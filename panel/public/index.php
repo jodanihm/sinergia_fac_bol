@@ -1,0 +1,4688 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * Front controller del panel de autoservicio (onboarding SaaS).
+ *
+ * App PHP plana, SEPARADA de public/ (API DTE) y del motor (src/, integration/
+ * en la raiz del repo): comparte solo la base de datos, via las mismas env
+ * vars DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASS que usa public/index.php (ver
+ * panel/src/Db.php).
+ *
+ * Etapa actual (1+2+3+4+5): registro, login, datos de empresa, carga de
+ * certificado digital, carga de CAF, progreso de certificacion (consulta en
+ * vivo al SII), panel de progreso. api_key se muestra como seccion aparte.
+ */
+
+use GuzzleHttp\Client;
+use Plantiflex\FacturacionCl\Dto\Credenciales;
+use Plantiflex\FacturacionCl\Dto\Libro;
+use Plantiflex\FacturacionCl\Dto\LineaLibro;
+use Plantiflex\FacturacionCl\Enums\Ambiente;
+use Plantiflex\FacturacionCl\Enums\TipoEnvioLibro;
+use Plantiflex\FacturacionCl\Enums\TipoLibro;
+use Plantiflex\FacturacionCl\Enums\TipoOperacionLibro;
+use Plantiflex\FacturacionCl\Exceptions\EnvioRechazadoException;
+use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
+use Plantiflex\FacturacionCl\Pdf\MuestrasImpresasZipBuilder;
+use Plantiflex\FacturacionCl\Providers\BoletaFacturador;
+use Plantiflex\FacturacionCl\Providers\SiiDirectoFacturador;
+use Plantiflex\FacturacionCl\Sii\BoletaSetPruebasBuilder;
+use Plantiflex\FacturacionCl\Sii\CertificacionEstadoResolver;
+use Plantiflex\FacturacionCl\Sii\EnvioDteParser;
+use Plantiflex\FacturacionCl\Sii\EnvioRecibosBuilder;
+use Plantiflex\FacturacionCl\Sii\LibroComprasPayloadBuilder;
+use Plantiflex\FacturacionCl\Sii\LibroService;
+use Plantiflex\FacturacionCl\Sii\LibroVentasPayloadBuilder;
+use Plantiflex\FacturacionCl\Sii\LoteDteEmisor;
+use Plantiflex\FacturacionCl\Sii\RespuestaDteBuilder;
+use Plantiflex\FacturacionCl\Sii\RvdBuilder;
+use Plantiflex\FacturacionCl\Sii\RvdResumenCalculator;
+use Plantiflex\FacturacionCl\Sii\SetBasicoPayloadBuilder;
+use Plantiflex\FacturacionCl\Sii\SetPruebasParser;
+use Plantiflex\FacturacionCl\Sii\SimulacionSetBuilder;
+use Plantiflex\FacturacionCl\Sii\SiiAutenticador;
+use Plantiflex\FacturacionCl\Sii\SiiConsultor;
+use Plantiflex\FacturacionCl\Sii\SiiUploader;
+use Plantiflex\FacturacionCl\Sii\XmlSigner;
+use Plantiflex\FacturacionCl\Sii\DatosContribuyenteSiiParser;
+use Plantiflex\Integration\Facturacion\CertificadoCrypto;
+use Plantiflex\Integration\Facturacion\CertificadoRutSenderExtractor;
+use Plantiflex\Integration\Facturacion\CertificadoCryptoException;
+use Plantiflex\Integration\Facturacion\MySqlBoletaRvdRepository;
+use Plantiflex\Integration\Facturacion\MySqlDteEmitidoRepository;
+use Plantiflex\Integration\Facturacion\MySqlEmisorRepository;
+use Plantiflex\Integration\Facturacion\MySqlFolioRepository;
+use Plantiflex\Integration\Facturacion\MySqlIntercambioRespuestaRepository;
+use Plantiflex\Integration\Facturacion\MySqlLibroRepository;
+use Plantiflex\Integration\Facturacion\MySqlSetBasicoSokRepository;
+use Plantiflex\Integration\Facturacion\MySqlSetPruebasArchivoRepository;
+
+require __DIR__ . '/../src/Db.php';
+require __DIR__ . '/../src/Auth.php';
+require __DIR__ . '/../src/Rut.php';
+require __DIR__ . '/../src/Csrf.php';
+// Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
+// del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
+// como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
+// libreria que usa public/index.php, sin reimplementar nada de cifrado, firma
+// ni consulta al SII.
+require __DIR__ . '/../../vendor/autoload.php';
+
+Auth::iniciar();
+
+// ===========================================================================
+//  Helpers
+// ===========================================================================
+function vista(string $nombre, array $datos = []): never
+{
+    extract($datos);
+    require __DIR__ . '/../views/' . $nombre . '.php';
+    exit;
+}
+
+/**
+ * <input> oculto con el token CSRF de la sesion, listo para insertar dentro
+ * de cualquier <form method="post">. Centraliza el escape/generado para no
+ * repetirlo en cada uno de los formularios de panel/views/ -- la
+ * verificacion correspondiente vive en el router (ver mas abajo), UNA sola
+ * vez para todos los POST, no handler por handler.
+ */
+function csrfInput(): string
+{
+    return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(Csrf::generarToken()) . '">';
+}
+
+function redirigir(string $ruta): never
+{
+    header('Location: ' . $ruta);
+    exit;
+}
+
+/**
+ * Redirect PRG (Post-Redirect-Get) con 303 See Other explicito: el codigo
+ * correcto para que el navegador convierta el siguiente request a GET SIEMPRE
+ * (a diferencia de 302, que en teoria HTTP es ambiguo). Usar al final de un
+ * handler POST que ya termino de procesar, para que un refresh/atras del
+ * navegador no reenvie el POST original.
+ */
+function redirigirPrg(string $ruta): never
+{
+    header('Location: ' . $ruta, true, 303);
+    exit;
+}
+
+/**
+ * Guarda un mensaje flash en sesion, para mostrarlo UNA vez tras un redirect
+ * (patron PRG). $datos es opcional (retrocompatible): permite adjuntar
+ * estructura extra (ej. errores de construccion, resultado de una emision)
+ * que un flash de solo texto no alcanza a expresar.
+ */
+function flashSet(string $tipo, string $mensaje, array $datos = []): void
+{
+    $_SESSION['flash'] = ['tipo' => $tipo, 'mensaje' => $mensaje] + $datos;
+}
+
+/**
+ * Recupera y BORRA el flash de sesion: se muestra una sola vez, nunca
+ * sobrevive a un segundo GET (ej. un refresh de la pagina que ya lo mostro).
+ *
+ * @return array{tipo:string, mensaje:string}|null
+ */
+function flashTomar(): ?array
+{
+    if (! isset($_SESSION['flash'])) {
+        return null;
+    }
+    $flash = $_SESSION['flash'];
+    unset($_SESSION['flash']);
+    return $flash;
+}
+
+/** Valida una fecha YYYY-MM-DD real (calendario), mismo patron que validaFecha() en public/index.php. */
+function fechaValida(string $f): bool
+{
+    if (! preg_match('/^\d{4}-\d{2}-\d{2}$/', $f)) {
+        return false;
+    }
+    [$y, $m, $d] = explode('-', $f);
+    return checkdate((int) $m, (int) $d, (int) $y);
+}
+
+/**
+ * Llave maestra (KEK) para envelope encryption de certificados. Mismo patron
+ * que public/index.php: getenv('CRYPTO_MASTER_KEY') en hex -> 32 bytes crudos.
+ * Nunca se cachea en sesion ni se loguea.
+ */
+function kekMaestra(): string
+{
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel: CRYPTO_MASTER_KEY ausente o mal configurada (esperados 32 bytes en hex)');
+        http_response_code(500);
+        echo 'Error de configuracion del servidor. Contacta al administrador.';
+        exit;
+    }
+    return $bin;
+}
+
+/**
+ * Los 4 tipos DTE estandar que se muestran en la pantalla de CAF (/caf) como
+ * checklist de "que le falta cargar" al cliente. Un CAF de un tipo fuera de
+ * este mapa igual se lista (con nombre generico), solo no aparece en el
+ * checklist de los 4 estandar.
+ */
+const NOMBRES_TIPO_DTE = [
+    33 => 'Factura',
+    61 => 'Nota de credito',
+    56 => 'Nota de debito',
+    39 => 'Boleta',
+];
+
+/** "Nombre (N)" usando NOMBRES_TIPO_DTE, o "Documento tipo N (N)" si el tipo no esta mapeado. */
+function nombreTipoDte(int $tipo): string
+{
+    $nombre = NOMBRES_TIPO_DTE[$tipo] ?? "Documento tipo {$tipo}";
+    return "{$nombre} ({$tipo})";
+}
+
+/** Primer valor de texto de un tag XML plano (sin namespace), igual que scripts/cargar_caf.php. */
+function cafTexto(DOMDocument $dom, string $tag): string
+{
+    $n = $dom->getElementsByTagName($tag)->item(0);
+    return $n === null ? '' : trim((string) $n->textContent);
+}
+
+/**
+ * Lista los CAF cargados para un rut_emisor (ambiente certificacion), con
+ * folios restantes calculados. Se reutiliza tanto para GET /caf como para
+ * redibujar la lista cuando POST /caf falla con un error.
+ *
+ * @return list<array<string,mixed>>
+ */
+function listarCafs(PDO $pdo, string $rutEmisor, string $ambiente = 'certificacion'): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT c.tipo_dte, c.folio_desde, c.folio_hasta, c.estado, f.proximo_folio '
+        . 'FROM dte_caf c '
+        . 'INNER JOIN dte_folio f ON f.caf_id = c.id '
+        . 'WHERE c.rut_emisor = :rut AND c.ambiente = :amb '
+        . 'ORDER BY c.tipo_dte ASC, c.folio_desde ASC'
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':amb' => $ambiente]);
+    $cafs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($cafs as &$c) {
+        $c['folios_restantes'] = (int) $c['folio_hasta'] - (int) $c['proximo_folio'] + 1;
+    }
+    unset($c);
+
+    return $cafs;
+}
+
+/**
+ * Exige el onboarding base completo (empresa + certificado + >=1 CAF) para
+ * llegar a /apikeys: redirige a la etapa pendiente si falta algo. Devuelve el
+ * rut_emisor de la cuenta cuando todo esta completo.
+ */
+function exigirOnboardingCompleto(PDO $pdo, int $cuentaId): string
+{
+    $stmt = $pdo->prepare(
+        "SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+    $rutEmisor = $stmt->fetchColumn();
+    if ($rutEmisor === false) {
+        redirigir('/empresa');
+    }
+
+    $stmtCert = $pdo->prepare(
+        "SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmtCert->execute([':rut' => $rutEmisor]);
+    if ($stmtCert->fetchColumn() === false) {
+        redirigir('/certificado');
+    }
+
+    $stmtCaf = $pdo->prepare(
+        "SELECT 1 FROM dte_caf WHERE rut_emisor = :rut AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmtCaf->execute([':rut' => $rutEmisor]);
+    if ($stmtCaf->fetchColumn() === false) {
+        redirigir('/caf');
+    }
+
+    return (string) $rutEmisor;
+}
+
+/**
+ * Lista las api_key de una cuenta (todos los estados), mas recientes primero.
+ * NUNCA incluye key_hash: solo metadata segura de mostrar en la vista.
+ *
+ * @return list<array<string,mixed>>
+ */
+function listarApiKeys(PDO $pdo, int $cuentaId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, prefijo, ambiente, estado, last_used_at, created_at '
+        . 'FROM api_key WHERE cuenta_id = :cuenta_id ORDER BY created_at DESC'
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Duplicado de listarApiKeys() filtrado a ambiente='produccion' -- funcion
+ * NUEVA e independiente (listarApiKeys() no se toca), mismo criterio de
+ * duplicacion literal ya aplicado para certificado/CAF de produccion.
+ *
+ * @return list<array<string,mixed>>
+ */
+function listarApiKeysProduccion(PDO $pdo, int $cuentaId): array
+{
+    $stmt = $pdo->prepare(
+        "SELECT id, prefijo, ambiente, estado, last_used_at, created_at "
+        . "FROM api_key WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' ORDER BY created_at DESC"
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Duplicado de exigirOnboardingCompleto() para el ambiente de PRODUCCION --
+ * funcion NUEVA e independiente (exigirOnboardingCompleto() no se toca).
+ * Exige, para ambiente='produccion': fila dte_emisor con resolucion_fecha/
+ * resolucion_numero informados (NOT NULL en el schema, y resolucion_numero
+ * > 0 -- ver validacion de handleEmpresaProduccionPost(), que exige entero
+ * positivo), fila dte_certificado, y al menos una fila dte_caf. Encadena
+ * igual que exigirOnboardingCompleto(): redirige a la estacion de PRODUCCION
+ * que falte (nunca a las de certificacion). Devuelve el rut_emisor cuando
+ * todo esta completo.
+ */
+function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
+{
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor FROM dte_emisor '
+        . "WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' "
+        . 'AND resolucion_fecha IS NOT NULL AND resolucion_numero > 0 LIMIT 1'
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+    $rutEmisor = $stmt->fetchColumn();
+    if ($rutEmisor === false) {
+        redirigir('/empresa-produccion');
+    }
+
+    $stmtCert = $pdo->prepare(
+        "SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmtCert->execute([':rut' => $rutEmisor]);
+    if ($stmtCert->fetchColumn() === false) {
+        redirigir('/certificado-produccion');
+    }
+
+    $stmtCaf = $pdo->prepare(
+        "SELECT 1 FROM dte_caf WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmtCaf->execute([':rut' => $rutEmisor]);
+    if ($stmtCaf->fetchColumn() === false) {
+        redirigir('/caf-produccion');
+    }
+
+    return (string) $rutEmisor;
+}
+
+/**
+ * Lista los dte_emitido del SET BASICO (factura 33 / NC 61 / ND 56) del
+ * rut_emisor, ambiente certificacion. Boleta (39) NO entra aqui: se certifica
+ * en un proceso aparte del SII (ver agruparEmitidosPorEnvio()/setBasicoAprobado()).
+ *
+ * @return list<array<string,mixed>>
+ */
+function listarEmitidosFactura(PDO $pdo, string $rutEmisor): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, tipo_dte, folio, track_id, estado, fecha_emision '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND tipo_dte IN (33, 61, 56) "
+        . 'ORDER BY tipo_dte ASC, folio ASC'
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Agrupa los dte_emitido del set basico por ENVIO (track_id).
+ *
+ * El estado que devuelve el SII (EPR/RCT/RFR/-11/...) es del ENVIO completo,
+ * no de cada documento: todos los documentos de un mismo EnvioDTE comparten
+ * track_id y por lo tanto el MISMO estado (ver
+ * SiiConsultor::consultarEnvio(), SOAP QueryEstUp.jws). Antes esta vista
+ * listaba documento por documento (8 documentos x hasta 8 intentos de
+ * certificacion = 64 filas y 64 botones "Actualizar estado" en la
+ * certificacion real de EASY AGENDA SPA, 78157243-8), lo cual era inusable y
+ * ademas podia mostrar estados distintos para filas de un mismo envio.
+ *
+ * Documentos sin track_id se devuelven aparte (sinTrackId): no hay nada que
+ * consultar ni agrupar para ellos.
+ *
+ * @param list<array<string,mixed>> $emitidos
+ * @return array{
+ *     envios: list<array{trackId:string, estado:string, fechaEmision:string, resumen:string, tipos:list<int>, documentos:list<array<string,mixed>>}>,
+ *     sinTrackId: list<array<string,mixed>>,
+ * }
+ */
+function agruparEmitidosPorEnvio(array $emitidos): array
+{
+    $porTrack   = [];
+    $sinTrackId = [];
+
+    foreach ($emitidos as $e) {
+        $trackId = $e['track_id'];
+        if ($trackId === null || $trackId === '') {
+            $sinTrackId[] = $e;
+            continue;
+        }
+        $porTrack[(string) $trackId][] = $e;
+    }
+
+    $envios = [];
+    foreach ($porTrack as $trackId => $docs) {
+        // El estado mostrado es el de la fila mas reciente (mayor id): si hay
+        // inconsistencia historica entre filas de un mismo envio (el bug que
+        // esta agrupacion corrige de raiz hacia adelante), se muestra el
+        // ultimo valor persistido, no uno arbitrario.
+        usort($docs, static fn (array $a, array $b): int => (int) $a['id'] <=> (int) $b['id']);
+        $masReciente = $docs[array_key_last($docs)];
+
+        $conteos = [];
+        foreach ($docs as $d) {
+            $tipo = (int) $d['tipo_dte'];
+            $conteos[$tipo] = ($conteos[$tipo] ?? 0) + 1;
+        }
+        $resumen = [];
+        foreach ($conteos as $tipo => $n) {
+            $resumen[] = sprintf('%dx %s', $n, NOMBRES_TIPO_DTE[$tipo] ?? "tipo {$tipo}");
+        }
+
+        $envios[] = [
+            'trackId'      => $trackId,
+            'estado'       => $masReciente['estado'],
+            'fechaEmision' => $docs[0]['fecha_emision'],
+            'resumen'      => implode(', ', $resumen),
+            'tipos'        => array_keys($conteos),
+            'documentos'   => $docs,
+            'ultimoId'     => (int) $masReciente['id'],
+        ];
+    }
+
+    // Envio mas reciente arriba. Se ordena por el mayor id de fila (orden de
+    // insercion real), no por track_id ni fecha: cada reintento de
+    // certificacion crea filas NUEVAS con folios nuevos, asi que el id mas
+    // alto es siempre el envio mas reciente, sin asumir nada sobre el formato
+    // del track_id que asigna el SII.
+    usort($envios, static fn (array $a, array $b): int => $b['ultimoId'] <=> $a['ultimoId']);
+
+    return ['envios' => $envios, 'sinTrackId' => $sinTrackId];
+}
+
+/**
+ * Determina si el SET BASICO esta APROBADO: el SII exige que los 3 tipos (33
+ * factura / 61 NC / 56 ND) vayan en UN SOLO EnvioDTE aceptado (EPR), Y que el
+ * tenant haya confirmado a mano que ESE envio paso la revision de CONTENIDO
+ * del SII (SOK) -- EPR por si solo NO alcanza (bug real corregido: ver
+ * CertificacionEstadoResolver::setBasicoAprobado(), donde vive ahora la
+ * logica -- movida a src/Sii/ para poder testearla sin requerir este front
+ * controller completo).
+ *
+ * @param list<array{trackId:string, estado:string, tipos:list<int>}> $envios Salida de agruparEmitidosPorEnvio()['envios']
+ * @param array<string,string> $sokPorTrackId Salida de MySqlSetBasicoSokRepository::confirmadosPorTrackId(): track_id => confirmado_sok_at
+ * @return array{aprobado:bool, trackId:?string}
+ */
+function setBasicoAprobado(array $envios, array $sokPorTrackId): array
+{
+    return CertificacionEstadoResolver::setBasicoAprobado($envios, $sokPorTrackId);
+}
+
+/**
+ * Identifica el(los) candidato(s) a envio de SIMULACION. A diferencia del Set
+ * Basico (setBasicoAprobado()), el SII no da ningun campo/estado propio que
+ * distinga "esto es la simulacion" -- se infiere con este criterio, elegido
+ * tras evaluar alternativas:
+ *   - Excluye el propio envio del Set Basico ya identificado.
+ *   - Exige estado EPR (envio aceptado).
+ *   - Exige MAS de 8 documentos: el Set Basico son EXACTAMENTE 8 (4 factura +
+ *     3 NC + 1 ND); la Simulacion la exige el SII en el rango 20-100
+ *     (evidencia real: EASY AGENDA 30 docs -- respuesta_simulacion_v2.json --
+ *     y Plantiflex 30 docs, docs/CERTIFICACION_MUESTRAS_IMPRESAS.md).
+ * Alternativa evaluada y descartada: "lo que sobra tras excluir el Set
+ * Basico" da el MISMO resultado pero es menos explicita sobre POR QUE se
+ * descarta un envio que no sea el de simulacion (ej. un intento de Set
+ * Basico rechazado con 2-3 documentos sueltos); el corte por cantidad (>8)
+ * dice la razon directamente y evita ese falso positivo.
+ * Si hay MAS DE UN candidato (ej. la simulacion se reenvio una vez), NO se
+ * adivina cual es la vigente: se devuelven TODOS para que la vista le pida
+ * al tenant que elija (un <select>, no una deteccion silenciosa incorrecta).
+ *
+ * @param list<array{trackId:string, estado:string, fechaEmision:string, resumen:string, documentos:list<array<string,mixed>>}> $envios Salida de agruparEmitidosPorEnvio()['envios']
+ * @return list<array{trackId:string, fechaEmision:string, resumen:string, cantidad:int}>
+ */
+function simulacionCandidatos(array $envios, ?string $trackIdSetBasico): array
+{
+    $candidatos = [];
+    foreach ($envios as $envio) {
+        if ($trackIdSetBasico !== null && $envio['trackId'] === $trackIdSetBasico) {
+            continue;
+        }
+        if ($envio['estado'] !== 'EPR' || count($envio['documentos']) <= 8) {
+            continue;
+        }
+        $candidatos[] = [
+            'trackId'      => $envio['trackId'],
+            'fechaEmision' => $envio['fechaEmision'],
+            'resumen'      => $envio['resumen'],
+            'cantidad'     => count($envio['documentos']),
+        ];
+    }
+
+    return $candidatos;
+}
+
+/**
+ * Resuelve el envio de SIMULACION: si hay exactamente un candidato
+ * (simulacionCandidatos()), se toma como aprobado sin preguntar; si hay 0,
+ * aun no existe; si hay MAS de uno, es ambiguo y el llamador debe pedirle al
+ * tenant que elija (ver 'candidatos').
+ *
+ * @param list<array{trackId:string, estado:string, fechaEmision:string, resumen:string, documentos:list<array<string,mixed>>}> $envios
+ * @return array{aprobado:bool, trackId:?string, ambiguo:bool, candidatos:list<array<string,mixed>>}
+ */
+function simulacionAprobada(array $envios, ?string $trackIdSetBasico): array
+{
+    $candidatos = simulacionCandidatos($envios, $trackIdSetBasico);
+
+    if (count($candidatos) === 1) {
+        return ['aprobado' => true, 'trackId' => $candidatos[0]['trackId'], 'ambiguo' => false, 'candidatos' => []];
+    }
+    if ($candidatos === []) {
+        return ['aprobado' => false, 'trackId' => null, 'ambiguo' => false, 'candidatos' => []];
+    }
+
+    return ['aprobado' => false, 'trackId' => null, 'ambiguo' => true, 'candidatos' => $candidatos];
+}
+
+/**
+ * Codigos de estado de un ENVIO DE LIBRO que el SII considera aceptado --
+ * suficiente para avanzar a "Declarar Avance" en el portal de certificacion:
+ *   LOK = aceptado sin reparos
+ *   LTC = aceptado con reparos
+ * Fuente: docs/REFERENCIA_CERTIFICACION_SII_DTE.md lineas 61-64 ("enviar ->
+ * LOK/LTC -> Declarar Avance"). LNC ("Tipo de Envio de Libro No Corresponde",
+ * ej. reenviar un TOTAL del mismo periodo -- observado real en el tenant
+ * 78157243-8, trackId 0253052338) y LRC son estados de RECHAZO: NO cuentan
+ * como aceptado. NO se adivino: confirmado contra el doc antes de codear.
+ */
+const ESTADOS_LIBRO_ACEPTADO = ['LOK', 'LTC'];
+
+/**
+ * Lista los libros IECV enviados (dte_libro) del rut_emisor, ambiente
+ * certificacion, filtrados por tipo de operacion (VENTA/COMPRA). Envio mas
+ * reciente primero (mayor id = insercion mas reciente, mismo criterio de
+ * orden que agruparEmitidosPorEnvio() usa para el set basico).
+ *
+ * @return list<array<string,mixed>>
+ */
+function listarLibros(PDO $pdo, string $rutEmisor, string $tipoOperacion): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, track_id, estado, periodo_tributario, tipo_libro, tipo_envio, folio_notificacion, created_at '
+        . 'FROM dte_libro '
+        . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND tipo_operacion = :tipo "
+        . 'ORDER BY id DESC'
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':tipo' => $tipoOperacion]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * True si existe al menos un libro (de un tipo de operacion) en estado
+ * aceptado (ver ESTADOS_LIBRO_ACEPTADO). Devuelve el trackId de ese libro para
+ * mostrarlo en la vista, igual que setBasicoAprobado().
+ *
+ * @param list<array<string,mixed>> $libros Salida de listarLibros()
+ * @return array{aprobado:bool, trackId:?string}
+ */
+function libroAprobado(array $libros): array
+{
+    foreach ($libros as $libro) {
+        if (in_array($libro['estado'], ESTADOS_LIBRO_ACEPTADO, true)) {
+            return ['aprobado' => true, 'trackId' => $libro['track_id']];
+        }
+    }
+
+    return ['aprobado' => false, 'trackId' => null];
+}
+
+/**
+ * True si los 3 componentes que exige el SII para certificar factura estan
+ * APROBADOS (ver docs/REFERENCIA_CERTIFICACION_SII_DTE.md seccion 4):
+ *   1. Set Basico      -> un envio en EPR con los 3 tipos (setBasicoAprobado()).
+ *   2. Libro de Ventas -> un envio en LOK/LTC (libroAprobado()).
+ *   3. Libro de Compras-> un envio en LOK/LTC (libroAprobado()).
+ * UNICA funcion de este criterio: la usan la estacion 5 (handlePanelGet()) y
+ * la guardia de la estacion 6 (handleCertificacionAprobadaGet() y
+ * handleCertificacionAprobadaConfirmarPost()), para que las tres queden
+ * garantizadas consistentes entre si -- antes esta funcion (entonces
+ * setBasicoCompleto()) solo miraba el set basico, lo que era un falso
+ * positivo: un tenant podia llegar a la estacion 6 sin haber enviado libros.
+ */
+function certificacionCompleta(PDO $pdo, string $rutEmisor): bool
+{
+    $sokPorTrackId = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+    $setBasico = setBasicoAprobado(agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor))['envios'], $sokPorTrackId);
+    $ventas    = libroAprobado(listarLibros($pdo, $rutEmisor, 'VENTA'));
+    $compras   = libroAprobado(listarLibros($pdo, $rutEmisor, 'COMPRA'));
+
+    return $setBasico['aprobado'] && $ventas['aprobado'] && $compras['aprobado'];
+}
+
+/**
+ * Fecha de confirmacion de certificacion del emisor de esta cuenta (ambiente
+ * certificacion), o null si no esta confirmada (o no hay fila de emisor).
+ * Scope estricto por cuenta_id: nunca se consulta un emisor ajeno.
+ */
+function obtenerCertificacionConfirmadaAt(PDO $pdo, int $cuentaId): ?string
+{
+    $stmt = $pdo->prepare(
+        "SELECT certificacion_confirmada_at FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+    $valor = $stmt->fetchColumn();
+
+    return ($valor === false || $valor === null) ? null : (string) $valor;
+}
+
+/**
+ * Fila cruda de las 3 columnas *_at (+ simulacion_track_id) de las etapas
+ * manuales 2-4 (Simulacion, Intercambio, Muestras Impresas), ver migracion
+ * 010_emisor_etapas_manuales.sql. Scope estricto por cuenta_id, mismo
+ * criterio que obtenerCertificacionConfirmadaAt(). Si no hay fila de emisor
+ * (no deberia pasar tras exigirOnboardingCompleto(), pero se cubre igual),
+ * devuelve las 4 columnas en null.
+ *
+ * @return array{simulacion_confirmada_at:?string, simulacion_track_id:?string,
+ *         intercambio_confirmado_at:?string, muestras_impresas_confirmadas_at:?string}
+ */
+function obtenerEtapasManualesRaw(PDO $pdo, int $cuentaId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT simulacion_confirmada_at, simulacion_track_id, intercambio_confirmado_at, '
+        . "muestras_impresas_confirmadas_at FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    return $fila !== false ? $fila : [
+        'simulacion_confirmada_at'         => null,
+        'simulacion_track_id'              => null,
+        'intercambio_confirmado_at'        => null,
+        'muestras_impresas_confirmadas_at' => null,
+    ];
+}
+
+/**
+ * Encadena la habilitacion de las etapas manuales 2-4 igual que Set Basico ->
+ * Libro de Ventas/Compras (ver $todosAprobados en handleCertificacionGet()):
+ * Simulacion exige la etapa 1 (Set de Prueba) completa; Intercambio exige
+ * Simulacion confirmada; Muestras Impresas exige Intercambio confirmado.
+ *
+ * @param array{simulacion_confirmada_at:?string, simulacion_track_id:?string,
+ *        intercambio_confirmado_at:?string, muestras_impresas_confirmadas_at:?string} $raw
+ * @return array{
+ *     simulacion:array{confirmada:bool,fecha:?string,trackId:?string,habilitada:bool},
+ *     intercambio:array{confirmada:bool,fecha:?string,habilitada:bool},
+ *     muestrasImpresas:array{confirmada:bool,fecha:?string,habilitada:bool}
+ * }
+ */
+function calcularEtapasManuales(array $raw, bool $todosAprobados): array
+{
+    $simulacionConfirmada  = $raw['simulacion_confirmada_at'] !== null;
+    $intercambioConfirmado = $raw['intercambio_confirmado_at'] !== null;
+    $muestrasConfirmadas   = $raw['muestras_impresas_confirmadas_at'] !== null;
+
+    return [
+        'simulacion' => [
+            'confirmada' => $simulacionConfirmada,
+            'fecha'      => $raw['simulacion_confirmada_at'],
+            'trackId'    => $raw['simulacion_track_id'],
+            'habilitada' => $todosAprobados,
+        ],
+        'intercambio' => [
+            'confirmada' => $intercambioConfirmado,
+            'fecha'      => $raw['intercambio_confirmado_at'],
+            'habilitada' => $simulacionConfirmada,
+        ],
+        'muestrasImpresas' => [
+            'confirmada' => $muestrasConfirmadas,
+            'fecha'      => $raw['muestras_impresas_confirmadas_at'],
+            'habilitada' => $intercambioConfirmado,
+        ],
+    ];
+}
+
+// ===========================================================================
+//  Router: metodo y ruta
+// ===========================================================================
+$metodo = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+$ruta   = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+$ruta   = rtrim($ruta, '/');
+if ($ruta === '') {
+    $ruta = '/';
+}
+
+// ===========================================================================
+//  CSRF: chequeo CENTRAL, antes de despachar a CUALQUIER handler POST.
+//
+//  Se verifica aqui -- una sola vez para las ~31 rutas POST de este router --
+//  en vez de repetir Csrf::validar() en cada handler. Cubre TODAS las rutas
+//  POST sin excepcion, incluidas /login, /registro y las de /admin/tenants/*
+//  (ninguna pasa por Auth::requerirSesion() en el router, pero todas viven
+//  sobre la MISMA sesion PHP que arranca Auth::iniciar() para cualquier
+//  visitante -- el token existe aunque todavia no haya usuario autenticado).
+//  /login en particular SI necesita CSRF (previene "login CSRF": forzar a la
+//  victima a autenticarse en una cuenta del atacante sin que se de cuenta).
+//
+//  Este panel es la UNICA superficie que usa cookies de sesion: la API real
+//  del motor (POST /api/v1/dte, /api/v1/boleta, /api/v1/libro, etc.) vive en
+//  un front controller COMPLETAMENTE APARTE (public/index.php en la raiz del
+//  repo, no panel/public/index.php) y se autentica por X-Api-Key, nunca por
+//  cookie -- por eso no aplica CSRF ahi y no hay nada que excluir aqui.
+// ===========================================================================
+if ($metodo === 'POST' && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))) {
+    http_response_code(403);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Solicitud invalida</title></head><body>'
+        . '<h1>403 - Solicitud invalida</h1>'
+        . '<p>El token de seguridad de este formulario vencio o no es valido (la pagina pudo quedar '
+        . 'abierta demasiado tiempo, o el formulario no vino de este sitio). '
+        . 'Vuelve atras, recarga la pagina y vuelve a intentarlo.</p>'
+        . '</body></html>';
+    exit;
+}
+
+if ($metodo === 'GET' && $ruta === '/') {
+    redirigir(Auth::autenticado() ? '/panel' : '/login');
+}
+
+if ($metodo === 'GET' && $ruta === '/registro') {
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+    vista('registro', ['errores' => [], 'email' => '']);
+}
+
+if ($metodo === 'POST' && $ruta === '/registro') {
+    handleRegistroPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/login') {
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+    vista('login', ['error' => null, 'email' => '']);
+}
+
+if ($metodo === 'POST' && $ruta === '/login') {
+    handleLoginPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/logout') {
+    Auth::logout();
+    redirigir('/login');
+}
+
+if ($metodo === 'GET' && $ruta === '/empresa') {
+    Auth::requerirSesion();
+    handleEmpresaGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/empresa') {
+    Auth::requerirSesion();
+    handleEmpresaPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/empresa/importar-datos-sii') {
+    Auth::requerirSesion();
+    handleEmpresaImportarDatosSiiGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/empresa/importar-datos-sii') {
+    Auth::requerirSesion();
+    handleEmpresaImportarDatosSiiPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificado') {
+    Auth::requerirSesion();
+    handleCertificadoGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificado') {
+    Auth::requerirSesion();
+    handleCertificadoPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/caf') {
+    Auth::requerirSesion();
+    handleCafGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/caf') {
+    Auth::requerirSesion();
+    handleCafPost();
+}
+
+// ---------------------------------------------------------------------------
+// Rutas de PRODUCCION (estacion 7, nueva): a proposito NO enlazadas desde
+// ningun lado del panel visible todavia (ver panel/views/partials/header.php
+// y views/panel.php, sin cambios) -- solo accesibles por URL directa hasta
+// que se habilite formalmente la estacion 7 (tarea aparte).
+// ---------------------------------------------------------------------------
+if ($metodo === 'GET' && $ruta === '/empresa-produccion') {
+    Auth::requerirSesion();
+    handleEmpresaProduccionGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/empresa-produccion') {
+    Auth::requerirSesion();
+    handleEmpresaProduccionPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificado-produccion') {
+    Auth::requerirSesion();
+    handleCertificadoProduccionGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificado-produccion') {
+    Auth::requerirSesion();
+    handleCertificadoProduccionPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/caf-produccion') {
+    Auth::requerirSesion();
+    handleCafProduccionGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/caf-produccion') {
+    Auth::requerirSesion();
+    handleCafProduccionPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/apikeys-produccion') {
+    Auth::requerirSesion();
+    handleApiKeysProduccionGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/apikeys-produccion/generar') {
+    Auth::requerirSesion();
+    handleApiKeysProduccionGenerarPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/apikeys-produccion/revocar') {
+    Auth::requerirSesion();
+    handleApiKeysProduccionRevocarPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/apikeys') {
+    Auth::requerirSesion();
+    handleApiKeysGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/apikeys/generar') {
+    Auth::requerirSesion();
+    handleApiKeysGenerarPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/apikeys/revocar') {
+    Auth::requerirSesion();
+    handleApiKeysRevocarPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion-elegir') {
+    Auth::requerirSesion();
+    handleCertificacionElegirGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion') {
+    Auth::requerirSesion();
+    handleCertificacionGet();
+}
+
+if ($metodo === 'GET' && preg_match('#^/certificacion/etapa/([^/]+)$#', $ruta, $mCertEtapa)) {
+    Auth::requerirSesion();
+    handleCertificacionEtapaGet($mCertEtapa[1]);
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/actualizar') {
+    Auth::requerirSesion();
+    handleCertificacionActualizarPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/marcar-sok') {
+    Auth::requerirSesion();
+    handleCertificacionMarcarSokPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/confirmar-etapa') {
+    Auth::requerirSesion();
+    handleCertificacionConfirmarEtapaPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/actualizar-libro') {
+    Auth::requerirSesion();
+    handleCertificacionActualizarLibroPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/emitir-libro-ventas') {
+    Auth::requerirSesion();
+    handleCertificacionEmitirLibroVentasPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/emitir-libro-compras') {
+    Auth::requerirSesion();
+    handleCertificacionEmitirLibroComprasPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion/set-pruebas') {
+    Auth::requerirSesion();
+    handleSetPruebasGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/set-pruebas') {
+    Auth::requerirSesion();
+    handleSetPruebasPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/set-pruebas/emitir') {
+    Auth::requerirSesion();
+    handleSetPruebasEmitirPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion/simulacion') {
+    Auth::requerirSesion();
+    handleCertificacionSimulacionGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/simulacion/emitir') {
+    Auth::requerirSesion();
+    handleCertificacionSimulacionEmitirPost();
+}
+
+// ---------------------------------------------------------------------------
+// Boleta (39/41): proceso APARTE de las 6 etapas de certificacion de factura
+// de arriba (ver handleCertificacionBoletaGet()).
+// ---------------------------------------------------------------------------
+if ($metodo === 'GET' && $ruta === '/certificacion/boleta') {
+    Auth::requerirSesion();
+    handleCertificacionBoletaGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/boleta/confirmar-etapa') {
+    Auth::requerirSesion();
+    handleCertificacionBoletaConfirmarEtapaPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion/boleta/set') {
+    Auth::requerirSesion();
+    handleCertificacionBoletaSetGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/boleta/set/emitir') {
+    Auth::requerirSesion();
+    handleCertificacionBoletaSetEmitirPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion/boleta/rvd') {
+    Auth::requerirSesion();
+    handleCertificacionBoletaRvdGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/boleta/rvd/emitir') {
+    Auth::requerirSesion();
+    handleCertificacionBoletaRvdEmitirPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion/intercambio') {
+    Auth::requerirSesion();
+    handleIntercambioGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion/intercambio') {
+    Auth::requerirSesion();
+    handleIntercambioPost();
+}
+
+if ($metodo === 'GET' && preg_match('#^/certificacion/intercambio/(acuse|resultado|recibos)\.xml$#', $ruta, $mIntercambioDescarga)) {
+    Auth::requerirSesion();
+    handleIntercambioDescargarGet($mIntercambioDescarga[1]);
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion/muestras-impresas') {
+    Auth::requerirSesion();
+    handleMuestrasImpresasGet();
+}
+
+// Descarga directa del ZIP como respuesta del propio POST (sin persistir: la
+// generacion es local e idempotente, no tiene efectos de red -- ver
+// handleMuestrasImpresasPost()). Ruta con extension .zip: pasa por
+// panel/router.php igual que las descargas .xml de intercambio ya existentes
+// (el router deja pasar a index.php cualquier ruta que no sea un archivo
+// FISICO real dentro de panel/public/, y no existe ningun archivo asi en
+// disco -- confirmado, no hizo falta tocar el router).
+if ($metodo === 'POST' && $ruta === '/certificacion/muestras-impresas.zip') {
+    Auth::requerirSesion();
+    handleMuestrasImpresasPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/certificacion-aprobada') {
+    Auth::requerirSesion();
+    handleCertificacionAprobadaGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/certificacion-aprobada/confirmar') {
+    Auth::requerirSesion();
+    handleCertificacionAprobadaConfirmarPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/panel') {
+    Auth::requerirSesion();
+    handlePanelGet();
+}
+
+// ---------------------------------------------------------------------------
+// Rutas de SUPERADMIN: a proposito NO enlazadas desde ningun lado del panel
+// normal de tenant (el que ve Auth::cuentaId() de una cuenta cualquiera).
+// Cada handler exige exigirSuperadmin() (403 si el rol no corresponde, sin
+// pasar por Auth::requerirSesion()/redirect a /login).
+// ---------------------------------------------------------------------------
+if ($metodo === 'GET' && $ruta === '/admin/tenants') {
+    handleAdminTenantsGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/admin/tenants/suspender') {
+    handleAdminTenantsSuspenderPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/admin/tenants/reactivar') {
+    handleAdminTenantsReactivarPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/admin/tenants/revertir-etapa') {
+    handleAdminTenantsRevertirEtapaPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/auditoria') {
+    handleAdminAuditoriaGet();
+}
+
+http_response_code(404);
+echo '404 - ruta no encontrada';
+exit;
+
+// ===========================================================================
+//  Handler: GET/POST /registro
+// ===========================================================================
+function handleRegistroPost(): void
+{
+    $email    = trim((string) ($_POST['email'] ?? ''));
+    $pass     = (string) ($_POST['password'] ?? '');
+    $confirma = (string) ($_POST['password_confirmacion'] ?? '');
+
+    $errores = [];
+
+    if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errores[] = 'Email invalido.';
+    }
+    if (strlen($pass) < 8) {
+        $errores[] = 'La contrasena debe tener al menos 8 caracteres.';
+    }
+    if ($pass !== $confirma) {
+        $errores[] = 'Las contrasenas no coinciden.';
+    }
+
+    $pdo = Db::conexion();
+
+    if ($errores === []) {
+        $stmt = $pdo->prepare('SELECT 1 FROM cuenta WHERE email = :email LIMIT 1');
+        $stmt->execute([':email' => $email]);
+        if ($stmt->fetchColumn() !== false) {
+            $errores[] = 'Ese email ya esta registrado.';
+        }
+    }
+    if ($errores === []) {
+        $stmt = $pdo->prepare('SELECT 1 FROM usuario WHERE email = :email LIMIT 1');
+        $stmt->execute([':email' => $email]);
+        if ($stmt->fetchColumn() !== false) {
+            $errores[] = 'Ese email ya esta registrado.';
+        }
+    }
+
+    if ($errores !== []) {
+        vista('registro', ['errores' => $errores, 'email' => $email]);
+        return;
+    }
+
+    try {
+        $pdo->beginTransaction();
+
+        $pdo->prepare(
+            'INSERT INTO cuenta (email, nombre, estado, created_at) '
+            . "VALUES (:email, :nombre, 'activa', NOW())"
+        )->execute([':email' => $email, ':nombre' => $email]);
+        $cuentaId = (int) $pdo->lastInsertId();
+
+        $hash = password_hash($pass, PASSWORD_DEFAULT);
+        $pdo->prepare(
+            'INSERT INTO usuario (cuenta_id, email, password_hash, rol, estado, created_at) '
+            . "VALUES (:cuenta_id, :email, :hash, 'owner', 'activo', NOW())"
+        )->execute([':cuenta_id' => $cuentaId, ':email' => $email, ':hash' => $hash]);
+        $usuarioId = (int) $pdo->lastInsertId();
+
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log('panel registro fallo: ' . $e->getMessage());
+        vista('registro', [
+            'errores' => ['No se pudo completar el registro. Intenta nuevamente.'],
+            'email'   => $email,
+        ]);
+        return;
+    }
+
+    Auth::login($usuarioId, $cuentaId);
+    Csrf::regenerarToken();
+    redirigir('/panel');
+}
+
+// ===========================================================================
+//  Handler: POST /login
+// ===========================================================================
+function handleLoginPost(): void
+{
+    $email = trim((string) ($_POST['email'] ?? ''));
+    $pass  = (string) ($_POST['password'] ?? '');
+
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT id, cuenta_id, password_hash, estado FROM usuario WHERE email = :email LIMIT 1'
+    );
+    $stmt->execute([':email' => $email]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Mensaje generico en TODOS los casos de fallo: no revela si el email existe.
+    if (
+        $row === false
+        || $row['estado'] !== 'activo'
+        || ! password_verify($pass, $row['password_hash'])
+    ) {
+        vista('login', ['error' => 'Credenciales invalidas.', 'email' => $email]);
+        return;
+    }
+
+    Auth::login((int) $row['id'], (int) $row['cuenta_id']);
+    Csrf::regenerarToken();
+    redirigir('/panel');
+}
+
+// ===========================================================================
+//  Handler: GET /empresa
+// ===========================================================================
+function handleEmpresaGet(): void
+{
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor, razon_social, giro, acteco, dir_origen, cmna_origen, '
+        . '       resolucion_fecha, resolucion_numero '
+        . "FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':cuenta_id' => Auth::cuentaId()]);
+    $emisor = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    // Precarga OPCIONAL desde /empresa/importar-datos-sii ("Usar estos
+    // datos"): SOLO si todavia no existe una fila guardada. Si ya existe,
+    // la fila real de la BD manda siempre -- sin cambios de comportamiento
+    // para el flujo manual existente.
+    if ($emisor === null && isset($_GET['razon_social'])) {
+        $emisor = [
+            'rut_emisor'        => (string) ($_GET['rut_emisor'] ?? ''),
+            'razon_social'      => (string) ($_GET['razon_social'] ?? ''),
+            'giro'              => (string) ($_GET['giro'] ?? ''),
+            'acteco'            => (string) ($_GET['acteco'] ?? ''),
+            'dir_origen'        => (string) ($_GET['dir_origen'] ?? ''),
+            'cmna_origen'       => (string) ($_GET['cmna_origen'] ?? ''),
+            'resolucion_fecha'  => '',
+            'resolucion_numero' => '',
+        ];
+    }
+
+    vista('empresa', ['errores' => [], 'emisor' => $emisor]);
+}
+
+// ===========================================================================
+//  Handler: GET /empresa/importar-datos-sii
+//
+//  Sub-estacion OPCIONAL de la estacion 2 (mismo patron de
+//  /certificacion/set-pruebas): muestra el formulario de subida del archivo
+//  de "Datos para Construccion DTE" (pe_construccion_dte) que entrega el
+//  SII, para previsualizar sus datos ANTES de aplicar nada. NO reemplaza el
+//  flujo manual de /empresa: el tenant puede seguir tipeando a mano.
+// ===========================================================================
+function handleEmpresaImportarDatosSiiGet(): void
+{
+    vista('empresa-importar-datos-sii', ['error' => null, 'datos' => null]);
+}
+
+// ===========================================================================
+//  Handler: POST /empresa/importar-datos-sii
+//
+//  Recibe el archivo y lo parsea con DatosContribuyenteSiiParser (src/Sii/,
+//  reusado TAL CUAL) -- NO guarda nada en la BD ni construye ningun payload
+//  aqui, solo muestra el preview. El boton "Usar estos datos" del preview
+//  apunta a /empresa con los valores como query string (ver
+//  handleEmpresaGet()); resolucion_fecha/resolucion_numero NUNCA se tocan:
+//  el archivo del SII no los trae, siguen siendo responsabilidad manual.
+// ===========================================================================
+function handleEmpresaImportarDatosSiiPost(): void
+{
+    $archivo = $_FILES['archivo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        vista('empresa-importar-datos-sii', [
+            'error' => 'Debes seleccionar el archivo de Datos para Construccion DTE (pe_construccion_dte) que descargaste del SII.',
+            'datos' => null,
+        ]);
+    }
+
+    $contenido = file_get_contents($archivo['tmp_name']);
+    if ($contenido === false || $contenido === '') {
+        vista('empresa-importar-datos-sii', ['error' => 'No se pudo leer el archivo subido.', 'datos' => null]);
+    }
+
+    try {
+        $datos = (new DatosContribuyenteSiiParser())->parse($contenido);
+    } catch (RuntimeException $e) {
+        vista('empresa-importar-datos-sii', [
+            'error' => 'El archivo no corresponde al formato esperado de Datos para Construccion DTE: ' . $e->getMessage(),
+            'datos' => null,
+        ]);
+    }
+
+    vista('empresa-importar-datos-sii', ['error' => null, 'datos' => $datos]);
+}
+
+// ===========================================================================
+//  Handler: POST /empresa
+//
+//  Ambiente SIEMPRE 'certificacion' en esta etapa (fijado por el servidor, no
+//  lo elige el cliente). cuenta_id sale de la sesion. Relacion 1:1 cuenta-
+//  emisor: si la cuenta ya tiene fila en certificacion, se actualiza esa fila
+//  en vez de insertar una nueva.
+// ===========================================================================
+function handleEmpresaPost(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $ambiente = 'certificacion';
+
+    $rutCrudo  = trim((string) ($_POST['rut_emisor'] ?? ''));
+    $rut       = Rut::normalizar($rutCrudo);
+    $razon     = trim((string) ($_POST['razon_social'] ?? ''));
+    $giro      = trim((string) ($_POST['giro'] ?? ''));
+    $actecoRaw = trim((string) ($_POST['acteco'] ?? ''));
+    $dir       = trim((string) ($_POST['dir_origen'] ?? ''));
+    $cmna      = trim((string) ($_POST['cmna_origen'] ?? ''));
+    $resFecha  = trim((string) ($_POST['resolucion_fecha'] ?? ''));
+    $resNumRaw = trim((string) ($_POST['resolucion_numero'] ?? ''));
+
+    $errores = [];
+
+    if (! Rut::valido($rut)) {
+        $errores['rut_emisor'] = 'RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).';
+    }
+    if ($razon === '') {
+        $errores['razon_social'] = 'La razon social es obligatoria.';
+    }
+    if ($giro === '') {
+        $errores['giro'] = 'El giro es obligatorio.';
+    }
+    if (! ctype_digit($actecoRaw)) {
+        $errores['acteco'] = 'El codigo de actividad economica debe ser un numero entero.';
+    }
+    if ($dir === '') {
+        $errores['dir_origen'] = 'La direccion es obligatoria.';
+    }
+    if ($cmna === '') {
+        $errores['cmna_origen'] = 'La comuna es obligatoria.';
+    }
+    if (! fechaValida($resFecha)) {
+        $errores['resolucion_fecha'] = 'Fecha de resolucion invalida (formato YYYY-MM-DD).';
+    }
+    if (! ctype_digit($resNumRaw)) {
+        $errores['resolucion_numero'] = 'El numero de resolucion debe ser un numero entero (0 o mayor).';
+    }
+
+    $datosForm = [
+        'rut_emisor'        => $rutCrudo,
+        'razon_social'      => $razon,
+        'giro'              => $giro,
+        'acteco'            => $actecoRaw,
+        'dir_origen'        => $dir,
+        'cmna_origen'       => $cmna,
+        'resolucion_fecha'  => $resFecha,
+        'resolucion_numero' => $resNumRaw,
+    ];
+
+    if ($errores !== []) {
+        vista('empresa', ['errores' => $errores, 'emisor' => $datosForm]);
+        return;
+    }
+
+    $acteco = (int) $actecoRaw;
+    $resNum = (int) $resNumRaw;
+    $pdo    = Db::conexion();
+
+    try {
+        $stmt = $pdo->prepare(
+            'SELECT id FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = :amb LIMIT 1'
+        );
+        $stmt->execute([':cuenta_id' => $cuentaId, ':amb' => $ambiente]);
+        $existenteId = $stmt->fetchColumn();
+
+        if ($existenteId !== false) {
+            $upd = $pdo->prepare(
+                'UPDATE dte_emisor SET rut_emisor = :rut, razon_social = :razon, giro = :giro, '
+                . 'acteco = :acteco, dir_origen = :dir, cmna_origen = :cmna, '
+                . 'resolucion_fecha = :resfecha, resolucion_numero = :resnum '
+                . 'WHERE id = :id'
+            );
+            $upd->execute([
+                ':rut'      => $rut,
+                ':razon'    => $razon,
+                ':giro'     => $giro,
+                ':acteco'   => $acteco,
+                ':dir'      => $dir,
+                ':cmna'     => $cmna,
+                ':resfecha' => $resFecha,
+                ':resnum'   => $resNum,
+                ':id'       => $existenteId,
+            ]);
+        } else {
+            $ins = $pdo->prepare(
+                'INSERT INTO dte_emisor '
+                . '(cuenta_id, rut_emisor, ambiente, razon_social, giro, acteco, dir_origen, cmna_origen, '
+                . ' resolucion_fecha, resolucion_numero) '
+                . 'VALUES (:cuenta_id, :rut, :amb, :razon, :giro, :acteco, :dir, :cmna, :resfecha, :resnum)'
+            );
+            $ins->execute([
+                ':cuenta_id' => $cuentaId,
+                ':rut'       => $rut,
+                ':amb'       => $ambiente,
+                ':razon'     => $razon,
+                ':giro'      => $giro,
+                ':acteco'    => $acteco,
+                ':dir'       => $dir,
+                ':cmna'      => $cmna,
+                ':resfecha'  => $resFecha,
+                ':resnum'    => $resNum,
+            ]);
+        }
+    } catch (PDOException $e) {
+        error_log('panel empresa guardar fallo: ' . $e->getMessage());
+        // 23000 = violacion de UNIQUE (uk_emisor: rut_emisor+ambiente ya usado por otra cuenta).
+        $mensaje = $e->getCode() === '23000'
+            ? 'Ese RUT ya esta registrado en el sistema.'
+            : 'No se pudo guardar. Intenta nuevamente.';
+        vista('empresa', ['errores' => ['rut_emisor' => $mensaje], 'emisor' => $datosForm]);
+        return;
+    }
+
+    redirigir('/panel');
+}
+
+// ===========================================================================
+//  Handler: GET /empresa-produccion
+//
+//  Estacion 7 (PRODUCCION), NUEVA y todavia SIN enlazar desde el panel visible
+//  (ver PARTE D de la tarea que agrego esto): requiere que la etapa 2 de
+//  CERTIFICACION este completa (fila dte_emisor ambiente='certificacion'); si
+//  no, redirige a /empresa -- el flujo de produccion parte de una empresa que
+//  YA certifico, nunca desde cero. Si ya existe una fila de produccion, se
+//  muestra como "ya configurado" (no se permite reeditar aqui: los datos de
+//  produccion son la Resolucion REAL del SII, no se tocan por error). Si no
+//  existe, el formulario viene PRECARGADO con los datos de la fila de
+//  certificacion (razon_social/giro/acteco/dir_origen/cmna_origen) -- el
+//  rut_emisor NUNCA se pide de nuevo: es la MISMA empresa, se toma tal cual
+//  de la fila de certificacion, nunca del cliente.
+// ===========================================================================
+function handleEmpresaProduccionGet(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $pdo      = Db::conexion();
+
+    $stmtCert = $pdo->prepare(
+        'SELECT rut_emisor, razon_social, giro, acteco, dir_origen, cmna_origen '
+        . "FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmtCert->execute([':cuenta_id' => $cuentaId]);
+    $emisorCert = $stmtCert->fetch(PDO::FETCH_ASSOC);
+    if ($emisorCert === false) {
+        redirigir('/empresa');
+    }
+
+    $stmtProd = $pdo->prepare(
+        'SELECT rut_emisor, razon_social, giro, acteco, dir_origen, cmna_origen, '
+        . '       resolucion_fecha, resolucion_numero '
+        . "FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmtProd->execute([':cuenta_id' => $cuentaId]);
+    $emisorProd = $stmtProd->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    if ($emisorProd !== null) {
+        vista('empresa-produccion', [
+            'yaConfigurado' => true,
+            'produccion'    => $emisorProd,
+            'errores'       => [],
+            'emisor'        => null,
+        ]);
+    }
+
+    vista('empresa-produccion', [
+        'yaConfigurado' => false,
+        'produccion'    => null,
+        'errores'       => [],
+        'emisor'        => $emisorCert + ['resolucion_fecha' => '', 'resolucion_numero' => ''],
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /empresa-produccion
+//
+//  rut_emisor SIEMPRE el de la fila de certificacion (nunca del POST).
+//  resolucion_fecha/resolucion_numero son la Resolucion REAL de autorizacion
+//  del SII (NO se inventan: salen del correo/portal de autorizacion) -- por
+//  eso son obligatorios aqui, a diferencia de /empresa donde en certificacion
+//  representan solo la fecha de POSTULACION. Idempotente: si ya existe fila
+//  de produccion, no se inserta de nuevo (evita duplicar/pisar una Resolucion
+//  real ya cargada por un doble submit).
+// ===========================================================================
+function handleEmpresaProduccionPost(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $pdo      = Db::conexion();
+
+    $stmtCert = $pdo->prepare(
+        'SELECT rut_emisor, razon_social, giro, acteco, dir_origen, cmna_origen '
+        . "FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmtCert->execute([':cuenta_id' => $cuentaId]);
+    $emisorCert = $stmtCert->fetch(PDO::FETCH_ASSOC);
+    if ($emisorCert === false) {
+        redirigir('/empresa');
+    }
+
+    $stmtProd = $pdo->prepare(
+        "SELECT 1 FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmtProd->execute([':cuenta_id' => $cuentaId]);
+    if ($stmtProd->fetchColumn() !== false) {
+        redirigir('/empresa-produccion');
+    }
+
+    $razon     = trim((string) ($_POST['razon_social'] ?? ''));
+    $giro      = trim((string) ($_POST['giro'] ?? ''));
+    $actecoRaw = trim((string) ($_POST['acteco'] ?? ''));
+    $dir       = trim((string) ($_POST['dir_origen'] ?? ''));
+    $cmna      = trim((string) ($_POST['cmna_origen'] ?? ''));
+    $resFecha  = trim((string) ($_POST['resolucion_fecha'] ?? ''));
+    $resNumRaw = trim((string) ($_POST['resolucion_numero'] ?? ''));
+
+    $errores = [];
+    if ($razon === '') {
+        $errores['razon_social'] = 'La razon social es obligatoria.';
+    }
+    if ($giro === '') {
+        $errores['giro'] = 'El giro es obligatorio.';
+    }
+    if (! ctype_digit($actecoRaw)) {
+        $errores['acteco'] = 'El codigo de actividad economica debe ser un numero entero.';
+    }
+    if ($dir === '') {
+        $errores['dir_origen'] = 'La direccion es obligatoria.';
+    }
+    if ($cmna === '') {
+        $errores['cmna_origen'] = 'La comuna es obligatoria.';
+    }
+    if (! fechaValida($resFecha)) {
+        $errores['resolucion_fecha'] = 'Fecha de resolucion invalida (formato YYYY-MM-DD).';
+    }
+    if (! ctype_digit($resNumRaw) || (int) $resNumRaw <= 0) {
+        $errores['resolucion_numero'] = 'El numero de resolucion debe ser un numero entero positivo.';
+    }
+
+    $datosForm = [
+        'rut_emisor'        => $emisorCert['rut_emisor'],
+        'razon_social'      => $razon,
+        'giro'              => $giro,
+        'acteco'            => $actecoRaw,
+        'dir_origen'        => $dir,
+        'cmna_origen'       => $cmna,
+        'resolucion_fecha'  => $resFecha,
+        'resolucion_numero' => $resNumRaw,
+    ];
+
+    if ($errores !== []) {
+        vista('empresa-produccion', [
+            'yaConfigurado' => false,
+            'produccion'    => null,
+            'errores'       => $errores,
+            'emisor'        => $datosForm,
+        ]);
+    }
+
+    try {
+        $pdo->prepare(
+            'INSERT INTO dte_emisor '
+            . '(cuenta_id, rut_emisor, ambiente, razon_social, giro, acteco, dir_origen, cmna_origen, '
+            . ' resolucion_fecha, resolucion_numero) '
+            . "VALUES (:cuenta_id, :rut, 'produccion', :razon, :giro, :acteco, :dir, :cmna, :resfecha, :resnum)"
+        )->execute([
+            ':cuenta_id' => $cuentaId,
+            ':rut'       => $emisorCert['rut_emisor'],
+            ':razon'     => $razon,
+            ':giro'      => $giro,
+            ':acteco'    => (int) $actecoRaw,
+            ':dir'       => $dir,
+            ':cmna'      => $cmna,
+            ':resfecha'  => $resFecha,
+            ':resnum'    => (int) $resNumRaw,
+        ]);
+    } catch (PDOException $e) {
+        error_log('panel empresa-produccion guardar fallo: ' . $e->getMessage());
+        // 23000 = violacion de UNIQUE (uk_emisor: rut_emisor+ambiente ya usado por otra cuenta).
+        $mensaje = $e->getCode() === '23000'
+            ? 'Ese RUT ya esta registrado en ambiente de produccion.'
+            : 'No se pudo guardar. Intenta nuevamente.';
+        vista('empresa-produccion', [
+            'yaConfigurado' => false,
+            'produccion'    => null,
+            'errores'       => ['rut_emisor' => $mensaje],
+            'emisor'        => $datosForm,
+        ]);
+    }
+
+    redirigir('/empresa-produccion');
+}
+
+// ===========================================================================
+//  Handler: GET /certificado
+//
+//  Requiere que la etapa 2 (datos de empresa) este completa: si la cuenta no
+//  tiene fila en dte_emisor (ambiente certificacion), redirige a /empresa.
+// ===========================================================================
+function handleCertificadoGet(): void
+{
+    procesarCertificadoGet('certificacion', 'certificado', '/empresa');
+}
+
+// ===========================================================================
+//  Handler: GET /certificado-produccion
+//
+//  Mismo patron que GET /certificado, ambiente produccion: si no existe fila
+//  dte_emisor de produccion, redirige a /empresa-produccion (NO a /empresa).
+// ===========================================================================
+function handleCertificadoProduccionGet(): void
+{
+    procesarCertificadoGet('produccion', 'certificado-produccion', '/empresa-produccion');
+}
+
+/**
+ * Logica compartida de GET /certificado y GET /certificado-produccion:
+ * exige que exista la fila dte_emisor del ambiente correspondiente (si no,
+ * redirige a $rutaEmpresa) y renderiza $vista.
+ */
+function procesarCertificadoGet(string $ambiente, string $vista, string $rutaEmpresa): void
+{
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = :amb LIMIT 1'
+    );
+    $stmt->execute([':cuenta_id' => Auth::cuentaId(), ':amb' => $ambiente]);
+    if ($stmt->fetchColumn() === false) {
+        redirigir($rutaEmpresa);
+    }
+
+    vista($vista, ['error' => null]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificado
+// ===========================================================================
+function handleCertificadoPost(): void
+{
+    procesarCertificadoPost('certificacion', 'certificado', '/empresa');
+}
+
+// ===========================================================================
+//  Handler: POST /certificado-produccion
+//
+//  Misma logica EXACTA que POST /certificado (ver procesarCertificadoPost()),
+//  solo con $ambiente='produccion' fijo en vez de 'certificacion'. El
+//  certificado digital (.pfx) es el MISMO archivo en cert y produccion en la
+//  practica (no cambia entre ambientes), pero se guarda como fila separada
+//  (uk_cert_emisor: rut_emisor+ambiente) para no mezclar ambientes.
+// ===========================================================================
+function handleCertificadoProduccionPost(): void
+{
+    procesarCertificadoPost('produccion', 'certificado-produccion', '/empresa-produccion');
+}
+
+/**
+ * Logica compartida de POST /certificado y POST /certificado-produccion:
+ * envelope encryption: una DEK aleatoria (32B) cifra el cert/pkey en PEM; la
+ * DEK se envuelve (cifra) con la KEK maestra (CRYPTO_MASTER_KEY) y se guarda
+ * en dte_certificado.dek_envuelta. La clave del .pfx NUNCA se persiste ni se
+ * loguea; el archivo se lee de memoria desde tmp_name, nunca se copia a disco.
+ *
+ * $vista es el nombre de la vista a re-renderizar en caso de error (para que
+ * produccion muestre certificado-produccion.php, no certificado.php).
+ * $rutaEmpresa es a donde redirigir si la cuenta aun no tiene fila dte_emisor
+ * de este ambiente.
+ */
+function procesarCertificadoPost(string $ambiente, string $vista, string $rutaEmpresa): void
+{
+    $cuentaId = Auth::cuentaId();
+
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = :amb LIMIT 1'
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId, ':amb' => $ambiente]);
+    $rutEmisor = $stmt->fetchColumn();
+    if ($rutEmisor === false) {
+        redirigir($rutaEmpresa);
+    }
+
+    // --- a. Verificar que llego archivo + clave ---
+    $archivo = $_FILES['certificado'] ?? null;
+    $clave   = (string) ($_POST['clave'] ?? '');
+
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        vista($vista, ['error' => 'Debes seleccionar un archivo de certificado (.pfx/.p12) valido.']);
+    }
+    if ($clave === '') {
+        vista($vista, ['error' => 'La clave del certificado es obligatoria.']);
+    }
+
+    // --- b. Leer el .pfx A MEMORIA (nunca move_uploaded_file, nunca a disco propio) ---
+    $contenidoPfx = file_get_contents($archivo['tmp_name']);
+    if ($contenidoPfx === false || $contenidoPfx === '') {
+        vista($vista, ['error' => 'No se pudo leer el archivo subido.']);
+    }
+
+    // --- c. Abrir el PKCS12: valida clave Y formato de una sola vez ---
+    $certs = [];
+    if (! openssl_pkcs12_read($contenidoPfx, $certs, $clave)) {
+        // NUNCA logear la clave ni el contenido del archivo.
+        error_log(sprintf('panel certificado (%s): PKCS12 invalido o clave incorrecta (cuenta %d)', $ambiente, $cuentaId));
+        vista($vista, ['error' => 'Certificado o clave invalidos.']);
+    }
+    $contenidoPfx = null;
+
+    // --- d. Extraer cert y pkey en PEM ---
+    $certPem = $certs['cert'] ?? null;
+    $pkeyPem = $certs['pkey'] ?? null;
+    $certs   = null;
+    if (! is_string($certPem) || $certPem === '' || ! is_string($pkeyPem) || $pkeyPem === '') {
+        error_log(sprintf('panel certificado (%s): PKCS12 sin cert/pkey extraible (cuenta %d)', $ambiente, $cuentaId));
+        vista($vista, ['error' => 'Certificado o clave invalidos.']);
+    }
+
+    // --- e. Extraccion tolerante del RUT del FIRMANTE (sender) desde el certificado ---
+    //
+    //  El certificado pertenece a una PERSONA NATURAL autorizada a firmar (el
+    //  representante), cuyo RUT es casi siempre DISTINTO al rut_emisor de la
+    //  empresa (ej. cert 13520634-2 firma para empresa 77724622-4). NO se
+    //  compara contra rut_emisor: se guarda como rut_sender, el "sender" que
+    //  el motor envia al SII (antes una constante fija, FACT_RUT_SENDER).
+    //
+    //  CertificadoRutSenderExtractor prueba 2 metodos, en orden: (1)
+    //  subject.serialNumber (el metodo historico, cubre la mayoria de los
+    //  certificados SII), (2) fallback a la extension subjectAltName
+    //  (otherName con el OID chileno de RUN 1.3.6.1.4.1.8321.1) para
+    //  certificados que NO llevan el RUT en el serialNumber (ej.
+    //  13407848-0.pfx). Si ninguno encuentra nada, rut_sender queda NULL:
+    //  no bloquea la subida del certificado.
+    $rutSender = CertificadoRutSenderExtractor::extraer($certPem);
+    if ($rutSender === null) {
+        error_log(sprintf('panel certificado (%s): no se pudo extraer RUT del certificado para cuenta %d', $ambiente, $cuentaId));
+    }
+
+    // --- f-h. Envelope encryption: DEK aleatoria cifra los PEM; la KEK envuelve la DEK ---
+    $dek = random_bytes(32);
+    try {
+        $cryptoDek   = new CertificadoCrypto($dek);
+        $certCifrado = $cryptoDek->cifrar($certPem);
+        $pkeyCifrado = $cryptoDek->cifrar($pkeyPem);
+
+        $cryptoKek   = new CertificadoCrypto(kekMaestra());
+        $dekEnvuelta = $cryptoKek->cifrar($dek);
+    } catch (CertificadoCryptoException $e) {
+        error_log('panel certificado (' . $ambiente . '): fallo de cifrado - ' . $e->getMessage());
+        vista($vista, ['error' => 'No se pudo procesar el certificado. Intenta nuevamente.']);
+    }
+
+    // --- i. Guardar: respeta uk_cert_emisor(rut_emisor, ambiente); UPDATE si ya existe, INSERT si no ---
+    try {
+        $sel = $pdo->prepare(
+            'SELECT id FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = :amb LIMIT 1'
+        );
+        $sel->execute([':rut' => $rutEmisor, ':amb' => $ambiente]);
+        $existenteId = $sel->fetchColumn();
+
+        if ($existenteId !== false) {
+            $upd = $pdo->prepare(
+                'UPDATE dte_certificado SET cert_data_cifrado = :cert, pkey_data_cifrado = :pkey, '
+                . 'dek_envuelta = :dek, rut_sender = :sender WHERE id = :id'
+            );
+            $upd->execute([
+                ':cert'   => $certCifrado,
+                ':pkey'   => $pkeyCifrado,
+                ':dek'    => $dekEnvuelta,
+                ':sender' => $rutSender,
+                ':id'     => $existenteId,
+            ]);
+        } else {
+            $ins = $pdo->prepare(
+                'INSERT INTO dte_certificado '
+                . '(rut_emisor, ambiente, cert_data_cifrado, pkey_data_cifrado, dek_envuelta, rut_sender) '
+                . 'VALUES (:rut, :amb, :cert, :pkey, :dek, :sender)'
+            );
+            $ins->execute([
+                ':rut'    => $rutEmisor,
+                ':amb'    => $ambiente,
+                ':cert'   => $certCifrado,
+                ':pkey'   => $pkeyCifrado,
+                ':dek'    => $dekEnvuelta,
+                ':sender' => $rutSender,
+            ]);
+        }
+    } catch (PDOException $e) {
+        error_log('panel certificado (' . $ambiente . '): fallo al guardar - ' . $e->getMessage());
+        vista($vista, ['error' => 'No se pudo guardar el certificado. Intenta nuevamente.']);
+    }
+
+    redirigir($ambiente === 'produccion' ? '/certificado-produccion' : '/panel');
+}
+
+// ===========================================================================
+//  Handler: GET /caf
+// ===========================================================================
+function handleCafGet(): void
+{
+    procesarCafGet('certificacion', 'caf', '/empresa', '/certificado');
+}
+
+// ===========================================================================
+//  Handler: GET /caf-produccion
+//
+//  Mismo patron que GET /caf, ambiente produccion: redirige a
+//  /empresa-produccion o /certificado-produccion (nunca a las de
+//  certificacion) si falta una etapa anterior de produccion.
+// ===========================================================================
+function handleCafProduccionGet(): void
+{
+    procesarCafGet('produccion', 'caf-produccion', '/empresa-produccion', '/certificado-produccion');
+}
+
+/**
+ * Logica compartida de GET /caf y GET /caf-produccion: requiere emisor Y
+ * certificado del ambiente correspondiente (si falta alguno, redirige a
+ * $rutaEmpresa/$rutaCertificado), y renderiza $vista con el listado de CAF de
+ * ESE ambiente (listarCafs() con $ambiente).
+ */
+function procesarCafGet(string $ambiente, string $vista, string $rutaEmpresa, string $rutaCertificado): void
+{
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = :amb LIMIT 1'
+    );
+    $stmt->execute([':cuenta_id' => Auth::cuentaId(), ':amb' => $ambiente]);
+    $rutEmisor = $stmt->fetchColumn();
+    if ($rutEmisor === false) {
+        redirigir($rutaEmpresa);
+    }
+
+    $stmtCert = $pdo->prepare(
+        'SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = :amb LIMIT 1'
+    );
+    $stmtCert->execute([':rut' => $rutEmisor, ':amb' => $ambiente]);
+    if ($stmtCert->fetchColumn() === false) {
+        redirigir($rutaCertificado);
+    }
+
+    vista($vista, ['error' => null, 'cafs' => listarCafs($pdo, (string) $rutEmisor, $ambiente)]);
+}
+
+// ===========================================================================
+//  Handler: POST /caf
+// ===========================================================================
+function handleCafPost(): void
+{
+    procesarCafPost('certificacion', 'caf', '/empresa', '/certificado', '/caf');
+}
+
+// ===========================================================================
+//  Handler: POST /caf-produccion
+//
+//  Misma logica EXACTA que POST /caf (ver procesarCafPost()), solo con
+//  $ambiente='produccion' fijo. El CAF de produccion es un archivo NUEVO y
+//  DISTINTO del de certificacion (folios distintos, emitido por el SII para
+//  el ambiente real) -- no se reutiliza el mismo XML entre ambientes en un
+//  caso real (solo se prueba el MECANISMO con archivos de certificacion, ver
+//  PARTE E de la tarea que agrego esto).
+// ===========================================================================
+function handleCafProduccionPost(): void
+{
+    procesarCafPost('produccion', 'caf-produccion', '/empresa-produccion', '/certificado-produccion', '/caf-produccion');
+}
+
+/**
+ * Logica compartida de POST /caf y POST /caf-produccion.
+ *
+ * El CAF del SII viene en ISO-8859-1 SIN atributo encoding; su firma FRMA es
+ * sobre esos bytes exactos. Por eso: se parsea una COPIA convertida a UTF-8
+ * solo si hace falta (igual que scripts/cargar_caf.php), pero se CIFRA Y
+ * GUARDA el original sin tocar -- convertir el encoding invalidaria el CAF al
+ * timbrar (ver TedBuilder, que firma el DD con la RSASK de este mismo CAF).
+ * Envelope encryption identica a /certificado: DEK aleatoria cifra los bytes
+ * originales, la KEK maestra envuelve la DEK.
+ */
+function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, string $rutaCertificado, string $rutaExito): void
+{
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = :amb LIMIT 1'
+    );
+    $stmt->execute([':cuenta_id' => Auth::cuentaId(), ':amb' => $ambiente]);
+    $rutEmisor = $stmt->fetchColumn();
+    if ($rutEmisor === false) {
+        redirigir($rutaEmpresa);
+    }
+
+    $stmtCert = $pdo->prepare(
+        'SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = :amb LIMIT 1'
+    );
+    $stmtCert->execute([':rut' => $rutEmisor, ':amb' => $ambiente]);
+    if ($stmtCert->fetchColumn() === false) {
+        redirigir($rutaCertificado);
+    }
+
+    // --- a. Verificar que llego archivo ---
+    $archivo = $_FILES['caf'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        vista($vista, [
+            'error' => 'Debes seleccionar un archivo CAF (.xml) valido.',
+            'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        ]);
+    }
+
+    // --- b. Leer los BYTES ORIGINALES a memoria (nunca move_uploaded_file, nunca a disco propio) ---
+    $original = file_get_contents($archivo['tmp_name']);
+    if ($original === false || trim($original) === '') {
+        vista($vista, [
+            'error' => 'No se pudo leer el archivo subido.',
+            'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        ]);
+    }
+
+    // --- c. Copia SOLO para parsear; NUNCA se cifra esta version convertida ---
+    $paraParsear = mb_check_encoding($original, 'UTF-8')
+        ? $original
+        : mb_convert_encoding($original, 'UTF-8', 'ISO-8859-1');
+
+    $dom = new DOMDocument();
+    libxml_use_internal_errors(true);
+    $xmlOk = $dom->loadXML($paraParsear);
+    libxml_clear_errors();
+    libxml_use_internal_errors(false);
+    if (! $xmlOk) {
+        vista($vista, [
+            'error' => 'El archivo no es un CAF valido.',
+            'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        ]);
+    }
+
+    // --- d. Extraer TD/RE/D/H ---
+    $td = cafTexto($dom, 'TD');
+    $re = cafTexto($dom, 'RE');
+    $d  = cafTexto($dom, 'D');
+    $h  = cafTexto($dom, 'H');
+    if ($td === '' || $re === '' || $d === '' || $h === '') {
+        vista($vista, [
+            'error' => 'CAF mal formado: faltan datos de tipo, RUT o rango de folios.',
+            'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        ]);
+    }
+
+    // --- e. Validar tipo/rango y que el RUT del CAF sea el de la empresa (no el del firmante) ---
+    $tipo  = (int) $td;
+    $desde = (int) $d;
+    $hasta = (int) $h;
+    if ($tipo <= 0 || $desde <= 0 || $hasta < $desde) {
+        vista($vista, [
+            'error' => 'Valores invalidos en el CAF (tipo o rango de folios).',
+            'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        ]);
+    }
+    if (Rut::normalizar($re) !== Rut::normalizar((string) $rutEmisor)) {
+        vista($vista, [
+            'error' => 'El RUT del CAF no corresponde a tu empresa.',
+            'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        ]);
+    }
+
+    // --- f. Envelope encryption sobre los BYTES ORIGINALES (NO la copia UTF-8) ---
+    $dek = random_bytes(32);
+    try {
+        $cifrado     = (new CertificadoCrypto($dek))->cifrar($original);
+        $dekEnvuelta = (new CertificadoCrypto(kekMaestra()))->cifrar($dek);
+    } catch (CertificadoCryptoException $e) {
+        error_log('panel caf (' . $ambiente . '): fallo de cifrado - ' . $e->getMessage());
+        vista($vista, [
+            'error' => 'No se pudo procesar el CAF. Intenta nuevamente.',
+            'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        ]);
+    }
+
+    // --- g. Guardar en transaccion (dte_caf + dte_folio) ---
+    try {
+        $pdo->beginTransaction();
+
+        $pdo->prepare(
+            'INSERT INTO dte_caf (rut_emisor, tipo_dte, ambiente, folio_desde, folio_hasta, caf_xml_cifrado, dek_envuelta) '
+            . 'VALUES (:rut, :tipo, :amb, :desde, :hasta, :xml, :dek)'
+        )->execute([
+            ':rut'   => $rutEmisor,
+            ':tipo'  => $tipo,
+            ':amb'   => $ambiente,
+            ':desde' => $desde,
+            ':hasta' => $hasta,
+            ':xml'   => $cifrado,
+            ':dek'   => $dekEnvuelta,
+        ]);
+        $cafId = (int) $pdo->lastInsertId();
+
+        $pdo->prepare(
+            'INSERT INTO dte_folio (caf_id, rut_emisor, tipo_dte, ambiente, proximo_folio, folio_hasta) '
+            . 'VALUES (:caf, :rut, :tipo, :amb, :prox, :hasta)'
+        )->execute([
+            ':caf'   => $cafId,
+            ':rut'   => $rutEmisor,
+            ':tipo'  => $tipo,
+            ':amb'   => $ambiente,
+            ':prox'  => $desde,
+            ':hasta' => $hasta,
+        ]);
+
+        $pdo->commit();
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log('panel caf (' . $ambiente . '): fallo al guardar - ' . $e->getMessage());
+        // 23000 = violacion de UNIQUE (uk_caf_rango: mismo rut/tipo/ambiente/rango ya cargado).
+        $mensaje = $e->getCode() === '23000'
+            ? 'Este CAF ya esta cargado (mismo tipo y rango).'
+            : 'No se pudo guardar el CAF. Intenta nuevamente.';
+        vista($vista, ['error' => $mensaje, 'cafs' => listarCafs($pdo, (string) $rutEmisor, $ambiente)]);
+    }
+
+    redirigir($rutaExito);
+}
+
+// ===========================================================================
+//  Handler: GET /apikeys
+//
+//  Requiere onboarding base completo (empresa + certificado + >=1 CAF). Nunca
+//  muestra un secreto de una key ya existente (no se guarda en claro): solo
+//  el POST /apikeys/generar puede pasar 'keyNueva' a la vista, y solo en el
+//  request donde recien se genero.
+// ===========================================================================
+function handleApiKeysGet(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $pdo      = Db::conexion();
+    exigirOnboardingCompleto($pdo, $cuentaId);
+
+    vista('apikeys', [
+        'keys'     => listarApiKeys($pdo, $cuentaId),
+        'keyNueva' => null,
+        'error'    => null,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /apikeys/generar
+//
+//  Genera una API key de ambiente 'certificacion', scopeada al rut_emisor de
+//  la cuenta. SOLO se persiste key_hash (sha256 del secreto) + prefijo; el
+//  secreto en claro vive nada mas en la variable local de este request y en
+//  el render de esta misma respuesta (nunca en sesion, BD ni error_log).
+// ===========================================================================
+function handleApiKeysGenerarPost(): void
+{
+    $cuentaId  = Auth::cuentaId();
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    // --- b. Secreto: base64url de 32 bytes aleatorios (alta entropia, sin punto) ---
+    $secreto = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+
+    // --- c. Prefijo con marca de ambiente ("cert_" + 8 hex); verifica unicidad ---
+    $prefijo = null;
+    for ($intento = 0; $intento < 5; $intento++) {
+        $candidato = 'cert_' . bin2hex(random_bytes(4));
+        $chequeo   = $pdo->prepare('SELECT 1 FROM api_key WHERE prefijo = :prefijo LIMIT 1');
+        $chequeo->execute([':prefijo' => $candidato]);
+        if ($chequeo->fetchColumn() === false) {
+            $prefijo = $candidato;
+            break;
+        }
+    }
+    if ($prefijo === null) {
+        error_log(sprintf('panel apikeys: no se pudo generar un prefijo unico tras 5 intentos (cuenta %d)', $cuentaId));
+        vista('apikeys', [
+            'keys'     => listarApiKeys($pdo, $cuentaId),
+            'keyNueva' => null,
+            'error'    => 'No se pudo generar una key en este momento. Intenta nuevamente.',
+        ]);
+    }
+
+    // --- d. Hash del secreto (sha256 hex, formato que exige resolverTenant() en public/index.php) ---
+    $keyHash = hash('sha256', $secreto);
+
+    // --- e. Guardar: SOLO key_hash + prefijo van a BD. El secreto NUNCA. ---
+    try {
+        $pdo->prepare(
+            "INSERT INTO api_key (cuenta_id, key_hash, prefijo, rut_emisor_scope, ambiente, estado) "
+            . "VALUES (:cuenta_id, :hash, :prefijo, :rut, 'certificacion', 'activa')"
+        )->execute([
+            ':cuenta_id' => $cuentaId,
+            ':hash'      => $keyHash,
+            ':prefijo'   => $prefijo,
+            ':rut'       => $rutEmisor,
+        ]);
+    } catch (PDOException $e) {
+        error_log('panel apikeys: fallo al guardar - ' . $e->getMessage());
+        vista('apikeys', [
+            'keys'     => listarApiKeys($pdo, $cuentaId),
+            'keyNueva' => null,
+            'error'    => 'No se pudo guardar la nueva key. Intenta nuevamente.',
+        ]);
+    }
+
+    // --- f. Mostrar la key completa UNA vez, solo en el render de esta respuesta ---
+    //     (sin redirect: si redirigieramos a GET /apikeys, tendriamos que pasar
+    //     la key por sesion o query string, y NINGUNA de esas dos es aceptable
+    //     para un secreto).
+    vista('apikeys', [
+        'keys'     => listarApiKeys($pdo, $cuentaId),
+        'keyNueva' => $prefijo . '.' . $secreto,
+        'error'    => null,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /apikeys/revocar
+//
+//  Revoca por id, scopeado a cuenta_id en el propio UPDATE (revocar el id de
+//  otra cuenta simplemente actualiza 0 filas, sin filtrar si el id existe).
+// ===========================================================================
+function handleApiKeysRevocarPost(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $id       = (int) ($_POST['id'] ?? 0);
+
+    if ($id > 0) {
+        Db::conexion()
+            ->prepare("UPDATE api_key SET estado = 'revocada' WHERE id = :id AND cuenta_id = :cuenta_id")
+            ->execute([':id' => $id, ':cuenta_id' => $cuentaId]);
+    }
+
+    redirigir('/apikeys');
+}
+
+// ===========================================================================
+//  Handler: GET /apikeys-produccion
+//
+//  Duplicado de GET /apikeys para el ambiente de PRODUCCION -- funcion NUEVA
+//  e independiente (handleApiKeysGet() no se toca). Requiere
+//  exigirProduccionCompleto() (empresa + certificado + >=1 CAF, los 3 de
+//  produccion).
+// ===========================================================================
+function handleApiKeysProduccionGet(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $pdo      = Db::conexion();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    vista('apikeys-produccion', [
+        'keys'     => listarApiKeysProduccion($pdo, $cuentaId),
+        'keyNueva' => null,
+        'error'    => null,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /apikeys-produccion/generar
+//
+//  Duplicado de POST /apikeys/generar (handleApiKeysGenerarPost() no se
+//  toca): misma logica exacta (secreto aleatorio, hash sha256, key mostrada
+//  UNA sola vez), con 2 diferencias: ambiente='produccion' en el INSERT, y
+//  prefijo 'prod_' + 8 hex (en vez de 'cert_'), mismo modelo test/live que ya
+//  usa el proyecto.
+// ===========================================================================
+function handleApiKeysProduccionGenerarPost(): void
+{
+    $cuentaId  = Auth::cuentaId();
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
+
+    // --- b. Secreto: base64url de 32 bytes aleatorios (alta entropia, sin punto) ---
+    $secreto = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+
+    // --- c. Prefijo con marca de ambiente ("prod_" + 8 hex); verifica unicidad ---
+    $prefijo = null;
+    for ($intento = 0; $intento < 5; $intento++) {
+        $candidato = 'prod_' . bin2hex(random_bytes(4));
+        $chequeo   = $pdo->prepare('SELECT 1 FROM api_key WHERE prefijo = :prefijo LIMIT 1');
+        $chequeo->execute([':prefijo' => $candidato]);
+        if ($chequeo->fetchColumn() === false) {
+            $prefijo = $candidato;
+            break;
+        }
+    }
+    if ($prefijo === null) {
+        error_log(sprintf('panel apikeys-produccion: no se pudo generar un prefijo unico tras 5 intentos (cuenta %d)', $cuentaId));
+        vista('apikeys-produccion', [
+            'keys'     => listarApiKeysProduccion($pdo, $cuentaId),
+            'keyNueva' => null,
+            'error'    => 'No se pudo generar una key en este momento. Intenta nuevamente.',
+        ]);
+    }
+
+    // --- d. Hash del secreto (sha256 hex, formato que exige resolverTenant() en public/index.php) ---
+    $keyHash = hash('sha256', $secreto);
+
+    // --- e. Guardar: SOLO key_hash + prefijo van a BD. El secreto NUNCA. ---
+    try {
+        $pdo->prepare(
+            "INSERT INTO api_key (cuenta_id, key_hash, prefijo, rut_emisor_scope, ambiente, estado) "
+            . "VALUES (:cuenta_id, :hash, :prefijo, :rut, 'produccion', 'activa')"
+        )->execute([
+            ':cuenta_id' => $cuentaId,
+            ':hash'      => $keyHash,
+            ':prefijo'   => $prefijo,
+            ':rut'       => $rutEmisor,
+        ]);
+    } catch (PDOException $e) {
+        error_log('panel apikeys-produccion: fallo al guardar - ' . $e->getMessage());
+        vista('apikeys-produccion', [
+            'keys'     => listarApiKeysProduccion($pdo, $cuentaId),
+            'keyNueva' => null,
+            'error'    => 'No se pudo guardar la nueva key. Intenta nuevamente.',
+        ]);
+    }
+
+    // --- f. Mostrar la key completa UNA vez, solo en el render de esta respuesta ---
+    vista('apikeys-produccion', [
+        'keys'     => listarApiKeysProduccion($pdo, $cuentaId),
+        'keyNueva' => $prefijo . '.' . $secreto,
+        'error'    => null,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /apikeys-produccion/revocar
+//
+//  Duplicado de POST /apikeys/revocar (handleApiKeysRevocarPost() no se
+//  toca): misma logica, scopeado a cuenta_id en el UPDATE.
+// ===========================================================================
+function handleApiKeysProduccionRevocarPost(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $id       = (int) ($_POST['id'] ?? 0);
+
+    if ($id > 0) {
+        Db::conexion()
+            ->prepare("UPDATE api_key SET estado = 'revocada' WHERE id = :id AND cuenta_id = :cuenta_id")
+            ->execute([':id' => $id, ':cuenta_id' => $cuentaId]);
+    }
+
+    redirigir('/apikeys-produccion');
+}
+
+// ===========================================================================
+//  SOLO SUPERADMIN: dashboard de vigilancia de tenants + auditoria.
+//
+//  Todo el codigo de esta seccion es NUEVO y ADITIVO: no reemplaza ni llama
+//  desde ningun handler/vista existente del tenant. Cada handler empieza con
+//  exigirSuperadmin(), que responde 403 (nunca redirige a /login) si la
+//  sesion actual no tiene usuario.rol = 'superadmin'.
+// ===========================================================================
+
+/**
+ * Exige que el usuario de la sesion actual tenga usuario.rol = 'superadmin'.
+ * Responde 403 y termina la ejecucion si no (sea porque no hay sesion, o
+ * porque la hay pero el rol no es superadmin) -- NUNCA redirige a /login:
+ * un redirect confirmaria que la ruta existe y requiere autenticacion a
+ * cualquiera que la sondee sin sesion; un 403 uniforme no distingue esos
+ * casos.
+ */
+function exigirSuperadmin(PDO $pdo): void
+{
+    if (! Auth::autenticado()) {
+        http_response_code(403);
+        echo '403 - No autorizado.';
+        exit;
+    }
+
+    $stmt = $pdo->prepare('SELECT rol FROM usuario WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => Auth::usuarioId()]);
+    $rol = $stmt->fetchColumn();
+
+    if ($rol !== 'superadmin') {
+        http_response_code(403);
+        echo '403 - No autorizado.';
+        exit;
+    }
+}
+
+/**
+ * Registra una fila en el changelog admin_auditoria (append-only: un solo
+ * INSERT, ninguna fila se actualiza despues). Reutilizable desde cualquier
+ * accion administrativa futura, no solo suspender/reactivar cuenta.
+ *
+ * @param array<string,mixed>|null $valorAnterior Snapshot ANTES del cambio (null si no aplica, ej. una creacion).
+ * @param array<string,mixed>|null $valorNuevo    Snapshot DESPUES del cambio (null si no aplica, ej. una eliminacion).
+ */
+function registrarAuditoria(
+    PDO $pdo,
+    int $usuarioId,
+    string $accion,
+    string $entidadTipo,
+    int $entidadId,
+    ?array $valorAnterior,
+    ?array $valorNuevo
+): void {
+    $pdo->prepare(
+        'INSERT INTO admin_auditoria (usuario_id, accion, entidad_tipo, entidad_id, valor_anterior, valor_nuevo) '
+        . 'VALUES (:usuario_id, :accion, :entidad_tipo, :entidad_id, :anterior, :nuevo)'
+    )->execute([
+        ':usuario_id'   => $usuarioId,
+        ':accion'       => $accion,
+        ':entidad_tipo' => $entidadTipo,
+        ':entidad_id'   => $entidadId,
+        ':anterior'     => $valorAnterior !== null ? json_encode($valorAnterior, JSON_UNESCAPED_UNICODE) : null,
+        ':nuevo'        => $valorNuevo !== null ? json_encode($valorNuevo, JSON_UNESCAPED_UNICODE) : null,
+    ]);
+}
+
+/**
+ * Nombre + clase de color de las 6 etapas de certificacion de UN rut_emisor,
+ * MISMA convencion que el bloque ya existente en panel/views/certificacion.php
+ * (completada=verde, activa=azul=primera etapa no completada, no-gestionada
+ * =gris) -- extraida aqui como funcion PURA (sin PDO) para que
+ * GET /admin/tenants pueda mostrar el resumen compacto de TODAS las cuentas
+ * sin reinventar el criterio. certificacion.php NO se toca; sigue con su
+ * bloque inline igual que antes.
+ *
+ * @param array{simulacion:array{confirmada:bool},intercambio:array{confirmada:bool},muestrasImpresas:array{confirmada:bool}} $etapasManuales Salida de calcularEtapasManuales().
+ * @return list<array{nombre:string,clase:string}>
+ */
+function resumenEtapasBarra(bool $todosAprobados, array $etapasManuales, ?string $certConfirmadaAt): array
+{
+    $etapas = [
+        ['nombre' => 'Set de Prueba',            'completada' => $todosAprobados],
+        ['nombre' => 'Simulacion',               'completada' => $etapasManuales['simulacion']['confirmada']],
+        ['nombre' => 'Intercambio',              'completada' => $etapasManuales['intercambio']['confirmada']],
+        ['nombre' => 'Muestras Impresas',        'completada' => $etapasManuales['muestrasImpresas']['confirmada']],
+        ['nombre' => 'Declaracion Cumplimiento', 'completada' => $certConfirmadaAt !== null],
+        ['nombre' => 'Autorizacion',             'completada' => $certConfirmadaAt !== null],
+    ];
+
+    $todasAnterioresCompletas = true;
+    foreach ($etapas as &$e) {
+        if ($e['completada']) {
+            $e['clase'] = 'etapa--completada';
+        } elseif ($todasAnterioresCompletas) {
+            $e['clase'] = 'etapa--activa';
+        } else {
+            $e['clase'] = 'etapa--no-gestionada';
+        }
+        if (! $e['completada']) {
+            $todasAnterioresCompletas = false;
+        }
+    }
+    unset($e);
+
+    return $etapas;
+}
+
+// ===========================================================================
+//  Handler: GET /admin/tenants (SOLO SUPERADMIN)
+//
+//  Recorre TODAS las cuentas (no solo Auth::cuentaId(), a diferencia de todo
+//  el resto del panel) y arma, por cuenta, el mismo resumen de certificacion
+//  que ya usa el tenant individual: reutiliza setBasicoAprobado(),
+//  libroAprobado(), calcularEtapasManuales() y obtenerCertificacionConfirmadaAt()
+//  TAL CUAL, por cada rut_emisor encontrado -- no reinventa el calculo de en
+//  que etapa esta cada empresa. Solo lectura: ninguna fila se modifica aqui.
+// ===========================================================================
+function handleAdminTenantsGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $cuentas = $pdo->query(
+        'SELECT id, email, nombre, estado, created_at FROM cuenta ORDER BY created_at DESC'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $resumen = [];
+    foreach ($cuentas as $cuenta) {
+        $cuentaId = (int) $cuenta['id'];
+
+        $stmtEmisores = $pdo->prepare(
+            "SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion'"
+        );
+        $stmtEmisores->execute([':cuenta_id' => $cuentaId]);
+        $rutsEmisor = $stmtEmisores->fetchAll(PDO::FETCH_COLUMN);
+
+        $emisores = [];
+        foreach ($rutsEmisor as $rutEmisor) {
+            $rutEmisor = (string) $rutEmisor;
+
+            $agrupado       = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor));
+            $sokPorTrackId  = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+            $setBasico      = setBasicoAprobado($agrupado['envios'], $sokPorTrackId);
+            $ventas         = libroAprobado(listarLibros($pdo, $rutEmisor, 'VENTA'));
+            $compras        = libroAprobado(listarLibros($pdo, $rutEmisor, 'COMPRA'));
+            $todosAprobados = $setBasico['aprobado'] && $ventas['aprobado'] && $compras['aprobado'];
+
+            $etapasManuales   = calcularEtapasManuales(obtenerEtapasManualesRaw($pdo, $cuentaId), $todosAprobados);
+            $certConfirmadaAt = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
+
+            $stmtCertProd = $pdo->prepare(
+                "SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
+            );
+            $stmtCertProd->execute([':rut' => $rutEmisor]);
+
+            $stmtCafProd = $pdo->prepare(
+                "SELECT 1 FROM dte_caf WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
+            );
+            $stmtCafProd->execute([':rut' => $rutEmisor]);
+
+            $emisores[] = [
+                'rutEmisor'           => $rutEmisor,
+                'setBasico'           => $setBasico,
+                'libroVentas'         => $ventas,
+                'libroCompras'        => $compras,
+                'todosAprobados'      => $todosAprobados,
+                'etapasManuales'      => $etapasManuales,
+                'certConfirmadaAt'    => $certConfirmadaAt,
+                'barra'               => resumenEtapasBarra($todosAprobados, $etapasManuales, $certConfirmadaAt),
+                'tieneCertProduccion' => $stmtCertProd->fetchColumn() !== false,
+                'tieneCafProduccion'  => $stmtCafProd->fetchColumn() !== false,
+            ];
+        }
+
+        $stmtApiKeyProd = $pdo->prepare(
+            "SELECT 1 FROM api_key WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' LIMIT 1"
+        );
+        $stmtApiKeyProd->execute([':cuenta_id' => $cuentaId]);
+
+        $resumen[] = [
+            'cuenta'                => $cuenta,
+            'emisores'              => $emisores,
+            'tieneApiKeyProduccion' => $stmtApiKeyProd->fetchColumn() !== false,
+        ];
+    }
+
+    vista('admin-tenants', ['resumen' => $resumen, 'flash' => flashTomar()]);
+}
+
+// ===========================================================================
+//  Handler: POST /admin/tenants/suspender (SOLO SUPERADMIN)
+//  Handler: POST /admin/tenants/reactivar (SOLO SUPERADMIN)
+//
+//  Unica accion de mutacion de este panel de superadmin. Comparten
+//  cambiarEstadoCuentaAdmin(): lee el snapshot COMPLETO de la fila cuenta
+//  ANTES de cambiar el estado (valor_anterior), actualiza, y registra la
+//  auditoria con el snapshot antes/despues. Fuera de alcance a proposito:
+//  que pasa si una cuenta suspendida sigue usando el resto del panel (tarea
+//  aparte) -- hoy solo se deja el estado y su auditoria.
+// ===========================================================================
+function handleAdminTenantsSuspenderPost(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+    cambiarEstadoCuentaAdmin($pdo, 'suspendida', 'cuenta.suspender');
+}
+
+function handleAdminTenantsReactivarPost(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+    cambiarEstadoCuentaAdmin($pdo, 'activa', 'cuenta.reactivar');
+}
+
+/**
+ * Logica compartida de suspender/reactivar cuenta. usuario_id de la
+ * auditoria es SIEMPRE Auth::usuarioId() (el superadmin de la sesion
+ * actual), nunca un valor del POST.
+ */
+function cambiarEstadoCuentaAdmin(PDO $pdo, string $nuevoEstado, string $accion): void
+{
+    $cuentaId = (int) ($_POST['cuenta_id'] ?? 0);
+    if ($cuentaId <= 0) {
+        redirigir('/admin/tenants');
+    }
+
+    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, created_at FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $cuentaId]);
+    $anterior = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($anterior === false) {
+        redirigir('/admin/tenants');
+    }
+
+    $pdo->prepare('UPDATE cuenta SET estado = :estado WHERE id = :id')
+        ->execute([':estado' => $nuevoEstado, ':id' => $cuentaId]);
+
+    $nuevo = $anterior;
+    $nuevo['estado'] = $nuevoEstado;
+
+    registrarAuditoria($pdo, Auth::usuarioId(), $accion, 'cuenta', $cuentaId, $anterior, $nuevo);
+
+    redirigir('/admin/tenants');
+}
+
+// ===========================================================================
+//  Handler: POST /admin/tenants/revertir-etapa (SOLO SUPERADMIN)
+//
+//  Camino INVERSO de las confirmaciones manuales de las etapas 2-4
+//  (handleCertificacionConfirmarEtapaPost()) y de la 5/6
+//  (handleCertificacionAprobadaConfirmarPost()) -- NINGUNO de esos 2
+//  handlers se toca; esto es codigo nuevo y aditivo. Correccion
+//  administrativa para cuando el tenant (o el propio superadmin) confirmo
+//  algo por error: pone el campo de vuelta a NULL, con su propia auditoria.
+// ===========================================================================
+function handleAdminTenantsRevertirEtapaPost(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    // Whitelist FIJA de columnas revertibles: $campo NUNCA se interpola
+    // directo de $_POST, solo selecciona una entrada de este mapa (mismo
+    // criterio ya usado en handleCertificacionConfirmarEtapaPost()). El
+    // valor es la columna 'track_id' pareja a limpiar junto (null si el
+    // campo no tiene una).
+    $camposRevertibles = [
+        'certificacion_confirmada_at'      => null,
+        'simulacion_confirmada_at'         => 'simulacion_track_id',
+        'intercambio_confirmado_at'        => null,
+        'muestras_impresas_confirmadas_at' => null,
+    ];
+
+    $rutEmisor = trim((string) ($_POST['rut_emisor'] ?? ''));
+    $campo     = (string) ($_POST['campo'] ?? '');
+
+    if ($rutEmisor === '' || ! array_key_exists($campo, $camposRevertibles)) {
+        redirigir('/admin/tenants');
+    }
+    $trackCol = $camposRevertibles[$campo];
+
+    $stmt = $pdo->prepare(
+        'SELECT id, certificacion_confirmada_at, simulacion_confirmada_at, simulacion_track_id, '
+        . '       intercambio_confirmado_at, muestras_impresas_confirmadas_at '
+        . "FROM dte_emisor WHERE rut_emisor = :rut AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false) {
+        redirigir('/admin/tenants');
+    }
+
+    $valorAnterior = [$campo => $fila[$campo]];
+    if ($trackCol !== null) {
+        $valorAnterior[$trackCol] = $fila[$trackCol];
+    }
+
+    $sql = "UPDATE dte_emisor SET {$campo} = NULL"
+        . ($trackCol !== null ? ", {$trackCol} = NULL" : '')
+        . ' WHERE id = :id';
+    $pdo->prepare($sql)->execute([':id' => $fila['id']]);
+
+    $valorNuevo = [$campo => null];
+    if ($trackCol !== null) {
+        $valorNuevo[$trackCol] = null;
+    }
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'etapa.revertir', 'dte_emisor', (int) $fila['id'], $valorAnterior, $valorNuevo);
+
+    flashSet('ok', sprintf('Campo %s revertido para el RUT %s.', $campo, $rutEmisor));
+    redirigir('/admin/tenants');
+}
+
+// ===========================================================================
+//  Handler: GET /admin/auditoria (SOLO SUPERADMIN)
+//
+//  Lista cronologica (mas reciente primero) del changelog admin_auditoria.
+//  Solo lectura, sin filtros por ahora.
+// ===========================================================================
+function handleAdminAuditoriaGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $filas = $pdo->query(
+        'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, a.entidad_id, '
+        . '       a.valor_anterior, a.valor_nuevo, a.created_at '
+        . 'FROM admin_auditoria a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id '
+        . 'ORDER BY a.created_at DESC, a.id DESC'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    vista('admin-auditoria', ['filas' => $filas]);
+}
+
+/**
+ * Convierte una fecha de BD (aaaa-mm-dd, o un timestamp completo como
+ * aaaa-mm-dd hh:ii:ss) al formato dd-mm-aaaa que exige el SII en "Declarar
+ * Avance" (pe_avance1, campo "Fecha Envio").
+ */
+function formatearFechaAvanceSii(string $fecha): string
+{
+    return (new DateTimeImmutable($fecha))->format('d-m-Y');
+}
+
+/**
+ * Fecha (dd-mm-aaaa) del envio APROBADO de un componente, para la tabla de
+ * "Declarar Avance": null si el componente aun no esta aprobado.
+ *
+ * @param list<array<string,mixed>> $filas         Envios/libros del componente (con 'trackId'/'track_id' y el campo de fecha).
+ * @param array{aprobado:bool,trackId:?string} $veredicto Salida de setBasicoAprobado()/libroAprobado().
+ * @param string $campoTrackId Nombre del campo de trackId en cada fila ('trackId' para envios de set basico, 'track_id' para libros).
+ * @param string $campoFecha   Nombre del campo de fecha en cada fila.
+ */
+function fechaEnvioAprobado(array $filas, array $veredicto, string $campoTrackId, string $campoFecha): ?string
+{
+    if (! $veredicto['aprobado']) {
+        return null;
+    }
+    foreach ($filas as $fila) {
+        if ($fila[$campoTrackId] === $veredicto['trackId']) {
+            return formatearFechaAvanceSii((string) $fila[$campoFecha]);
+        }
+    }
+
+    return null;
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion
+//
+//  Progreso de certificacion del SET BASICO (factura/NC/ND), agrupado por
+//  ENVIO (track_id) -- no por documento, ver agruparEmitidosPorEnvio(). Requiere
+//  onboarding base completo (empresa + certificado + >=1 CAF).
+// ===========================================================================
+/**
+ * Calculo puro (solo lectura de BD, sin flash ni efectos de sesion) de todas
+ * las variables que necesita la certificacion de factura. Compartido por GET
+ * /certificacion (resumen) y GET /certificacion/etapa/{n} (vista por etapa)
+ * para no duplicar este calculo -- ver handleCertificacionGet() y
+ * handleCertificacionEtapaGet(). flashTomar() se queda FUERA de este helper
+ * a proposito: es stateful (consume el flash de sesion una sola vez) y cada
+ * handler debe llamarlo el mismo una sola vez, no este helper compartido.
+ */
+function calcularDatosCertificacion(PDO $pdo, int $cuentaId, string $rutEmisor): array
+{
+    $agrupado      = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor));
+    $librosVentas  = listarLibros($pdo, $rutEmisor, 'VENTA');
+    $librosCompras = listarLibros($pdo, $rutEmisor, 'COMPRA');
+    $sokPorTrackId = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+
+    $setBasico            = setBasicoAprobado($agrupado['envios'], $sokPorTrackId);
+    $libroVentasAprobado  = libroAprobado($librosVentas);
+    $libroComprasAprobado = libroAprobado($librosCompras);
+    $todosAprobados       = $setBasico['aprobado'] && $libroVentasAprobado['aprobado'] && $libroComprasAprobado['aprobado'];
+
+    // Set Basico EPR+3-tipos pero TODAVIA sin SOK: habilita la opcion de
+    // riesgo "emitir Libro sin esperar SOK" en las tarjetas de Libro de
+    // Ventas/Compras (ver CertificacionEstadoResolver::setBasicoEnviadoSinReparos()).
+    // Solo tiene sentido mostrarla cuando el Set Basico normal AUN no esta
+    // aprobado (si ya lo esta, el boton normal ya funciona, no hace falta
+    // la opcion de riesgo).
+    $setBasicoSinSok = $setBasico['aprobado']
+        ? ['aprobado' => false, 'trackId' => null]
+        : CertificacionEstadoResolver::setBasicoEnviadoSinReparos($agrupado['envios']);
+
+    // Etapas 2-4 (Simulacion, Intercambio, Muestras Impresas): confirmacion
+    // MANUAL del tenant, igual criterio que certificacion_confirmada_at (etapa
+    // 6) -- ver migracion 010_emisor_etapas_manuales.sql. Encadenadas igual
+    // que Set Basico -> Libro de Ventas/Compras (ver calcularEtapasManuales()).
+    $etapasManuales             = calcularEtapasManuales(obtenerEtapasManualesRaw($pdo, $cuentaId), $todosAprobados);
+    $certificacionConfirmadaAt  = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
+
+    // Fecha del envio APROBADO de cada componente, en el formato dd-mm-aaaa
+    // que pide el SII en "Declarar Avance" (pe_avance1). Set Basico usa la
+    // fecha_emision de los documentos (dte_emitido, via agruparEmitidosPorEnvio());
+    // los libros usan created_at de dte_libro -- es el momento en que
+    // MySqlLibroRepository::registrar() persiste, llamado inmediatamente
+    // despues de que el SII responde OK al envio (ver enviarLibroIecv() en
+    // public/index.php), asi que refleja la fecha real de envio al SII.
+    $fechaSetBasico    = fechaEnvioAprobado($agrupado['envios'], $setBasico, 'trackId', 'fechaEmision');
+    $fechaLibroVentas  = fechaEnvioAprobado($librosVentas, $libroVentasAprobado, 'track_id', 'created_at');
+    $fechaLibroCompras = fechaEnvioAprobado($librosCompras, $libroComprasAprobado, 'track_id', 'created_at');
+
+    return [
+        'envios'                     => $agrupado['envios'],
+        'sinTrackId'                 => $agrupado['sinTrackId'],
+        'sokPorTrackId'              => $sokPorTrackId,
+        'setBasico'                  => $setBasico,
+        'setBasicoSinSok'            => $setBasicoSinSok,
+        'fechaSetBasico'             => $fechaSetBasico,
+        'librosVentas'               => $librosVentas,
+        'libroVentasAprobado'        => $libroVentasAprobado,
+        'fechaLibroVentas'           => $fechaLibroVentas,
+        'librosCompras'              => $librosCompras,
+        'libroComprasAprobado'       => $libroComprasAprobado,
+        'fechaLibroCompras'          => $fechaLibroCompras,
+        'todosAprobados'             => $todosAprobados,
+        'etapasManuales'             => $etapasManuales,
+        'certificacionConfirmadaAt'  => $certificacionConfirmadaAt,
+    ];
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion-elegir
+//
+//  Pagina intermedia de eleccion entre Factura y Boleta -- 2 procesos
+//  INDEPENDIENTES ante el SII (ver /certificacion vs /certificacion/boleta),
+//  cada uno con su propia barra de 6 pasos. Resumen COMPACTO de cada uno,
+//  reusando EXACTAMENTE el mismo calculo que ya usan las paginas de detalle
+//  (calcularDatosCertificacion()+resumenEtapasBarra() para factura,
+//  listarBoletasEmitidas()+calcularEtapasBoletaManuales()+resumenEtapasBoletaBarra()
+//  para boleta) -- no se recalcula ningun estado nuevo aqui, solo se
+//  presenta mas compacto. No es ruta que se pueda bloquear: /certificacion y
+//  /certificacion/boleta siguen accesibles directo por URL (ver punto 5 de
+//  la tarea), esta pagina solo cambia el punto de entrada normal desde el
+//  dashboard (ver handlePanelGet()).
+// ===========================================================================
+function handleCertificacionElegirGet(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    $datosFactura      = calcularDatosCertificacion($pdo, $cuentaId, $rutEmisor);
+    $segmentosFactura  = resumenEtapasBarra($datosFactura['todosAprobados'], $datosFactura['etapasManuales'], $datosFactura['certificacionConfirmadaAt']);
+    $completadasFactura = count(array_filter($segmentosFactura, static fn (array $s): bool => $s['completada']));
+    $textoFactura       = textoEtapaActiva($segmentosFactura);
+
+    $boletasEmitidas   = listarBoletasEmitidas($pdo, $rutEmisor);
+    $rvdUltimo         = (new MySqlBoletaRvdRepository($pdo))->ultimo($rutEmisor, Ambiente::Certificacion);
+    $setEmitido        = $boletasEmitidas !== [];
+    $rvdEnviado        = $rvdUltimo !== null;
+    $etapasBoleta      = calcularEtapasBoletaManuales(obtenerEtapasBoletaManualesRaw($pdo, $cuentaId), $setEmitido, $rvdEnviado);
+    $segmentosBoleta   = resumenEtapasBoletaBarra(existeCafBoleta($pdo, $rutEmisor), $setEmitido, $rvdEnviado, $etapasBoleta);
+    $completadasBoleta = count(array_filter($segmentosBoleta, static fn (array $s): bool => $s['completada']));
+    $textoBoleta       = textoEtapaActiva($segmentosBoleta);
+
+    vista('certificacion-elegir', [
+        'segmentosFactura'   => $segmentosFactura,
+        'completadasFactura' => $completadasFactura,
+        'textoFactura'       => $textoFactura,
+        'segmentosBoleta'    => $segmentosBoleta,
+        'completadasBoleta'  => $completadasBoleta,
+        'textoBoleta'        => $textoBoleta,
+    ]);
+}
+
+function handleCertificacionGet(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    // Solo lectura de BD + el flash dejado por un POST anterior (si hay). NO
+    // se consulta el SII aqui: esta ruta es un GET idempotente. etapaActual
+    // en null: el resumen no esta "dentro" de ninguna etapa especifica (ver
+    // partials/certificacion/_barra-etapas.php).
+    vista('certificacion', array_merge(
+        ['flash' => flashTomar(), 'etapaActual' => null],
+        calcularDatosCertificacion($pdo, $cuentaId, $rutEmisor),
+    ));
+}
+
+/**
+ * GET /certificacion/etapa/{n} (n=1..6): vista de UNA sola etapa de la
+ * certificacion de factura, con la barra de 6 etapas arriba para navegar
+ * entre ellas. Usa el mismo calculo que el resumen (calcularDatosCertificacion())
+ * -- no se duplica logica de BD, solo cambia que partials renderiza la vista.
+ * n invalido (no numerico, 0, o > 6) redirige al resumen.
+ */
+function handleCertificacionEtapaGet(string $nCrudo): void
+{
+    if (! ctype_digit($nCrudo)) {
+        redirigir('/certificacion');
+    }
+    $n = (int) $nCrudo;
+    if ($n < 1 || $n > 6) {
+        redirigir('/certificacion');
+    }
+
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    vista('certificacion-etapa', array_merge(
+        ['flash' => flashTomar(), 'etapaActual' => $n],
+        calcularDatosCertificacion($pdo, $cuentaId, $rutEmisor),
+    ));
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/actualizar
+//
+//  "Actualizar estado": consulta el ENVIO al SII EN VIVO por track_id y
+//  persiste el resultado en TODAS las filas de dte_emitido que comparten ese
+//  track_id (el estado es del envio completo, no de un documento suelto; ver
+//  agruparEmitidosPorEnvio()). Reusa los MISMOS componentes del motor que usa
+//  public/index.php (MySqlEmisorRepository::obtenerCertificado() -- ya
+//  descifra envelope --, SiiAutenticador::obtenerToken(),
+//  SiiConsultor::consultarEnvio()): NO se reimplementa cifrado, firma ni
+//  consulta SOAP, se llama a las mismas clases del motor via el autoloader de
+//  Composer. Scope estricto: track_id + rut_emisor + ambiente de ESTA cuenta,
+//  igual que el resto del panel.
+// ===========================================================================
+function handleCertificacionActualizarPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    $trackId = trim((string) ($_POST['track_id'] ?? ''));
+    if ($trackId === '') {
+        redirigirPrg('/certificacion');
+    }
+
+    $stmt = $pdo->prepare(
+        "SELECT 1 FROM dte_emitido WHERE track_id = :track AND rut_emisor = :rut AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':track' => $trackId, ':rut' => $rutEmisor]);
+    if ($stmt->fetchColumn() === false) {
+        // No existe, o no pertenece a esta cuenta: mismo destino, sin filtrar cual.
+        redirigirPrg('/certificacion');
+    }
+
+    $certTls = __DIR__ . '/../../fullchain.pem';
+    $keyTls  = __DIR__ . '/../../key.pem';
+    if (! is_file($certTls) || ! is_readable($certTls) || ! is_file($keyTls) || ! is_readable($keyTls)) {
+        flashSet('error', 'Certificado TLS mutuo no disponible en el servidor.');
+        redirigirPrg('/certificacion');
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel certificacion: CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion');
+    }
+    $crypto = new CertificadoCrypto($bin);
+    $emisor = new MySqlEmisorRepository($pdo, $crypto);
+    $http   = new Client(['timeout' => 60, 'cert' => $certTls, 'ssl_key' => $keyTls, 'verify' => true]);
+
+    // La llamada al SII va aislada: si falla, no se toca dte_emitido -- el
+    // estado previo persistido queda intacto.
+    try {
+        $cert  = $emisor->obtenerCertificado($rutEmisor, Ambiente::Certificacion);
+        $token = (new SiiAutenticador($http, new XmlSigner()))->obtenerToken($cert, Ambiente::Certificacion);
+        $res   = (new SiiConsultor($http))->consultarEnvio($rutEmisor, $trackId, $token, Ambiente::Certificacion);
+    } catch (SiiAutenticacionException $e) {
+        error_log('panel certificacion: fallo de autenticacion con el SII - ' . $e->glosaSii);
+        flashSet('error', 'No se pudo autenticar con el SII para consultar el estado. Intenta nuevamente.');
+        redirigirPrg('/certificacion');
+    } catch (Throwable $e) {
+        error_log('panel certificacion: fallo consulta SII - ' . $e->getMessage());
+        flashSet('error', 'No se pudo consultar el estado en el SII. Intenta nuevamente.');
+        redirigirPrg('/certificacion');
+    }
+
+    // Persistir en TODAS las filas de este envio (mismo track_id), scope del
+    // tenant: el estado es del envio completo, no de una fila suelta.
+    $pdo->prepare(
+        "UPDATE dte_emitido SET estado = :estado WHERE track_id = :track AND rut_emisor = :rut AND ambiente = 'certificacion'"
+    )->execute([':estado' => $res['estado'], ':track' => $trackId, ':rut' => $rutEmisor]);
+
+    flashSet('ok', sprintf('Estado actualizado: %s (envio %s)', $res['estado'], $trackId));
+    redirigirPrg('/certificacion');
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/marcar-sok
+//
+//  Confirmacion MANUAL del tenant de que un envio del Set Basico paso la
+//  revision de CONTENIDO del SII (SOK) -- NUNCA se infiere ni se consulta al
+//  SII aqui (no hay webservice para esto). Scope estricto: el track_id debe
+//  pertenecer a un dte_emitido de ESTA cuenta, igual que
+//  handleCertificacionActualizarPost(). Ver setBasicoAprobado() y
+//  009_dte_set_basico_sok.sql para el porque de esta marca.
+// ===========================================================================
+function handleCertificacionMarcarSokPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    $trackId = trim((string) ($_POST['track_id'] ?? ''));
+    if ($trackId === '') {
+        redirigirPrg('/certificacion');
+    }
+
+    $stmt = $pdo->prepare(
+        "SELECT 1 FROM dte_emitido WHERE track_id = :track AND rut_emisor = :rut AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':track' => $trackId, ':rut' => $rutEmisor]);
+    if ($stmt->fetchColumn() === false) {
+        // No existe, o no pertenece a esta cuenta: mismo destino, sin filtrar cual.
+        redirigirPrg('/certificacion');
+    }
+
+    (new MySqlSetBasicoSokRepository($pdo))->marcar($rutEmisor, Ambiente::Certificacion, $trackId);
+
+    flashSet('ok', sprintf('Envio %s marcado como SOK.', $trackId));
+    redirigirPrg('/certificacion');
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/confirmar-etapa
+//
+//  Confirmacion MANUAL de una de las etapas 2-4 de la certificacion de
+//  FACTURA (Simulacion, Intercambio, Muestras Impresas), que hoy se gestionan
+//  FUERA del panel (portal del SII / correo) y no tienen ningun webservice
+//  que las confirme -- mismo patron que handleCertificacionAprobadaConfirmarPost()
+//  para la etapa 6 (certificacion_confirmada_at): NUNCA se infiere, es una
+//  declaracion explicita del tenant tras el checkbox obligatorio.
+//
+//  Encadenada igual que Set Basico -> Libro de Ventas/Compras: cada etapa
+//  exige que la ANTERIOR ya este confirmada (ver calcularEtapasManuales()).
+//  La guardia se recalcula aqui en el servidor, nunca se confia en lo que
+//  haya llegado del formulario.
+// ===========================================================================
+function handleCertificacionConfirmarEtapaPost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    // Columnas fijas del propio codigo (whitelist), NUNCA tomadas de $_POST:
+    // $etapa solo selecciona una entrada de este mapa, jamas se interpola
+    // directo. trackCol=null (Intercambio/Muestras Impresas) porque no hay
+    // forma de asociarles un track ID -- solo Simulacion permite guardar uno.
+    $campos = [
+        'simulacion'        => ['at' => 'simulacion_confirmada_at', 'trackCol' => 'simulacion_track_id', 'clave' => 'simulacion'],
+        'intercambio'       => ['at' => 'intercambio_confirmado_at', 'trackCol' => null, 'clave' => 'intercambio'],
+        'muestras-impresas' => ['at' => 'muestras_impresas_confirmadas_at', 'trackCol' => null, 'clave' => 'muestrasImpresas'],
+    ];
+
+    $etapa = (string) ($_POST['etapa'] ?? '');
+    if (! isset($campos[$etapa])) {
+        redirigirPrg('/certificacion');
+    }
+    $campo    = $campos[$etapa]['at'];
+    $trackCol = $campos[$etapa]['trackCol'];
+
+    $raw = obtenerEtapasManualesRaw($pdo, $cuentaId);
+    if ($raw[$campo] !== null) {
+        flashSet('ok', 'Esta etapa ya estaba confirmada.');
+        redirigirPrg('/certificacion');
+    }
+
+    if (empty($_POST['confirmo'])) {
+        flashSet('error', 'Debes marcar la casilla de confirmacion para registrar esta etapa.');
+        redirigirPrg('/certificacion');
+    }
+
+    $agrupado       = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor));
+    $sokPorTrackId  = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+    $setBasico      = setBasicoAprobado($agrupado['envios'], $sokPorTrackId);
+    $ventas         = libroAprobado(listarLibros($pdo, $rutEmisor, 'VENTA'));
+    $compras        = libroAprobado(listarLibros($pdo, $rutEmisor, 'COMPRA'));
+    $todosAprobados = $setBasico['aprobado'] && $ventas['aprobado'] && $compras['aprobado'];
+
+    $etapasManuales = calcularEtapasManuales($raw, $todosAprobados);
+    if (! $etapasManuales[$campos[$etapa]['clave']]['habilitada']) {
+        flashSet('error', 'Esta etapa todavia no esta habilitada: falta confirmar la etapa anterior.');
+        redirigirPrg('/certificacion');
+    }
+
+    if ($trackCol !== null) {
+        $trackId = trim((string) ($_POST['track_id'] ?? ''));
+        $sql = "UPDATE dte_emisor SET {$campo} = NOW()"
+             . ($trackId !== '' ? ", {$trackCol} = :track_id" : '')
+             . " WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND cuenta_id = :cuenta_id AND {$campo} IS NULL";
+        $params = [':rut' => $rutEmisor, ':cuenta_id' => $cuentaId];
+        if ($trackId !== '') {
+            $params[':track_id'] = $trackId;
+        }
+        $pdo->prepare($sql)->execute($params);
+    } else {
+        $pdo->prepare(
+            "UPDATE dte_emisor SET {$campo} = NOW() WHERE rut_emisor = :rut AND ambiente = 'certificacion' "
+            . "AND cuenta_id = :cuenta_id AND {$campo} IS NULL"
+        )->execute([':rut' => $rutEmisor, ':cuenta_id' => $cuentaId]);
+    }
+
+    flashSet('ok', 'Etapa confirmada.');
+    redirigirPrg('/certificacion');
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/actualizar-libro
+//
+//  Analogo a handleCertificacionActualizarPost(), pero para dte_libro: mismas
+//  clases del motor (MySqlEmisorRepository::obtenerCertificado(),
+//  SiiAutenticador::obtenerToken(), SiiConsultor::consultarEnvio() -- el mismo
+//  servicio QueryEstUp.jws que usa GET /api/v1/libro/{trackId}/estado-sii del
+//  motor, ver public/index.php::consultarEstadoSiiLibro()), reusadas via el
+//  autoloader de Composer, NUNCA por HTTP. Scope estricto: track_id debe
+//  existir en dte_libro para rut_emisor+ambiente de ESTA cuenta
+//  (LibroRepositoryInterface::existeTrackId()).
+// ===========================================================================
+function handleCertificacionActualizarLibroPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    $libros    = new MySqlLibroRepository($pdo);
+
+    $trackId = trim((string) ($_POST['track_id'] ?? ''));
+    if ($trackId === '') {
+        redirigirPrg('/certificacion');
+    }
+
+    if (! $libros->existeTrackId($rutEmisor, Ambiente::Certificacion, $trackId)) {
+        // No existe, o no pertenece a esta cuenta: mismo destino, sin filtrar cual.
+        redirigirPrg('/certificacion');
+    }
+
+    $certTls = __DIR__ . '/../../fullchain.pem';
+    $keyTls  = __DIR__ . '/../../key.pem';
+    if (! is_file($certTls) || ! is_readable($certTls) || ! is_file($keyTls) || ! is_readable($keyTls)) {
+        flashSet('error', 'Certificado TLS mutuo no disponible en el servidor.');
+        redirigirPrg('/certificacion');
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel certificacion (libro): CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion');
+    }
+    $crypto = new CertificadoCrypto($bin);
+    $emisor = new MySqlEmisorRepository($pdo, $crypto);
+    $http   = new Client(['timeout' => 60, 'cert' => $certTls, 'ssl_key' => $keyTls, 'verify' => true]);
+
+    // La llamada al SII va aislada: si falla, no se toca dte_libro -- el
+    // estado previo persistido queda intacto.
+    try {
+        $cert  = $emisor->obtenerCertificado($rutEmisor, Ambiente::Certificacion);
+        $token = (new SiiAutenticador($http, new XmlSigner()))->obtenerToken($cert, Ambiente::Certificacion);
+        $res   = (new SiiConsultor($http))->consultarEnvio($rutEmisor, $trackId, $token, Ambiente::Certificacion);
+    } catch (SiiAutenticacionException $e) {
+        error_log('panel certificacion (libro): fallo de autenticacion con el SII - ' . $e->glosaSii);
+        flashSet('error', 'No se pudo autenticar con el SII para consultar el estado. Intenta nuevamente.');
+        redirigirPrg('/certificacion');
+    } catch (Throwable $e) {
+        error_log('panel certificacion (libro): fallo consulta SII - ' . $e->getMessage());
+        flashSet('error', 'No se pudo consultar el estado en el SII. Intenta nuevamente.');
+        redirigirPrg('/certificacion');
+    }
+
+    $libros->actualizarEstado($rutEmisor, Ambiente::Certificacion, $trackId, $res['estado']);
+
+    flashSet('ok', sprintf('Estado actualizado: %s (envio %s)', $res['estado'], $trackId));
+    redirigirPrg('/certificacion');
+}
+
+/**
+ * Convierte el payload plano de un builder (misma forma que el body de
+ * POST /api/v1/libro) a los DTOs Libro/LineaLibro que exige
+ * LibroService::enviarLibro(). Mapeo identico al que hace enviarLibroIecv()
+ * (motor, public/index.php) desde el body JSON -- replicado aqui porque el
+ * panel es un front controller separado que no puede invocar esa funcion.
+ */
+function libroDesdeArrayPanel(array $payload): Libro
+{
+    $lineas = array_map(static fn (array $l): LineaLibro => new LineaLibro(
+        tpoDoc:         $l['tpoDoc'],
+        nroDoc:         $l['nroDoc'],
+        fecha:          new DateTimeImmutable($l['fecha']),
+        rutContraparte: $l['rutContraparte'],
+        razonSocial:    $l['razonSocial'],
+        mntExe:         $l['mntExe'],
+        mntNeto:        $l['mntNeto'],
+        mntIva:         $l['mntIva'],
+        mntTotal:       $l['mntTotal'],
+        ivaUsoComun:    $l['ivaUsoComun'] ?? null,
+        codIvaNoRec:    $l['codIvaNoRec'] ?? null,
+        mntIvaNoRec:    $l['mntIvaNoRec'] ?? null,
+        codOtroImp:     $l['codOtroImp'] ?? null,
+        mntOtroImp:     $l['mntOtroImp'] ?? null,
+        tasaOtroImp:    $l['tasaOtroImp'] ?? 19,
+    ), $payload['lineas']);
+
+    return new Libro(
+        tipoOperacion:          TipoOperacionLibro::from($payload['tipoOperacion']),
+        periodoTributario:      $payload['periodoTributario'],
+        tipoLibro:              TipoLibro::from($payload['tipoLibro']),
+        tipoEnvio:              TipoEnvioLibro::from($payload['tipoEnvio']),
+        folioNotificacion:      $payload['folioNotificacion'],
+        lineas:                 $lineas,
+        factorProporcionalidad: $payload['factorProporcionalidad'] ?? null,
+    );
+}
+
+/**
+ * Wiring compartido para emitir un Libro IECV directo (sin HTTP interno):
+ * mismo patron mTLS + MySqlEmisorRepository + LibroService que ya usa
+ * scripts/enviar_libro.php, y persistencia con MySqlLibroRepository (mismo
+ * repo que ya usa la estacion 5 para listar libros). Identidad
+ * (rut_emisor/ambiente/rutSender) SIEMPRE del tenant autenticado.
+ */
+function emitirLibroPanel(PDO $pdo, string $rutEmisor, array $payload, string $tipoOperacionParaRepo, bool $modoSinSok = false): never
+{
+    $certTls = __DIR__ . '/../../fullchain.pem';
+    $keyTls  = __DIR__ . '/../../key.pem';
+    if (! is_file($certTls) || ! is_readable($certTls) || ! is_file($keyTls) || ! is_readable($keyTls)) {
+        flashSet('error', 'Certificado TLS mutuo no disponible en el servidor.');
+        redirigirPrg('/certificacion');
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel libro: CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion');
+    }
+
+    $rutSender = resolverRutSenderTenant($pdo, $rutEmisor, Ambiente::Certificacion);
+    if ($rutSender === null) {
+        flashSet('error', 'El certificado del emisor no tiene RUT de firmante (sender). Vuelve a cargar el certificado.');
+        redirigirPrg('/certificacion');
+    }
+
+    $crypto  = new CertificadoCrypto($bin);
+    $service = new LibroService(
+        new Client(['timeout' => 60, 'cert' => $certTls, 'ssl_key' => $keyTls, 'verify' => true]),
+        new MySqlEmisorRepository($pdo, $crypto),
+    );
+
+    $cred = new Credenciales(
+        rutEmisor: $rutEmisor,
+        apiToken:  'no-usado-por-sii-directo',
+        ambiente:  Ambiente::Certificacion,
+        rutSender: $rutSender,
+    );
+
+    $libro = libroDesdeArrayPanel($payload);
+
+    try {
+        $res = $service->enviarLibro($libro, $cred);
+    } catch (SiiAutenticacionException $e) {
+        error_log('panel libro: fallo de autenticacion con el SII - ' . $e->glosaSii);
+        flashSet('error', 'No se pudo autenticar con el SII para emitir el libro. Intenta nuevamente.');
+        redirigirPrg('/certificacion');
+    } catch (EnvioRechazadoException $e) {
+        flashSet('error', sprintf('El SII rechazo el envio del libro (status %s, trackId %s).', $e->status, $e->trackId ?? 'sin trackId'));
+        redirigirPrg('/certificacion');
+    } catch (Throwable $e) {
+        error_log('panel libro: fallo el envio - ' . $e->getMessage());
+        flashSet('error', 'No se pudo emitir el libro: ' . $e->getMessage());
+        redirigirPrg('/certificacion');
+    }
+
+    // El SII ya acepto el envio: persistir es best-effort (mismo criterio que
+    // enviarLibroIecv() en public/index.php) -- un fallo aqui no debe ocultar
+    // que el SII SI acepto el libro.
+    try {
+        (new MySqlLibroRepository($pdo))->registrar(
+            rutEmisor:         $rutEmisor,
+            ambiente:          Ambiente::Certificacion,
+            tipoOperacion:     $tipoOperacionParaRepo,
+            periodoTributario: $payload['periodoTributario'],
+            tipoLibro:         $payload['tipoLibro'],
+            tipoEnvio:         $payload['tipoEnvio'],
+            folioNotificacion: $payload['folioNotificacion'],
+            trackId:           $res['trackId'] ?? null,
+            estado:            'enviado',
+            xml:               $res['xml'],
+        );
+    } catch (Throwable $e) {
+        error_log('panel libro: dte_libro registrar fallo (trackId ' . ($res['trackId'] ?? 'null') . '): ' . $e->getMessage());
+    }
+
+    $mensaje = sprintf('Libro enviado. Track ID: %s, status: %s.', $res['trackId'] !== '' ? $res['trackId'] : '(vacio)', $res['status']);
+    if ($modoSinSok) {
+        $mensaje .= ' ATENCION: se emitio en modo "sin esperar SOK" -- si el Set Basico es rechazado en '
+            . 'contenido (SRH) mas adelante, este libro tambien queda invalido y hay que rehacer ambos.';
+    }
+    flashSet('ok', $mensaje);
+    redirigirPrg('/certificacion');
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/emitir-libro-ventas
+//
+//  Construye el Libro de Ventas con los documentos YA EMITIDOS del envio
+//  APROBADO del Set Basico (dte_emitido) -- NO vuelve a tocar el archivo
+//  parseado salvo para leer el numero de atencion del Libro de Ventas.
+//  setBasicoAprobado()/agruparEmitidosPorEnvio() son las MISMAS funciones que
+//  ya usa la estacion 5, no se reimplementa ese chequeo.
+// ===========================================================================
+function handleCertificacionEmitirLibroVentasPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    // "Emitir sin esperar SOK": SOLO si el formulario de riesgo especifico es
+    // el que se envio (campo 'modo' === 'sin_sok', nunca se infiere) Y el
+    // checkbox de riesgo tambien llego marcado -- si llega 'modo=sin_sok'
+    // pero SIN el checkbox, se rechaza explicito en vez de degradar en
+    // silencio al criterio normal. El flujo normal (sin ese campo) usa
+    // setBasicoAprobado() exactamente igual que antes.
+    $modoSinSok = ($_POST['modo'] ?? '') === 'sin_sok';
+    if ($modoSinSok && empty($_POST['acepto_riesgo'])) {
+        flashSet('error', 'Debes marcar la casilla "Entiendo el riesgo" para emitir sin esperar SOK.');
+        redirigirPrg('/certificacion');
+    }
+
+    $envios = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor))['envios'];
+    if ($modoSinSok) {
+        $setBasico = CertificacionEstadoResolver::setBasicoEnviadoSinReparos($envios);
+    } else {
+        $sokPorTrackId = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+        $setBasico = setBasicoAprobado($envios, $sokPorTrackId);
+    }
+    if (! $setBasico['aprobado']) {
+        flashSet('error', 'El Set Basico debe estar aprobado (EPR y confirmado SOK) antes de poder emitir el Libro de Ventas.');
+        redirigirPrg('/certificacion');
+    }
+
+    $archivo = (new MySqlSetPruebasArchivoRepository($pdo))->obtener($rutEmisor, Ambiente::Certificacion);
+    if ($archivo === null) {
+        flashSet('error', 'No hay ningun archivo de set de pruebas cargado (falta el numero de atencion del Libro de Ventas).');
+        redirigirPrg('/certificacion');
+    }
+    try {
+        $parseado = (new SetPruebasParser())->parse($archivo['contenido']);
+    } catch (Throwable $e) {
+        flashSet('error', 'El archivo guardado no se pudo interpretar: ' . $e->getMessage());
+        redirigirPrg('/certificacion');
+    }
+    if ($parseado->numeroAtencionLibroVentas === null) {
+        flashSet('error', 'El archivo no trae el numero de atencion del Libro de Ventas.');
+        redirigirPrg('/certificacion');
+    }
+
+    // Mismo orden en que se emitieron (ver LibroVentasPayloadBuilder: el SII
+    // acepto el orden de EMISION del lote, no un orden numerico por tipoDte).
+    $stmt = $pdo->prepare(
+        "SELECT tipo_dte, folio, fecha_emision, neto, iva, total FROM dte_emitido "
+        . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND track_id = :track "
+        . 'ORDER BY id ASC'
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':track' => $setBasico['trackId']]);
+    $documentos = array_map(static fn (array $r): array => [
+        'tipoDte'      => (int) $r['tipo_dte'],
+        'folio'        => (int) $r['folio'],
+        'fechaEmision' => (string) $r['fecha_emision'],
+        'neto'         => (int) $r['neto'],
+        'iva'          => (int) $r['iva'],
+        'total'        => (int) $r['total'],
+    ], $stmt->fetchAll(PDO::FETCH_ASSOC));
+
+    $resultado = (new LibroVentasPayloadBuilder())->construir($documentos, $parseado->numeroAtencionLibroVentas);
+    if ($resultado->errores !== []) {
+        flashSet('error', 'No se emitio nada: ' . implode(' ', $resultado->errores));
+        redirigirPrg('/certificacion');
+    }
+
+    emitirLibroPanel($pdo, $rutEmisor, $resultado->payload, 'VENTA', $modoSinSok);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/emitir-libro-compras
+//
+//  Construye el Libro de Compras con SetPruebasParseado->casosLibroCompras
+//  (los documentos de PROVEEDORES que el SII dicta en el archivo) -- NO usa
+//  dte_emitido para nada. Requiere el Set Basico ya aprobado (misma guardia
+//  que Libro de Ventas, aunque el Libro de Compras no dependa tecnicamente de
+//  esos documentos: es la misma secuencia de certificacion del SII).
+// ===========================================================================
+function handleCertificacionEmitirLibroComprasPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    // "Emitir sin esperar SOK": mismo criterio que Libro de Ventas (ver
+    // handleCertificacionEmitirLibroVentasPost()) -- SOLO si el formulario de
+    // riesgo especifico envio 'modo=sin_sok' Y el checkbox de riesgo tambien
+    // llego marcado.
+    $modoSinSok = ($_POST['modo'] ?? '') === 'sin_sok';
+    if ($modoSinSok && empty($_POST['acepto_riesgo'])) {
+        flashSet('error', 'Debes marcar la casilla "Entiendo el riesgo" para emitir sin esperar SOK.');
+        redirigirPrg('/certificacion');
+    }
+
+    $envios = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor))['envios'];
+    if ($modoSinSok) {
+        $setBasico = CertificacionEstadoResolver::setBasicoEnviadoSinReparos($envios);
+    } else {
+        $sokPorTrackId = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+        $setBasico = setBasicoAprobado($envios, $sokPorTrackId);
+    }
+    if (! $setBasico['aprobado']) {
+        flashSet('error', 'El Set Basico debe estar aprobado (EPR y confirmado SOK) antes de poder emitir el Libro de Compras.');
+        redirigirPrg('/certificacion');
+    }
+
+    $archivo = (new MySqlSetPruebasArchivoRepository($pdo))->obtener($rutEmisor, Ambiente::Certificacion);
+    if ($archivo === null) {
+        flashSet('error', 'No hay ningun archivo de set de pruebas cargado.');
+        redirigirPrg('/certificacion');
+    }
+    try {
+        $parseado = (new SetPruebasParser())->parse($archivo['contenido']);
+    } catch (Throwable $e) {
+        flashSet('error', 'El archivo guardado no se pudo interpretar: ' . $e->getMessage());
+        redirigirPrg('/certificacion');
+    }
+
+    $resultado = (new LibroComprasPayloadBuilder())->construir($parseado, new DateTimeImmutable());
+    if ($resultado->errores !== []) {
+        flashSet('error', 'No se emitio nada: ' . implode(' ', $resultado->errores));
+        redirigirPrg('/certificacion');
+    }
+
+    emitirLibroPanel($pdo, $rutEmisor, $resultado->payload, 'COMPRA', $modoSinSok);
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/set-pruebas
+//
+//  Sub-estacion de la 5: preview de SOLO LECTURA del archivo
+//  SIISetDePruebas<RUT>.txt que el SII entrega al tenant (el archivo con los
+//  8 casos del set basico + libro de ventas/compras). Reusa
+//  SetPruebasParser::parse() TAL CUAL (src/Sii/SetPruebasParser.php, validado
+//  8/8 contra el archivo real de EASY AGENDA SPA, preserva tildes/enes
+//  exactas) -- no se reimplementa nada del parseo aqui. El archivo se guarda
+//  crudo (dte_set_pruebas_archivo) y se re-parsea en cada visita, para no
+//  duplicar la fuente de verdad. Este paso NO emite nada al SII (Paso 3,
+//  aparte): no hay boton de emision funcional en esta pantalla.
+// ===========================================================================
+function handleSetPruebasGet(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    $repo      = new MySqlSetPruebasArchivoRepository($pdo);
+
+    $archivo     = $repo->obtener($rutEmisor, Ambiente::Certificacion);
+    $parseado    = null;
+    $errorParseo = null;
+    if ($archivo !== null) {
+        try {
+            $parseado = (new SetPruebasParser())->parse($archivo['contenido']);
+        } catch (Throwable $e) {
+            $errorParseo = 'El archivo guardado no se pudo interpretar: ' . $e->getMessage();
+        }
+    }
+
+    vista('set-pruebas', [
+        'flash'       => flashTomar(),
+        'archivo'     => $archivo,
+        'parseado'    => $parseado,
+        'errorParseo' => $errorParseo,
+        'error'       => null,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/set-pruebas
+//
+//  Recibe el archivo subido y lo pasa TAL CUAL (bytes originales, sin forzar
+//  encoding -- SetPruebasParser::parse() ya hace la conversion ISO-8859-1 ->
+//  UTF-8 internamente) a SetPruebasParser::parse(). Si el archivo es
+//  irreconocible por completo (RuntimeException: no tiene ni siquiera "SET
+//  BASICO - NUMERO DE ATENCION"), se muestra un error claro -- nunca un 500 ni
+//  una pantalla en blanco. Si parsea, aunque sea con advertencias en
+//  secciones puntuales, se persiste (reemplaza el archivo anterior de este
+//  tenant+ambiente, ver MySqlSetPruebasArchivoRepository::guardar()) y se
+//  redirige (PRG) al preview, que las mostrara.
+// ===========================================================================
+function handleSetPruebasPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    $repo      = new MySqlSetPruebasArchivoRepository($pdo);
+
+    $archivo = $_FILES['archivo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        vista('set-pruebas', [
+            'flash'       => null,
+            'archivo'     => $repo->obtener($rutEmisor, Ambiente::Certificacion),
+            'parseado'    => null,
+            'errorParseo' => null,
+            'error'       => 'Debes seleccionar el archivo SIISetDePruebas<RUT>.txt que recibiste del SII.',
+        ]);
+    }
+
+    // Bytes originales a memoria, sin conversion (mismo patron que /caf):
+    // SetPruebasParser ya asume ISO-8859-1 y hace la conversion internamente.
+    $contenido = file_get_contents($archivo['tmp_name']);
+    if ($contenido === false || $contenido === '') {
+        vista('set-pruebas', [
+            'flash'       => null,
+            'archivo'     => $repo->obtener($rutEmisor, Ambiente::Certificacion),
+            'parseado'    => null,
+            'errorParseo' => null,
+            'error'       => 'No se pudo leer el archivo subido.',
+        ]);
+    }
+
+    try {
+        $parseado = (new SetPruebasParser())->parse($contenido);
+    } catch (RuntimeException $e) {
+        vista('set-pruebas', [
+            'flash'       => null,
+            'archivo'     => $repo->obtener($rutEmisor, Ambiente::Certificacion),
+            'parseado'    => null,
+            'errorParseo' => null,
+            'error'       => 'El archivo no corresponde al formato de SIISetDePruebas<RUT>.txt esperado: ' . $e->getMessage(),
+        ]);
+    }
+
+    $repo->guardar($rutEmisor, Ambiente::Certificacion, basename((string) $archivo['name']), $contenido);
+
+    flashSet('ok', $parseado->advertencias === []
+        ? 'Archivo cargado y parseado correctamente.'
+        : sprintf('Archivo cargado. El parser encontro %d advertencia(s); revisalas abajo.', count($parseado->advertencias)));
+    redirigirPrg('/certificacion/set-pruebas');
+}
+
+/**
+ * RUT del firmante (sender) del emisor, SIEMPRE del tenant autenticado (nunca
+ * hardcodeado): mismo dato/consulta que resolverRutSender() en public/index.php
+ * (motor), replicado aqui porque el panel es un front controller separado que
+ * no puede invocar funciones sueltas de ese archivo.
+ */
+function resolverRutSenderTenant(PDO $pdo, string $rutEmisor, Ambiente $ambiente): ?string
+{
+    $stmt = $pdo->prepare(
+        'SELECT rut_sender FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = :amb LIMIT 1'
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':amb' => $ambiente->value]);
+    $rutSender = $stmt->fetchColumn();
+
+    return ($rutSender === false || trim((string) $rutSender) === '') ? null : (string) $rutSender;
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/set-pruebas/emitir
+//
+//  Emite el SET BASICO completo (los documentos del archivo parseado) en UN
+//  solo EnvioDTE, reemplazando el armado manual de JSON que hoy hace un
+//  humano. Reusa SetPruebasParser + SetBasicoPayloadBuilder TAL CUAL
+//  (src/Sii/), y LoteDteEmisor para invocar el motor DIRECTO -- misma logica
+//  de asignacion de folios + resolucion de refIndiceLote que POST
+//  /api/v1/dte/lote, sin HTTP interno (ver LoteDteEmisor, que documenta la
+//  pequena duplicacion deliberada con emitirDteLote()). Si el builder
+//  reporta casos ambiguos (SetBasicoPayloadResultado::$errores), NO se emite
+//  nada: se muestran al tenant. Identidad (rut_emisor/ambiente/rutSender)
+//  SIEMPRE del tenant autenticado, igual que el resto del panel.
+// ===========================================================================
+function handleSetPruebasEmitirPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    $repo      = new MySqlSetPruebasArchivoRepository($pdo);
+
+    $archivo = $repo->obtener($rutEmisor, Ambiente::Certificacion);
+    if ($archivo === null) {
+        flashSet('error', 'No hay ningun archivo de set de pruebas cargado.');
+        redirigirPrg('/certificacion/set-pruebas');
+    }
+
+    try {
+        $parseado = (new SetPruebasParser())->parse($archivo['contenido']);
+    } catch (Throwable $e) {
+        flashSet('error', 'El archivo guardado no se pudo interpretar: ' . $e->getMessage());
+        redirigirPrg('/certificacion/set-pruebas');
+    }
+
+    $resultado = (new SetBasicoPayloadBuilder())->construir($parseado, new DateTimeImmutable());
+    if ($resultado->errores !== []) {
+        flashSet(
+            'error',
+            sprintf('No se emitio nada: %d caso(s) requieren revision manual antes de poder construir el lote.', count($resultado->errores)),
+            ['erroresConstruccion' => $resultado->errores],
+        );
+        redirigirPrg('/certificacion/set-pruebas');
+    }
+
+    $certTls = __DIR__ . '/../../fullchain.pem';
+    $keyTls  = __DIR__ . '/../../key.pem';
+    if (! is_file($certTls) || ! is_readable($certTls) || ! is_file($keyTls) || ! is_readable($keyTls)) {
+        flashSet('error', 'Certificado TLS mutuo no disponible en el servidor.');
+        redirigirPrg('/certificacion/set-pruebas');
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel set-pruebas emitir: CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion/set-pruebas');
+    }
+
+    $rutSender = resolverRutSenderTenant($pdo, $rutEmisor, Ambiente::Certificacion);
+    if ($rutSender === null) {
+        flashSet('error', 'El certificado del emisor no tiene RUT de firmante (sender). Vuelve a cargar el certificado.');
+        redirigirPrg('/certificacion/set-pruebas');
+    }
+
+    $crypto     = new CertificadoCrypto($bin);
+    $folios     = new MySqlFolioRepository($pdo, fn (string $c): string => $crypto->descifrar($c), cryptoKek: $crypto);
+    $emisor     = new MySqlEmisorRepository($pdo, $crypto);
+    $facturador = new SiiDirectoFacturador(
+        new Client(['timeout' => 60, 'cert' => $certTls, 'ssl_key' => $keyTls, 'verify' => true]),
+        $folios,
+        $emisor,
+        dteEmitido: new MySqlDteEmitidoRepository($pdo),
+    );
+
+    $cred = new Credenciales(
+        rutEmisor: $rutEmisor,
+        apiToken:  'no-usado-por-sii-directo',
+        ambiente:  Ambiente::Certificacion,
+        rutSender: $rutSender,
+    );
+
+    try {
+        $res = (new LoteDteEmisor($facturador, $folios))->emitir($resultado->payload['documentos'], $cred, new DateTimeImmutable());
+    } catch (SiiAutenticacionException $e) {
+        error_log('panel set-pruebas emitir: fallo de autenticacion con el SII - ' . $e->glosaSii);
+        flashSet('error', 'No se pudo autenticar con el SII para emitir el set basico. Intenta nuevamente.');
+        redirigirPrg('/certificacion/set-pruebas');
+    } catch (EnvioRechazadoException $e) {
+        flashSet('error', sprintf('El SII rechazo el envio (status %s, trackId %s).', $e->status, $e->trackId ?? 'sin trackId'));
+        redirigirPrg('/certificacion/set-pruebas');
+    } catch (Throwable $e) {
+        error_log('panel set-pruebas emitir: fallo la emision - ' . $e->getMessage());
+        flashSet('error', 'No se pudo emitir el set basico: ' . $e->getMessage());
+        redirigirPrg('/certificacion/set-pruebas');
+    }
+
+    flashSet(
+        'ok',
+        sprintf('Set Basico emitido. Track ID: %s (%d documentos).', $res['trackId'], count($res['documentos'])),
+        ['resultadoEmision' => $res],
+    );
+    redirigirPrg('/certificacion/set-pruebas');
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/simulacion
+//
+//  Sub-estacion OPCIONAL (mismo patron de /certificacion/set-pruebas):
+//  preview de SOLO LECTURA del lote de Simulacion ANTES de emitirlo, con
+//  selector de cantidad total (20-100, default 30). Reusa
+//  SimulacionSetBuilder::construir() TAL CUAL -- no se reimplementa el
+//  armado del lote aqui. Gateada a setBasicoEnviadoSinReparos() (EPR+3-tipos,
+//  NO exige SOK: la Simulacion es una etapa independiente del Set Basico
+//  segun el manual del SII, solo requiere que la etapa 1 este tecnicamente
+//  completa). Este paso NO emite nada al SII: no hay boton funcional salvo
+//  el de POST /certificacion/simulacion/emitir mas abajo.
+// ===========================================================================
+function handleCertificacionSimulacionGet(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    $envios    = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor))['envios'];
+    $setBasico = CertificacionEstadoResolver::setBasicoEnviadoSinReparos($envios);
+    if (! $setBasico['aprobado']) {
+        flashSet('error', 'El Set Basico debe estar en EPR con los 3 tipos de documento antes de poder generar el Set de Simulacion.');
+        redirigirPrg('/certificacion');
+    }
+
+    $total = (int) ($_GET['total'] ?? 30);
+    if ($total < 20 || $total > 100) {
+        $total = 30;
+    }
+
+    try {
+        $documentos = (new SimulacionSetBuilder())->construir($total);
+    } catch (Throwable $e) {
+        flashSet('error', 'No se pudo generar la vista previa: ' . $e->getMessage());
+        redirigirPrg('/certificacion');
+    }
+
+    vista('certificacion-simulacion', [
+        'flash'      => flashTomar(),
+        'total'      => $total,
+        'documentos' => $documentos,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/simulacion/emitir
+//
+//  Emite el Set de Simulacion completo (SimulacionSetBuilder::construir())
+//  en UN solo EnvioDTE, invocando el motor DIRECTO en PHP -- MISMO patron
+//  exacto que handleSetPruebasEmitirPost() (LoteDteEmisor + SiiDirectoFacturador,
+//  ver el comentario de esa funcion): sin HTTP interno, sin API key.
+//  Identidad (rut_emisor/ambiente/rutSender) SIEMPRE del tenant autenticado.
+//  Gateada igual que el preview: setBasicoEnviadoSinReparos(), NO exige SOK.
+// ===========================================================================
+function handleCertificacionSimulacionEmitirPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    $envios    = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor))['envios'];
+    $setBasico = CertificacionEstadoResolver::setBasicoEnviadoSinReparos($envios);
+    if (! $setBasico['aprobado']) {
+        flashSet('error', 'El Set Basico debe estar en EPR con los 3 tipos de documento antes de poder emitir el Set de Simulacion.');
+        redirigirPrg('/certificacion');
+    }
+
+    $total = (int) ($_POST['total'] ?? 30);
+    if ($total < 20 || $total > 100) {
+        flashSet('error', 'La cantidad de documentos debe estar entre 20 y 100.');
+        redirigirPrg('/certificacion/simulacion');
+    }
+
+    try {
+        $documentos = (new SimulacionSetBuilder())->construir($total);
+    } catch (Throwable $e) {
+        flashSet('error', 'No se pudo construir el lote: ' . $e->getMessage());
+        redirigirPrg('/certificacion/simulacion');
+    }
+
+    $certTls = __DIR__ . '/../../fullchain.pem';
+    $keyTls  = __DIR__ . '/../../key.pem';
+    if (! is_file($certTls) || ! is_readable($certTls) || ! is_file($keyTls) || ! is_readable($keyTls)) {
+        flashSet('error', 'Certificado TLS mutuo no disponible en el servidor.');
+        redirigirPrg('/certificacion/simulacion');
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel simulacion emitir: CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion/simulacion');
+    }
+
+    $rutSender = resolverRutSenderTenant($pdo, $rutEmisor, Ambiente::Certificacion);
+    if ($rutSender === null) {
+        flashSet('error', 'El certificado del emisor no tiene RUT de firmante (sender). Vuelve a cargar el certificado.');
+        redirigirPrg('/certificacion/simulacion');
+    }
+
+    $crypto     = new CertificadoCrypto($bin);
+    $folios     = new MySqlFolioRepository($pdo, fn (string $c): string => $crypto->descifrar($c), cryptoKek: $crypto);
+    $emisor     = new MySqlEmisorRepository($pdo, $crypto);
+    $facturador = new SiiDirectoFacturador(
+        new Client(['timeout' => 60, 'cert' => $certTls, 'ssl_key' => $keyTls, 'verify' => true]),
+        $folios,
+        $emisor,
+        dteEmitido: new MySqlDteEmitidoRepository($pdo),
+    );
+
+    $cred = new Credenciales(
+        rutEmisor: $rutEmisor,
+        apiToken:  'no-usado-por-sii-directo',
+        ambiente:  Ambiente::Certificacion,
+        rutSender: $rutSender,
+    );
+
+    try {
+        $res = (new LoteDteEmisor($facturador, $folios))->emitir($documentos, $cred, new DateTimeImmutable());
+    } catch (SiiAutenticacionException $e) {
+        error_log('panel simulacion emitir: fallo de autenticacion con el SII - ' . $e->glosaSii);
+        flashSet('error', 'No se pudo autenticar con el SII para emitir la Simulacion. Intenta nuevamente.');
+        redirigirPrg('/certificacion/simulacion');
+    } catch (EnvioRechazadoException $e) {
+        flashSet('error', sprintf('El SII rechazo el envio (status %s, trackId %s).', $e->status, $e->trackId ?? 'sin trackId'));
+        redirigirPrg('/certificacion/simulacion');
+    } catch (Throwable $e) {
+        error_log('panel simulacion emitir: fallo la emision - ' . $e->getMessage());
+        flashSet('error', 'No se pudo emitir la Simulacion: ' . $e->getMessage());
+        redirigirPrg('/certificacion/simulacion');
+    }
+
+    flashSet(
+        'ok',
+        sprintf(
+            'Set de Simulacion emitido. Track ID: %s (%d documentos). Cuando el SII confirme el contenido, '
+            . 'pega este Track ID en "Etapas 2-4" al confirmar Simulacion.',
+            $res['trackId'],
+            count($res['documentos']),
+        ),
+        ['simulacionTrackId' => $res['trackId']],
+    );
+    redirigirPrg('/certificacion');
+}
+
+// ===========================================================================
+//  BOLETA (39/41): proceso APARTE de las 6 etapas de certificacion de
+//  FACTURA (Set Basico/Libros/Simulacion/Intercambio/Muestras/Declaracion de
+//  arriba) -- boleta tiene su propio circuito ante el SII, sin relacion con
+//  esas 6 etapas. Esta es la PRIMERA pieza de la futura estacion 5b de
+//  boleta: solo Set de Prueba (5 CASO fijos, universales) + RVD. El resto de
+//  los pasos propios de boleta (Intercambio, Muestras, Declaracion
+//  Cumplimiento) queda para una tarea aparte, sin nada en el panel todavia.
+// ===========================================================================
+
+/**
+ * Boletas (39/41) ya persistidas en dte_emitido para este tenant, ambiente
+ * certificacion -- fuente para el resumen de estado y para el calculo
+ * dinamico del RVD (RvdResumenCalculator). Mismo criterio de scope minimo de
+ * columnas que listarEmitidosFactura().
+ *
+ * @return list<array{tipoDte:int, folio:int, neto:int, iva:int, total:int}>
+ */
+function listarBoletasEmitidas(PDO $pdo, string $rutEmisor): array
+{
+    $stmt = $pdo->prepare(
+        "SELECT tipo_dte, folio, neto, iva, total FROM dte_emitido "
+        . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND tipo_dte IN (39, 41) "
+        . 'ORDER BY tipo_dte ASC, folio ASC'
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+
+    return array_map(static fn (array $r): array => [
+        'tipoDte' => (int) $r['tipo_dte'],
+        'folio'   => (int) $r['folio'],
+        'neto'    => (int) $r['neto'],
+        'iva'     => (int) $r['iva'],
+        'total'   => (int) $r['total'],
+    ], $stmt->fetchAll(PDO::FETCH_ASSOC));
+}
+
+/**
+ * Exige que exista CAF de BOLETA (tipo_dte=39) cargado para el tenant en
+ * ambiente certificacion. Adaptacion de la comprobacion de CAF que ya hace
+ * exigirOnboardingCompleto() (esa no filtra por tipo: cualquier CAF cargado,
+ * ej de factura, la deja pasar -- boleta necesita su propio CAF).
+ */
+function existeCafBoleta(PDO $pdo, string $rutEmisor): bool
+{
+    $stmt = $pdo->prepare(
+        "SELECT 1 FROM dte_caf WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND tipo_dte = 39 LIMIT 1"
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+
+    return $stmt->fetchColumn() !== false;
+}
+
+function exigirCafBoleta(PDO $pdo, string $rutEmisor): void
+{
+    if (! existeCafBoleta($pdo, $rutEmisor)) {
+        flashSet('error', 'Necesitas cargar un CAF de Boleta (tipo 39) antes de continuar con esta seccion.');
+        redirigir('/caf');
+    }
+}
+
+/**
+ * Fila cruda de las columnas *_at (+ track_id) de las etapas manuales 4-6 de
+ * BOLETA (Revision/VoBo/Cumplimiento), ver migracion 013. Mismo patron que
+ * obtenerEtapasManualesRaw() (factura), pero con las columnas propias de
+ * boleta -- boleta_cumplimiento_confirmado_at es DISTINTA de
+ * certificacion_confirmada_at (esa es la Declaracion de Cumplimiento de
+ * FACTURA, procesos separados ante el SII).
+ *
+ * @return array{boleta_revision_solicitada_at:?string, boleta_revision_track_id:?string,
+ *         boleta_vobo_at:?string, boleta_revision_resultado:?string, boleta_cumplimiento_confirmado_at:?string}
+ */
+function obtenerEtapasBoletaManualesRaw(PDO $pdo, int $cuentaId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT boleta_revision_solicitada_at, boleta_revision_track_id, boleta_vobo_at, '
+        . 'boleta_revision_resultado, '
+        . "boleta_cumplimiento_confirmado_at FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    return $fila !== false ? $fila : [
+        'boleta_revision_solicitada_at'     => null,
+        'boleta_revision_track_id'          => null,
+        'boleta_vobo_at'                    => null,
+        'boleta_revision_resultado'         => null,
+        'boleta_cumplimiento_confirmado_at' => null,
+    ];
+}
+
+/**
+ * Encadena la habilitacion de las etapas manuales 4-6 de BOLETA: Revision
+ * exige que el Set de Boleta este emitido Y el RVD ya enviado (pasos 1-3 de
+ * la barra, ya existentes -- el correo del SII para revisar el Set exige
+ * que el RVD del periodo ya este enviado); VoBo exige Revision confirmada;
+ * Cumplimiento exige VoBo confirmado CON resultado='aprobado' (migracion
+ * 014) -- si el SII rechazo (SRH), Cumplimiento se queda bloqueado: hay que
+ * rehacer el Set/Revision, no tiene sentido declarar cumplimiento sobre un
+ * set rechazado. Mismo espiritu que calcularEtapasManuales() (factura).
+ *
+ * @param array{boleta_revision_solicitada_at:?string, boleta_revision_track_id:?string,
+ *        boleta_vobo_at:?string, boleta_revision_resultado:?string, boleta_cumplimiento_confirmado_at:?string} $raw
+ * @return array{
+ *     revision:array{confirmada:bool,fecha:?string,trackId:?string,habilitada:bool},
+ *     vobo:array{confirmada:bool,fecha:?string,resultado:?string,habilitada:bool},
+ *     cumplimiento:array{confirmada:bool,fecha:?string,habilitada:bool}
+ * }
+ */
+function calcularEtapasBoletaManuales(array $raw, bool $setEmitido, bool $rvdEnviado): array
+{
+    $revisionConfirmada     = $raw['boleta_revision_solicitada_at'] !== null;
+    $voboConfirmado         = $raw['boleta_vobo_at'] !== null;
+    $resultado              = $raw['boleta_revision_resultado'];
+    $cumplimientoConfirmado = $raw['boleta_cumplimiento_confirmado_at'] !== null;
+
+    return [
+        'revision' => [
+            'confirmada' => $revisionConfirmada,
+            'fecha'      => $raw['boleta_revision_solicitada_at'],
+            'trackId'    => $raw['boleta_revision_track_id'],
+            'habilitada' => $setEmitido && $rvdEnviado,
+        ],
+        'vobo' => [
+            'confirmada' => $voboConfirmado,
+            'fecha'      => $raw['boleta_vobo_at'],
+            'resultado'  => $resultado,
+            'habilitada' => $revisionConfirmada,
+        ],
+        'cumplimiento' => [
+            'confirmada' => $cumplimientoConfirmado,
+            'fecha'      => $raw['boleta_cumplimiento_confirmado_at'],
+            'habilitada' => $voboConfirmado && $resultado === 'aprobado',
+        ],
+    ];
+}
+
+/**
+ * Mismo criterio de color que resumenEtapasBarra() (factura), pero para los
+ * 6 pasos PROPIOS de BOLETA (CAF/Set/RVD/Revision/VoBo/Cumplimiento) + un
+ * cuarto color ("etapa--rechazada", rojo) para cuando el SII rechazo (SRH)
+ * el Set en la revision de contenido -- factura no tiene este caso, por eso
+ * es una funcion separada en vez de generalizar resumenEtapasBarra() (evita
+ * tocar codigo ya usado por /admin/tenants).
+ *
+ * @param array{revision:array{confirmada:bool,habilitada:bool}, vobo:array{confirmada:bool,resultado:?string,habilitada:bool}, cumplimiento:array{confirmada:bool,habilitada:bool}} $etapasBoleta
+ * @return list<array{nombre:string, completada:bool, clase:string}>
+ */
+function resumenEtapasBoletaBarra(bool $cafBoleta, bool $setEmitido, bool $rvdEnviado, array $etapasBoleta): array
+{
+    $rechazada = $etapasBoleta['vobo']['confirmada'] && $etapasBoleta['vobo']['resultado'] === 'rechazado';
+
+    $pasos = [
+        ['nombre' => 'CAF',          'completada' => $cafBoleta],
+        ['nombre' => 'Set',          'completada' => $setEmitido],
+        ['nombre' => 'RVD',          'completada' => $rvdEnviado],
+        ['nombre' => 'Revision',     'completada' => $etapasBoleta['revision']['confirmada']],
+        ['nombre' => 'VoBo',         'completada' => $etapasBoleta['vobo']['confirmada'] && ! $rechazada, 'rechazada' => $rechazada],
+        ['nombre' => 'Cumplimiento', 'completada' => $etapasBoleta['cumplimiento']['confirmada']],
+    ];
+
+    $todasAnterioresCompletas = true;
+    foreach ($pasos as &$p) {
+        if (! empty($p['rechazada'])) {
+            $p['clase'] = 'etapa--rechazada';
+        } elseif ($p['completada']) {
+            $p['clase'] = 'etapa--completada';
+        } elseif ($todasAnterioresCompletas) {
+            $p['clase'] = 'etapa--activa';
+        } else {
+            $p['clase'] = 'etapa--no-gestionada';
+        }
+        if (! $p['completada']) {
+            $todasAnterioresCompletas = false;
+        }
+    }
+    unset($p);
+
+    return $pasos;
+}
+
+/**
+ * Texto corto de "donde esta" un proceso (factura o boleta), a partir de los
+ * segmentos ya coloreados por resumenEtapasBarra()/resumenEtapasBoletaBarra():
+ * la primera etapa "etapa--activa" es la mas temprana no completada; si hay
+ * una "etapa--rechazada" se prioriza ese mensaje (mas urgente que "en
+ * progreso"); si no queda ninguna pendiente, el proceso esta completo. Usada
+ * por /certificacion-elegir para el resumen compacto de cada tarjeta.
+ *
+ * @param list<array{nombre:string, clase:string}> $segmentos
+ */
+function textoEtapaActiva(array $segmentos): string
+{
+    $total = count($segmentos);
+    foreach ($segmentos as $s) {
+        if ($s['clase'] === 'etapa--rechazada') {
+            return sprintf('Rechazada en %s', $s['nombre']);
+        }
+    }
+    foreach ($segmentos as $i => $s) {
+        if ($s['clase'] === 'etapa--activa') {
+            return sprintf('Etapa %d de %d - %s', $i + 1, $total, $s['nombre']);
+        }
+    }
+
+    return sprintf('Completo (%d/%d)', $total, $total);
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/boleta
+//
+//  Resumen de la certificacion de boleta: 2 links (Set de Prueba, RVD) + su
+//  estado (emitido/no emitido), leido de lo que ya existe (dte_emitido para
+//  el Set, dte_boleta_rvd para el RVD -- migracion 012).
+// ===========================================================================
+function handleCertificacionBoletaGet(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    $boletasEmitidas = listarBoletasEmitidas($pdo, $rutEmisor);
+    $rvd             = (new MySqlBoletaRvdRepository($pdo))->ultimo($rutEmisor, Ambiente::Certificacion);
+    $setEmitido      = $boletasEmitidas !== [];
+    $rvdEnviado      = $rvd !== null;
+
+    $etapasBoleta = calcularEtapasBoletaManuales(
+        obtenerEtapasBoletaManualesRaw($pdo, $cuentaId),
+        $setEmitido,
+        $rvdEnviado,
+    );
+
+    vista('boleta', [
+        'flash'           => flashTomar(),
+        'setEmitido'      => $setEmitido,
+        'cantidadEmitida' => count($boletasEmitidas),
+        'rvd'             => $rvd,
+        'cafBoleta'       => existeCafBoleta($pdo, $rutEmisor),
+        'etapasBoleta'    => $etapasBoleta,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/boleta/confirmar-etapa
+//
+//  Confirmacion MANUAL de los pasos 4-6 de boleta (Revision del Set en
+//  certBolElectDteInternet/?SET=2, VoBo del SII, Declaracion de Cumplimiento
+//  DE BOLETA -- distinta de la de factura) -- mismo patron EXACTO que
+//  handleCertificacionConfirmarEtapaPost() (factura): whitelist fija de
+//  campos (nunca interpolados desde $_POST directo), encadenamiento
+//  recalculado en el servidor via calcularEtapasBoletaManuales(), nunca se
+//  confia en lo que haya llegado del formulario.
+// ===========================================================================
+function handleCertificacionBoletaConfirmarEtapaPost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    $campos = [
+        'revision'     => ['at' => 'boleta_revision_solicitada_at', 'trackCol' => 'boleta_revision_track_id', 'resultadoCol' => null],
+        'vobo'         => ['at' => 'boleta_vobo_at', 'trackCol' => null, 'resultadoCol' => 'boleta_revision_resultado'],
+        'cumplimiento' => ['at' => 'boleta_cumplimiento_confirmado_at', 'trackCol' => null, 'resultadoCol' => null],
+    ];
+
+    $etapa = (string) ($_POST['etapa'] ?? '');
+    if (! isset($campos[$etapa])) {
+        redirigirPrg('/certificacion/boleta');
+    }
+    $campo        = $campos[$etapa]['at'];
+    $trackCol     = $campos[$etapa]['trackCol'];
+    $resultadoCol = $campos[$etapa]['resultadoCol'];
+
+    $raw = obtenerEtapasBoletaManualesRaw($pdo, $cuentaId);
+    if ($raw[$campo] !== null) {
+        flashSet('ok', 'Esta etapa ya estaba confirmada.');
+        redirigirPrg('/certificacion/boleta');
+    }
+
+    if (empty($_POST['confirmo'])) {
+        flashSet('error', 'Debes marcar la casilla de confirmacion para registrar esta etapa.');
+        redirigirPrg('/certificacion/boleta');
+    }
+
+    $boletasEmitidas = listarBoletasEmitidas($pdo, $rutEmisor);
+    $rvdUltimo       = (new MySqlBoletaRvdRepository($pdo))->ultimo($rutEmisor, Ambiente::Certificacion);
+    $etapasBoleta    = calcularEtapasBoletaManuales($raw, $boletasEmitidas !== [], $rvdUltimo !== null);
+
+    if (! $etapasBoleta[$etapa]['habilitada']) {
+        flashSet('error', 'Esta etapa todavia no esta habilitada: falta completar el paso anterior.');
+        redirigirPrg('/certificacion/boleta');
+    }
+
+    if ($trackCol !== null) {
+        $trackId = trim((string) ($_POST['track_id'] ?? ''));
+        if ($trackId === '') {
+            flashSet('error', 'Debes informar el Track ID del Set de Boleta.');
+            redirigirPrg('/certificacion/boleta');
+        }
+        $pdo->prepare(
+            "UPDATE dte_emisor SET {$campo} = NOW(), {$trackCol} = :track_id "
+            . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND cuenta_id = :cuenta_id AND {$campo} IS NULL"
+        )->execute([':rut' => $rutEmisor, ':cuenta_id' => $cuentaId, ':track_id' => $trackId]);
+    } elseif ($resultadoCol !== null) {
+        // vobo: whitelist fija de valores, NUNCA se interpola $_POST['resultado']
+        // directo (solo selecciona una entrada de este array, igual criterio
+        // que $campos con $etapa).
+        $resultado = (string) ($_POST['resultado'] ?? '');
+        if (! in_array($resultado, ['aprobado', 'rechazado'], true)) {
+            flashSet('error', 'Debes indicar si el SII aprobo o rechazo la revision.');
+            redirigirPrg('/certificacion/boleta');
+        }
+        $pdo->prepare(
+            "UPDATE dte_emisor SET {$campo} = NOW(), {$resultadoCol} = :resultado "
+            . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND cuenta_id = :cuenta_id AND {$campo} IS NULL"
+        )->execute([':rut' => $rutEmisor, ':cuenta_id' => $cuentaId, ':resultado' => $resultado]);
+    } else {
+        $pdo->prepare(
+            "UPDATE dte_emisor SET {$campo} = NOW() WHERE rut_emisor = :rut AND ambiente = 'certificacion' "
+            . "AND cuenta_id = :cuenta_id AND {$campo} IS NULL"
+        )->execute([':rut' => $rutEmisor, ':cuenta_id' => $cuentaId]);
+    }
+
+    flashSet('ok', 'Etapa confirmada.');
+    redirigirPrg('/certificacion/boleta');
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/boleta/set
+//
+//  Preview del Set de Prueba de Boleta: 5 CASO fijos y universales (ver
+//  BoletaSetPruebasBuilder -- confirmado diff vacio entre el set de EASY
+//  AGENDA y el de sinergia, sin NUMERO DE ATENCION ni variacion por tenant,
+//  a diferencia del Set de Pruebas de factura). NO hace falta parsear ningun
+//  archivo ni pedir datos por formulario.
+// ===========================================================================
+function handleCertificacionBoletaSetGet(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    exigirCafBoleta($pdo, $rutEmisor);
+
+    vista('boleta-set', [
+        'flash' => flashTomar(),
+        'casos' => (new BoletaSetPruebasBuilder())->casos(),
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/boleta/set/emitir
+//
+//  Emite el Set de Prueba de Boleta completo (BoletaSetPruebasBuilder, 5
+//  CASO fijos) en UN solo EnvioBOLETA, invocando BoletaFacturador->emitirLote()
+//  DIRECTO en PHP -- mismo patron sin API key/HTTP interno ya usado en Set
+//  Basico/Simulacion, pero con la clase propia de boleta (canal REST
+//  apicert/pangal, NO SiiDirectoFacturador/maullin -- ver docblock de
+//  BoletaFacturador). Identidad (rut_emisor/ambiente/rutSender) SIEMPRE del
+//  tenant autenticado via resolverRutSenderTenant(), NUNCA hardcodeada (a
+//  diferencia de scripts/emitir_set_boletas_ea.php, que hardcodea el RUT del
+//  firmante -- confirmado con Daniel que ese valor es su RUT real de
+//  firmante autorizado para multiples empresas, pero igual el panel debe
+//  resolverlo dinamicamente por tenant, nunca copiarlo como constante).
+// ===========================================================================
+function handleCertificacionBoletaSetEmitirPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    exigirCafBoleta($pdo, $rutEmisor);
+
+    $certTls = __DIR__ . '/../../fullchain.pem';
+    $keyTls  = __DIR__ . '/../../key.pem';
+    if (! is_file($certTls) || ! is_readable($certTls) || ! is_file($keyTls) || ! is_readable($keyTls)) {
+        flashSet('error', 'Certificado TLS mutuo no disponible en el servidor.');
+        redirigirPrg('/certificacion/boleta/set');
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel boleta set emitir: CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion/boleta/set');
+    }
+
+    $rutSender = resolverRutSenderTenant($pdo, $rutEmisor, Ambiente::Certificacion);
+    if ($rutSender === null) {
+        flashSet('error', 'El certificado del emisor no tiene RUT de firmante (sender). Vuelve a cargar el certificado.');
+        redirigirPrg('/certificacion/boleta/set');
+    }
+
+    $crypto     = new CertificadoCrypto($bin);
+    $folios     = new MySqlFolioRepository($pdo, fn (string $c): string => $crypto->descifrar($c), cryptoKek: $crypto);
+    $emisor     = new MySqlEmisorRepository($pdo, $crypto);
+    $facturador = new BoletaFacturador(
+        new Client(['timeout' => 60, 'cert' => $certTls, 'ssl_key' => $keyTls, 'verify' => true]),
+        $folios,
+        $emisor,
+        dteEmitido: new MySqlDteEmitidoRepository($pdo),
+    );
+
+    $cred = new Credenciales(
+        rutEmisor: $rutEmisor,
+        apiToken:  'no-usado-por-sii-directo',
+        ambiente:  Ambiente::Certificacion,
+        rutSender: $rutSender,
+    );
+
+    try {
+        $documentos = (new BoletaSetPruebasBuilder())->construirDocumentos();
+        $res        = $facturador->emitirLote($documentos, $cred);
+    } catch (SiiAutenticacionException $e) {
+        error_log('panel boleta set emitir: fallo de autenticacion con el SII - ' . $e->glosaSii);
+        flashSet('error', 'No se pudo autenticar con el SII para emitir el Set de Boleta. Intenta nuevamente.');
+        redirigirPrg('/certificacion/boleta/set');
+    } catch (EnvioRechazadoException $e) {
+        flashSet('error', sprintf('El SII rechazo el envio (status %s, trackId %s).', $e->status, $e->trackId ?? 'sin trackId'));
+        redirigirPrg('/certificacion/boleta/set');
+    } catch (Throwable $e) {
+        error_log('panel boleta set emitir: fallo la emision - ' . $e->getMessage());
+        flashSet('error', 'No se pudo emitir el Set de Boleta: ' . $e->getMessage());
+        redirigirPrg('/certificacion/boleta/set');
+    }
+
+    flashSet('ok', sprintf('Set de Boleta emitido. Track ID: %s (%d boletas).', $res['trackId'], count($res['boletas'])));
+    redirigirPrg('/certificacion/boleta');
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/boleta/rvd
+//
+//  Preview del RVD (ConsumoFolios) calculado DINAMICAMENTE a partir de las
+//  boletas ya persistidas en dte_emitido (RvdResumenCalculator) -- reemplaza
+//  la verificacion a mano con calculadora que dejo documentada
+//  scripts/emitir_rvd_boleta_ea.php. Requiere CAF de boleta Y que el Set de
+//  Boleta (paso A) ya se haya emitido para este tenant.
+// ===========================================================================
+function handleCertificacionBoletaRvdGet(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    exigirCafBoleta($pdo, $rutEmisor);
+
+    $boletas = listarBoletasEmitidas($pdo, $rutEmisor);
+    if ($boletas === []) {
+        flashSet('error', 'Primero debes emitir el Set de Boleta antes de generar el RVD.');
+        redirigir('/certificacion/boleta');
+    }
+
+    try {
+        $resumenes = (new RvdResumenCalculator())->calcular($boletas);
+    } catch (Throwable $e) {
+        flashSet('error', 'No se pudo calcular el resumen del RVD: ' . $e->getMessage());
+        redirigir('/certificacion/boleta');
+    }
+
+    vista('boleta-rvd', [
+        'flash'     => flashTomar(),
+        'resumenes' => $resumenes,
+        'fecha'     => date('Y-m-d'),
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/boleta/rvd/emitir
+//
+//  Construye, firma y envia el RVD DIRECTO en PHP -- mismo patron de
+//  scripts/emitir_rvd_boleta_ea.php: RvdBuilder + SiiAutenticador +
+//  SiiUploader (canal SOAP CLASICO, maullin/palena), NUNCA BoletaAutenticador/
+//  BoletaUploader (REST): el spec REST de boleta no tiene endpoint de
+//  ConsumoFolios/RVD, confirmado contra docs/44_API_Boleta_Electronica_OpenAPI_Spec.yaml.
+//  A diferencia del script viejo, el resumen (neto/iva/exento/total/folios)
+//  se calcula DINAMICAMENTE desde dte_emitido (RvdResumenCalculator) -- ya
+//  no se verifica a mano con calculadora.
+// ===========================================================================
+function handleCertificacionBoletaRvdEmitirPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    exigirCafBoleta($pdo, $rutEmisor);
+
+    $boletas = listarBoletasEmitidas($pdo, $rutEmisor);
+    if ($boletas === []) {
+        flashSet('error', 'Primero debes emitir el Set de Boleta antes de generar el RVD.');
+        redirigirPrg('/certificacion/boleta');
+    }
+
+    try {
+        $resumenes = (new RvdResumenCalculator())->calcular($boletas);
+    } catch (Throwable $e) {
+        flashSet('error', 'No se pudo calcular el resumen del RVD: ' . $e->getMessage());
+        redirigirPrg('/certificacion/boleta');
+    }
+
+    $certTls = __DIR__ . '/../../fullchain.pem';
+    $keyTls  = __DIR__ . '/../../key.pem';
+    if (! is_file($certTls) || ! is_readable($certTls) || ! is_file($keyTls) || ! is_readable($keyTls)) {
+        flashSet('error', 'Certificado TLS mutuo no disponible en el servidor.');
+        redirigirPrg('/certificacion/boleta/rvd');
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel boleta rvd emitir: CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion/boleta/rvd');
+    }
+
+    $rutSender = resolverRutSenderTenant($pdo, $rutEmisor, Ambiente::Certificacion);
+    if ($rutSender === null) {
+        flashSet('error', 'El certificado del emisor no tiene RUT de firmante (sender). Vuelve a cargar el certificado.');
+        redirigirPrg('/certificacion/boleta/rvd');
+    }
+
+    $crypto = new CertificadoCrypto($bin);
+    $emisor = new MySqlEmisorRepository($pdo, $crypto);
+    $fecha  = date('Y-m-d');
+    $signer = new XmlSigner();
+    $rvdBuilder = new RvdBuilder();
+
+    try {
+        $cert  = $emisor->obtenerCertificado($rutEmisor, Ambiente::Certificacion);
+        $datos = $emisor->obtenerDatosEmisor($rutEmisor, Ambiente::Certificacion);
+
+        $doc   = $rvdBuilder->build($datos, $rutSender, $fecha, 1, $resumenes, Ambiente::Certificacion);
+        $docCF = $doc->getElementsByTagNameNS('http://www.sii.cl/SiiDte', 'DocumentoConsumoFolios')->item(0);
+        if (! $docCF instanceof DOMElement) {
+            throw new RuntimeException('No se encontro DocumentoConsumoFolios en el documento generado.');
+        }
+        $idCF = $docCF->getAttribute('ID');
+        $signer->insertarEsqueletoFirma($docCF, $idCF, $cert);
+        $rvdBuilder->agregarSchemaLocation($doc);
+        $signer->congelar($doc);
+        $signer->calcularDigestYFirmar($doc, $idCF, $cert);
+
+        $utf8   = XmlSigner::limpiarPrefijosDsig((string) $doc->saveXML());
+        $iso    = (string) mb_convert_encoding($utf8, 'ISO-8859-1', 'UTF-8');
+        $xmlRvd = (string) preg_replace(
+            '/(<\?xml[^>]*encoding=")UTF-8("[^>]*\?>)/i',
+            '${1}ISO-8859-1${2}',
+            $iso,
+            1,
+        );
+
+        $http      = new Client(['timeout' => 60, 'cert' => $certTls, 'ssl_key' => $keyTls, 'verify' => true]);
+        $token     = (new SiiAutenticador($http, $signer))->obtenerToken($cert, Ambiente::Certificacion);
+        $resultado = (new SiiUploader($http))->subir($xmlRvd, $token, $rutSender, $rutEmisor, Ambiente::Certificacion);
+    } catch (SiiAutenticacionException $e) {
+        error_log('panel boleta rvd emitir: fallo de autenticacion con el SII - ' . $e->glosaSii);
+        flashSet('error', 'No se pudo autenticar con el SII para enviar el RVD. Intenta nuevamente.');
+        redirigirPrg('/certificacion/boleta/rvd');
+    } catch (Throwable $e) {
+        error_log('panel boleta rvd emitir: fallo el envio - ' . $e->getMessage());
+        flashSet('error', 'No se pudo enviar el RVD: ' . $e->getMessage());
+        redirigirPrg('/certificacion/boleta/rvd');
+    }
+
+    (new MySqlBoletaRvdRepository($pdo))->registrar(
+        rutEmisor: $rutEmisor,
+        ambiente:  Ambiente::Certificacion,
+        fechaRvd:  $fecha,
+        trackId:   $resultado['trackId'] ?? null,
+        estado:    'enviado',
+        xml:       $xmlRvd,
+    );
+
+    flashSet('ok', sprintf('RVD enviado. Track ID: %s.', $resultado['trackId'] ?? '(sin trackId)'));
+    redirigirPrg('/certificacion/boleta');
+}
+
+/**
+ * Extrae el numero de intercambio del texto libre "SET INTERCAMBIO NUMERO <n>"
+ * (NmbItem del Detalle de cada Documento del EnvioDTE recibido -- confirmado
+ * en intercambio_4955508.xml; NO es un campo estructurado de EnvioDteParser,
+ * por eso se busca aqui con un regex best-effort sobre el XML crudo en vez de
+ * tocar EnvioDteParser -- se reusa TAL CUAL, sin agregarle nada).
+ */
+function extraerNumeroIntercambio(string $xml): ?int
+{
+    return preg_match('/SET INTERCAMBIO NUMERO\s+(\d+)/i', $xml, $m) === 1 ? (int) $m[1] : null;
+}
+
+/**
+ * Documentos del EnvioDTE con un flag 'aceptado' agregado (RUTRecep del
+ * documento === rut_emisor del tenant): mismo criterio que usan
+ * RespuestaDteBuilder/EnvioRecibosBuilder internamente, replicado aqui SOLO
+ * para mostrarlo en el preview (no se reimplementa la logica de la
+ * respuesta, solo se refleja cual sera el resultado).
+ *
+ * @return list<array<string,mixed>>
+ */
+function documentosIntercambioConEstado(EnvioDteParser $envio, string $rutEmisor): array
+{
+    return array_map(
+        static fn (array $d): array => $d + ['aceptado' => $d['RUTRecep'] === $rutEmisor],
+        $envio->documentos,
+    );
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/intercambio
+//
+//  Sub-estacion de la 5: sube el EnvioDTE que el SII entrega al tenant en
+//  www4.sii.cl/pfeInternet ("SET DE INTERCAMBIO") y genera las 3 respuestas
+//  (RecepcionEnvio, ResultadoDTE, EnvioRecibos) que el tenant debe subir a
+//  mano al MISMO portal (no hay API del SII para eso: el ultimo paso queda
+//  fuera de este sistema por diseno). Reusa EnvioDteParser/RespuestaDteBuilder/
+//  EnvioRecibosBuilder TAL CUAL. Se re-parsea el archivo guardado en cada
+//  visita (no se persiste la estructura parseada), mismo criterio que
+//  set-pruebas.
+// ===========================================================================
+function handleIntercambioGet(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    $repo      = new MySqlIntercambioRespuestaRepository($pdo);
+
+    $fila        = $repo->obtener($rutEmisor, Ambiente::Certificacion);
+    $documentos  = null;
+    $errorParseo = null;
+    if ($fila !== null) {
+        try {
+            $envio = new EnvioDteParser();
+            $envio->loadXML($fila['archivo_envio_original']);
+            $documentos = documentosIntercambioConEstado($envio, $rutEmisor);
+        } catch (Throwable $e) {
+            $errorParseo = 'El archivo guardado no se pudo interpretar: ' . $e->getMessage();
+        }
+    }
+
+    vista('intercambio', [
+        'flash'       => flashTomar(),
+        'fila'        => $fila,
+        'documentos'  => $documentos,
+        'errorParseo' => $errorParseo,
+        'error'       => null,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/intercambio
+//
+//  Genera las 3 respuestas directo (sin HTTP interno): identidad SIEMPRE del
+//  tenant autenticado -- rutResponde = rut_emisor via exigirOnboardingCompleto(),
+//  rutRecibe = RutEmisor del envio recibido, mailContacto = email de la
+//  CUENTA (no hay precedente de leerlo por cuenta_id en el panel; se agrega
+//  la consulta aqui), certificado via MySqlEmisorRepository (mismo patron de
+//  toda la estacion 5), rutFirma via resolverRutSenderTenant() (ya existente,
+//  reusado tal cual). Si EnvioRecibosBuilder no encuentra ningun documento
+//  dirigido al tenant, lanza RuntimeException -- se captura y se muestra
+//  claro, no un 500.
+// ===========================================================================
+function handleIntercambioPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    $repo      = new MySqlIntercambioRespuestaRepository($pdo);
+
+    $archivo = $_FILES['archivo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        vista('intercambio', [
+            'flash' => null, 'fila' => $repo->obtener($rutEmisor, Ambiente::Certificacion),
+            'documentos' => null, 'errorParseo' => null,
+            'error' => 'Debes seleccionar el archivo XML del EnvioDTE descargado del SII.',
+        ]);
+    }
+
+    $xmlOriginal = file_get_contents($archivo['tmp_name']);
+    if ($xmlOriginal === false || trim($xmlOriginal) === '') {
+        vista('intercambio', [
+            'flash' => null, 'fila' => $repo->obtener($rutEmisor, Ambiente::Certificacion),
+            'documentos' => null, 'errorParseo' => null,
+            'error' => 'No se pudo leer el archivo subido.',
+        ]);
+    }
+
+    try {
+        $envio = new EnvioDteParser();
+        $envio->loadXML($xmlOriginal);
+    } catch (Throwable $e) {
+        vista('intercambio', [
+            'flash' => null, 'fila' => $repo->obtener($rutEmisor, Ambiente::Certificacion),
+            'documentos' => null, 'errorParseo' => null,
+            'error' => 'El archivo no es un EnvioDTE valido: ' . $e->getMessage(),
+        ]);
+    }
+
+    $bin = @hex2bin(getenv('CRYPTO_MASTER_KEY') ?: '');
+    if ($bin === false || strlen($bin) !== CertificadoCrypto::KEY_LENGTH) {
+        error_log('panel intercambio: CRYPTO_MASTER_KEY ausente o mal configurada');
+        flashSet('error', 'Error de configuracion del servidor (llave de cifrado). Contacta al administrador.');
+        redirigirPrg('/certificacion/intercambio');
+    }
+    $crypto = new CertificadoCrypto($bin);
+    $emisor = new MySqlEmisorRepository($pdo, $crypto);
+
+    try {
+        $cert  = $emisor->obtenerCertificado($rutEmisor, Ambiente::Certificacion);
+        $datos = $emisor->obtenerDatosEmisor($rutEmisor, Ambiente::Certificacion);
+    } catch (Throwable $e) {
+        flashSet('error', 'No se pudo obtener el certificado/datos del emisor: ' . $e->getMessage());
+        redirigirPrg('/certificacion/intercambio');
+    }
+
+    $rutFirma = resolverRutSenderTenant($pdo, $rutEmisor, Ambiente::Certificacion);
+    if ($rutFirma === null) {
+        flashSet('error', 'El certificado del emisor no tiene RUT de firmante (sender). Vuelve a cargar el certificado.');
+        redirigirPrg('/certificacion/intercambio');
+    }
+
+    $stmtEmail = $pdo->prepare('SELECT email FROM cuenta WHERE id = :id LIMIT 1');
+    $stmtEmail->execute([':id' => Auth::cuentaId()]);
+    $mailContacto = (string) ($stmtEmail->fetchColumn() ?: '');
+
+    $car = [
+        'RutResponde'  => $rutEmisor,
+        'RutRecibe'    => $envio->caratula['RutEmisor'] ?? '',
+        'IdRespuesta'  => 1,
+        'MailContacto' => $mailContacto,
+    ];
+
+    try {
+        $xmlAcuse     = (new RespuestaDteBuilder(new XmlSigner()))->acuseRecibo($envio, $car, $cert);
+        $xmlResultado = (new RespuestaDteBuilder(new XmlSigner()))->aceptacionRechazo($envio, $car, $cert);
+        $xmlRecibos   = (new EnvioRecibosBuilder(new XmlSigner()))->generar($envio, $car, $cert, $datos->dirOrigen, $rutFirma);
+    } catch (Throwable $e) {
+        // Incluye el caso documentado de EnvioRecibosBuilder: "ningun
+        // documento dirigido a <rut>" cuando ningun RUTRecep del envio
+        // coincide con el tenant.
+        flashSet('error', 'No se pudieron generar las respuestas del intercambio: ' . $e->getMessage());
+        redirigirPrg('/certificacion/intercambio');
+    }
+
+    $repo->guardar(
+        $rutEmisor,
+        Ambiente::Certificacion,
+        extraerNumeroIntercambio($xmlOriginal),
+        $xmlOriginal,
+        $xmlAcuse,
+        $xmlResultado,
+        $xmlRecibos,
+    );
+
+    flashSet('ok', 'Respuestas del intercambio generadas correctamente.');
+    redirigirPrg('/certificacion/intercambio');
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/intercambio/{acuse|resultado|recibos}.xml
+//
+//  Descarga uno de los 3 XML generados. Scope estricto: solo el rut_emisor
+//  del tenant autenticado.
+// ===========================================================================
+function handleIntercambioDescargarGet(string $cual): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+    $fila      = (new MySqlIntercambioRespuestaRepository($pdo))->obtener($rutEmisor, Ambiente::Certificacion);
+    if ($fila === null) {
+        http_response_code(404);
+        echo '404 - no hay respuesta de intercambio generada';
+        exit;
+    }
+
+    $contenido = match ($cual) {
+        'acuse'     => $fila['respuesta_acuse'],
+        'resultado' => $fila['respuesta_resultado'],
+        'recibos'   => $fila['respuesta_recibos'],
+    };
+
+    header('Content-Type: application/xml; charset=ISO-8859-1');
+    header('Content-Disposition: attachment; filename="respuesta_' . $cual . '.xml"');
+    echo $contenido;
+    exit;
+}
+
+/**
+ * Arma la lista de documentos a incluir en las Muestras Impresas: TODOS los
+ * del Set Basico ($trackIdSetBasico) + 1 por TIPO de la Simulacion
+ * ($trackIdSimulacion, modo "porTipo" -- igual que
+ * scripts/generar_muestras_pdf.php: el manual del SII exige "todos" los del
+ * set de pruebas + "una muestra de cada tipo" de la simulacion, ver
+ * docs/CERTIFICACION_MUESTRAS_IMPRESAS.md). $trackIdSimulacion puede ser
+ * null (simulacion aun no identificada o ambigua sin resolver): en ese caso
+ * solo se arma el Set Basico.
+ *
+ * @return list<array{tipoDte:int, folio:int, xml:string, origen:string}>
+ */
+function planificarDocumentosMuestras(PDO $pdo, string $rutEmisor, string $trackIdSetBasico, ?string $trackIdSimulacion): array
+{
+    $documentos = [];
+
+    $stmt = $pdo->prepare(
+        "SELECT tipo_dte, folio, xml FROM dte_emitido "
+        . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND track_id = :track ORDER BY id ASC"
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':track' => $trackIdSetBasico]);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $documentos[] = [
+            'tipoDte' => (int) $r['tipo_dte'], 'folio' => (int) $r['folio'],
+            'xml' => (string) $r['xml'], 'origen' => 'prueba',
+        ];
+    }
+
+    if ($trackIdSimulacion !== null) {
+        $stmtTipos = $pdo->prepare(
+            "SELECT tipo_dte, MIN(folio) AS folio FROM dte_emitido "
+            . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND track_id = :track "
+            . 'GROUP BY tipo_dte ORDER BY tipo_dte ASC'
+        );
+        $stmtTipos->execute([':rut' => $rutEmisor, ':track' => $trackIdSimulacion]);
+        foreach ($stmtTipos->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $tipoDte = (int) $r['tipo_dte'];
+            $folio   = (int) $r['folio'];
+            $stmtXml = $pdo->prepare(
+                "SELECT xml FROM dte_emitido WHERE rut_emisor = :rut AND ambiente = 'certificacion' "
+                . 'AND tipo_dte = :tipo AND folio = :folio LIMIT 1'
+            );
+            $stmtXml->execute([':rut' => $rutEmisor, ':tipo' => $tipoDte, ':folio' => $folio]);
+            $xml = $stmtXml->fetchColumn();
+            if ($xml !== false) {
+                $documentos[] = ['tipoDte' => $tipoDte, 'folio' => $folio, 'xml' => (string) $xml, 'origen' => 'simulacion'];
+            }
+        }
+    }
+
+    return $documentos;
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion/muestras-impresas
+//
+//  Sub-estacion de la 5: previsualiza y genera el ZIP de PDF para la etapa 4
+//  (Documentos Impresos, www4.sii.cl/pdfdteInternet). Solo funciona con el
+//  Set Basico aprobado (setBasicoAprobado(), reusada tal cual). La Simulacion
+//  no tiene equivalente rastreado en el panel: se identifica con
+//  simulacionAprobada() (ver docblock); si es ambigua, la vista debe mostrar
+//  un selector en vez de adivinar.
+// ===========================================================================
+function handleMuestrasImpresasGet(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    $envios        = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor))['envios'];
+    $sokPorTrackId = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+    $setBasico     = setBasicoAprobado($envios, $sokPorTrackId);
+    $simulacion    = simulacionAprobada($envios, $setBasico['trackId']);
+
+    $planificado = null;
+    if ($setBasico['aprobado'] && ! $simulacion['ambiguo']) {
+        $planificado = planificarDocumentosMuestras($pdo, $rutEmisor, $setBasico['trackId'], $simulacion['trackId']);
+    }
+
+    vista('muestras-impresas', [
+        'flash'       => flashTomar(),
+        'setBasico'   => $setBasico,
+        'simulacion'  => $simulacion,
+        'planificado' => $planificado,
+        'error'       => null,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion/muestras-impresas.zip
+//
+//  Genera los PDF (Set Basico completo + 1 por tipo de la Simulacion, con
+//  copia cedible para las facturas) y los devuelve empaquetados en un ZIP
+//  como respuesta DIRECTA de este POST (no se persiste nada: es generacion
+//  local e idempotente a partir de dte_emitido, sin efectos de red -- un
+//  refresh que reenvie el POST solo regenera el mismo ZIP). Reusa
+//  DtePdfGenerator TAL CUAL via MuestrasImpresasZipBuilder. NO sube nada al
+//  SII: la subida a www4.sii.cl/pdfdteInternet sigue siendo manual.
+// ===========================================================================
+function handleMuestrasImpresasPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
+
+    $envios        = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor))['envios'];
+    $sokPorTrackId = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+    $setBasico     = setBasicoAprobado($envios, $sokPorTrackId);
+    if (! $setBasico['aprobado']) {
+        flashSet('error', 'El Set Basico debe estar aprobado (EPR y confirmado SOK) antes de generar las muestras impresas.');
+        redirigirPrg('/certificacion/muestras-impresas');
+    }
+
+    $simulacion        = simulacionAprobada($envios, $setBasico['trackId']);
+    $trackIdSimulacion = $simulacion['trackId'];
+    if ($simulacion['ambiguo']) {
+        $elegido = trim((string) ($_POST['track_id_simulacion'] ?? ''));
+        $valido  = false;
+        foreach ($simulacion['candidatos'] as $c) {
+            if ($c['trackId'] === $elegido) {
+                $valido = true;
+                break;
+            }
+        }
+        if (! $valido) {
+            flashSet('error', 'Debes elegir cual envio corresponde a la Simulacion (hay mas de un candidato posible).');
+            redirigirPrg('/certificacion/muestras-impresas');
+        }
+        $trackIdSimulacion = $elegido;
+    }
+
+    $documentos = planificarDocumentosMuestras($pdo, $rutEmisor, $setBasico['trackId'], $trackIdSimulacion);
+
+    if (! class_exists(ZipArchive::class)) {
+        flashSet('error', 'La extension ZipArchive de PHP no esta disponible en el servidor. Contacta al administrador.');
+        redirigirPrg('/certificacion/muestras-impresas');
+    }
+
+    try {
+        $resultado = (new MuestrasImpresasZipBuilder())->construir($documentos);
+    } catch (Throwable $e) {
+        flashSet('error', 'No se pudieron generar las muestras impresas: ' . $e->getMessage());
+        redirigirPrg('/certificacion/muestras-impresas');
+    }
+
+    header('Content-Type: application/zip');
+    header('Content-Disposition: attachment; filename="muestras_impresas_' . $rutEmisor . '.zip"');
+    header('Content-Length: ' . strlen($resultado['zip']));
+    echo $resultado['zip'];
+    exit;
+}
+
+// ===========================================================================
+//  Handler: GET /certificacion-aprobada
+//
+//  Estacion 6. El SII no expone webservice que informe la aprobacion, asi que
+//  esta pantalla NUNCA afirma "certificado" por su cuenta: solo refleja la
+//  confirmacion explicita del tenant (certificacion_confirmada_at). Solo
+//  lectura de BD; sin llamadas al SII.
+// ===========================================================================
+function handleCertificacionAprobadaGet(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    $confirmadaAt = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
+
+    // Bloqueada mientras la estacion 5 no este completa (salvo que ya este
+    // confirmada: en ese caso se muestra el estado completado igual).
+    if ($confirmadaAt === null && ! certificacionCompleta($pdo, $rutEmisor)) {
+        redirigir('/certificacion');
+    }
+
+    vista('certificacion_aprobada', [
+        'flash'        => flashTomar(),
+        'confirmadaAt' => $confirmadaAt,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /certificacion-aprobada/confirmar
+//
+//  Registra la confirmacion del tenant. rut_emisor y cuenta_id SIEMPRE del
+//  tenant autenticado, nunca del POST. Patron PRG (flashSet + redirigirPrg).
+// ===========================================================================
+function handleCertificacionAprobadaConfirmarPost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirOnboardingCompleto($pdo, $cuentaId);
+
+    // Idempotente: si ya estaba confirmada, no se falla ni se duplica.
+    if (obtenerCertificacionConfirmadaAt($pdo, $cuentaId) !== null) {
+        flashSet('ok', 'La certificacion ya estaba confirmada.');
+        redirigirPrg('/certificacion-aprobada');
+    }
+
+    // Guardia servidor: sin los 3 componentes aprobados (set basico + libro de
+    // ventas + libro de compras) no se puede confirmar, aunque el POST llegue igual.
+    if (! certificacionCompleta($pdo, $rutEmisor)) {
+        flashSet('error', 'Aun no completas los 3 componentes de la certificacion (Set Basico, Libro de Ventas y Libro de Compras aceptados por el SII). No se registro la confirmacion.');
+        redirigirPrg('/certificacion');
+    }
+
+    if (empty($_POST['confirmo'])) {
+        flashSet('error', 'Debes marcar la casilla de confirmacion para registrar la certificacion.');
+        redirigirPrg('/certificacion-aprobada');
+    }
+
+    $pdo->prepare(
+        "UPDATE dte_emisor SET certificacion_confirmada_at = NOW() "
+        . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND cuenta_id = :cuenta_id "
+        . 'AND certificacion_confirmada_at IS NULL'
+    )->execute([':rut' => $rutEmisor, ':cuenta_id' => $cuentaId]);
+
+    flashSet('ok', 'Confirmacion registrada: tu empresa quedo marcada como certificada ante el SII.');
+    redirigirPrg('/certificacion-aprobada');
+}
+
+// ===========================================================================
+//  Handler: GET /panel
+// ===========================================================================
+function handlePanelGet(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $pdo      = Db::conexion();
+
+    $stmt = $pdo->prepare(
+        "SELECT 1 FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+    $tieneEmisor = $stmt->fetchColumn() !== false;
+
+    // Estacion 3 (certificado): solo se consulta si la etapa 2 esta completa;
+    // requiere el rut_emisor de la cuenta para buscar en dte_certificado.
+    $tieneCertificado = false;
+    if ($tieneEmisor) {
+        $stmtRut = $pdo->prepare(
+            "SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
+        );
+        $stmtRut->execute([':cuenta_id' => $cuentaId]);
+        $rutEmisor = $stmtRut->fetchColumn();
+
+        $stmtCert = $pdo->prepare(
+            "SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = 'certificacion' LIMIT 1"
+        );
+        $stmtCert->execute([':rut' => $rutEmisor]);
+        $tieneCertificado = $stmtCert->fetchColumn() !== false;
+    }
+
+    // Estacion 4 (CAF): solo se consulta si la etapa 3 esta completa; reusa
+    // $rutEmisor (solo se llega aqui con $tieneCertificado=true si $tieneEmisor
+    // ya fue true, asi que $rutEmisor ya quedo asignado arriba).
+    $tieneCaf = false;
+    if ($tieneCertificado) {
+        $stmtCaf = $pdo->prepare(
+            "SELECT 1 FROM dte_caf WHERE rut_emisor = :rut AND ambiente = 'certificacion' LIMIT 1"
+        );
+        $stmtCaf->execute([':rut' => $rutEmisor]);
+        $tieneCaf = $stmtCaf->fetchColumn() !== false;
+    }
+
+    // Estacion 5 (en certificacion): solo se consulta si hay CAF (etapa 4
+    // completa). "Completada" = los 3 componentes que exige el SII estan
+    // aprobados -- Set Basico + Libro de Ventas + Libro de Compras -- ver
+    // certificacionCompleta(). Misma funcion que usa la guardia de la
+    // estacion 6: garantiza que ambas queden consistentes entre si.
+    $estacion5Completa = false;
+    if ($tieneCaf) {
+        $estacion5Completa = certificacionCompleta($pdo, $rutEmisor);
+    }
+
+    // Estacion 6 (certificacion aprobada): el SII no informa la aprobacion por
+    // webservice, asi que "completada" SOLO refleja la confirmacion explicita
+    // del tenant (certificacion_confirmada_at). Bloqueada mientras la estacion
+    // 5 no este completa.
+    $certConfirmada = false;
+    if ($tieneEmisor) {
+        $certConfirmada = obtenerCertificacionConfirmadaAt($pdo, $cuentaId) !== null;
+    }
+
+    $estaciones = [
+        ['titulo' => 'Registrado',                        'estado' => 'completado'],
+        ['titulo' => 'Datos de empresa cargados',         'estado' => $tieneEmisor ? 'completado' : 'pendiente', 'enlace' => '/empresa'],
+        ['titulo' => 'Certificado digital',               'estado' => $tieneCertificado ? 'completado' : ($tieneEmisor ? 'pendiente' : 'inactiva'), 'enlace' => '/certificado'],
+        ['titulo' => 'CAF de certificacion',              'estado' => $tieneCaf ? 'completado' : ($tieneCertificado ? 'pendiente' : 'inactiva'), 'enlace' => '/caf'],
+        ['titulo' => 'En certificacion (sets de prueba)', 'estado' => $estacion5Completa ? 'completado' : ($tieneCaf ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-elegir'],
+        ['titulo' => 'Certificacion aprobada',            'estado' => $certConfirmada ? 'completado' : ($estacion5Completa ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-aprobada'],
+        ['titulo' => 'En produccion',                     'estado' => 'inactiva'],
+    ];
+
+    // "Credenciales de API" no es una estacion numerada del ciclo de 7: es una
+    // seccion aparte que solo aparece cuando el onboarding base esta completo.
+    vista('panel', ['estaciones' => $estaciones, 'mostrarApiKeys' => $tieneCaf]);
+}

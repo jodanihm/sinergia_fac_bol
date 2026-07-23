@@ -1,0 +1,47 @@
+# Dependencias / paquetes (equivalentes a node_modules en este proyecto PHP)
+vendor/
+node_modules/
+.next/
+dist/
+build/
+.venv/
+oracle/LibreDTE-master/
+
+# Base de datos cruda - NUNCA debe entrar al pipeline de extraccion/IA
+mysql_data/
+
+# Secretos y material criptografico
+*.pfx
+*.pem
+.crypto_master_key
+.crypto_master_key.*
+.fact_api_key
+.rcv_internal_key
+*.bak_*
+
+# Documentos tributarios/fiscales reales (datos de contribuyentes: RUT, folios, envios)
+DTEMAIL*.txt
+DTEMAIL*.xml
+FOLMAIL*.txt
+SETMAIL*.txt
+SIISetDePruebas*.txt
+dd_canonical_step5.txt
+audit/
+
+# Carpetas de assets pesados (imagenes, PDFs de muestra, capturas)
+brewer_ppt/
+logo/
+muestras/
+muestras_v2/
+public/
+
+# Renders pagina-por-pagina en PNG de PDFs que ya estan indexados como "paper"
+# (redundante: 1131 imagenes sin valor semantico adicional sobre los PDF/XSD)
+docs/*Diagrama*/
+
+# Cache / artefactos de test
+.phpunit.cache/
+coverage/
+
+# Salida del propio Graphify
+graphify-out/

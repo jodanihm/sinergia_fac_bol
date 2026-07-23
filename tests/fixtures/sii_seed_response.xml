@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <SOAP-ENV:Body>
+    <ns1:getSeedResponse xmlns:ns1="http://DefaultNamespace" SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+      <getSeedReturn xsi:type="xsd:string">&lt;?xml version=&quot;1.0&quot;?&gt;&lt;SII:RESPUESTA xmlns:SII=&quot;http://www.sii.cl/XMLSchema&quot;&gt;&lt;SII:RESP_BODY&gt;&lt;SEMILLA&gt;041220190614&lt;/SEMILLA&gt;&lt;/SII:RESP_BODY&gt;&lt;SII:RESP_HDR&gt;&lt;ESTADO&gt;00&lt;/ESTADO&gt;&lt;/SII:RESP_HDR&gt;&lt;/SII:RESPUESTA&gt;</getSeedReturn>
+    </ns1:getSeedResponse>
+  </SOAP-ENV:Body>
+</SOAP-ENV:Envelope>

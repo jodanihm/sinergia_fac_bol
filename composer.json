@@ -1,0 +1,32 @@
+{
+    "name": "plantiflex/facturacion-cl",
+    "description": "Modulo agnostico de facturacion electronica para Chile (DTE/SII).",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["chile", "sii", "dte", "facturacion", "boleta", "libredte"],
+    "require": {
+        "php": ">=8.2",
+        "ext-json": "*",
+        "guzzlehttp/guzzle": "^7.8",
+        "tecnickcom/tcpdf": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Plantiflex\\FacturacionCl\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Plantiflex\\FacturacionCl\\Tests\\": "tests/",
+            "Plantiflex\\Integration\\Facturacion\\": "integration/plantiflex/"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true
+    }
+}

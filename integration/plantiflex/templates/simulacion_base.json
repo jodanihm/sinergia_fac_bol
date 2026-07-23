@@ -1,0 +1,23 @@
+{
+    "_comentario": "Plantilla base del Set de Simulacion, semilla tomada de payload_simulacion_v2.json (30 documentos: 22 factura / 6 NC / 2 ND), YA ACEPTADO por el SII en 2 ocasiones reales (EASY AGENDA y sinergia). SimulacionSetBuilder escala la cantidad total manteniendo esta misma proporcion aproximada y el mismo patron de referencias intra-lote (NC anula/corrige factura, ND anula NC) -- no se reinventan las glosas.",
+    "receptor": {
+        "rut": "66666666-6",
+        "razonSocial": "Cliente de Prueba",
+        "giro": "Servicios",
+        "direccion": "Calle Falsa 123",
+        "comuna": "Santiago"
+    },
+    "glosasFactura": [
+        {"nombre": "Desarrollo de sitio web corporativo", "precioUnitario": 850000},
+        {"nombre": "Diseno de aplicacion web", "precioUnitario": 1200000},
+        {"nombre": "Mantencion mensual de sitio web", "precioUnitario": 150000},
+        {"nombre": "Hosting y dominio anual", "precioUnitario": 95000},
+        {"nombre": "Diseno UX/UI de plataforma", "precioUnitario": 680000},
+        {"nombre": "Desarrollo de tienda online", "precioUnitario": 1450000},
+        {"nombre": "Integracion de pasarela de pago", "precioUnitario": 320000},
+        {"nombre": "Optimizacion SEO", "precioUnitario": 280000}
+    ],
+    "notaCreditoAnulaFactura": {"codigo": "1", "razon": "ANULA FACTURA POR DEVOLUCION TOTAL"},
+    "notaCreditoCorrigeGiro": {"codigo": "2", "razon": "CORRIGE GIRO DEL RECEPTOR"},
+    "notaDebitoAnulaNotaCredito": {"codigo": "1", "razon": "ANULA NOTA DE CREDITO ELECTRONICA"}
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <SOAP-ENV:Body>
+    <ns1:getTokenResponse xmlns:ns1="http://DefaultNamespace" SOAP-ENV:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+      <getTokenReturn xsi:type="xsd:string">&lt;?xml version=&quot;1.0&quot;?&gt;&lt;SII:RESPUESTA xmlns:SII=&quot;http://www.sii.cl/XMLSchema&quot;&gt;&lt;SII:RESP_BODY&gt;&lt;TOKEN&gt;7E0AAFB1-FAF7-46AF-9183-E2EFC07F45A2&lt;/TOKEN&gt;&lt;/SII:RESP_BODY&gt;&lt;SII:RESP_HDR&gt;&lt;ESTADO&gt;00&lt;/ESTADO&gt;&lt;/SII:RESP_HDR&gt;&lt;/SII:RESPUESTA&gt;</getTokenReturn>
+    </ns1:getTokenResponse>
+  </SOAP-ENV:Body>
+</SOAP-ENV:Envelope>

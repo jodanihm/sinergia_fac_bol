@@ -1,0 +1,65 @@
+# docker-compose.yml -- sinergia_fac_bol
+# Ningun valor de secreto vive aqui: se cargan por env_file desde
+# /mnt/tank/secretos/sinergia_fac_bol/env/, fuera del arbol de git.
+# key.pem, fullchain.pem y .rcv_internal_key se sirven por el bind mount
+# del codigo completo (/app) -- NO por mounts de archivo individuales
+# (los mounts anidados sobre ZFS no se activaban en runtime). Su exclusion
+# de git la garantiza el .gitignore (*.pem y el nombre exacto), no un mount.
+
+services:
+  sinergia_mysql:
+    image: mysql:8
+    container_name: sinergia_mysql
+    restart: unless-stopped
+    env_file:
+      - /mnt/tank/secretos/sinergia_fac_bol/env/mysql.env
+    ports:
+      - "127.0.0.1:3309:3306"
+    volumes:
+      - sinergia_mysql_data:/var/lib/mysql
+    networks:
+      - sinergia_net
+
+  sinergia_motor:
+    image: sinergia_php:8.2
+    container_name: sinergia_motor
+    restart: unless-stopped
+    working_dir: /app
+    command: ["php", "-S", "0.0.0.0:80", "-t", "public"]
+    env_file:
+      - /mnt/tank/secretos/sinergia_fac_bol/env/sinergia.env
+    ports:
+      - "8092:80"
+    volumes:
+      - /mnt/tank/documentos/webserver/sinergia_fac_bol:/app
+    depends_on:
+      - sinergia_mysql
+    networks:
+      - sinergia_net
+
+  sinergia_panel:
+    image: sinergia_php:8.2
+    container_name: sinergia_panel
+    restart: unless-stopped
+    working_dir: /app
+    command: ["php", "-S", "0.0.0.0:8091", "-t", "panel/public", "panel/router.php"]
+    env_file:
+      - /mnt/tank/secretos/sinergia_fac_bol/env/sinergia.env
+    ports:
+      - "8091:8091"
+    volumes:
+      - /mnt/tank/documentos/webserver/sinergia_fac_bol:/app
+    depends_on:
+      - sinergia_mysql
+    networks:
+      - sinergia_net
+
+networks:
+  sinergia_net:
+    external: true
+    name: sinergia_net
+
+volumes:
+  sinergia_mysql_data:
+    external: true
+    name: sinergia_mysql_data

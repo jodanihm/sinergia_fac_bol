@@ -1,0 +1,10 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><?= htmlspecialchars($titulo ?? 'Panel'); ?></title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<main>

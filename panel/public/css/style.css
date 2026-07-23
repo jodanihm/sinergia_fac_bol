@@ -1,0 +1,103 @@
+body {
+    font-family: system-ui, sans-serif;
+    max-width: 640px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    color: #222;
+}
+h1 { font-size: 1.4rem; }
+label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
+input { display: block; width: 100%; padding: 0.4rem; box-sizing: border-box; }
+button { margin-top: 1rem; padding: 0.5rem 1rem; }
+.errores { color: #b00020; }
+.error { color: #b00020; font-size: 0.9rem; margin: 0.2rem 0 0; }
+.estaciones { display: flex; flex-direction: column; gap: 0.5rem; }
+.estacion {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+}
+.estacion--completado { border-color: #2e7d32; background: #f1f8f1; }
+.estacion--pendiente { border-color: #ed6c02; background: #fff8f0; }
+.estacion--inactiva { border-color: #ccc; background: #fafafa; color: #888; }
+.estacion__numero { font-weight: 700; width: 1.5rem; }
+
+/* Barra de progreso de 6 etapas (certificacion.php). */
+.progreso-etapas { display: flex; gap: 0.35rem; margin: 1rem 0 1.5rem; }
+.etapa {
+    flex: 1;
+    text-align: center;
+    padding: 0.5rem 0.25rem;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    font-size: 0.7rem;
+    font-weight: 600;
+    line-height: 1.25;
+    display: block;
+    text-decoration: none;
+}
+.etapa__numero { display: block; font-size: 0.95rem; }
+.etapa--completada { background: #f1f8f1; border-color: #2e7d32; color: #2e7d32; }
+.etapa--activa { background: #e8f0fe; border-color: #1a56db; color: #1a56db; }
+.etapa--no-gestionada { background: #fafafa; border-color: #ddd; color: #999; cursor: help; }
+/* Rechazada (boleta): el SII rechazo -SRH- la revision, no es lo mismo que
+   "no gestionada" (esa es simplemente "aun no le toca"). Solo boleta la usa,
+   factura no tiene este estado -- ver resumenEtapasBoletaBarra(). */
+.etapa--rechazada { background: #fdecea; border-color: #b00020; color: #b00020; cursor: help; }
+/* Etapa cuya pagina se esta viendo AHORA (independiente del color de
+   progreso: podrias estar viendo la etapa 4 aunque lo que toca hacer
+   todavia sea la etapa 2) -- ver partials/certificacion/_barra-etapas.php. */
+.etapa--actual { outline: 2px solid #222; outline-offset: 1px; }
+
+/* Tarjetas de componente (certificacion.php). */
+.tarjeta { border: 1px solid #ddd; border-radius: 6px; padding: 0.9rem 1rem; margin: 1.25rem 0; }
+.tarjeta h2 { margin-top: 0; }
+.tarjeta details { margin-top: 0.75rem; }
+.tarjeta summary { cursor: pointer; font-weight: 600; }
+
+.aviso-ambar { background: #fff7e6; color: #7a4b00; border-radius: 4px; padding: 0.5rem 0.75rem; }
+
+/* Mini barra de etapas circular con icono de revertir superpuesto
+   (panel/views/admin-tenants.php). Distinta de .etapa (rectangular, con
+   texto) que usa certificacion.php -- ese bloque no se toca. Reusa las
+   mismas clases de color .etapa--completada/activa/no-gestionada para el
+   semaforo (fondo/borde/texto), solo cambia forma y tamano. */
+.tabla-scroll { overflow-x: auto; }
+.progreso-etapas--admin { display: flex; gap: 0.55rem; margin: 0 0 0.35rem; padding-top: 0.4rem; }
+.etapa-circulo {
+    position: relative;
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+    font-weight: 700;
+}
+.etapa-circulo__revertir-form { position: absolute; top: -0.4rem; right: -0.4rem; margin: 0; line-height: 0; }
+.etapa-circulo__revertir {
+    width: 0.95rem;
+    height: 0.95rem;
+    line-height: 0.85rem;
+    border-radius: 50%;
+    background: #b00020;
+    color: #fff;
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-align: center;
+    padding: 0;
+    margin: 0;
+    border: 1px solid #fff;
+    cursor: pointer;
+}
+
+/* Seccion de pasos manuales en el portal del SII: mismo ambar que .aviso-ambar,
+   para distinguirla claramente de las acciones automatizadas del panel. */
+.seccion-manual { background: #fff8f0; border: 1px solid #ed6c02; border-radius: 6px; padding: 1rem 1.1rem; margin: 1.5rem 0; }
+.seccion-manual h2 { margin-top: 0; }

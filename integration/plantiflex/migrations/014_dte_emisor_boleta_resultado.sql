@@ -1,0 +1,36 @@
+-- =============================================================================
+-- Migracion 014: columna boleta_revision_resultado en dte_emisor.
+--
+-- GAP QUE CORRIGE: hoy no hay forma de registrar si el SII RECHAZO (SRH) el
+-- Set de Boleta en la revision de contenido -- boleta_vobo_at (migracion 013)
+-- asumia que el resultado SIEMPRE es aprobacion ("V.B."), sin espacio para
+-- un rechazo. Si el SII rechaza, el paso 5 quedaba "PENDIENTE" para
+-- siempre, indistinguible de "el SII todavia no respondio".
+--
+-- UBICACION (audited con Daniel antes de crear esta migracion): el resultado
+-- se completa junto con boleta_vobo_at, NO junto a boleta_revision_solicitada_at
+-- (migracion 013, paso 4) -- el resultado recien se conoce cuando el SII
+-- responde, que es exactamente lo que el paso 5 (hoy llamado "VoBo") ya
+-- representa. En el paso 4 el tenant todavia no puede saber el resultado.
+--
+--   boleta_revision_resultado = NULL        -> resultado aun no confirmado
+--                                               (equivalente a boleta_vobo_at IS NULL)
+--   boleta_revision_resultado = 'aprobado'  -> el SII dio V.B. de contenido
+--   boleta_revision_resultado = 'rechazado' -> el SII rechazo (SRH); el
+--                                               paso 6 (Cumplimiento) queda
+--                                               bloqueado, hay que rehacer el
+--                                               Set/Revision (flujo de
+--                                               reintento no incluido en esta
+--                                               migracion, tarea aparte).
+--
+-- 100% aditiva: no se borra ni renombra ninguna columna existente
+-- (boleta_vobo_at de la 013 se mantiene igual, sigue siendo la fecha en que
+-- se confirmo el resultado, cualquiera sea). Columna NULLABLE.
+--
+-- Portable a MySQL 8.x (Oracle) y MariaDB 10.x: SIN IF NOT EXISTS en la
+-- clausula ADD COLUMN (exclusiva de MariaDB; MySQL 8.4 falla con error de
+-- sintaxis si se usa ahi).
+-- =============================================================================
+
+ALTER TABLE dte_emisor
+    ADD COLUMN boleta_revision_resultado ENUM('aprobado','rechazado') NULL AFTER boleta_vobo_at;

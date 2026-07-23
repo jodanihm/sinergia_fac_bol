@@ -1,0 +1,42 @@
+{
+    "_comentario": "Los 5 CASO del Set de Prueba de Boleta Electronica de Ventas y Servicios que entrega el SII -- UNIVERSAL, confirmado con diff byte a byte entre las copias guardadas de EASY AGENDA (easyagenda/Set Prueba BE.txt, Set Prueba BE (2).txt, Set Prueba BE3.txt: identicas) y el mismo documento verificado para sinergia. A diferencia del Set de Pruebas de FACTURA (que trae un NUMERO DE ATENCION distinto por tenant y requiere parser + carga de archivo), este es un script fijo que el SII entrega igual a cualquier contribuyente: no hace falta parser ni formulario, solo copiar los 5 casos tal cual una vez. Fuente literal: scripts/emitir_set_boletas_ea.php (glosas/cantidades/precios ya usados y aceptados por el SII en el envio real de EASY AGENDA, folios 122-126/144-148).",
+    "receptor": {
+        "rut": "66666666-6",
+        "razonSocial": "Consumidor Final"
+    },
+    "casos": [
+        {
+            "nombre": "CASO-1",
+            "detalles": [
+                {"nombre": "Cambio de aceite", "cantidad": 1, "precioUnitario": 19900},
+                {"nombre": "Alineacion y balanceo", "cantidad": 1, "precioUnitario": 9900}
+            ]
+        },
+        {
+            "nombre": "CASO-2",
+            "detalles": [
+                {"nombre": "Papel de regalo", "cantidad": 17, "precioUnitario": 120}
+            ]
+        },
+        {
+            "nombre": "CASO-3",
+            "detalles": [
+                {"nombre": "Sandwic", "cantidad": 2, "precioUnitario": 1500},
+                {"nombre": "Bebida", "cantidad": 2, "precioUnitario": 550}
+            ]
+        },
+        {
+            "nombre": "CASO-4",
+            "detalles": [
+                {"nombre": "item afecto 1", "cantidad": 8, "precioUnitario": 1590},
+                {"nombre": "item exento 2", "cantidad": 2, "precioUnitario": 1000, "exento": true}
+            ]
+        },
+        {
+            "nombre": "CASO-5",
+            "detalles": [
+                {"nombre": "Arroz", "cantidad": 5, "precioUnitario": 700, "unidad": "Kg"}
+            ]
+        }
+    ]
+}

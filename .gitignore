@@ -1,0 +1,107 @@
+# ============================================================================
+# .gitignore -- sinergia_fac_bol
+# ============================================================================
+
+# --- Bloque 0: lo que el .gitignore anterior ya excluia (se conserva) ---
+/vendor/
+/composer.lock
+/.phpunit.cache/
+/.phpunit.result.cache
+/coverage/
+.idea/
+.vscode/
+
+# --- Bloque A1: secretos por extension (cualquier nivel) ---
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+
+# --- Bloque A2: secretos por nombre (cualquier nivel) ---
+.crypto_master_key
+.crypto_master_key.*
+.fact_api_key
+.rcv_internal_key
+
+# --- Bloque A3: archivos de entorno con valores (no el example) ---
+.env
+*.env
+!/.env.example
+
+# --- Bloque A4: CAF (folios firmados por el SII) por nombre, cualquier nivel ---
+*CAF*.xml
+*caf*.xml
+*Caf*.xml
+FoliosSII*.xml
+
+# --- Bloque A5: carpetas con material sensible disperso ---
+/sinergia/
+/easyagenda/
+/folios_reales/
+
+# --- Bloque B: datos (nunca a git) ---
+/mysql_data/
+
+# --- Bloque C1: directorios de residuo/regenerables ---
+/graphify-out/
+/oracle/
+/muestras/
+/muestras_v2/
+/brewer_ppt/
+/debug/
+/audit/
+
+# --- Bloque C2: residuo suelto en la RAIZ, por extension (solo nivel raiz) ---
+/*.php
+/*.xml
+/*.json
+/*.pdf
+/*.txt
+/*.docx
+/*.sql
+/*.gz
+/*.b64
+/*.bak
+/*.bak.*
+/*.bak_*
+
+# --- Bloque C3: residuo por patron de nombre en la raiz ---
+/DTEMAIL*
+/SETMAIL*
+/FOLMAIL*
+/patch_*.php
+/fix_*.php
+
+# --- Bloque C4: residuo de sistema operativo (cualquier nivel) ---
+Thumbs.db
+desktop.ini
+
+# --- Bloque E: exclusiones adicionales confirmadas (residuo y no-producto) ---
+# handoffs previos sueltos en la raiz (ya reemplazados)
+/PROMPT_CONTINUIDAD*.md
+# config local del editor/herramienta (mismo trato que .vscode/ y .idea/)
+/.claude/
+# documentacion oficial del SII (33M, 1131 PNG); no son originales del proyecto
+/docs/
+# scripts de la migracion de seguridad y de prueba (no del producto)
+/paso*.sh
+/probar_certificado.sh
+# pertenece al proyecto hermano boletas_facturas
+/run_facturacion_api.sh
+# residuo vacio
+/respondemos
+# backups .bak en CUALQUIER nivel (los /*.bak* de C2 cubren solo la raiz)
+*.bak*
+
+# --- Bloque D: reincluir los legitimos de la raiz que C2 excluiria ---
+!/composer.json
+!/phpunit.xml
+!/estructura_facturacion_cl.sql
+!/docker-compose.yml
+!/.env.example
+!/.gitignore
+!/.graphifyignore
+!/README.md
+!/CLAUDE.md
+!/Dockerfile.php
