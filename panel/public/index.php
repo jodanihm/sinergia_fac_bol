@@ -320,10 +320,10 @@ function definicionMenu(): array
                 ['clave' => 'config.caf', 'label' => 'Folios y CAF', 'destino' => '/caf', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'config.certificacion', 'label' => 'Certificacion SII', 'destino' => '/certificacion-elegir', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'config.apikeys', 'label' => 'API keys', 'destino' => '/apikeys', 'construido' => true, 'requiereProduccion' => false],
-                ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => false, 'requiereProduccion' => false],
+                ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => true, 'requiereProduccion' => false],
             ],
         ],
-        ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'construido' => false, 'requiereProduccion' => false],
+        ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'construido' => true, 'requiereProduccion' => false],
     ];
 }
 
@@ -2382,6 +2382,428 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
     ]);
 }
 
+// ===========================================================================
+//  Configuracion > Usuarios (M6, pieza 1): invitar un segundo usuario a la
+//  cuenta via link de activacion de un solo uso. Sin SMTP en el proyecto
+//  (confirmado en M5): el owner copia el link generado y lo comparte por
+//  cualquier canal fuera de la app; quien lo abre define SU PROPIA
+//  contrasena (el owner nunca la conoce ni la elige). rol='colaborador' es
+//  puramente visual (sin logica que lo lea para permitir/bloquear nada):
+//  el sistema de permisos real queda fuera de alcance de M6 (PASO 0: hoy
+//  solo puede existir un usuario por cuenta, construir permisos ahora seria
+//  especulativo).
+// ===========================================================================
+
+/** @return list<array<string,mixed>> */
+function listarUsuariosDeCuenta(PDO $pdo, int $cuentaId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, email, rol, estado, activacion_token, activacion_expira, created_at '
+        . 'FROM usuario WHERE cuenta_id = :c ORDER BY created_at ASC, id ASC'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function contarUsuariosActivos(PDO $pdo, int $cuentaId): int
+{
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM usuario WHERE cuenta_id = :c AND estado = 'activo'");
+    $stmt->execute([':c' => $cuentaId]);
+
+    return (int) $stmt->fetchColumn();
+}
+
+/**
+ * Crea una invitacion nueva o regenera el token de una pendiente (cubre
+ * "el link vencio, reenvialo" y un doble-submit accidental del formulario).
+ * Cubre los 3 casos de duplicado de email (usuario.email es UNIQUE GLOBAL,
+ * no por cuenta -- ver PASO 0 de M6): email de OTRA cuenta como owner
+ * original, email ya activo en ESTA cuenta, email de OTRA cuenta como
+ * colaborador -- los 3 dan un error claro, nunca un 500 por violar el
+ * UNIQUE a ciegas.
+ *
+ * @return array{status:string, mensaje?:string, token?:string, usuarioId?:int, regenerado?:bool}
+ */
+function crearOResendearInvitacion(PDO $pdo, int $cuentaId, string $email): array
+{
+    // Ojo: cuenta.email es el email del OWNER original (lo fija /registro).
+    // Si el email pertenece a esta MISMA cuenta (invitar el propio email del
+    // owner), no es un error de "otra cuenta" -- cae al chequeo de usuario de
+    // abajo, que lo va a encontrar como activo y dar el mensaje correcto.
+    $stmt = $pdo->prepare('SELECT id FROM cuenta WHERE email = :email LIMIT 1');
+    $stmt->execute([':email' => $email]);
+    $cuentaConEseEmail = $stmt->fetchColumn();
+    if ($cuentaConEseEmail !== false && (int) $cuentaConEseEmail !== $cuentaId) {
+        return ['status' => 'error', 'mensaje' => 'Ese email ya esta en uso en otra cuenta.'];
+    }
+
+    $stmt = $pdo->prepare('SELECT id, cuenta_id, estado FROM usuario WHERE email = :email LIMIT 1');
+    $stmt->execute([':email' => $email]);
+    $existente = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    $expira = (new DateTimeImmutable('+48 hours'))->format('Y-m-d H:i:s');
+
+    if ($existente !== false) {
+        if ((int) $existente['cuenta_id'] !== $cuentaId) {
+            return ['status' => 'error', 'mensaje' => 'Ese email ya esta en uso en otra cuenta.'];
+        }
+        if ($existente['estado'] === 'activo') {
+            return ['status' => 'error', 'mensaje' => 'Esta persona ya tiene acceso a tu cuenta.'];
+        }
+        // inactivo, misma cuenta: invitacion pendiente (o desactivada antes de
+        // completar la activacion) -- regenerar token y reenviar.
+        $token = bin2hex(random_bytes(32));
+        $pdo->prepare('UPDATE usuario SET activacion_token = :token, activacion_expira = :expira WHERE id = :id')
+            ->execute([':token' => $token, ':expira' => $expira, ':id' => $existente['id']]);
+
+        return ['status' => 'ok', 'token' => $token, 'usuarioId' => (int) $existente['id'], 'regenerado' => true];
+    }
+
+    $token = bin2hex(random_bytes(32));
+    // Hash de bytes aleatorios: hace login imposible hasta que se active
+    // (usuario.password_hash es NOT NULL, no se puede dejar vacio).
+    $passwordInutilizable = password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT);
+    $pdo->prepare(
+        'INSERT INTO usuario (cuenta_id, email, password_hash, rol, estado, activacion_token, activacion_expira, created_at) '
+        . "VALUES (:cuenta_id, :email, :hash, 'colaborador', 'inactivo', :token, :expira, NOW())"
+    )->execute([
+        ':cuenta_id' => $cuentaId,
+        ':email'     => $email,
+        ':hash'      => $passwordInutilizable,
+        ':token'     => $token,
+        ':expira'    => $expira,
+    ]);
+
+    return ['status' => 'ok', 'token' => $token, 'usuarioId' => (int) $pdo->lastInsertId(), 'regenerado' => false];
+}
+
+/**
+ * Resuelve un token de activacion: 'invalido' (no existe, o el usuario ya
+ * no esta 'inactivo'), 'vencido' (existe pero paso activacion_expira), o
+ * 'valido' (listo para definir contrasena).
+ *
+ * @return array{estado:string, usuario?:array<string,mixed>}
+ */
+function resolverUsuarioPorTokenActivacion(PDO $pdo, string $token): array
+{
+    if ($token === '') {
+        return ['estado' => 'invalido'];
+    }
+    $stmt = $pdo->prepare(
+        'SELECT id, cuenta_id, email, estado, activacion_expira FROM usuario WHERE activacion_token = :token LIMIT 1'
+    );
+    $stmt->execute([':token' => $token]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false || $fila['estado'] !== 'inactivo') {
+        return ['estado' => 'invalido'];
+    }
+    if ($fila['activacion_expira'] === null || (string) $fila['activacion_expira'] < date('Y-m-d H:i:s')) {
+        return ['estado' => 'vencido', 'usuario' => $fila];
+    }
+
+    return ['estado' => 'valido', 'usuario' => $fila];
+}
+
+function handleUsuariosListadoGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    vista('usuarios-listado', [
+        'usuarios'  => listarUsuariosDeCuenta($pdo, $cuentaId),
+        'flash'     => flashTomar(),
+        'navActivo' => 'config.usuarios',
+    ]);
+}
+
+function handleUsuarioInvitarPost(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    $email    = trim((string) ($_POST['email'] ?? ''));
+
+    if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        flashSet('error', 'Email invalido.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    $resultado = crearOResendearInvitacion($pdo, $cuentaId, $email);
+    if ($resultado['status'] === 'error') {
+        flashSet('error', $resultado['mensaje']);
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    $esquema = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' ? 'https' : 'http';
+    $host    = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+    $link    = sprintf('%s://%s/activar/%s', $esquema, $host, $resultado['token']);
+
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'usuario.invitar',
+        'usuario',
+        $resultado['usuarioId'],
+        null,
+        ['email' => $email, 'regenerado' => $resultado['regenerado']],
+    );
+
+    flashSet(
+        'exito',
+        'Invitacion lista. Copia este link y compartelo por fuera de la app (valido 48 horas, un solo uso):',
+        ['link' => $link],
+    );
+    redirigirPrg('/configuracion/usuarios');
+}
+
+function handleUsuarioActivarPost(int $id): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    $stmt = $pdo->prepare('SELECT estado, activacion_token FROM usuario WHERE id = :id AND cuenta_id = :c LIMIT 1');
+    $stmt->execute([':id' => $id, ':c' => $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false) {
+        flashSet('error', 'Usuario no encontrado.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+    if ($fila['activacion_token'] !== null) {
+        flashSet('error', 'Este usuario nunca completo su activacion. Vuelve a invitarlo desde el formulario de arriba.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    $pdo->prepare("UPDATE usuario SET estado = 'activo' WHERE id = :id AND cuenta_id = :c")
+        ->execute([':id' => $id, ':c' => $cuentaId]);
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'usuario.activar', 'usuario', $id, ['estado' => $fila['estado']], ['estado' => 'activo']);
+
+    flashSet('exito', 'Usuario activado.');
+    redirigirPrg('/configuracion/usuarios');
+}
+
+function handleUsuarioDesactivarPost(int $id): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    if ($id === Auth::usuarioId()) {
+        flashSet('error', 'No puedes desactivar tu propia cuenta.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    $stmt = $pdo->prepare('SELECT estado FROM usuario WHERE id = :id AND cuenta_id = :c LIMIT 1');
+    $stmt->execute([':id' => $id, ':c' => $cuentaId]);
+    $estadoActual = $stmt->fetchColumn();
+    if ($estadoActual === false) {
+        flashSet('error', 'Usuario no encontrado.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+    if ($estadoActual !== 'activo') {
+        flashSet('error', 'Ese usuario ya esta inactivo.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    // Guarda: nunca dejar la cuenta en 0 usuarios activos (auto-bloqueo total,
+    // sin via de recuperacion salvo un fix manual por SQL).
+    if (contarUsuariosActivos($pdo, $cuentaId) <= 1) {
+        flashSet('error', 'No puedes desactivar al ultimo usuario activo de tu cuenta.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    $pdo->prepare("UPDATE usuario SET estado = 'inactivo' WHERE id = :id AND cuenta_id = :c")
+        ->execute([':id' => $id, ':c' => $cuentaId]);
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'usuario.desactivar', 'usuario', $id, ['estado' => 'activo'], ['estado' => 'inactivo']);
+
+    flashSet('exito', 'Usuario desactivado.');
+    redirigirPrg('/configuracion/usuarios');
+}
+
+/** GET /activar/{token}: publica, sin sesion (mismo nivel que /login, /registro). */
+function handleActivarCuentaGet(string $token): void
+{
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+
+    $pdo = Db::conexion();
+    vista('activar-cuenta', [
+        'token'      => $token,
+        'resolucion' => resolverUsuarioPorTokenActivacion($pdo, $token),
+        'errores'    => [],
+    ]);
+}
+
+/**
+ * POST /activar/{token}: publica. El UPDATE final exige
+ * activacion_token = :token en el WHERE (atomico): si el mismo token se
+ * manda 2 veces casi al mismo tiempo (doble-submit), solo el primero en
+ * llegar afecta la fila -- el segundo la encuentra con activacion_token ya
+ * en NULL y falla limpio, sin reactivar ni pisar nada.
+ */
+function handleActivarCuentaPost(string $token): void
+{
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+
+    $pdo        = Db::conexion();
+    $resolucion = resolverUsuarioPorTokenActivacion($pdo, $token);
+    if ($resolucion['estado'] !== 'valido') {
+        vista('activar-cuenta', ['token' => $token, 'resolucion' => $resolucion, 'errores' => []]);
+    }
+
+    $pass     = (string) ($_POST['password'] ?? '');
+    $confirma = (string) ($_POST['password_confirmacion'] ?? '');
+    $errores  = [];
+    if (strlen($pass) < 8) {
+        $errores[] = 'La contrasena debe tener al menos 8 caracteres.';
+    }
+    if ($pass !== $confirma) {
+        $errores[] = 'Las contrasenas no coinciden.';
+    }
+    if ($errores !== []) {
+        vista('activar-cuenta', ['token' => $token, 'resolucion' => $resolucion, 'errores' => $errores]);
+    }
+
+    $usuario = $resolucion['usuario'];
+    $hash    = password_hash($pass, PASSWORD_DEFAULT);
+    $stmt    = $pdo->prepare(
+        "UPDATE usuario SET password_hash = :hash, estado = 'activo', activacion_token = NULL, activacion_expira = NULL "
+        . 'WHERE id = :id AND activacion_token = :token'
+    );
+    $stmt->execute([':hash' => $hash, ':id' => $usuario['id'], ':token' => $token]);
+
+    if ($stmt->rowCount() !== 1) {
+        // Carrera de doble-submit: otro request ya consumio este token.
+        vista('activar-cuenta', ['token' => $token, 'resolucion' => ['estado' => 'invalido'], 'errores' => []]);
+    }
+
+    Auth::login((int) $usuario['id'], (int) $usuario['cuenta_id']);
+    Csrf::regenerarToken();
+    redirigir('/panel');
+}
+
+// ===========================================================================
+//  Auditoria de tenant (M6, pieza 2): filtra admin_auditoria por los eventos
+//  que pertenecen a ESTA cuenta especifica. La tabla no tiene columna
+//  cuenta_id propia (ver PASO 0 de M6): se resuelve indirectamente segun
+//  entidad_tipo, un LEFT JOIN distinto por tipo. Extensible: un entidad_tipo
+//  nuevo a futuro solo agrega un LEFT JOIN mas + una condicion mas en el OR.
+//
+//  Por que nunca se ve una cuenta ajena: :cuentaId es SIEMPRE
+//  Auth::cuentaId() de la sesion actual. Para entidad_tipo='cuenta' (las
+//  unicas 2 acciones exclusivas de superadmin que existen hoy: suspender/
+//  reactivar), la condicion exige que la cuenta AFECTADA (entidad_id) sea
+//  la propia -- si superadmin actua sobre OTRO tenant, esa fila no matchea
+//  para nadie mas que ese tenant. Si superadmin actua sobre ESTA cuenta, SI
+//  se ve (transparencia sobre acciones que afectan la cuenta propia).
+// ===========================================================================
+
+/**
+ * @return array{0:string, 1:array<string,mixed>}
+ */
+function filtroAuditoriaTenant(int $cuentaId, ?string $desde, ?string $hasta, ?string $accionFiltro): array
+{
+    $where = "(\n"
+        . "    (a.entidad_tipo = 'api_key' AND ak.cuenta_id = :cuenta_ak)\n"
+        . "    OR (a.entidad_tipo = 'cuenta' AND a.entidad_id = :cuenta_directa)\n"
+        . "    OR (a.entidad_tipo = 'dte_emisor' AND de.cuenta_id = :cuenta_de)\n"
+        . "    OR (a.entidad_tipo = 'usuario' AND u2.cuenta_id = :cuenta_u2)\n"
+        . ')';
+    $params = [
+        ':cuenta_ak'      => $cuentaId,
+        ':cuenta_directa' => $cuentaId,
+        ':cuenta_de'      => $cuentaId,
+        ':cuenta_u2'      => $cuentaId,
+    ];
+    if ($desde !== null && $hasta !== null) {
+        $where .= ' AND a.created_at BETWEEN :desde AND :hasta';
+        $params[':desde'] = $desde . ' 00:00:00';
+        $params[':hasta'] = $hasta . ' 23:59:59';
+    }
+    if ($accionFiltro !== null && $accionFiltro !== '') {
+        $where .= ' AND a.accion LIKE :accion';
+        $params[':accion'] = '%' . $accionFiltro . '%';
+    }
+
+    return [$where, $params];
+}
+
+/** @return list<array<string,mixed>> */
+function listarAuditoriaTenant(PDO $pdo, int $cuentaId, ?string $desde, ?string $hasta, ?string $accionFiltro, int $limit, int $offset): array
+{
+    [$where, $params] = filtroAuditoriaTenant($cuentaId, $desde, $hasta, $accionFiltro);
+    $stmt = $pdo->prepare(
+        'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, a.entidad_id, '
+        . '       a.valor_anterior, a.valor_nuevo, a.created_at '
+        . 'FROM admin_auditoria a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id '
+        . "LEFT JOIN api_key ak ON a.entidad_tipo = 'api_key' AND ak.id = a.entidad_id "
+        . "LEFT JOIN dte_emisor de ON a.entidad_tipo = 'dte_emisor' AND de.id = a.entidad_id "
+        . "LEFT JOIN usuario u2 ON a.entidad_tipo = 'usuario' AND u2.id = a.entidad_id "
+        . 'WHERE ' . $where
+        . ' ORDER BY a.created_at DESC, a.id DESC LIMIT :limit OFFSET :offset'
+    );
+    foreach ($params as $k => $v) {
+        $stmt->bindValue($k, $v);
+    }
+    $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    $stmt->execute();
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function contarAuditoriaTenant(PDO $pdo, int $cuentaId, ?string $desde, ?string $hasta, ?string $accionFiltro): int
+{
+    [$where, $params] = filtroAuditoriaTenant($cuentaId, $desde, $hasta, $accionFiltro);
+    $stmt = $pdo->prepare(
+        'SELECT COUNT(*) FROM admin_auditoria a '
+        . "LEFT JOIN api_key ak ON a.entidad_tipo = 'api_key' AND ak.id = a.entidad_id "
+        . "LEFT JOIN dte_emisor de ON a.entidad_tipo = 'dte_emisor' AND de.id = a.entidad_id "
+        . "LEFT JOIN usuario u2 ON a.entidad_tipo = 'usuario' AND u2.id = a.entidad_id "
+        . 'WHERE ' . $where
+    );
+    $stmt->execute($params);
+
+    return (int) $stmt->fetchColumn();
+}
+
+function handleAuditoriaTenantGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    $desdeRaw = trim((string) ($_GET['desde'] ?? ''));
+    $hastaRaw = trim((string) ($_GET['hasta'] ?? ''));
+    $desde    = ($desdeRaw !== '' && fechaValida($desdeRaw)) ? $desdeRaw : null;
+    $hasta    = ($hastaRaw !== '' && fechaValida($hastaRaw)) ? $hastaRaw : null;
+    if ($desde === null || $hasta === null) {
+        $desde = null;
+        $hasta = null;
+    }
+    $accionFiltro = trim((string) ($_GET['accion'] ?? ''));
+
+    $porPagina = 25;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $total     = contarAuditoriaTenant($pdo, $cuentaId, $desde, $hasta, $accionFiltro !== '' ? $accionFiltro : null);
+    $offset    = ($pagina - 1) * $porPagina;
+    $filas     = listarAuditoriaTenant($pdo, $cuentaId, $desde, $hasta, $accionFiltro !== '' ? $accionFiltro : null, $porPagina, $offset);
+
+    vista('auditoria-tenant', [
+        'filas'        => $filas,
+        'desde'        => $desde ?? '',
+        'hasta'        => $hasta ?? '',
+        'accionFiltro' => $accionFiltro,
+        'pagina'       => $pagina,
+        'totalPaginas' => max(1, (int) ceil($total / $porPagina)),
+        'total'        => $total,
+        'navActivo'    => 'auditoria',
+    ]);
+}
+
 /** Endpoint JSON: resuelve el cliente por RUT para el autocompletado del form. */
 function handleClientePorRutGet(): void
 {
@@ -3068,6 +3490,15 @@ if ($metodo === 'GET' && $ruta === '/logout') {
     redirigir('/login');
 }
 
+// --- Activacion de invitacion (M6, publica, sin sesion) ---
+if ($metodo === 'GET' && preg_match('#^/activar/([0-9a-f]{64})$#', $ruta, $mActivar)) {
+    handleActivarCuentaGet($mActivar[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/activar/([0-9a-f]{64})$#', $ruta, $mActivar)) {
+    handleActivarCuentaPost($mActivar[1]);
+}
+
 // --- Maestros > Clientes ---
 if ($metodo === 'GET' && $ruta === '/maestros/clientes') {
     Auth::requerirSesion();
@@ -3490,6 +3921,33 @@ if ($metodo === 'POST' && $ruta === '/certificacion-aprobada/confirmar') {
 if ($metodo === 'GET' && $ruta === '/panel') {
     Auth::requerirSesion();
     handlePanelGet();
+}
+
+// --- Configuracion > Usuarios (M6) ---
+if ($metodo === 'GET' && $ruta === '/configuracion/usuarios') {
+    Auth::requerirSesion();
+    handleUsuariosListadoGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/configuracion/usuarios') {
+    Auth::requerirSesion();
+    handleUsuarioInvitarPost();
+}
+
+if ($metodo === 'POST' && preg_match('#^/configuracion/usuarios/(\d+)/activar$#', $ruta, $mUsu)) {
+    Auth::requerirSesion();
+    handleUsuarioActivarPost((int) $mUsu[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/configuracion/usuarios/(\d+)/desactivar$#', $ruta, $mUsu)) {
+    Auth::requerirSesion();
+    handleUsuarioDesactivarPost((int) $mUsu[1]);
+}
+
+// --- Auditoria de tenant (M6) ---
+if ($metodo === 'GET' && $ruta === '/auditoria') {
+    Auth::requerirSesion();
+    handleAuditoriaTenantGet();
 }
 
 // ---------------------------------------------------------------------------
