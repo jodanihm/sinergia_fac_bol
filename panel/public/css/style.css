@@ -101,3 +101,86 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
    para distinguirla claramente de las acciones automatizadas del panel. */
 .seccion-manual { background: #fff8f0; border: 1px solid #ed6c02; border-radius: 6px; padding: 1rem 1.1rem; margin: 1.5rem 0; }
 .seccion-manual h2 { margin-top: 0; }
+
+/* ==========================================================================
+   Shell con menu lateral (partials/_nav.php). Solo aplica cuando hay sesion:
+   el <body> lleva la clase "con-sidebar" (ver header.php). Sin sesion, el body
+   conserva el layout centrado de arriba (login/registro), intacto.
+   ========================================================================== */
+body.con-sidebar {
+    max-width: none;
+    margin: 0;
+    display: flex;
+    align-items: stretch;
+    min-height: 100vh;
+}
+body.con-sidebar > main {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 960px;
+    padding: 1.5rem 2rem;
+    box-sizing: border-box;
+}
+
+.sidebar {
+    flex: 0 0 232px;
+    width: 232px;
+    box-sizing: border-box;
+    background: #f7f7f8;
+    border-right: 1px solid #ddd;
+    padding: 1rem 0.75rem 1.5rem;
+    display: flex;
+    flex-direction: column;
+}
+.sidebar__marca { font-weight: 700; font-size: 1.05rem; padding: 0.25rem 0.5rem 1rem; }
+.sidebar__grupo { margin-bottom: 0.85rem; }
+.sidebar__grupo-titulo {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #888;
+    padding: 0 0.5rem;
+    margin: 0.5rem 0 0.3rem;
+}
+.sidebar__subgrupo { margin: 0.15rem 0; }
+.sidebar__subtitulo {
+    font-size: 0.72rem;
+    color: #666;
+    padding: 0 0.5rem;
+    margin: 0.35rem 0 0.15rem;
+}
+.sidebar__pie { margin-top: auto; padding-top: 1rem; border-top: 1px solid #e2e2e6; }
+
+.nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    text-decoration: none;
+    color: #222;
+}
+.nav-item--sub { padding-left: 1.25rem; font-size: 0.85rem; }
+a.nav-item:hover { background: #ececf0; }
+.nav-item--activo { background: #e8f0fe; color: #1a56db; font-weight: 600; }
+.nav-item--proximo,
+.nav-item--bloqueado { color: #aaa; cursor: default; }
+.nav-item__badge {
+    font-size: 0.58rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    border-radius: 3px;
+    padding: 0.05rem 0.3rem;
+    white-space: nowrap;
+}
+.nav-item--proximo .nav-item__badge { background: #eaeaea; color: #999; }
+.nav-item--bloqueado .nav-item__badge { background: #fff7e6; color: #7a4b00; border: 1px solid #ed6c02; }
+
+/* En pantallas angostas el sidebar pasa arriba, apilado (no fixed, sin JS). */
+@media (max-width: 720px) {
+    body.con-sidebar { flex-direction: column; }
+    .sidebar { flex: none; width: 100%; border-right: none; border-bottom: 1px solid #ddd; }
+    .sidebar__pie { margin-top: 1rem; }
+}

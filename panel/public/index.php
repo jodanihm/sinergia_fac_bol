@@ -58,6 +58,10 @@ use Plantiflex\Integration\Facturacion\MySqlIntercambioRespuestaRepository;
 use Plantiflex\Integration\Facturacion\MySqlLibroRepository;
 use Plantiflex\Integration\Facturacion\MySqlSetBasicoSokRepository;
 use Plantiflex\Integration\Facturacion\MySqlSetPruebasArchivoRepository;
+use Plantiflex\Integration\Facturacion\MySqlClienteRepository;
+use Plantiflex\Integration\Facturacion\ClienteDuplicadoException;
+use Plantiflex\Integration\Facturacion\MySqlProductoRepository;
+use Plantiflex\Integration\Facturacion\ProductoDuplicadoException;
 
 require __DIR__ . '/../src/Db.php';
 require __DIR__ . '/../src/Auth.php';
@@ -219,6 +223,549 @@ function listarCafs(PDO $pdo, string $rutEmisor, string $ambiente = 'certificaci
     unset($c);
 
     return $cafs;
+}
+
+// ===========================================================================
+//  Menu lateral (shell del panel) -- ver partials/_nav.php
+// ===========================================================================
+
+/**
+ * Eje "estado del tenant" del menu. tenantEnProduccion=true habilita el flujo
+ * operativo (Ventas). Para M2 la definicion es simple: el tenant confirmo su
+ * certificacion (dte_emisor.certificacion_confirmada_at no null). Se afina en
+ * M3, cuando de verdad haya emision de produccion que desbloquear. No persiste
+ * ningun enum: se calcula dinamicamente, como el resto del estado del panel.
+ */
+function tenantEnProduccion(PDO $pdo, int $cuentaId): bool
+{
+    $stmt = $pdo->prepare(
+        'SELECT 1 FROM dte_emisor '
+        . "WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' "
+        . '  AND certificacion_confirmada_at IS NOT NULL '
+        . 'LIMIT 1'
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+
+    return $stmt->fetchColumn() !== false;
+}
+
+/**
+ * Resuelve el estado visual de un item del menu a partir de los dos ejes.
+ * Precedencia: si el modulo NO esta construido gana "proximamente" (no tiene
+ * sentido pedir "termina la certificacion" para algo que aun no existe).
+ *
+ * @param array<string,mixed> $item
+ *
+ * @return 'habilitado'|'bloqueado_cert'|'proximamente'
+ */
+function navEstadoItem(array $item, bool $enProduccion): string
+{
+    if (empty($item['construido'])) {
+        return 'proximamente';
+    }
+    if (! empty($item['requiereProduccion']) && ! $enProduccion) {
+        return 'bloqueado_cert';
+    }
+    return 'habilitado';
+}
+
+/**
+ * Definicion declarativa del menu lateral. Eje "construido" por item: se cambia
+ * a true a medida que cada modulo se implementa (hoy: Dashboard, Maestros y las
+ * opciones de Configuracion ya existentes). Los items operativos llevan
+ * requiereProduccion=true (Ventas); Maestros/Configuracion/Dashboard no.
+ *
+ * Estructura: cada seccion es un item suelto (sin 'items') o un grupo (con
+ * 'items'); un item de grupo puede a su vez tener 'items' (subgrupo, ej.
+ * Ventas > Emision). 'clave' identifica el item para marcarlo activo.
+ *
+ * @return list<array<string,mixed>>
+ */
+function definicionMenu(): array
+{
+    return [
+        ['clave' => 'dashboard', 'label' => 'Dashboard', 'destino' => '/panel', 'construido' => true, 'requiereProduccion' => false],
+        [
+            'label' => 'Ventas',
+            'items' => [
+                [
+                    'label' => 'Emision',
+                    'items' => [
+                        ['clave' => 'ventas.factura', 'label' => 'Factura electronica', 'destino' => '/ventas/factura', 'construido' => false, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.nc', 'label' => 'Nota de credito', 'destino' => '/ventas/nota-credito', 'construido' => false, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'construido' => false, 'requiereProduccion' => true, 'sub' => true],
+                    ],
+                ],
+                ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => false, 'requiereProduccion' => true],
+                ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'construido' => false, 'requiereProduccion' => true],
+                ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'construido' => false, 'requiereProduccion' => true],
+            ],
+        ],
+        [
+            'label' => 'Maestros',
+            'items' => [
+                ['clave' => 'maestros.clientes', 'label' => 'Clientes', 'destino' => '/maestros/clientes', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'maestros.productos', 'label' => 'Productos y servicios', 'destino' => '/maestros/productos', 'construido' => true, 'requiereProduccion' => false],
+            ],
+        ],
+        [
+            'label' => 'Configuracion',
+            'items' => [
+                ['clave' => 'config.empresa', 'label' => 'Empresa', 'destino' => '/empresa', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'config.certificado', 'label' => 'Certificado digital', 'destino' => '/certificado', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'config.caf', 'label' => 'Folios y CAF', 'destino' => '/caf', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'config.certificacion', 'label' => 'Certificacion SII', 'destino' => '/certificacion-elegir', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'config.apikeys', 'label' => 'API keys', 'destino' => '/apikeys', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => false, 'requiereProduccion' => false],
+            ],
+        ],
+        ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'construido' => false, 'requiereProduccion' => false],
+    ];
+}
+
+// ===========================================================================
+//  Maestros > Clientes (CRUD). Aislamiento por cuenta_id via
+//  MySqlClienteRepository (ver integration/plantiflex/).
+// ===========================================================================
+
+/** Arma el repo de clientes sobre la conexion del panel. */
+function clienteRepo(): MySqlClienteRepository
+{
+    return new MySqlClienteRepository(Db::conexion());
+}
+
+/**
+ * Valida y normaliza los datos de un cliente desde $_POST (compartido por alta
+ * y edicion). rut_cliente y razon_social obligatorios; el resto opcional.
+ * rut_cliente queda NORMALIZADO (Rut::normalizar) listo para guardar.
+ *
+ * @param array<string,mixed> $post
+ *
+ * @return array{0:array<string,mixed>, 1:array<string,string>} [datos, errores]
+ */
+function validarCliente(array $post): array
+{
+    $rut    = Rut::normalizar((string) ($post['rut_cliente'] ?? ''));
+    $razon  = trim((string) ($post['razon_social'] ?? ''));
+    $giro   = trim((string) ($post['giro'] ?? ''));
+    $dir    = trim((string) ($post['direccion'] ?? ''));
+    $comuna = trim((string) ($post['comuna'] ?? ''));
+    $email  = trim((string) ($post['email'] ?? ''));
+    $tel    = trim((string) ($post['telefono'] ?? ''));
+
+    $errores = [];
+    if (! Rut::valido($rut)) {
+        $errores['rut_cliente'] = 'RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).';
+    }
+    if ($razon === '') {
+        $errores['razon_social'] = 'La razon social es obligatoria.';
+    }
+    if ($email !== '' && ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errores['email'] = 'El email no tiene un formato valido.';
+    }
+
+    $datos = [
+        'rut_cliente'  => $rut,
+        'razon_social' => $razon,
+        'giro'         => $giro,
+        'direccion'    => $dir,
+        'comuna'       => $comuna,
+        'email'        => $email,
+        'telefono'     => $tel,
+    ];
+
+    return [$datos, $errores];
+}
+
+/**
+ * Resuelve un cliente por su RUT dentro de la cuenta, distinguiendo 3 estados de
+ * forma inequivoca. Base reutilizable para M3 (emision unitaria): "el usuario
+ * escribe un RUT en el formulario de factura; si el cliente existe se
+ * autocompleta, si no existe se ofrece crearlo sin abandonar la factura".
+ *
+ * Recibe el RUT CRUDO (como lo escribe el usuario): normaliza y valida aqui, para
+ * que quien llame no repita esa logica. Un cliente INACTIVO se devuelve como
+ * 'encontrado' con cliente['activo'] === false (NO como 'no_encontrado'): asi el
+ * caller lo ve y decide, y no cae en un ClienteDuplicadoException si intentara
+ * "crearlo" (el UNIQUE(cuenta_id, rut_cliente) cubre activos e inactivos).
+ *
+ * @return array{
+ *   estado: 'rut_invalido'|'no_encontrado'|'encontrado',
+ *   rut: string,
+ *   cliente: array<string,mixed>|null
+ * }
+ */
+function resolverClientePorRut(int $cuentaId, string $rutCrudo): array
+{
+    $rut = Rut::normalizar($rutCrudo);
+    if (! Rut::valido($rut)) {
+        return ['estado' => 'rut_invalido', 'rut' => '', 'cliente' => null];
+    }
+
+    $cliente = clienteRepo()->buscarPorRut($cuentaId, $rut);
+    if ($cliente === null) {
+        return ['estado' => 'no_encontrado', 'rut' => $rut, 'cliente' => null];
+    }
+
+    return ['estado' => 'encontrado', 'rut' => $rut, 'cliente' => $cliente];
+}
+
+/** 404 real (no redirect) cuando un cliente no existe o es de otra cuenta. */
+function responder404Cliente(): never
+{
+    http_response_code(404);
+    $titulo = 'Cliente no encontrado';
+    require __DIR__ . '/../views/partials/header.php';
+    echo '<h1>Cliente no encontrado</h1>';
+    echo '<p>El cliente no existe o no pertenece a tu empresa. '
+        . '<a href="/maestros/clientes">Volver al listado</a>.</p>';
+    require __DIR__ . '/../views/partials/footer.php';
+    exit;
+}
+
+function handleClientesListar(): void
+{
+    $cuentaId         = Auth::cuentaId();
+    $repo             = clienteRepo();
+    $q                = trim((string) ($_GET['q'] ?? ''));
+    $busqueda         = $q !== '' ? $q : null;
+    $incluirInactivos = ($_GET['inactivos'] ?? '') === '1';
+    $soloActivos      = ! $incluirInactivos;
+
+    $porPagina = 25;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $total     = $repo->contar($cuentaId, $busqueda, $soloActivos);
+    $offset    = ($pagina - 1) * $porPagina;
+    $clientes  = $repo->listar($cuentaId, $busqueda, $soloActivos, $porPagina, $offset);
+
+    vista('clientes-listado', [
+        'clientes'         => $clientes,
+        'q'                => $q,
+        'incluirInactivos' => $incluirInactivos,
+        'pagina'           => $pagina,
+        'totalPaginas'     => max(1, (int) ceil($total / $porPagina)),
+        'total'            => $total,
+        'flash'            => flashTomar(),
+        'navActivo'        => 'maestros.clientes',
+    ]);
+}
+
+function handleClienteNuevoGet(): void
+{
+    vista('cliente-form', [
+        'modo'      => 'nuevo',
+        'accion'    => '/maestros/clientes/nuevo',
+        'cliente'   => [],
+        'errores'   => [],
+        'navActivo' => 'maestros.clientes',
+    ]);
+}
+
+function handleClienteNuevoPost(): void
+{
+    $cuentaId          = Auth::cuentaId();
+    $repo              = clienteRepo();
+    [$datos, $errores] = validarCliente($_POST);
+
+    if ($errores === [] && $repo->buscarPorRut($cuentaId, $datos['rut_cliente']) !== null) {
+        $errores['rut_cliente'] = 'Ya existe un cliente con ese RUT en tu empresa.';
+    }
+
+    if ($errores === []) {
+        try {
+            $repo->crear($cuentaId, $datos);
+            flashSet('exito', 'Cliente creado.');
+            redirigirPrg('/maestros/clientes');
+        } catch (ClienteDuplicadoException $e) {
+            // Borde de carrera: otro request creo el mismo RUT entre el chequeo
+            // previo y este insert. Mismo mensaje amigable, no error generico.
+            $errores['rut_cliente'] = 'Ya existe un cliente con ese RUT en tu empresa.';
+        }
+    }
+
+    vista('cliente-form', [
+        'modo'      => 'nuevo',
+        'accion'    => '/maestros/clientes/nuevo',
+        'cliente'   => $datos,
+        'errores'   => $errores,
+        'navActivo' => 'maestros.clientes',
+    ]);
+}
+
+function handleClienteEditarGet(int $id): void
+{
+    $cliente = clienteRepo()->buscarPorId(Auth::cuentaId(), $id);
+    if ($cliente === null) {
+        responder404Cliente();
+    }
+    vista('cliente-form', [
+        'modo'      => 'editar',
+        'accion'    => "/maestros/clientes/{$id}/editar",
+        'cliente'   => $cliente,
+        'errores'   => [],
+        'navActivo' => 'maestros.clientes',
+    ]);
+}
+
+function handleClienteEditarPost(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = clienteRepo();
+
+    if ($repo->buscarPorId($cuentaId, $id) === null) {
+        responder404Cliente();
+    }
+
+    [$datos, $errores] = validarCliente($_POST);
+    if ($errores === []) {
+        $otro = $repo->buscarPorRut($cuentaId, $datos['rut_cliente']);
+        if ($otro !== null && (int) $otro['id'] !== $id) {
+            $errores['rut_cliente'] = 'Ya existe otro cliente con ese RUT en tu empresa.';
+        }
+    }
+
+    if ($errores === []) {
+        try {
+            $repo->actualizar($cuentaId, $id, $datos);
+            flashSet('exito', 'Cliente actualizado.');
+            redirigirPrg('/maestros/clientes');
+        } catch (ClienteDuplicadoException $e) {
+            $errores['rut_cliente'] = 'Ya existe otro cliente con ese RUT en tu empresa.';
+        }
+    }
+
+    $datos['id'] = $id;
+    vista('cliente-form', [
+        'modo'      => 'editar',
+        'accion'    => "/maestros/clientes/{$id}/editar",
+        'cliente'   => $datos,
+        'errores'   => $errores,
+        'navActivo' => 'maestros.clientes',
+    ]);
+}
+
+function handleClienteActivarPost(int $id): void
+{
+    if (! clienteRepo()->activar(Auth::cuentaId(), $id)) {
+        responder404Cliente();
+    }
+    flashSet('exito', 'Cliente activado.');
+    redirigirPrg('/maestros/clientes');
+}
+
+function handleClienteDesactivarPost(int $id): void
+{
+    if (! clienteRepo()->desactivar(Auth::cuentaId(), $id)) {
+        responder404Cliente();
+    }
+    flashSet('exito', 'Cliente desactivado.');
+    redirigirPrg('/maestros/clientes');
+}
+
+// ===========================================================================
+//  Maestros > Productos (CRUD). Aislamiento por cuenta_id via
+//  MySqlProductoRepository. Espejo de Clientes con las diferencias propias de
+//  producto: codigo opcional (unico solo si no es NULL), precio decimal,
+//  exento (bool).
+// ===========================================================================
+
+/** Arma el repo de productos sobre la conexion del panel. */
+function productoRepo(): MySqlProductoRepository
+{
+    return new MySqlProductoRepository(Db::conexion());
+}
+
+/**
+ * Valida y normaliza los datos de un producto desde $_POST (compartido por alta
+ * y edicion). Solo nombre es obligatorio. precio_unitario acepta entero o
+ * decimal ("1990" o "1990.50"); texto no numerico es error de validacion (no un
+ * 500). exento es checkbox (ausente = 0).
+ *
+ * @param array<string,mixed> $post
+ *
+ * @return array{0:array<string,mixed>, 1:array<string,string>} [datos, errores]
+ */
+function validarProducto(array $post): array
+{
+    $codigo    = trim((string) ($post['codigo'] ?? ''));
+    $nombre    = trim((string) ($post['nombre'] ?? ''));
+    $desc      = trim((string) ($post['descripcion'] ?? ''));
+    $precioRaw = trim((string) ($post['precio_unitario'] ?? ''));
+    $unidad    = trim((string) ($post['unidad'] ?? ''));
+    $exento    = ! empty($post['exento']);
+
+    $errores = [];
+    if ($nombre === '') {
+        $errores['nombre'] = 'El nombre es obligatorio.';
+    }
+    if ($precioRaw !== '' && ! is_numeric($precioRaw)) {
+        $errores['precio_unitario'] = 'El precio debe ser un numero (ej. 1990 o 1990.50).';
+    }
+
+    $datos = [
+        'codigo'          => $codigo,
+        'nombre'          => $nombre,
+        'descripcion'     => $desc,
+        'precio_unitario' => $precioRaw, // el repo castea a float; vacio -> NULL
+        'unidad'          => $unidad,
+        'exento'          => $exento,
+    ];
+
+    return [$datos, $errores];
+}
+
+/** 404 real (no redirect) cuando un producto no existe o es de otra cuenta. */
+function responder404Producto(): never
+{
+    http_response_code(404);
+    $titulo = 'Producto no encontrado';
+    require __DIR__ . '/../views/partials/header.php';
+    echo '<h1>Producto no encontrado</h1>';
+    echo '<p>El producto no existe o no pertenece a tu empresa. '
+        . '<a href="/maestros/productos">Volver al listado</a>.</p>';
+    require __DIR__ . '/../views/partials/footer.php';
+    exit;
+}
+
+function handleProductosListar(): void
+{
+    $cuentaId         = Auth::cuentaId();
+    $repo             = productoRepo();
+    $q                = trim((string) ($_GET['q'] ?? ''));
+    $busqueda         = $q !== '' ? $q : null;
+    $incluirInactivos = ($_GET['inactivos'] ?? '') === '1';
+    $soloActivos      = ! $incluirInactivos;
+
+    $porPagina = 25;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $total     = $repo->contar($cuentaId, $busqueda, $soloActivos);
+    $offset    = ($pagina - 1) * $porPagina;
+    $productos = $repo->listar($cuentaId, $busqueda, $soloActivos, $porPagina, $offset);
+
+    vista('productos-listado', [
+        'productos'        => $productos,
+        'q'                => $q,
+        'incluirInactivos' => $incluirInactivos,
+        'pagina'           => $pagina,
+        'totalPaginas'     => max(1, (int) ceil($total / $porPagina)),
+        'total'            => $total,
+        'flash'            => flashTomar(),
+        'navActivo'        => 'maestros.productos',
+    ]);
+}
+
+function handleProductoNuevoGet(): void
+{
+    vista('producto-form', [
+        'modo'      => 'nuevo',
+        'accion'    => '/maestros/productos/nuevo',
+        'producto'  => [],
+        'errores'   => [],
+        'navActivo' => 'maestros.productos',
+    ]);
+}
+
+function handleProductoNuevoPost(): void
+{
+    $cuentaId          = Auth::cuentaId();
+    $repo              = productoRepo();
+    [$datos, $errores] = validarProducto($_POST);
+
+    // Duplicado SOLO si el usuario ingreso un codigo (los productos sin codigo
+    // conviven: UNIQUE(cuenta_id, codigo) permite multiples NULL).
+    if ($errores === [] && $datos['codigo'] !== ''
+        && $repo->buscarPorCodigo($cuentaId, $datos['codigo']) !== null
+    ) {
+        $errores['codigo'] = 'Ya existe un producto con ese codigo en tu empresa.';
+    }
+
+    if ($errores === []) {
+        try {
+            $repo->crear($cuentaId, $datos);
+            flashSet('exito', 'Producto creado.');
+            redirigirPrg('/maestros/productos');
+        } catch (ProductoDuplicadoException $e) {
+            $errores['codigo'] = 'Ya existe un producto con ese codigo en tu empresa.';
+        }
+    }
+
+    vista('producto-form', [
+        'modo'      => 'nuevo',
+        'accion'    => '/maestros/productos/nuevo',
+        'producto'  => $datos,
+        'errores'   => $errores,
+        'navActivo' => 'maestros.productos',
+    ]);
+}
+
+function handleProductoEditarGet(int $id): void
+{
+    $producto = productoRepo()->buscarPorId(Auth::cuentaId(), $id);
+    if ($producto === null) {
+        responder404Producto();
+    }
+    vista('producto-form', [
+        'modo'      => 'editar',
+        'accion'    => "/maestros/productos/{$id}/editar",
+        'producto'  => $producto,
+        'errores'   => [],
+        'navActivo' => 'maestros.productos',
+    ]);
+}
+
+function handleProductoEditarPost(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = productoRepo();
+
+    if ($repo->buscarPorId($cuentaId, $id) === null) {
+        responder404Producto();
+    }
+
+    [$datos, $errores] = validarProducto($_POST);
+    if ($errores === [] && $datos['codigo'] !== '') {
+        $otro = $repo->buscarPorCodigo($cuentaId, $datos['codigo']);
+        if ($otro !== null && (int) $otro['id'] !== $id) {
+            $errores['codigo'] = 'Ya existe otro producto con ese codigo en tu empresa.';
+        }
+    }
+
+    if ($errores === []) {
+        try {
+            $repo->actualizar($cuentaId, $id, $datos);
+            flashSet('exito', 'Producto actualizado.');
+            redirigirPrg('/maestros/productos');
+        } catch (ProductoDuplicadoException $e) {
+            $errores['codigo'] = 'Ya existe otro producto con ese codigo en tu empresa.';
+        }
+    }
+
+    $datos['id'] = $id;
+    vista('producto-form', [
+        'modo'      => 'editar',
+        'accion'    => "/maestros/productos/{$id}/editar",
+        'producto'  => $datos,
+        'errores'   => $errores,
+        'navActivo' => 'maestros.productos',
+    ]);
+}
+
+function handleProductoActivarPost(int $id): void
+{
+    if (! productoRepo()->activar(Auth::cuentaId(), $id)) {
+        responder404Producto();
+    }
+    flashSet('exito', 'Producto activado.');
+    redirigirPrg('/maestros/productos');
+}
+
+function handleProductoDesactivarPost(int $id): void
+{
+    if (! productoRepo()->desactivar(Auth::cuentaId(), $id)) {
+        responder404Producto();
+    }
+    flashSet('exito', 'Producto desactivado.');
+    redirigirPrg('/maestros/productos');
 }
 
 /**
@@ -743,6 +1290,78 @@ if ($metodo === 'POST' && $ruta === '/login') {
 if ($metodo === 'GET' && $ruta === '/logout') {
     Auth::logout();
     redirigir('/login');
+}
+
+// --- Maestros > Clientes ---
+if ($metodo === 'GET' && $ruta === '/maestros/clientes') {
+    Auth::requerirSesion();
+    handleClientesListar();
+}
+
+if ($metodo === 'GET' && $ruta === '/maestros/clientes/nuevo') {
+    Auth::requerirSesion();
+    handleClienteNuevoGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/maestros/clientes/nuevo') {
+    Auth::requerirSesion();
+    handleClienteNuevoPost();
+}
+
+if ($metodo === 'GET' && preg_match('#^/maestros/clientes/(\d+)/editar$#', $ruta, $mCli)) {
+    Auth::requerirSesion();
+    handleClienteEditarGet((int) $mCli[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/editar$#', $ruta, $mCli)) {
+    Auth::requerirSesion();
+    handleClienteEditarPost((int) $mCli[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/activar$#', $ruta, $mCli)) {
+    Auth::requerirSesion();
+    handleClienteActivarPost((int) $mCli[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/desactivar$#', $ruta, $mCli)) {
+    Auth::requerirSesion();
+    handleClienteDesactivarPost((int) $mCli[1]);
+}
+
+// --- Maestros > Productos ---
+if ($metodo === 'GET' && $ruta === '/maestros/productos') {
+    Auth::requerirSesion();
+    handleProductosListar();
+}
+
+if ($metodo === 'GET' && $ruta === '/maestros/productos/nuevo') {
+    Auth::requerirSesion();
+    handleProductoNuevoGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/maestros/productos/nuevo') {
+    Auth::requerirSesion();
+    handleProductoNuevoPost();
+}
+
+if ($metodo === 'GET' && preg_match('#^/maestros/productos/(\d+)/editar$#', $ruta, $mProd)) {
+    Auth::requerirSesion();
+    handleProductoEditarGet((int) $mProd[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/editar$#', $ruta, $mProd)) {
+    Auth::requerirSesion();
+    handleProductoEditarPost((int) $mProd[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/activar$#', $ruta, $mProd)) {
+    Auth::requerirSesion();
+    handleProductoActivarPost((int) $mProd[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/desactivar$#', $ruta, $mProd)) {
+    Auth::requerirSesion();
+    handleProductoDesactivarPost((int) $mProd[1]);
 }
 
 if ($metodo === 'GET' && $ruta === '/empresa') {
