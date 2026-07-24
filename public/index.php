@@ -476,6 +476,10 @@ if ($metodo === 'GET' && preg_match('#^/api/v1/dte/(\d+)/(\d+)/pdf$#', $ruta, $m
     pdfDte($tenant, (int) $mp[1], (int) $mp[2]);
 }
 
+if ($metodo === 'GET' && preg_match('#^/api/v1/dte/(\d+)/(\d+)/xml$#', $ruta, $mx)) {
+    xmlDte($tenant, (int) $mx[1], (int) $mx[2]);
+}
+
 if ($metodo === 'POST' && preg_match('#^/api/v1/dte/(\d+)/(\d+)/anular$#', $ruta, $ma)) {
     anularDte($tenant, (int) $ma[1], (int) $ma[2]);
 }
@@ -1088,6 +1092,28 @@ function listarDte(array $tenant): never
     $rutEmisor = $tenant['rut_emisor'];
     $ambiente  = ambienteDesdeTenant($tenant);
 
+    $tipoDte = null;
+    if (isset($_GET['tipoDte']) && $_GET['tipoDte'] !== '') {
+        $tipoDte = (int) $_GET['tipoDte'];
+        if (! in_array($tipoDte, TIPOS_PERMITIDOS_LISTADO, true)) {
+            invalido('tipoDte debe ser 33, 61, 56 o 39', 'tipoDte');
+        }
+    }
+
+    // folio: filtro por numero de documento. Solo es unico DENTRO de un tipo,
+    // asi que sin tipoDte puede devolver mas de una fila (uso normal del
+    // listado del panel, M5); con tipoDte devuelve como maximo 1 (uso del
+    // detalle del panel, que siempre manda ambos). NO exige rango de fechas:
+    // un documento puede ser de cualquier periodo pasado, no solo del mes
+    // actual.
+    $folio = null;
+    if (isset($_GET['folio']) && $_GET['folio'] !== '') {
+        $folio = (int) $_GET['folio'];
+        if ($folio <= 0) {
+            invalido('folio debe ser > 0', 'folio');
+        }
+    }
+
     $periodo = trim((string) ($_GET['periodo'] ?? ''));
     $desde   = trim((string) ($_GET['desde'] ?? ''));
     $hasta   = trim((string) ($_GET['hasta'] ?? ''));
@@ -1112,19 +1138,24 @@ function listarDte(array $tenant): never
             invalido('desde no puede ser mayor que hasta', 'desde');
         }
         $periodo = null;
+    } elseif ($folio !== null) {
+        // Busqueda puntual sin rango: no default al mes actual.
+        $periodo = null;
+        $desde   = null;
+        $hasta   = null;
     } else {
         $periodo = date('Y-m');
         $desde   = date('Y-m-01');
         $hasta   = date('Y-m-t');
     }
 
-    $tipoDte = null;
-    if (isset($_GET['tipoDte']) && $_GET['tipoDte'] !== '') {
-        $tipoDte = (int) $_GET['tipoDte'];
-        if (! in_array($tipoDte, TIPOS_PERMITIDOS_LISTADO, true)) {
-            invalido('tipoDte debe ser 33, 61, 56 o 39', 'tipoDte');
-        }
-    }
+    // receptorRut: busqueda parcial (LIKE). estado: igualdad exacta (sin
+    // catalogo cerrado, ver filtroPeriodo()). Ambos opcionales, para el
+    // listado del panel (M5).
+    $receptorRut = trim((string) ($_GET['receptorRut'] ?? ''));
+    $receptorRut = $receptorRut !== '' ? $receptorRut : null;
+    $estado      = trim((string) ($_GET['estado'] ?? ''));
+    $estado      = $estado !== '' ? $estado : null;
 
     $limit  = (int) ($_GET['limit'] ?? 50);
     $offset = (int) ($_GET['offset'] ?? 0);
@@ -1137,9 +1168,9 @@ function listarDte(array $tenant): never
 
     try {
         $repo    = new MySqlDteEmitidoRepository(pdo());
-        $items   = $repo->listarPorPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $limit, $offset);
-        $total   = $repo->contarPorPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte);
-        $resumen = $repo->resumenPorPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte);
+        $items   = $repo->listarPorPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $limit, $offset, $folio, $receptorRut, $estado);
+        $total   = $repo->contarPorPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $folio, $receptorRut, $estado);
+        $resumen = $repo->resumenPorPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $folio, $receptorRut, $estado);
     } catch (Throwable $e) {
         responder(500, ['error' => 'fallo el listado', 'detalle' => $e->getMessage()]);
     }
@@ -1332,6 +1363,42 @@ function pdfDte(array $tenant, int $tipoDte, int $folio): never
     header(sprintf('Content-Disposition: inline; filename="dte_%d_%d.pdf"', $tipoDte, $folio));
     header('Content-Length: ' . strlen($pdf));
     echo $pdf;
+    exit;
+}
+
+// ===========================================================================
+//  Handler: GET /api/v1/dte/{tipoDte}/{folio}/xml
+//
+//  Descarga el XML crudo tal como se persiste en dte_emitido (el EnvioDTE
+//  completo, mismo bytes enviados al SII -- ver persistirEmitido() en
+//  SiiDirectoFacturador). Mas simple que /pdf: no pasa por LibreDTE/TCPDF, solo
+//  devuelve el blob ya guardado. Mismo patron de auth/resolucion de tenant y
+//  mismos tipos permitidos que /pdf (TIPOS_PERMITIDOS_PDF incluye boleta).
+// ===========================================================================
+function xmlDte(array $tenant, int $tipoDte, int $folio): never
+{
+    if (! in_array($tipoDte, TIPOS_PERMITIDOS_PDF, true)) {
+        invalido('tipoDte debe ser uno de 33, 61, 56, 39', 'tipoDte');
+    }
+    if ($folio <= 0) {
+        invalido('folio debe ser > 0', 'folio');
+    }
+
+    $rutEmisor = $tenant['rut_emisor'];
+    $ambiente  = ambienteDesdeTenant($tenant);
+
+    $xml = (new MySqlDteEmitidoRepository(pdo()))->obtenerXml($rutEmisor, $ambiente, $tipoDte, $folio);
+    if ($xml === null) {
+        responder(404, ['error' => 'folio no encontrado']);
+    }
+
+    // El XML se persiste en ISO-8859-1 (mismo criterio que dte_libro/dte_emitido,
+    // ver migracion 008): se declara el charset para que quien lo abra/valide
+    // no asuma UTF-8 por defecto.
+    header('Content-Type: application/xml; charset=ISO-8859-1');
+    header(sprintf('Content-Disposition: attachment; filename="dte_%d_%d.xml"', $tipoDte, $folio));
+    header('Content-Length: ' . strlen($xml));
+    echo $xml;
     exit;
 }
 

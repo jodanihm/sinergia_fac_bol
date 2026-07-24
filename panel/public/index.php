@@ -298,7 +298,7 @@ function definicionMenu(): array
                 ],
                 ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => false, 'requiereProduccion' => true],
                 ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'construido' => false, 'requiereProduccion' => true],
-                ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'construido' => false, 'requiereProduccion' => true],
+                ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
         [
@@ -907,28 +907,90 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
 }
 
 /**
+ * Cliente Guzzle configurado contra el motor (MOTOR_URL). Centraliza la unica
+ * construccion del Client que usan emitirEnMotor() y las funciones de
+ * consulta de M5 (listar/pdf/xml/estado-sii) -- no duplicar base_uri/timeout/
+ * http_errors en cada una.
+ */
+function clienteMotor(): Client
+{
+    $base = getenv('MOTOR_URL');
+    if ($base === false || trim($base) === '') {
+        throw new RuntimeException('MOTOR_URL no configurada en el entorno del panel.');
+    }
+    return new Client([
+        'base_uri'    => rtrim($base, '/') . '/',
+        'timeout'     => 60,
+        'http_errors' => false,
+    ]);
+}
+
+/**
  * POST al motor. Devuelve ['status'=>int, 'body'=>array]. NO lanza en 4xx/5xx
  * (http_errors=false); un fallo de conexion (motor caido/timeout) SI propaga
  * como GuzzleException para que el handler lo distinga de una respuesta HTTP.
  */
 function emitirEnMotor(string $keyServicio, array $documento, string $idemKey): array
 {
-    $base = getenv('MOTOR_URL');
-    if ($base === false || trim($base) === '') {
-        throw new RuntimeException('MOTOR_URL no configurada en el entorno del panel.');
-    }
-    $http = new Client([
-        'base_uri'    => rtrim($base, '/') . '/',
-        'timeout'     => 60,
-        'http_errors' => false,
-    ]);
-    $resp = $http->post('api/v1/dte', [
+    $resp = clienteMotor()->post('api/v1/dte', [
         'headers' => [
             'X-Api-Key'       => $keyServicio,
             'Idempotency-Key' => $idemKey,
             'Content-Type'    => 'application/json',
         ],
         'json' => $documento,
+    ]);
+    $body = json_decode((string) $resp->getBody(), true);
+
+    return ['status' => $resp->getStatusCode(), 'body' => is_array($body) ? $body : []];
+}
+
+/**
+ * GET /api/v1/dte del motor (listado de documentos, M5). $filtros: pares
+ * clave=>valor que se mandan como query string (desde/hasta/tipoDte/folio/
+ * limit/offset, los que vengan definidos). Devuelve ['status'=>int,
+ * 'body'=>array]; igual que emitirEnMotor(), NO lanza en 4xx/5xx.
+ */
+function listarDocumentosEnMotor(string $keyServicio, array $filtros): array
+{
+    $resp = clienteMotor()->get('api/v1/dte', [
+        'headers' => ['X-Api-Key' => $keyServicio],
+        'query'   => $filtros,
+    ]);
+    $body = json_decode((string) $resp->getBody(), true);
+
+    return ['status' => $resp->getStatusCode(), 'body' => is_array($body) ? $body : []];
+}
+
+/**
+ * GET binario del motor (pdf/xml de un documento, M5). Devuelve
+ * ['status'=>int, 'contentType'=>?string, 'body'=>string]; en 4xx/5xx el
+ * body es el JSON de error del motor (string sin decodificar, el llamador
+ * decide si lo muestra).
+ */
+function obtenerBinarioEnMotor(string $keyServicio, string $ruta): array
+{
+    $resp = clienteMotor()->get($ruta, [
+        'headers' => ['X-Api-Key' => $keyServicio],
+    ]);
+
+    return [
+        'status'      => $resp->getStatusCode(),
+        'contentType' => $resp->getHeaderLine('Content-Type') ?: null,
+        'body'        => (string) $resp->getBody(),
+    ];
+}
+
+/**
+ * GET /api/v1/dte/{tipoDte}/{folio}/estado-sii del motor: consulta el SII
+ * (QueryEstUp.jws via track_id) y persiste el estado nuevo en dte_emitido
+ * (ver consultarEstadoSiiDte() en el motor). Devuelve ['status'=>int,
+ * 'body'=>array].
+ */
+function consultarEstadoSiiEnMotor(string $keyServicio, int $tipoDte, int $folio): array
+{
+    $resp = clienteMotor()->get("api/v1/dte/{$tipoDte}/{$folio}/estado-sii", [
+        'headers' => ['X-Api-Key' => $keyServicio],
     ]);
     $body = json_decode((string) $resp->getBody(), true);
 
@@ -963,7 +1025,38 @@ function guardarClienteDesdeReceptor(int $cuentaId, array $receptor): void
 function handleEmisionGet(int $tipoDte): void
 {
     exigirProduccionCompleto(Db::conexion(), Auth::cuentaId()); // guard (redirige si falta emisor/cert/CAF prod)
-    renderEmisionForm($tipoDte, bin2hex(random_bytes(16)), [], null, null, null);
+    renderEmisionForm($tipoDte, bin2hex(random_bytes(16)), formConReferenciaPrellenada($tipoDte), null, null, null);
+}
+
+/**
+ * Prellena referencias[0] desde query params (ref_tipo/ref_folio/ref_fecha/
+ * ref_codigo/ref_razon) cuando se llega desde el boton "Anular"/"Corregir" del
+ * detalle de un documento (M5). Solo aplica a NC/ND (61/56); factura no lleva
+ * referencia. $form queda editable igual que en un re-render de POST/422 --
+ * armarDocumentoEmision() y la vista no cambian, ya leen $form['referencias'][0].
+ *
+ * @return array<string,mixed>
+ */
+function formConReferenciaPrellenada(int $tipoDte): array
+{
+    if (! in_array($tipoDte, [61, 56], true)) {
+        return [];
+    }
+    $folioRef = trim((string) ($_GET['ref_folio'] ?? ''));
+    if ($folioRef === '') {
+        return [];
+    }
+    return [
+        'referencias' => [
+            0 => [
+                'tipoDocumento' => trim((string) ($_GET['ref_tipo'] ?? '')),
+                'folio'         => $folioRef,
+                'fecha'         => trim((string) ($_GET['ref_fecha'] ?? '')),
+                'codigo'        => trim((string) ($_GET['ref_codigo'] ?? '')),
+                'razon'         => trim((string) ($_GET['ref_razon'] ?? '')),
+            ],
+        ],
+    ];
 }
 
 function handleEmisionPost(int $tipoDte): void
@@ -1058,6 +1151,238 @@ function handleEmisionResultadoGet(): void
         'resultado' => $flash['resultado'],
         'navActivo'  => 'ventas.factura',
     ]);
+}
+
+// ===========================================================================
+//  Ventas > Panel de emision (M5): listado de dte_emitido de produccion,
+//  detalle, descarga de PDF/XML y consulta de estado SII. El panel NUNCA lee
+//  dte_emitido de produccion directo de la BD (Decision #1 del proyecto): todo
+//  pasa por HTTP al motor con la key de servicio, igual que la emision de M3.
+// ===========================================================================
+
+/**
+ * Arma el array de filtros ($_GET -> query string del motor) para el listado
+ * y para el link "siguiente/anterior" de paginacion. Solo incluye claves con
+ * valor (el motor trata su ausencia como "sin filtro").
+ *
+ * @return array<string,string>
+ */
+function filtrosDocumentosDesdeGet(): array
+{
+    $filtros = [];
+    foreach (['desde', 'hasta', 'tipoDte', 'folio', 'receptorRut', 'estado'] as $campo) {
+        $v = trim((string) ($_GET[$campo] ?? ''));
+        if ($v !== '') {
+            $filtros[$campo] = $v;
+        }
+    }
+    // desde/hasta deben ir juntos (mismo criterio que el motor): si falta uno,
+    // se descarta el otro para no mandar un rango incompleto.
+    if (isset($filtros['desde']) !== isset($filtros['hasta'])) {
+        unset($filtros['desde'], $filtros['hasta']);
+    }
+    return $filtros;
+}
+
+/**
+ * Resuelve razon_social del receptor de cada item en UNA sola query (evita
+ * N+1). Normaliza receptor_rut en LECTURA (Rut::normalizar): armarDocumentoEmision()
+ * de M3 solo hace trim() antes de mandar el RUT al motor, asi que
+ * dte_emitido.receptor_rut puede no venir en el mismo formato canonico que
+ * cliente.rut_cliente (ej. con puntos). No se toca M3 para esto.
+ *
+ * @param list<array<string,mixed>> $items
+ *
+ * @return list<array<string,mixed>> mismos items + 'receptorRazonSocial'
+ */
+function resolverRazonSocialReceptores(int $cuentaId, array $items): array
+{
+    $ruts = [];
+    foreach ($items as $it) {
+        $ruts[] = Rut::normalizar((string) ($it['receptorRut'] ?? ''));
+    }
+    $porRut = clienteRepo()->buscarPorRuts($cuentaId, $ruts);
+
+    foreach ($items as &$it) {
+        $rutNorm = Rut::normalizar((string) ($it['receptorRut'] ?? ''));
+        $it['receptorRazonSocial'] = $porRut[$rutNorm]['razon_social'] ?? null;
+    }
+    unset($it);
+
+    return $items;
+}
+
+function handleDocumentosListadoGet(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
+
+    $porPagina = 25;
+    $filtros   = filtrosDocumentosDesdeGet();
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+
+    $filtrosMotor           = $filtros;
+    $filtrosMotor['limit']  = $porPagina;
+    $filtrosMotor['offset'] = ($pagina - 1) * $porPagina;
+
+    $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+
+    try {
+        $res = listarDocumentosEnMotor($keyServicio, $filtrosMotor);
+    } catch (Throwable $e) {
+        error_log('panel documentos: fallo de conexion al listar - ' . $e->getMessage());
+        vista('documentos-listado', [
+            'items'        => [],
+            'total'        => 0,
+            'pagina'       => 1,
+            'totalPaginas' => 1,
+            'filtros'      => $filtros,
+            'errorMotor'   => 'No se pudo contactar el motor de emision.',
+            'navActivo'    => 'ventas.panel-emision',
+        ]);
+    }
+
+    if ($res['status'] !== 200) {
+        error_log('panel documentos: respuesta ' . $res['status'] . ' del motor al listar - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
+        vista('documentos-listado', [
+            'items'        => [],
+            'total'        => 0,
+            'pagina'       => 1,
+            'totalPaginas' => 1,
+            'filtros'      => $filtros,
+            'errorMotor'   => 'El motor de emision devolvio un error al listar los documentos.',
+            'navActivo'    => 'ventas.panel-emision',
+        ]);
+    }
+
+    $items = is_array($res['body']['items'] ?? null) ? $res['body']['items'] : [];
+    $items = resolverRazonSocialReceptores($cuentaId, $items);
+    $total = (int) ($res['body']['total'] ?? 0);
+
+    vista('documentos-listado', [
+        'items'        => $items,
+        'total'        => $total,
+        'pagina'       => $pagina,
+        'totalPaginas' => max(1, (int) ceil($total / $porPagina)),
+        'filtros'      => $filtros,
+        'errorMotor'   => null,
+        'navActivo'    => 'ventas.panel-emision',
+    ]);
+}
+
+function handleDocumentoDetalleGet(int $tipoDte, int $folio): void
+{
+    if (! in_array($tipoDte, [33, 61, 56, 39], true) || $folio <= 0) {
+        redirigir('/ventas/panel-emision');
+    }
+
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
+
+    $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+
+    $documento   = null;
+    $errorMotor  = null;
+    try {
+        $res = listarDocumentosEnMotor($keyServicio, ['tipoDte' => $tipoDte, 'folio' => $folio]);
+        if ($res['status'] === 200 && ! empty($res['body']['items'])) {
+            [$documento] = resolverRazonSocialReceptores($cuentaId, $res['body']['items']);
+        } elseif ($res['status'] !== 200) {
+            error_log('panel documentos: respuesta ' . $res['status'] . ' del motor al pedir detalle - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
+            $errorMotor = 'El motor de emision devolvio un error al buscar el documento.';
+        }
+    } catch (Throwable $e) {
+        error_log('panel documentos: fallo de conexion al pedir detalle - ' . $e->getMessage());
+        $errorMotor = 'No se pudo contactar el motor de emision.';
+    }
+
+    vista('documento-detalle', [
+        'tipoDte'    => $tipoDte,
+        'folio'      => $folio,
+        'documento'  => $documento,
+        'errorMotor' => $errorMotor,
+        'flash'      => flashTomar(),
+        'navActivo'  => 'ventas.panel-emision',
+    ]);
+}
+
+/**
+ * Descarga binaria (PDF o XML) proxeada desde el motor. $sufijo: 'pdf' | 'xml'.
+ * Content-Type se reenvia tal cual del motor (incluye el charset ISO-8859-1
+ * del XML); Content-Disposition se arma igual aqui porque el nombre de
+ * archivo depende solo de tipoDte/folio/sufijo, ya conocidos.
+ */
+function proxyDocumentoBinario(int $tipoDte, int $folio, string $sufijo): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
+    $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+
+    try {
+        $res = obtenerBinarioEnMotor($keyServicio, "api/v1/dte/{$tipoDte}/{$folio}/{$sufijo}");
+    } catch (Throwable $e) {
+        error_log("panel documentos: fallo de conexion al pedir {$sufijo} - " . $e->getMessage());
+        http_response_code(502);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'No se pudo contactar el motor de emision.';
+        exit;
+    }
+
+    if ($res['status'] !== 200) {
+        error_log("panel documentos: respuesta {$res['status']} del motor al pedir {$sufijo}");
+        http_response_code($res['status'] === 404 ? 404 : 502);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo $res['status'] === 404 ? 'Documento no encontrado.' : 'No se pudo obtener el documento.';
+        exit;
+    }
+
+    if ($res['contentType'] !== null) {
+        header('Content-Type: ' . $res['contentType']);
+    }
+    $disposicion = $sufijo === 'pdf' ? 'inline' : 'attachment';
+    header(sprintf('Content-Disposition: %s; filename="dte_%d_%d.%s"', $disposicion, $tipoDte, $folio, $sufijo));
+    header('Content-Length: ' . strlen($res['body']));
+    echo $res['body'];
+    exit;
+}
+
+function handleDocumentoPdfGet(int $tipoDte, int $folio): void
+{
+    proxyDocumentoBinario($tipoDte, $folio, 'pdf');
+}
+
+function handleDocumentoXmlGet(int $tipoDte, int $folio): void
+{
+    proxyDocumentoBinario($tipoDte, $folio, 'xml');
+}
+
+function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
+    $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+    $destino     = "/ventas/panel-emision/{$tipoDte}/{$folio}";
+
+    try {
+        $res = consultarEstadoSiiEnMotor($keyServicio, $tipoDte, $folio);
+    } catch (Throwable $e) {
+        error_log('panel documentos: fallo de conexion al consultar estado SII - ' . $e->getMessage());
+        flashSet('error', 'No se pudo contactar el motor de emision.');
+        redirigirPrg($destino);
+    }
+
+    if ($res['status'] === 200) {
+        flashSet('exito', 'Estado actualizado: ' . (string) ($res['body']['estado'] ?? '-') . '.');
+    } else {
+        error_log('panel documentos: estado-sii respondio ' . $res['status'] . ' - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
+        flashSet('error', (string) ($res['body']['error'] ?? 'No se pudo consultar el estado en el SII.'));
+    }
+
+    redirigirPrg($destino);
 }
 
 /** Endpoint JSON: resuelve el cliente por RUT para el autocompletado del form. */
@@ -1854,6 +2179,32 @@ if ($metodo === 'GET' && $ruta === '/ventas/nota-debito') {
 if ($metodo === 'POST' && $ruta === '/ventas/nota-debito') {
     Auth::requerirSesion();
     handleEmisionPost(56);
+}
+
+// --- Ventas > Panel de emision (M5) ---
+if ($metodo === 'GET' && $ruta === '/ventas/panel-emision') {
+    Auth::requerirSesion();
+    handleDocumentosListadoGet();
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)$#', $ruta, $mDoc)) {
+    Auth::requerirSesion();
+    handleDocumentoDetalleGet((int) $mDoc[1], (int) $mDoc[2]);
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/pdf$#', $ruta, $mDocPdf)) {
+    Auth::requerirSesion();
+    handleDocumentoPdfGet((int) $mDocPdf[1], (int) $mDocPdf[2]);
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/xml$#', $ruta, $mDocXml)) {
+    Auth::requerirSesion();
+    handleDocumentoXmlGet((int) $mDocXml[1], (int) $mDocXml[2]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/estado-sii$#', $ruta, $mDocEstado)) {
+    Auth::requerirSesion();
+    handleDocumentoEstadoSiiPost((int) $mDocEstado[1], (int) $mDocEstado[2]);
 }
 
 if ($metodo === 'GET' && $ruta === '/empresa') {

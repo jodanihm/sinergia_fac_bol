@@ -140,17 +140,50 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
 
     /**
      * WHERE + params comunes del filtro por periodo (rut+ambiente del servidor,
-     * rango de fecha_emision, tipo_dte opcional).
+     * rango de fecha_emision opcional, tipo_dte/folio/receptorRut/estado
+     * opcionales).
+     *
+     * $desde/$hasta nullable: sin ellos (busqueda puntual por folio, M5) no se
+     * restringe por fecha. $folio es la busqueda puntual de UN documento (junto
+     * a tipo_dte, unico por rut_emisor+ambiente+tipo_dte+folio). $receptorRut
+     * es LIKE (busqueda parcial, para el listado M5); $estado es igualdad
+     * exacta (no hay catalogo cerrado de valores: vienen de distintas fuentes
+     * SII -- 'enviado', 'EPR', 'DOK', 'DNK', etc).
      *
      * @return array{0:string, 1:array<string,mixed>}
      */
-    private function filtroPeriodo(string $rutEmisor, Ambiente $ambiente, string $desde, string $hasta, ?int $tipoDte): array
-    {
-        $where  = 'rut_emisor = :rut AND ambiente = :amb AND fecha_emision BETWEEN :desde AND :hasta';
-        $params = [':rut' => $rutEmisor, ':amb' => $ambiente->value, ':desde' => $desde, ':hasta' => $hasta];
+    private function filtroPeriodo(
+        string $rutEmisor,
+        Ambiente $ambiente,
+        ?string $desde,
+        ?string $hasta,
+        ?int $tipoDte,
+        ?int $folio = null,
+        ?string $receptorRut = null,
+        ?string $estado = null,
+    ): array {
+        $where  = 'rut_emisor = :rut AND ambiente = :amb';
+        $params = [':rut' => $rutEmisor, ':amb' => $ambiente->value];
+        if ($desde !== null && $hasta !== null) {
+            $where .= ' AND fecha_emision BETWEEN :desde AND :hasta';
+            $params[':desde'] = $desde;
+            $params[':hasta'] = $hasta;
+        }
         if ($tipoDte !== null) {
             $where .= ' AND tipo_dte = :tipo';
             $params[':tipo'] = $tipoDte;
+        }
+        if ($folio !== null) {
+            $where .= ' AND folio = :folio';
+            $params[':folio'] = $folio;
+        }
+        if ($receptorRut !== null && $receptorRut !== '') {
+            $where .= ' AND receptor_rut LIKE :receptor';
+            $params[':receptor'] = '%' . $receptorRut . '%';
+        }
+        if ($estado !== null && $estado !== '') {
+            $where .= ' AND estado = :estado';
+            $params[':estado'] = $estado;
         }
         return [$where, $params];
     }
@@ -160,9 +193,19 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
      *
      * @return list<array<string,mixed>>
      */
-    public function listarPorPeriodo(string $rutEmisor, Ambiente $ambiente, string $desde, string $hasta, ?int $tipoDte, int $limit, int $offset): array
-    {
-        [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte);
+    public function listarPorPeriodo(
+        string $rutEmisor,
+        Ambiente $ambiente,
+        ?string $desde,
+        ?string $hasta,
+        ?int $tipoDte,
+        int $limit,
+        int $offset,
+        ?int $folio = null,
+        ?string $receptorRut = null,
+        ?string $estado = null,
+    ): array {
+        [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $folio, $receptorRut, $estado);
         $stmt = $this->pdo->prepare(
             'SELECT folio, tipo_dte, fecha_emision, receptor_rut, neto, iva, total, estado, track_id, folio_ref, tipo_dte_ref '
             . 'FROM dte_emitido WHERE ' . $where
@@ -191,9 +234,17 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
     }
 
     /** Cuenta total de filas del filtro (para paginacion). */
-    public function contarPorPeriodo(string $rutEmisor, Ambiente $ambiente, string $desde, string $hasta, ?int $tipoDte): int
-    {
-        [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte);
+    public function contarPorPeriodo(
+        string $rutEmisor,
+        Ambiente $ambiente,
+        ?string $desde,
+        ?string $hasta,
+        ?int $tipoDte,
+        ?int $folio = null,
+        ?string $receptorRut = null,
+        ?string $estado = null,
+    ): int {
+        [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $folio, $receptorRut, $estado);
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM dte_emitido WHERE ' . $where);
         $stmt->execute($params);
 
@@ -206,9 +257,17 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
      *
      * @return array{porTipo: array<string, array{cantidad:int, neto:int, iva:int, total:int}>}
      */
-    public function resumenPorPeriodo(string $rutEmisor, Ambiente $ambiente, string $desde, string $hasta, ?int $tipoDte): array
-    {
-        [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte);
+    public function resumenPorPeriodo(
+        string $rutEmisor,
+        Ambiente $ambiente,
+        ?string $desde,
+        ?string $hasta,
+        ?int $tipoDte,
+        ?int $folio = null,
+        ?string $receptorRut = null,
+        ?string $estado = null,
+    ): array {
+        [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $folio, $receptorRut, $estado);
         $stmt = $this->pdo->prepare(
             'SELECT tipo_dte, COUNT(*) AS n, COALESCE(SUM(neto),0) AS neto, '
             . 'COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS total '

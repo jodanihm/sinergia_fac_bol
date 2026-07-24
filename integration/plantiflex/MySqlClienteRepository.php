@@ -116,6 +116,37 @@ final class MySqlClienteRepository
     }
 
     /**
+     * Version en lote de buscarPorRut(): UNA sola query para resolver varios
+     * RUT de una vez (evita N+1 al pintar un listado, ej. el de M5). Espera los
+     * RUT YA normalizados (Rut::normalizar).
+     *
+     * @param list<string> $rutsNormalizados
+     *
+     * @return array<string,array<string,mixed>> mapa rut_cliente => cliente
+     */
+    public function buscarPorRuts(int $cuentaId, array $rutsNormalizados): array
+    {
+        $ruts = array_values(array_unique($rutsNormalizados));
+        if ($ruts === []) {
+            return [];
+        }
+        $marcadores = implode(',', array_fill(0, count($ruts), '?'));
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNAS . ' FROM cliente '
+            . "WHERE cuenta_id = ? AND rut_cliente IN ({$marcadores})"
+        );
+        $stmt->execute([$cuentaId, ...$ruts]);
+
+        $mapa = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+            $cliente = $this->mapear($row);
+            $mapa[$cliente['rut_cliente']] = $cliente;
+        }
+
+        return $mapa;
+    }
+
+    /**
      * Inserta un cliente y devuelve su id. $datos: rut_cliente (normalizado) y
      * razon_social obligatorios; giro/direccion/comuna/email/telefono opcionales.
      *
