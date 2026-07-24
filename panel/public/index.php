@@ -291,9 +291,9 @@ function definicionMenu(): array
                 [
                     'label' => 'Emision',
                     'items' => [
-                        ['clave' => 'ventas.factura', 'label' => 'Factura electronica', 'destino' => '/ventas/factura', 'construido' => false, 'requiereProduccion' => true, 'sub' => true],
-                        ['clave' => 'ventas.nc', 'label' => 'Nota de credito', 'destino' => '/ventas/nota-credito', 'construido' => false, 'requiereProduccion' => true, 'sub' => true],
-                        ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'construido' => false, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.factura', 'label' => 'Factura electronica', 'destino' => '/ventas/factura', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.nc', 'label' => 'Nota de credito', 'destino' => '/ventas/nota-credito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
                 ],
                 ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => false, 'requiereProduccion' => true],
@@ -768,6 +768,307 @@ function handleProductoDesactivarPost(int $id): void
     redirigirPrg('/maestros/productos');
 }
 
+// ===========================================================================
+//  Ventas > Emision unitaria (M3): factura 33, NC 61, ND 56.
+//
+//  El panel NO instancia el motor: llama a su API por HTTP con la key de
+//  SERVICIO (X-Api-Key), asi rut_emisor/ambiente salen siempre de la fila
+//  api_key (garantia del refactor multi-tenant), nunca del payload. La URL
+//  del motor viene de MOTOR_URL. El Idempotency-Key se genera UNA vez en el
+//  GET (campo hidden) y viaja igual en cualquier reintento: el motor deduplica.
+// ===========================================================================
+
+/** Metadatos de cada tipo emitible: [titulo, ruta, clave de nav]. */
+function metaTipoEmision(int $tipoDte): array
+{
+    return match ($tipoDte) {
+        33 => ['Factura electronica', '/ventas/factura', 'ventas.factura'],
+        61 => ['Nota de credito', '/ventas/nota-credito', 'ventas.nc'],
+        56 => ['Nota de debito', '/ventas/nota-debito', 'ventas.nd'],
+        default => ['Documento', '/ventas/factura', 'ventas.factura'],
+    };
+}
+
+/** Renderiza el formulario de emision (compartido por los 3 tipos). */
+function renderEmisionForm(int $tipoDte, string $idemKey, array $form, ?string $errorCampo, ?string $errorMsg, ?string $flashError): never
+{
+    [$titulo, $accion, $nav] = metaTipoEmision($tipoDte);
+    $productos = productoRepo()->listar(Auth::cuentaId(), null, true, 1000, 0);
+    vista('emision-form', [
+        'tipoDte'    => $tipoDte,
+        'tituloDoc'  => $titulo,
+        'accion'     => $accion,
+        'idemKey'    => $idemKey,
+        'form'       => $form,
+        'errorCampo' => $errorCampo,
+        'errorMsg'   => $errorMsg,
+        'flashError' => $flashError,
+        'productos'  => $productos,
+        'navActivo'  => $nav,
+    ]);
+}
+
+/** Arma el JSON del DocumentoTributario que espera POST /api/v1/dte desde $_POST. */
+function armarDocumentoEmision(int $tipoDte, array $post): array
+{
+    $r        = is_array($post['receptor'] ?? null) ? $post['receptor'] : [];
+    $receptor = [
+        'rut'         => trim((string) ($r['rut'] ?? '')),
+        'razonSocial' => trim((string) ($r['razonSocial'] ?? '')),
+        'giro'        => trim((string) ($r['giro'] ?? '')),
+        'direccion'   => trim((string) ($r['direccion'] ?? '')),
+        'comuna'      => trim((string) ($r['comuna'] ?? '')),
+    ];
+    $email = trim((string) ($r['email'] ?? ''));
+    if ($email !== '') {
+        $receptor['email'] = $email;
+    }
+
+    $detalles = [];
+    foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $d) {
+        if (! is_array($d)) {
+            continue;
+        }
+        $nombre = trim((string) ($d['nombre'] ?? ''));
+        $cantR  = trim((string) ($d['cantidad'] ?? ''));
+        $precR  = trim((string) ($d['precioUnitario'] ?? ''));
+        if ($nombre === '' && $cantR === '' && $precR === '') {
+            continue; // linea totalmente vacia: se ignora
+        }
+        $linea = [
+            'nombre'         => $nombre,
+            'cantidad'       => is_numeric($cantR) ? (float) $cantR : $cantR,
+            'precioUnitario' => is_numeric($precR) ? (float) $precR : $precR,
+            'exento'         => ! empty($d['exento']),
+        ];
+        $unidad = trim((string) ($d['unidad'] ?? ''));
+        if ($unidad !== '') {
+            $linea['unidad'] = $unidad;
+        }
+        $desc = trim((string) ($d['descripcion'] ?? ''));
+        if ($desc !== '') {
+            $linea['descripcion'] = $desc;
+        }
+        $detalles[] = $linea;
+    }
+
+    $doc = [
+        'tipoDte'         => $tipoDte,
+        'receptor'        => $receptor,
+        'detalles'        => $detalles,
+        'montosSonBrutos' => ! empty($post['montosSonBrutos']),
+    ];
+
+    $dg = trim((string) ($post['descuentoGlobalPct'] ?? ''));
+    if ($dg !== '' && is_numeric($dg)) {
+        $doc['descuentoGlobalPct'] = (float) $dg;
+    }
+    $obs = trim((string) ($post['observaciones'] ?? ''));
+    if ($obs !== '') {
+        $doc['observaciones'] = $obs;
+    }
+
+    // Referencias: solo para NC (61) / ND (56), entrada manual (M3).
+    if (in_array($tipoDte, [61, 56], true)) {
+        $refs = [];
+        foreach (is_array($post['referencias'] ?? null) ? $post['referencias'] : [] as $ref) {
+            if (! is_array($ref)) {
+                continue;
+            }
+            $td = trim((string) ($ref['tipoDocumento'] ?? ''));
+            if ($td === '') {
+                continue;
+            }
+            $item = ['tipoDocumento' => is_numeric($td) ? (int) $td : $td];
+            $fol  = trim((string) ($ref['folio'] ?? ''));
+            if ($fol !== '') {
+                $item['folio'] = is_numeric($fol) ? (int) $fol : $fol;
+            }
+            $fe = trim((string) ($ref['fecha'] ?? ''));
+            if ($fe !== '') {
+                $item['fecha'] = $fe;
+            }
+            $cod = trim((string) ($ref['codigo'] ?? ''));
+            if ($cod !== '') {
+                $item['codigo'] = is_numeric($cod) ? (int) $cod : $cod;
+            }
+            $raz = trim((string) ($ref['razon'] ?? ''));
+            if ($raz !== '') {
+                $item['razon'] = $raz;
+            }
+            $refs[] = $item;
+        }
+        if ($refs !== []) {
+            $doc['referencias'] = $refs;
+        }
+    }
+
+    return $doc;
+}
+
+/**
+ * POST al motor. Devuelve ['status'=>int, 'body'=>array]. NO lanza en 4xx/5xx
+ * (http_errors=false); un fallo de conexion (motor caido/timeout) SI propaga
+ * como GuzzleException para que el handler lo distinga de una respuesta HTTP.
+ */
+function emitirEnMotor(string $keyServicio, array $documento, string $idemKey): array
+{
+    $base = getenv('MOTOR_URL');
+    if ($base === false || trim($base) === '') {
+        throw new RuntimeException('MOTOR_URL no configurada en el entorno del panel.');
+    }
+    $http = new Client([
+        'base_uri'    => rtrim($base, '/') . '/',
+        'timeout'     => 60,
+        'http_errors' => false,
+    ]);
+    $resp = $http->post('api/v1/dte', [
+        'headers' => [
+            'X-Api-Key'       => $keyServicio,
+            'Idempotency-Key' => $idemKey,
+            'Content-Type'    => 'application/json',
+        ],
+        'json' => $documento,
+    ]);
+    $body = json_decode((string) $resp->getBody(), true);
+
+    return ['status' => $resp->getStatusCode(), 'body' => is_array($body) ? $body : []];
+}
+
+/** Best-effort: crea el cliente en el maestro tras emitir (no invalida la emision). */
+function guardarClienteDesdeReceptor(int $cuentaId, array $receptor): void
+{
+    try {
+        $rut = Rut::normalizar((string) ($receptor['rut'] ?? ''));
+        if (! Rut::valido($rut)) {
+            return;
+        }
+        $repo = clienteRepo();
+        if ($repo->buscarPorRut($cuentaId, $rut) !== null) {
+            return; // ya existe (activo o inactivo): no se toca
+        }
+        $repo->crear($cuentaId, [
+            'rut_cliente'  => $rut,
+            'razon_social' => (string) ($receptor['razonSocial'] ?? ''),
+            'giro'         => (string) ($receptor['giro'] ?? ''),
+            'direccion'    => (string) ($receptor['direccion'] ?? ''),
+            'comuna'       => (string) ($receptor['comuna'] ?? ''),
+            'email'        => (string) ($receptor['email'] ?? ''),
+        ]);
+    } catch (Throwable $e) {
+        error_log('panel emision: no se pudo guardar el cliente tras emitir - ' . $e->getMessage());
+    }
+}
+
+function handleEmisionGet(int $tipoDte): void
+{
+    exigirProduccionCompleto(Db::conexion(), Auth::cuentaId()); // guard (redirige si falta emisor/cert/CAF prod)
+    renderEmisionForm($tipoDte, bin2hex(random_bytes(16)), [], null, null, null);
+}
+
+function handleEmisionPost(int $tipoDte): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId); // guard
+
+    // Idempotency-Key: viene del hidden del GET; se preserva en reintentos. Si
+    // faltara (manipulacion), se usa uno nuevo para este submit.
+    $idemKey   = trim((string) ($_POST['idem_key'] ?? '')) !== '' ? trim((string) $_POST['idem_key']) : bin2hex(random_bytes(16));
+    $documento = armarDocumentoEmision($tipoDte, $_POST);
+
+    try {
+        $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+        $res         = emitirEnMotor($keyServicio, $documento, $idemKey);
+    } catch (Throwable $e) {
+        error_log('panel emision: fallo de conexion con el motor - ' . $e->getMessage());
+        renderEmisionForm(
+            $tipoDte,
+            $idemKey,
+            $_POST,
+            null,
+            null,
+            'No se pudo contactar el motor de emision. NO se emitio ningun documento; revisa la conexion y reintenta.'
+        );
+    }
+
+    $status = $res['status'];
+    $body   = $res['body'];
+
+    if ($status === 201) {
+        if (! empty($_POST['guardar_cliente'])) {
+            guardarClienteDesdeReceptor($cuentaId, $documento['receptor']);
+        }
+        flashSet('exito', 'Documento emitido.', ['resultado' => [
+            'tipoDte' => $body['tipoDte'] ?? $tipoDte,
+            'folio'   => $body['folio'] ?? null,
+            'estado'  => $body['estado'] ?? null,
+            'trackId' => $body['trackId'] ?? null,
+            'fchEmis' => $body['fchEmis'] ?? null,
+            'neto'    => $body['neto'] ?? null,
+            'iva'     => $body['iva'] ?? null,
+            'total'   => $body['total'] ?? null,
+        ]]);
+        redirigirPrg('/ventas/resultado');
+    }
+
+    if ($status === 422) {
+        // El motor devuelve {error, campo} (un campo a la vez, fail-fast).
+        renderEmisionForm(
+            $tipoDte,
+            $idemKey,
+            $_POST,
+            (string) ($body['campo'] ?? ''),
+            (string) ($body['error'] ?? 'Hay un dato invalido en el documento.'),
+            null
+        );
+    }
+
+    if ($status === 502) {
+        error_log('panel emision: 502 del motor - ' . json_encode($body, JSON_UNESCAPED_UNICODE));
+        renderEmisionForm(
+            $tipoDte,
+            $idemKey,
+            $_POST,
+            null,
+            null,
+            'No se pudo emitir: el SII rechazo el documento o no respondio. Revisa los datos e intenta nuevamente en unos minutos.'
+        );
+    }
+
+    // 500 u otra respuesta inesperada.
+    error_log('panel emision: respuesta inesperada del motor (' . $status . ') - ' . json_encode($body, JSON_UNESCAPED_UNICODE));
+    renderEmisionForm(
+        $tipoDte,
+        $idemKey,
+        $_POST,
+        null,
+        null,
+        'Error del motor de emision. NO se emitio; intenta nuevamente.'
+    );
+}
+
+function handleEmisionResultadoGet(): void
+{
+    $flash = flashTomar();
+    if (empty($flash['resultado'])) {
+        redirigir('/ventas/factura');
+    }
+    vista('resultado-emision', [
+        'resultado' => $flash['resultado'],
+        'navActivo'  => 'ventas.factura',
+    ]);
+}
+
+/** Endpoint JSON: resuelve el cliente por RUT para el autocompletado del form. */
+function handleClientePorRutGet(): void
+{
+    $r = resolverClientePorRut(Auth::cuentaId(), (string) ($_GET['rut'] ?? ''));
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode($r, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /**
  * Exige el onboarding base completo (empresa + certificado + >=1 CAF) para
  * llegar a /apikeys: redirige a la etapa pendiente si falta algo. Devuelve el
@@ -813,7 +1114,7 @@ function listarApiKeys(PDO $pdo, int $cuentaId): array
 {
     $stmt = $pdo->prepare(
         'SELECT id, prefijo, ambiente, estado, last_used_at, created_at '
-        . 'FROM api_key WHERE cuenta_id = :cuenta_id ORDER BY created_at DESC'
+        . "FROM api_key WHERE cuenta_id = :cuenta_id AND tipo = 'externa' ORDER BY created_at DESC"
     );
     $stmt->execute([':cuenta_id' => $cuentaId]);
 
@@ -831,11 +1132,164 @@ function listarApiKeysProduccion(PDO $pdo, int $cuentaId): array
 {
     $stmt = $pdo->prepare(
         "SELECT id, prefijo, ambiente, estado, last_used_at, created_at "
-        . "FROM api_key WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' ORDER BY created_at DESC"
+        . "FROM api_key WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' AND tipo = 'externa' ORDER BY created_at DESC"
     );
     $stmt->execute([':cuenta_id' => $cuentaId]);
 
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// ===========================================================================
+//  API key de SERVICIO (interna del panel) -- ver migracion 017.
+//
+//  A diferencia de las externas (secreto irrecuperable, solo key_hash), la key
+//  de servicio guarda su secreto CIFRADO con el mismo envelope encryption que
+//  los certificados (DEK aleatoria -> secreto_cifrado; DEK envuelta con la KEK
+//  -> dek_envuelta). El panel la desencripta al emitir para el header X-Api-Key.
+//  Invisible al usuario (listarApiKeys* filtran tipo='externa').
+// ===========================================================================
+
+/**
+ * Desenvuelve el secreto de una key de servicio: KEK -> DEK (dek_envuelta),
+ * DEK -> secreto (secreto_cifrado). Mismo patron que
+ * MySqlEmisorRepository::obtenerCertificado.
+ *
+ * @throws CertificadoCryptoException si el material esta corrupto o la KEK no calza.
+ */
+function descifrarSecretoServicio(string $dekEnvuelta, string $secretoCifrado): string
+{
+    $dek = (new CertificadoCrypto(kekMaestra()))->descifrar($dekEnvuelta);
+    return (new CertificadoCrypto($dek))->descifrar($secretoCifrado);
+}
+
+/**
+ * Genera una key de servicio nueva para (cuenta, rut_emisor) en ambiente
+ * produccion, la cifra y la persiste, garantizando la invariante "una sola
+ * activa por cuenta" a nivel de aplicacion (MySQL no tiene indices unicos
+ * filtrados): serializa con un lock por cuenta (SELECT ... FOR UPDATE sobre
+ * cuenta) y, si otra transaccion ya creo una activa, la reutiliza; si no,
+ * inserta la nueva y revoca cualquier otra activa por defensa.
+ *
+ * @return array{id:int, prefijo:string, secreto:string}
+ */
+function generarKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): array
+{
+    $pdo->beginTransaction();
+    try {
+        // Mutex por cuenta: serializa generaciones concurrentes de la misma cuenta.
+        $pdo->prepare('SELECT id FROM cuenta WHERE id = :c FOR UPDATE')
+            ->execute([':c' => $cuentaId]);
+
+        // Re-chequeo dentro del lock: si otra transaccion ya dejo una activa que
+        // desenvuelve bien, se reutiliza (verificar-antes-de-insertar).
+        $ex = $pdo->prepare(
+            "SELECT id, prefijo, secreto_cifrado, dek_envuelta FROM api_key "
+            . "WHERE cuenta_id = :c AND ambiente = 'produccion' AND tipo = 'servicio' "
+            . "  AND estado = 'activa' ORDER BY id LIMIT 1"
+        );
+        $ex->execute([':c' => $cuentaId]);
+        $fila = $ex->fetch(PDO::FETCH_ASSOC);
+        if ($fila !== false) {
+            $secreto = descifrarSecretoServicio((string) $fila['dek_envuelta'], (string) $fila['secreto_cifrado']);
+            $pdo->commit();
+            return ['id' => (int) $fila['id'], 'prefijo' => (string) $fila['prefijo'], 'secreto' => $secreto];
+        }
+
+        // Secreto (base64url de 32 bytes, sin punto) + prefijo unico marcado 'svc_'.
+        $secreto = rtrim(strtr(base64_encode(random_bytes(32)), '+/', '-_'), '=');
+        $prefijo = null;
+        for ($i = 0; $i < 5; $i++) {
+            $cand = 'svc_' . bin2hex(random_bytes(4));
+            $chk  = $pdo->prepare('SELECT 1 FROM api_key WHERE prefijo = :p LIMIT 1');
+            $chk->execute([':p' => $cand]);
+            if ($chk->fetchColumn() === false) {
+                $prefijo = $cand;
+                break;
+            }
+        }
+        if ($prefijo === null) {
+            throw new RuntimeException('No se pudo generar un prefijo unico para la key de servicio.');
+        }
+
+        $keyHash        = hash('sha256', $secreto);
+        $dek            = random_bytes(32);
+        $secretoCifrado = (new CertificadoCrypto($dek))->cifrar($secreto);
+        $dekEnvuelta    = (new CertificadoCrypto(kekMaestra()))->cifrar($dek);
+
+        $pdo->prepare(
+            'INSERT INTO api_key '
+            . '(cuenta_id, key_hash, prefijo, rut_emisor_scope, ambiente, estado, tipo, secreto_cifrado, dek_envuelta) '
+            . "VALUES (:c, :hash, :prefijo, :rut, 'produccion', 'activa', 'servicio', :sc, :de)"
+        )->execute([
+            ':c'       => $cuentaId,
+            ':hash'    => $keyHash,
+            ':prefijo' => $prefijo,
+            ':rut'     => $rutEmisor,
+            ':sc'      => $secretoCifrado,
+            ':de'      => $dekEnvuelta,
+        ]);
+        $nuevaId = (int) $pdo->lastInsertId();
+
+        // Invariante (defensa): revoca cualquier OTRA activa de servicio de la cuenta.
+        $pdo->prepare(
+            "UPDATE api_key SET estado = 'revocada' "
+            . "WHERE cuenta_id = :c AND ambiente = 'produccion' AND tipo = 'servicio' "
+            . "  AND estado = 'activa' AND id != :id"
+        )->execute([':c' => $cuentaId, ':id' => $nuevaId]);
+
+        $pdo->commit();
+        return ['id' => $nuevaId, 'prefijo' => $prefijo, 'secreto' => $secreto];
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
+/**
+ * Devuelve el X-Api-Key ("prefijo.secreto") de la key de SERVICIO de la cuenta
+ * (ambiente produccion), generandola de forma perezosa si no existe. Si la key
+ * activa esta corrupta (no desenvuelve), la revoca, genera una nueva y registra
+ * el evento en admin_auditoria (auto-recuperacion, no silenciosa).
+ */
+function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
+{
+    $stmt = $pdo->prepare(
+        "SELECT id, prefijo, secreto_cifrado, dek_envuelta FROM api_key "
+        . "WHERE cuenta_id = :c AND ambiente = 'produccion' AND tipo = 'servicio' "
+        . "  AND estado = 'activa' ORDER BY id LIMIT 1"
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($fila !== false) {
+        try {
+            $secreto = descifrarSecretoServicio((string) $fila['dek_envuelta'], (string) $fila['secreto_cifrado']);
+            return (string) $fila['prefijo'] . '.' . $secreto;
+        } catch (CertificadoCryptoException $e) {
+            // Corrupta: revocar, regenerar y AUDITAR la auto-recuperacion.
+            $viejaId      = (int) $fila['id'];
+            $viejoPrefijo = (string) $fila['prefijo'];
+            $pdo->prepare("UPDATE api_key SET estado = 'revocada' WHERE id = :id")
+                ->execute([':id' => $viejaId]);
+
+            $nueva = generarKeyServicio($pdo, $cuentaId, $rutEmisor);
+            registrarAuditoria(
+                $pdo,
+                Auth::usuarioId(),
+                'apikey_servicio.auto_recuperacion',
+                'api_key',
+                $nueva['id'],
+                ['motivo' => 'descifrado_fallido', 'revocada_id' => $viejaId, 'revocado_prefijo' => $viejoPrefijo],
+                ['nueva_id' => $nueva['id'], 'nuevo_prefijo' => $nueva['prefijo']],
+            );
+            return $nueva['prefijo'] . '.' . $nueva['secreto'];
+        }
+    }
+
+    $nueva = generarKeyServicio($pdo, $cuentaId, $rutEmisor);
+    return $nueva['prefijo'] . '.' . $nueva['secreto'];
 }
 
 /**
@@ -1362,6 +1816,44 @@ if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/activar$#', $r
 if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/desactivar$#', $ruta, $mProd)) {
     Auth::requerirSesion();
     handleProductoDesactivarPost((int) $mProd[1]);
+}
+
+// --- Ventas > Emision unitaria (M3) ---
+if ($metodo === 'GET' && $ruta === '/ventas/cliente-por-rut') {
+    Auth::requerirSesion();
+    handleClientePorRutGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/resultado') {
+    Auth::requerirSesion();
+    handleEmisionResultadoGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/factura') {
+    Auth::requerirSesion();
+    handleEmisionGet(33);
+}
+if ($metodo === 'POST' && $ruta === '/ventas/factura') {
+    Auth::requerirSesion();
+    handleEmisionPost(33);
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/nota-credito') {
+    Auth::requerirSesion();
+    handleEmisionGet(61);
+}
+if ($metodo === 'POST' && $ruta === '/ventas/nota-credito') {
+    Auth::requerirSesion();
+    handleEmisionPost(61);
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/nota-debito') {
+    Auth::requerirSesion();
+    handleEmisionGet(56);
+}
+if ($metodo === 'POST' && $ruta === '/ventas/nota-debito') {
+    Auth::requerirSesion();
+    handleEmisionPost(56);
 }
 
 if ($metodo === 'GET' && $ruta === '/empresa') {
