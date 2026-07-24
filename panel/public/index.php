@@ -61,6 +61,10 @@ use Plantiflex\Integration\Facturacion\MySqlSetPruebasArchivoRepository;
 use Plantiflex\Integration\Facturacion\MySqlClienteRepository;
 use Plantiflex\Integration\Facturacion\ClienteDuplicadoException;
 use Plantiflex\Integration\Facturacion\MySqlProductoRepository;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
+use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
+use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use Plantiflex\Integration\Facturacion\ProductoDuplicadoException;
 
 require __DIR__ . '/../src/Db.php';
@@ -296,8 +300,8 @@ function definicionMenu(): array
                         ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
                 ],
-                ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => false, 'requiereProduccion' => true],
-                ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'construido' => false, 'requiereProduccion' => true],
+                ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
@@ -1385,6 +1389,999 @@ function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
     redirigirPrg($destino);
 }
 
+// ===========================================================================
+//  Ventas > Carga masiva de notas de venta (M4).
+//
+//  Contexto (ver PASO 0/1 de M4): un cliente con sistema de reservas cobra
+//  via Mercado Pago, emite boleta al momento y a fin de mes hay que anularla
+//  (NC) y reemplazarla por factura -- unos 200-300 documentos/mes. El motor
+//  (POST /api/v1/dte/lote) NO tiene idempotencia propia y es todo-o-nada por
+//  sobre (confirmado leyendo su codigo): la idempotencia de negocio vive
+//  ENTERAMENTE aqui, en nota_venta (UNIQUE(cuenta_id, identificador_externo)
+//  contra recarga del Excel + columna estado contra reintento de
+//  facturacion). Sin infraestructura de colas: sincrono con set_time_limit()
+//  + polling sobre el mismo estado persistido (sin nada que inventar).
+// ===========================================================================
+
+const NOTA_VENTA_ENCABEZADOS = [
+    'identificador_externo', 'rut_receptor', 'razon_social_receptor', 'giro_receptor',
+    'direccion_receptor', 'comuna_receptor', 'email_receptor', 'fecha_nota',
+    'producto_servicio', 'cantidad', 'precio_unitario', 'exento',
+    'folio_boleta_a_anular', 'fecha_boleta_a_anular',
+];
+
+/** Limite de sanidad: sin fuente oficial de un tope menor (ver PASO 1 de M4,
+ *  el XSD del SII permite hasta 2000 <DTE> por sobre); esto es solo para que
+ *  un archivo enorme no reviente PHP por memoria, acotado ademas por un
+ *  IReadFilter al leer (ver leerFilasExcelCargaMasiva()). */
+const NOTA_VENTA_MAX_FILAS = 5000;
+
+/** Documentos por sub-lote de facturacion masiva. Sin limite oficial menor
+ *  encontrado (ver PASO 1 de M4); valor conservador por gestion de riesgo
+ *  (el lote del motor es todo-o-nada), ajustable. */
+const FACTURACION_MASIVA_SUBLOTE = 20;
+
+/** Minutos sin resolverse para considerar una nota 'en_proceso' abandonada
+ *  (pestana cerrada a mitad de un sub-lote, ver PASO 3 de M4) y devolverla a
+ *  'pendiente' automaticamente. Mayor que cualquier timeout HTTP razonable
+ *  de un sub-lote real (motor+SII), para no recuperar una nota que en
+ *  realidad sigue siendo procesada por una request lenta legitima. */
+const FACTURACION_MASIVA_RECUPERAR_MINUTOS = 5;
+
+/** Genera el .xlsx vacio con los encabezados de la plantilla, directo a la
+ *  salida HTTP (nunca toca disco propio, igual criterio que las descargas
+ *  de PDF/XML de M5). */
+function handlePlantillaExcelGet(): void
+{
+    $libro = new Spreadsheet();
+    $libro->getActiveSheet()->fromArray(NOTA_VENTA_ENCABEZADOS, null, 'A1');
+
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header('Content-Disposition: attachment; filename="plantilla_notas_venta.xlsx"');
+    (new XlsxWriter($libro))->save('php://output');
+    exit;
+}
+
+/**
+ * Lee un .xlsx de carga masiva desde su tmp_name (NUNCA se copia a disco
+ * propio, se lee directo del archivo temporal que ya crea PHP para el
+ * upload -- mismo criterio que file_get_contents($archivo['tmp_name']) en
+ * CAF/certificado). El IReadFilter acota la memoria usada por PhpSpreadsheet
+ * a NOTA_VENTA_MAX_FILAS+2 filas SIN IMPORTAR cuantas traiga el archivo real
+ * -- la validacion de "demasiadas filas" ocurre ANTES de intentar leer todo
+ * el contenido de cada fila.
+ *
+ * @return list<array<string,string>> filas no vacias, como array asociativo
+ *                                     clave=>valor segun NOTA_VENTA_ENCABEZADOS
+ *
+ * @throws RuntimeException si el archivo no se puede leer, los encabezados no
+ *                          coinciden con la plantilla, o excede el limite de filas
+ */
+function leerFilasExcelCargaMasiva(string $rutaArchivo): array
+{
+    $limite = NOTA_VENTA_MAX_FILAS + 2; // +1 encabezado, +1 para poder detectar el excedente
+
+    $filtro = new class ($limite) implements IReadFilter {
+        public function __construct(private readonly int $limite)
+        {
+        }
+
+        public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
+        {
+            return $row <= $this->limite;
+        }
+    };
+
+    try {
+        $reader = new XlsxReader();
+        $reader->setReadFilter($filtro);
+        $libro = $reader->load($rutaArchivo);
+    } catch (Throwable $e) {
+        throw new RuntimeException('El archivo no es un .xlsx valido.', 0, $e);
+    }
+
+    $filasCrudas = $libro->getActiveSheet()->toArray(null, true, true, false);
+    if ($filasCrudas === []) {
+        throw new RuntimeException('El archivo esta vacio.');
+    }
+
+    $encabezados = array_map(static fn ($v): string => trim((string) $v), array_shift($filasCrudas));
+    if ($encabezados !== NOTA_VENTA_ENCABEZADOS) {
+        throw new RuntimeException(
+            'Los encabezados del archivo no coinciden con la plantilla. Descarga la plantilla y no cambies el orden ni los nombres de columna.'
+        );
+    }
+
+    if (count($filasCrudas) > NOTA_VENTA_MAX_FILAS) {
+        throw new RuntimeException(
+            'El archivo tiene mas de ' . NOTA_VENTA_MAX_FILAS . ' filas de datos. Divide la carga en archivos mas chicos.'
+        );
+    }
+
+    $filas = [];
+    foreach ($filasCrudas as $filaCruda) {
+        $vacia = true;
+        foreach ($filaCruda as $v) {
+            if (trim((string) $v) !== '') {
+                $vacia = false;
+                break;
+            }
+        }
+        if ($vacia) {
+            continue; // fila 100% vacia (comun al final de un Excel exportado): se ignora, no es un error
+        }
+        $filas[] = array_combine(NOTA_VENTA_ENCABEZADOS, array_map(static fn ($v): string => trim((string) $v), $filaCruda));
+    }
+
+    return $filas;
+}
+
+/**
+ * Valida y normaliza UNA fila cruda del Excel. NO escribe en la BD (eso lo
+ * hace el llamador en la pasada de guardado): solo valida y, si la fila es
+ * valida, resuelve el cliente por RUT (resolverClientePorRut(), reusado tal
+ * cual de M2/M3 -- ya cubre "inactivo -> reactivar en vez de duplicar").
+ *
+ * $externosVistos es un Set (clave=>true) que el llamador mantiene ENTRE
+ * llamadas para detectar identificador_externo repetido DENTRO del mismo
+ * archivo. El Set de RUTs-nuevos-repetidos NO hace falta aqui: no es un
+ * error de validacion (un mismo cliente puede tener 2 reservas en el mismo
+ * Excel), el dedupe de creacion se resuelve en la pasada de guardado.
+ *
+ * @param array<string,string> $fila
+ * @param array<string,bool> $externosVistos
+ *
+ * @return array{status:string, errores:list<string>, fila_original:array<string,string>, datos:?array<string,mixed>}
+ */
+function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$externosVistos): array
+{
+    $errores = [];
+
+    $externo = $fila['identificador_externo'];
+    if ($externo === '') {
+        $errores[] = 'identificador_externo es obligatorio';
+    } elseif (isset($externosVistos[$externo])) {
+        $errores[] = 'identificador_externo duplicado en este archivo';
+    } else {
+        $stmt = $pdo->prepare('SELECT 1 FROM nota_venta WHERE cuenta_id = :c AND identificador_externo = :e LIMIT 1');
+        $stmt->execute([':c' => $cuentaId, ':e' => $externo]);
+        if ($stmt->fetchColumn() !== false) {
+            $errores[] = 'identificador_externo ya existe (esta nota ya se cargo en otro lote)';
+        }
+    }
+
+    $resolucionCliente = resolverClientePorRut($cuentaId, $fila['rut_receptor']);
+    if ($resolucionCliente['estado'] === 'rut_invalido') {
+        $errores[] = 'rut_receptor invalido';
+    }
+
+    $fechaNota = $fila['fecha_nota'];
+    if ($fechaNota === '' || ! fechaValida($fechaNota)) {
+        $errores[] = 'fecha_nota debe ser una fecha YYYY-MM-DD valida';
+    }
+
+    if ($fila['producto_servicio'] === '') {
+        $errores[] = 'producto_servicio es obligatorio';
+    }
+
+    $cantidadRaw = $fila['cantidad'];
+    if ($cantidadRaw === '' || ! is_numeric($cantidadRaw) || (float) $cantidadRaw <= 0) {
+        $errores[] = 'cantidad debe ser un numero mayor que 0';
+    }
+
+    $precioRaw = $fila['precio_unitario'];
+    if ($precioRaw === '' || ! is_numeric($precioRaw) || (float) $precioRaw < 0) {
+        $errores[] = 'precio_unitario debe ser un numero mayor o igual a 0';
+    }
+
+    $exentoRaw = strtoupper($fila['exento']);
+    if ($exentoRaw !== '' && ! in_array($exentoRaw, ['SI', 'NO'], true)) {
+        $errores[] = 'exento debe ser SI, NO o quedar vacio';
+    }
+    $exento = $exentoRaw === 'SI';
+
+    $folioBoletaRaw = $fila['folio_boleta_a_anular'];
+    $fechaBoletaRaw = $fila['fecha_boleta_a_anular'];
+    $folioBoleta    = null;
+    $fechaBoleta    = null;
+    if ($folioBoletaRaw !== '') {
+        if (! is_numeric($folioBoletaRaw) || (int) $folioBoletaRaw <= 0) {
+            $errores[] = 'folio_boleta_a_anular debe ser un numero entero mayor que 0';
+        } else {
+            $folioBoleta = (int) $folioBoletaRaw;
+        }
+        if ($fechaBoletaRaw === '' || ! fechaValida($fechaBoletaRaw)) {
+            $errores[] = 'fecha_boleta_a_anular es obligatoria y debe ser YYYY-MM-DD valida cuando viene folio_boleta_a_anular';
+        } else {
+            $fechaBoleta = $fechaBoletaRaw;
+        }
+    }
+
+    // Datos del receptor: si el cliente existe en el maestro, se usan SUS
+    // datos (la fila los ignora); si es nuevo, la fila EXIGE razon social,
+    // giro, direccion y comuna (el motor los exige al emitir, ver
+    // validarDocumentoDte() en public/index.php).
+    $receptorRazonSocial = $fila['razon_social_receptor'];
+    $receptorGiro        = $fila['giro_receptor'];
+    $receptorDireccion   = $fila['direccion_receptor'];
+    $receptorComuna      = $fila['comuna_receptor'];
+    $receptorEmail       = $fila['email_receptor'];
+
+    if ($resolucionCliente['estado'] === 'encontrado') {
+        $cliente             = $resolucionCliente['cliente'];
+        $receptorRazonSocial = $cliente['razon_social'];
+        $receptorGiro        = (string) ($cliente['giro'] ?? '');
+        $receptorDireccion   = (string) ($cliente['direccion'] ?? '');
+        $receptorComuna      = (string) ($cliente['comuna'] ?? '');
+        $receptorEmail       = (string) ($cliente['email'] ?? '');
+    } elseif ($resolucionCliente['estado'] === 'no_encontrado') {
+        if ($receptorRazonSocial === '') {
+            $errores[] = 'razon_social_receptor es obligatorio (cliente nuevo, no esta en tu maestro)';
+        }
+        if ($receptorGiro === '') {
+            $errores[] = 'giro_receptor es obligatorio (cliente nuevo)';
+        }
+        if ($receptorDireccion === '') {
+            $errores[] = 'direccion_receptor es obligatorio (cliente nuevo)';
+        }
+        if ($receptorComuna === '') {
+            $errores[] = 'comuna_receptor es obligatorio (cliente nuevo)';
+        }
+    }
+
+    if ($errores !== []) {
+        return ['status' => 'error', 'errores' => $errores, 'fila_original' => $fila, 'datos' => null];
+    }
+
+    // Solo se marca "visto" si la fila quedo OK: un identificador invalido no
+    // debe "reservar" el slot y ocultar el error real de una fila repetida
+    // valida mas adelante.
+    if ($externo !== '') {
+        $externosVistos[$externo] = true;
+    }
+
+    $montoNeto = (float) $cantidadRaw * (float) $precioRaw;
+
+    return [
+        'status'        => 'ok',
+        'errores'       => [],
+        'fila_original' => $fila,
+        'datos'         => [
+            'identificador_externo' => $externo,
+            'receptor_razon_social' => $receptorRazonSocial,
+            'receptor_giro'         => $receptorGiro !== '' ? $receptorGiro : null,
+            'receptor_direccion'    => $receptorDireccion !== '' ? $receptorDireccion : null,
+            'receptor_comuna'       => $receptorComuna !== '' ? $receptorComuna : null,
+            'receptor_email'        => $receptorEmail !== '' ? $receptorEmail : null,
+            'fecha_nota'            => $fechaNota,
+            'detalle'               => [[
+                'nombre'         => $fila['producto_servicio'],
+                'cantidad'       => (float) $cantidadRaw,
+                'precioUnitario' => (float) $precioRaw,
+                'exento'         => $exento,
+            ]],
+            'monto_estimado'        => (int) round($exento ? $montoNeto : $montoNeto * 1.19),
+            'boleta_ref_tipo'       => $folioBoleta !== null ? 39 : null,
+            'boleta_ref_folio'      => $folioBoleta,
+            'boleta_ref_fecha'      => $fechaBoleta,
+            'cliente_resolucion'    => $resolucionCliente,
+        ],
+    ];
+}
+
+function crearLoteCarga(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreArchivo, int $totalFilas, int $filasValidas, int $filasError): int
+{
+    $stmt = $pdo->prepare(
+        'INSERT INTO lote_carga (cuenta_id, usuario_id, nombre_archivo, total_filas, filas_validas, filas_error) '
+        . 'VALUES (:cuenta_id, :usuario_id, :nombre, :total, :validas, :errores)'
+    );
+    $stmt->execute([
+        ':cuenta_id' => $cuentaId,
+        ':usuario_id' => $usuarioId,
+        ':nombre'    => $nombreArchivo,
+        ':total'     => $totalFilas,
+        ':validas'   => $filasValidas,
+        ':errores'   => $filasError,
+    ]);
+
+    return (int) $pdo->lastInsertId();
+}
+
+/** @return list<array<string,mixed>> */
+function listarLotesCarga(PDO $pdo, int $cuentaId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, nombre_archivo, total_filas, filas_validas, filas_error, created_at '
+        . 'FROM lote_carga WHERE cuenta_id = :c ORDER BY created_at DESC, id DESC LIMIT 50'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** @return array<string,mixed>|null */
+function obtenerLoteCarga(PDO $pdo, int $cuentaId, int $loteId): ?array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, nombre_archivo, total_filas, filas_validas, filas_error, created_at '
+        . 'FROM lote_carga WHERE id = :id AND cuenta_id = :c LIMIT 1'
+    );
+    $stmt->execute([':id' => $loteId, ':c' => $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    return $fila === false ? null : $fila;
+}
+
+/** @return list<array<string,mixed>> */
+function listarNotasVentaDeLote(PDO $pdo, int $cuentaId, int $loteId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, identificador_externo, receptor_rut, receptor_razon_social, fecha_nota, monto_estimado, '
+        . 'boleta_ref_folio, estado, error_mensaje, fila_original, resultado_documentos '
+        . 'FROM nota_venta WHERE cuenta_id = :c AND lote_carga_id = :lote ORDER BY id ASC'
+    );
+    $stmt->execute([':c' => $cuentaId, ':lote' => $loteId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d): void
+{
+    $stmt = $pdo->prepare(
+        'INSERT INTO nota_venta '
+        . '(cuenta_id, lote_carga_id, identificador_externo, receptor_rut, receptor_razon_social, '
+        . ' receptor_giro, receptor_direccion, receptor_comuna, receptor_email, fecha_nota, detalle, '
+        . " monto_estimado, boleta_ref_tipo, boleta_ref_folio, boleta_ref_fecha, estado) VALUES "
+        . '(:cuenta_id, :lote_id, :externo, :rut, :razon, :giro, :dir, :comuna, :email, :fecha, '
+        . " :detalle, :monto, :bref_tipo, :bref_folio, :bref_fecha, 'pendiente')"
+    );
+    $stmt->execute([
+        ':cuenta_id'  => $cuentaId,
+        ':lote_id'    => $loteId,
+        ':externo'    => $d['identificador_externo'],
+        ':rut'        => $d['receptor_rut'],
+        ':razon'      => $d['receptor_razon_social'],
+        ':giro'       => $d['receptor_giro'],
+        ':dir'        => $d['receptor_direccion'],
+        ':comuna'     => $d['receptor_comuna'],
+        ':email'      => $d['receptor_email'],
+        ':fecha'      => $d['fecha_nota'],
+        ':detalle'    => json_encode($d['detalle'], JSON_UNESCAPED_UNICODE),
+        ':monto'      => $d['monto_estimado'],
+        ':bref_tipo'  => $d['boleta_ref_tipo'],
+        ':bref_folio' => $d['boleta_ref_folio'],
+        ':bref_fecha' => $d['boleta_ref_fecha'],
+    ]);
+}
+
+function crearNotaVentaError(PDO $pdo, int $cuentaId, int $loteId, array $filaOriginal, array $errores): void
+{
+    $stmt = $pdo->prepare(
+        'INSERT INTO nota_venta (cuenta_id, lote_carga_id, estado, error_mensaje, fila_original) '
+        . "VALUES (:cuenta_id, :lote_id, 'error', :error, :original)"
+    );
+    $stmt->execute([
+        ':cuenta_id' => $cuentaId,
+        ':lote_id'   => $loteId,
+        ':error'     => mb_substr(implode('; ', $errores), 0, 500),
+        ':original'  => json_encode($filaOriginal, JSON_UNESCAPED_UNICODE),
+    ]);
+}
+
+function handleCargaMasivaGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId); // guard (redirige si falta emisor/cert/CAF prod)
+
+    vista('carga-masiva-form', [
+        'error'     => null,
+        'lotes'     => listarLotesCarga($pdo, $cuentaId),
+        'navActivo' => 'ventas.carga-masiva',
+    ]);
+}
+
+function handleCargaMasivaPost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $usuarioId = Auth::usuarioId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $errorForm = static function (string $mensaje) use ($pdo, $cuentaId): never {
+        vista('carga-masiva-form', [
+            'error'     => $mensaje,
+            'lotes'     => listarLotesCarga($pdo, $cuentaId),
+            'navActivo' => 'ventas.carga-masiva',
+        ]);
+    };
+
+    $archivo = $_FILES['archivo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        $errorForm('Debes seleccionar un archivo .xlsx valido.');
+    }
+
+    try {
+        $filas = leerFilasExcelCargaMasiva($archivo['tmp_name']);
+    } catch (Throwable $e) {
+        $errorForm($e->getMessage());
+    }
+
+    if ($filas === []) {
+        $errorForm('El archivo no tiene filas de datos (fuera del encabezado).');
+    }
+
+    $externosVistos = [];
+    $items = [];
+    foreach ($filas as $fila) {
+        $items[] = validarFilaCargaMasiva($fila, $pdo, $cuentaId, $externosVistos);
+    }
+
+    $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
+    $totalErrores = count($items) - $totalValidas;
+
+    $pdo->beginTransaction();
+    try {
+        $loteId = crearLoteCarga($pdo, $cuentaId, $usuarioId, $archivo['name'], count($items), $totalValidas, $totalErrores);
+
+        // RUT nuevo -> id de cliente ya creado EN ESTA MISMA carga (evita
+        // crear el mismo cliente 2 veces si aparece en varias filas).
+        $clienteIdPorRutNuevo = [];
+
+        foreach ($items as $item) {
+            if ($item['status'] === 'error') {
+                crearNotaVentaError($pdo, $cuentaId, $loteId, $item['fila_original'], $item['errores']);
+                continue;
+            }
+
+            $d   = $item['datos'];
+            $res = $d['cliente_resolucion'];
+
+            if ($res['estado'] === 'no_encontrado') {
+                $rutNorm = $res['rut'];
+                if (! isset($clienteIdPorRutNuevo[$rutNorm])) {
+                    try {
+                        $clienteIdPorRutNuevo[$rutNorm] = clienteRepo()->crear($cuentaId, [
+                            'rut_cliente'  => $rutNorm,
+                            'razon_social' => $d['receptor_razon_social'],
+                            'giro'         => $d['receptor_giro'],
+                            'direccion'    => $d['receptor_direccion'],
+                            'comuna'       => $d['receptor_comuna'],
+                            'email'        => $d['receptor_email'],
+                        ]);
+                    } catch (ClienteDuplicadoException) {
+                        // Carrera improbable (otra request creo el mismo RUT
+                        // entre la validacion y el guardado): se reusa el que
+                        // ya quedo creado, no se aborta la carga por esto.
+                        $existente = clienteRepo()->buscarPorRut($cuentaId, $rutNorm);
+                        $clienteIdPorRutNuevo[$rutNorm] = $existente['id'] ?? 0;
+                    }
+                }
+            } elseif ($res['estado'] === 'encontrado' && $res['cliente']['activo'] === false) {
+                clienteRepo()->activar($cuentaId, (int) $res['cliente']['id']);
+            }
+
+            crearNotaVentaValida($pdo, $cuentaId, $loteId, [
+                'identificador_externo' => $d['identificador_externo'],
+                'receptor_rut'          => $res['rut'],
+                'receptor_razon_social' => $d['receptor_razon_social'],
+                'receptor_giro'         => $d['receptor_giro'],
+                'receptor_direccion'    => $d['receptor_direccion'],
+                'receptor_comuna'       => $d['receptor_comuna'],
+                'receptor_email'        => $d['receptor_email'],
+                'fecha_nota'            => $d['fecha_nota'],
+                'detalle'               => $d['detalle'],
+                'monto_estimado'        => $d['monto_estimado'],
+                'boleta_ref_tipo'       => $d['boleta_ref_tipo'],
+                'boleta_ref_folio'      => $d['boleta_ref_folio'],
+                'boleta_ref_fecha'      => $d['boleta_ref_fecha'],
+            ]);
+        }
+
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log('panel carga masiva: fallo al guardar el lote - ' . $e->getMessage());
+        $errorForm('No se pudo guardar la carga. Intenta nuevamente.');
+    }
+
+    redirigirPrg("/ventas/carga-masiva/{$loteId}");
+}
+
+function handleCargaMasivaDetalleGet(int $loteId): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $lote = obtenerLoteCarga($pdo, $cuentaId, $loteId);
+    if ($lote === null) {
+        redirigir('/ventas/carga-masiva');
+    }
+
+    vista('carga-masiva-detalle', [
+        'lote'      => $lote,
+        'notas'     => listarNotasVentaDeLote($pdo, $cuentaId, $loteId),
+        'navActivo' => 'ventas.carga-masiva',
+    ]);
+}
+
+/** @return list<array<string,mixed>> */
+function listarNotasVentaPendientes(PDO $pdo, int $cuentaId, ?string $rutFiltro): array
+{
+    $where  = "cuenta_id = :c AND estado = 'pendiente'";
+    $params = [':c' => $cuentaId];
+    if ($rutFiltro !== null && $rutFiltro !== '') {
+        $where           .= ' AND receptor_rut LIKE :rut';
+        $params[':rut']   = '%' . $rutFiltro . '%';
+    }
+    $stmt = $pdo->prepare(
+        'SELECT id, identificador_externo, receptor_rut, receptor_razon_social, fecha_nota, monto_estimado, '
+        . "boleta_ref_folio FROM nota_venta WHERE {$where} ORDER BY fecha_nota ASC, id ASC LIMIT 500"
+    );
+    $stmt->execute($params);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Notas 'pendiente' de un conjunto de ids, ordenadas por id (orden estable
+ * entre llamadas sucesivas del mismo conjunto). $limite acota cuantas trae
+ * (para pedir "el siguiente sub-lote"); null trae todas (para el chequeo de
+ * folios sobre lo que falta procesar).
+ *
+ * @return list<array<string,mixed>>
+ */
+function obtenerNotasVentaPendientesPorIds(PDO $pdo, int $cuentaId, array $ids, ?int $limite = null): array
+{
+    if ($ids === []) {
+        return [];
+    }
+    $marcadores = implode(',', array_fill(0, count($ids), '?'));
+    $sql = "SELECT * FROM nota_venta WHERE cuenta_id = ? AND estado = 'pendiente' AND id IN ({$marcadores}) ORDER BY id ASC";
+    if ($limite !== null) {
+        $sql .= ' LIMIT ?';
+    }
+    $stmt = $pdo->prepare($sql);
+    $pos = 1;
+    $stmt->bindValue($pos++, $cuentaId, PDO::PARAM_INT);
+    foreach ($ids as $id) {
+        $stmt->bindValue($pos++, $id, PDO::PARAM_INT);
+    }
+    if ($limite !== null) {
+        $stmt->bindValue($pos, $limite, PDO::PARAM_INT);
+    }
+    $stmt->execute();
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Devuelve a 'pendiente' las notas 'en_proceso' de la cuenta que llevan mas
+ * de FACTURACION_MASIVA_RECUPERAR_MINUTOS sin resolverse (ver updated_at,
+ * migracion 018/020, ON UPDATE CURRENT_TIMESTAMP nativo) -- pestana cerrada a
+ * mitad de un sub-lote, PASO 3 de M4. Se llama al abrir el selector y antes
+ * de procesar un sub-lote nuevo, asi el usuario nunca ve una nota "trabada"
+ * para siempre.
+ */
+function recuperarNotasVentaEnProcesoViejas(PDO $pdo, int $cuentaId): void
+{
+    $pdo->prepare(
+        "UPDATE nota_venta SET estado = 'pendiente' "
+        . "WHERE cuenta_id = :c AND estado = 'en_proceso' "
+        . 'AND updated_at < (NOW() - INTERVAL ' . FACTURACION_MASIVA_RECUPERAR_MINUTOS . ' MINUTE)'
+    )->execute([':c' => $cuentaId]);
+}
+
+/** @return list<array<string,mixed>> */
+function obtenerNotasVentaPorIdsCualquierEstado(PDO $pdo, int $cuentaId, array $ids): array
+{
+    if ($ids === []) {
+        return [];
+    }
+    $marcadores = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $pdo->prepare(
+        'SELECT id, identificador_externo, receptor_rut, receptor_razon_social, estado, error_mensaje, resultado_documentos '
+        . "FROM nota_venta WHERE cuenta_id = ? AND id IN ({$marcadores})"
+    );
+    $stmt->execute([$cuentaId, ...$ids]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/** @return array{total:int,pendiente:int,en_proceso:int,facturada:int,error:int} */
+function contarNotasVentaPorEstado(PDO $pdo, int $cuentaId, array $ids): array
+{
+    $conteo = ['pendiente' => 0, 'en_proceso' => 0, 'facturada' => 0, 'error' => 0];
+    if ($ids === []) {
+        return $conteo + ['total' => 0];
+    }
+    $marcadores = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $pdo->prepare(
+        "SELECT estado, COUNT(*) AS n FROM nota_venta WHERE cuenta_id = ? AND id IN ({$marcadores}) GROUP BY estado"
+    );
+    $stmt->execute([$cuentaId, ...$ids]);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $conteo[(string) $r['estado']] = (int) $r['n'];
+    }
+    $conteo['total'] = array_sum($conteo);
+
+    return $conteo;
+}
+
+/**
+ * Reclama 'en_proceso' SOLO las notas que en ESE INSTANTE siguen 'pendiente'
+ * -- UPDATE...WHERE atomico con la condicion de estado incluida (id = ? AND
+ * estado = 'pendiente'), UNA fila a la vez para saber exactamente cuales se
+ * reclamaron de verdad (MySQL no devuelve que filas afecto un UPDATE con
+ * IN(...), solo el conteo). Devuelve la lista de ids REALMENTE reclamados.
+ *
+ * Esto es lo que cierra la carrera contra recuperarNotasVentaEnProcesoViejas():
+ * si dos procesos compiten por la misma nota (una recuperacion+reproceso
+ * concurrente con el proceso original que la tenia en_proceso), el UPDATE de
+ * uno de los dos afecta 0 filas (la condicion estado='pendiente' ya no se
+ * cumple, porque el otro ya la reclamo primero) y ESE proceso la descarta acá
+ * mismo, sin llamar nunca al motor por ella. Commit inmediato y corto, sin
+ * transaccion envolvente: si la pestana se cierra antes de que el sub-lote
+ * termine, la nota queda 'en_proceso' visible (y recuperable por
+ * recuperarNotasVentaEnProcesoViejas()) en vez de perderse.
+ *
+ * @param list<int> $ids
+ *
+ * @return list<int> ids efectivamente reclamados (subconjunto de $ids)
+ */
+function marcarNotasVentaEnProceso(PDO $pdo, array $ids): array
+{
+    if ($ids === []) {
+        return [];
+    }
+    $stmt = $pdo->prepare("UPDATE nota_venta SET estado = 'en_proceso' WHERE id = ? AND estado = 'pendiente'");
+    $reclamados = [];
+    foreach ($ids as $id) {
+        $stmt->execute([$id]);
+        if ($stmt->rowCount() === 1) {
+            $reclamados[] = $id;
+        }
+    }
+
+    return $reclamados;
+}
+
+/**
+ * UPDATE...WHERE atomico: solo marca 'error' las notas que SIGUEN
+ * 'en_proceso' (condicion de estado en el WHERE). Si el conteo de filas
+ * afectadas no coincide con lo esperado, alguna nota ya cambio de estado por
+ * otra via (recuperada y reprocesada por otro proceso mientras esta llamada
+ * estaba en curso) -- se deja constancia en el log en vez de sobreescribir en
+ * silencio un resultado que ya quedo resuelto de otra forma.
+ */
+function marcarNotasVentaError(PDO $pdo, array $ids, string $mensaje): void
+{
+    if ($ids === []) {
+        return;
+    }
+    $marcadores = implode(',', array_fill(0, count($ids), '?'));
+    $mensajeCorto = mb_substr($mensaje, 0, 500);
+    $stmt = $pdo->prepare(
+        "UPDATE nota_venta SET estado = 'error', error_mensaje = ? WHERE id IN ({$marcadores}) AND estado = 'en_proceso'"
+    );
+    $stmt->execute([$mensajeCorto, ...$ids]);
+    if ($stmt->rowCount() !== count($ids)) {
+        error_log(sprintf(
+            'facturacion masiva: marcarNotasVentaError afecto %d de %d notas esperadas (ids: %s) -- alguna ya no estaba en_proceso (carrera con recuperacion/otro proceso)',
+            $stmt->rowCount(),
+            count($ids),
+            implode(',', $ids)
+        ));
+    }
+}
+
+/**
+ * UPDATE...WHERE atomico: solo marca 'facturada' si la nota SIGUE
+ * 'en_proceso'. Si rowCount() da 0, la nota ya no estaba en_proceso (otro
+ * proceso la reclamo primero via una carrera con la recuperacion) -- en vez
+ * de perder en silencio el resultado_documentos de una emision REAL que si
+ * ocurrio en el motor, se deja logueado completo para poder reconciliar a
+ * mano (buscar el folio en dte_emitido del motor).
+ */
+function marcarNotaVentaFacturada(PDO $pdo, int $id, array $documentos): void
+{
+    $documentosJson = json_encode($documentos, JSON_UNESCAPED_UNICODE);
+    $stmt = $pdo->prepare(
+        "UPDATE nota_venta SET estado = 'facturada', resultado_documentos = :res WHERE id = :id AND estado = 'en_proceso'"
+    );
+    $stmt->execute([':res' => $documentosJson, ':id' => $id]);
+    if ($stmt->rowCount() !== 1) {
+        error_log(sprintf(
+            'facturacion masiva: la nota %d ya no estaba en_proceso al intentar marcarla facturada -- '
+            . 'el motor SI emitio estos documentos, revisar manualmente: %s',
+            $id,
+            $documentosJson
+        ));
+    }
+}
+
+/** Suma folios_restantes de los CAF activos de un tipo, en produccion. Reusa
+ *  listarCafs() (ya existente, M1) en vez de inventar una consulta nueva. */
+function sumarFoliosDisponibles(PDO $pdo, string $rutEmisor, int $tipoDte): int
+{
+    $total = 0;
+    foreach (listarCafs($pdo, $rutEmisor, 'produccion') as $c) {
+        if ((int) $c['tipo_dte'] === $tipoDte && $c['estado'] === 'activo') {
+            $total += max(0, (int) $c['folios_restantes']);
+        }
+    }
+
+    return $total;
+}
+
+/** POST /api/v1/dte/lote del motor (facturacion masiva, M4). Mismo patron que
+ *  emitirEnMotor()/listarDocumentosEnMotor(): reusa clienteMotor(), NO lanza
+ *  en 4xx/5xx (http_errors=false, vive en clienteMotor()). */
+function emitirLoteEnMotor(string $keyServicio, array $documentos): array
+{
+    $resp = clienteMotor()->post('api/v1/dte/lote', [
+        'headers' => ['X-Api-Key' => $keyServicio, 'Content-Type' => 'application/json'],
+        'json'    => ['documentos' => $documentos],
+    ]);
+    $body = json_decode((string) $resp->getBody(), true);
+
+    return ['status' => $resp->getStatusCode(), 'body' => is_array($body) ? $body : []];
+}
+
+/** Cuantos documentos produce esta nota: 1 (solo factura) o 2 (NC + factura,
+ *  si reemplaza una boleta) -- para repartir la respuesta del motor en el
+ *  MISMO orden en que se armaron. */
+function cantidadDocumentosPorNota(array $nota): int
+{
+    return empty($nota['boleta_ref_folio']) ? 1 : 2;
+}
+
+/** Arma los documentos del sub-lote para POST /api/v1/dte/lote, en el mismo
+ *  orden de $notas (factura primero, NC despues si aplica). La NC anula la
+ *  boleta original: mismo detalle/montos que la factura de reemplazo. */
+function armarDocumentosSubLote(array $notas): array
+{
+    $documentos = [];
+    foreach ($notas as $nota) {
+        $detalle  = json_decode((string) $nota['detalle'], true);
+        $receptor = [
+            'rut'         => $nota['receptor_rut'],
+            'razonSocial' => $nota['receptor_razon_social'],
+            'giro'        => (string) ($nota['receptor_giro'] ?? ''),
+            'direccion'   => (string) ($nota['receptor_direccion'] ?? ''),
+            'comuna'      => (string) ($nota['receptor_comuna'] ?? ''),
+        ];
+        if (! empty($nota['receptor_email'])) {
+            $receptor['email'] = $nota['receptor_email'];
+        }
+
+        $documentos[] = [
+            'tipoDte'         => 33,
+            'receptor'        => $receptor,
+            'detalles'        => $detalle,
+            'montosSonBrutos' => false,
+        ];
+
+        if (! empty($nota['boleta_ref_folio'])) {
+            $documentos[] = [
+                'tipoDte'         => 61,
+                'receptor'        => $receptor,
+                'detalles'        => $detalle,
+                'montosSonBrutos' => false,
+                'referencias'     => [[
+                    'tipoDocumento' => (int) ($nota['boleta_ref_tipo'] ?? 39),
+                    'folio'         => (int) $nota['boleta_ref_folio'],
+                    'fecha'         => $nota['boleta_ref_fecha'],
+                    'codigo'        => 1,
+                    'razon'         => 'Anula boleta N ' . $nota['boleta_ref_folio'],
+                ]],
+            ];
+        }
+    }
+
+    return $documentos;
+}
+
+/**
+ * Factura UN sub-lote: reclama en_proceso (commit inmediato, atomico -- ver
+ * marcarNotasVentaEnProceso()), llama al motor, y segun respuesta marca
+ * facturada (con resultado_documentos) o error (con el mensaje del motor) --
+ * TODAS las notas reclamadas juntas, porque POST /api/v1/dte/lote es
+ * todo-o-nada (confirmado en PASO 0 de M4). Un sub-lote fallido NO aborta
+ * los siguientes: el llamador sigue el loop.
+ *
+ * Solo se llama al motor por las notas EFECTIVAMENTE reclamadas: si otro
+ * proceso ya se quedo con alguna (carrera con recuperarNotasVentaEnProcesoViejas()
+ * + un reproceso concurrente), esta llamada la descarta ANTES de armar el
+ * payload -- nunca hay 2 llamadas al motor por la misma nota.
+ */
+function facturarSubLote(PDO $pdo, string $keyServicio, array $notas): void
+{
+    $ids           = array_map(static fn (array $n): int => (int) $n['id'], $notas);
+    $idsReclamados = marcarNotasVentaEnProceso($pdo, $ids);
+    if ($idsReclamados === []) {
+        return; // ninguna nota de este sub-lote seguia pendiente al reclamarla: ya las tomo otro proceso
+    }
+    if (count($idsReclamados) !== count($ids)) {
+        error_log(sprintf(
+            'facturacion masiva: sub-lote reclamo %d de %d notas pedidas (ids pedidos: %s, reclamados: %s) -- el resto ya no estaba pendiente',
+            count($idsReclamados),
+            count($ids),
+            implode(',', $ids),
+            implode(',', $idsReclamados)
+        ));
+    }
+    $notas = array_values(array_filter(
+        $notas,
+        static fn (array $n): bool => in_array((int) $n['id'], $idsReclamados, true)
+    ));
+
+    try {
+        $res = emitirLoteEnMotor($keyServicio, armarDocumentosSubLote($notas));
+    } catch (Throwable $e) {
+        error_log('facturacion masiva: fallo de conexion con el motor - ' . $e->getMessage());
+        marcarNotasVentaError($pdo, $idsReclamados, 'No se pudo contactar el motor de emision.');
+
+        return;
+    }
+
+    if ($res['status'] !== 201) {
+        error_log('facturacion masiva: sub-lote fallo (' . $res['status'] . ') - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
+        marcarNotasVentaError($pdo, $idsReclamados, (string) ($res['body']['error'] ?? 'El motor rechazo el sub-lote.'));
+
+        return;
+    }
+
+    $documentosResultado = is_array($res['body']['documentos'] ?? null) ? $res['body']['documentos'] : [];
+    $trackId             = $res['body']['trackId'] ?? null;
+    $cursor              = 0;
+    foreach ($notas as $nota) {
+        $n        = cantidadDocumentosPorNota($nota);
+        $docsNota = array_slice($documentosResultado, $cursor, $n);
+        foreach ($docsNota as &$dn) {
+            $dn['trackId'] = $trackId;
+        }
+        unset($dn);
+        marcarNotaVentaFacturada($pdo, (int) $nota['id'], $docsNota);
+        $cursor += $n;
+    }
+}
+
+function handleFacturacionMasivaGet(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
+
+    // Recupera notas 'en_proceso' abandonadas (pestana cerrada a mitad de un
+    // sub-lote) ANTES de listar pendientes: asi el usuario las vuelve a ver
+    // disponibles para seleccionar sin tener que hacer nada especial.
+    recuperarNotasVentaEnProcesoViejas($pdo, $cuentaId);
+
+    $rutFiltro = trim((string) ($_GET['rut'] ?? ''));
+
+    $idsResultado = trim((string) ($_GET['ids'] ?? ''));
+    $resultado    = [];
+    if ($idsResultado !== '') {
+        $ids       = array_values(array_filter(array_map('intval', explode(',', $idsResultado)), static fn ($v): bool => $v > 0));
+        $resultado = obtenerNotasVentaPorIdsCualquierEstado($pdo, $cuentaId, $ids);
+    }
+
+    vista('facturacion-masiva-form', [
+        'pendientes'         => listarNotasVentaPendientes($pdo, $cuentaId, $rutFiltro !== '' ? $rutFiltro : null),
+        'rutFiltro'          => $rutFiltro,
+        'foliosFactura'      => sumarFoliosDisponibles($pdo, $rutEmisor, 33),
+        'foliosNc'           => sumarFoliosDisponibles($pdo, $rutEmisor, 61),
+        'resultado'          => $resultado,
+        'flash'              => flashTomar(),
+        'subLoteTamano'      => FACTURACION_MASIVA_SUBLOTE,
+        'navActivo'          => 'ventas.facturacion-masiva',
+    ]);
+}
+
+/**
+ * Responde JSON y termina. Este endpoint SOLO se llama via fetch() desde
+ * facturacion-masiva-form.php (nunca un form POST clasico): un redirect PRG
+ * clasico se seguiria en silencio dentro del propio fetch (comportamiento
+ * default de la Fetch API), y el flash de error quedaria consumido por esa
+ * navegacion invisible ANTES de que el usuario llegue a ver la pagina real
+ * -- por eso este handler responde JSON directo en vez de flash+redirect.
+ */
+function responderJsonFacturacionMasiva(int $http, array $body): never
+{
+    http_response_code($http);
+    header('Content-Type: application/json');
+    echo json_encode($body, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
+ * Procesa UN sub-lote por request (PASO 3 de M4: el servidor del panel
+ * es php -S, de un solo hilo -- confirmado empiricamente que un POST largo
+ * bloquea cualquier otra request concurrente, incluido un polling de
+ * progreso separado. En vez de tocar la infraestructura, se trocea la
+ * orquestacion: el JS del navegador llama a este endpoint UNA vez por
+ * sub-lote, nunca dos a la vez, y cada respuesta ES el progreso -- no hace
+ * falta un endpoint de polling aparte ni set_time_limit() extendido, porque
+ * ninguna request individual corre mas que lo que tarda un sub-lote de 20).
+ *
+ * Recibe el conjunto COMPLETO de ids seleccionados por el usuario en
+ * notas[] (no solo el sub-lote): este handler decide solo cuales de esas
+ * siguen 'pendiente' y toma hasta FACTURACION_MASIVA_SUBLOTE para procesar
+ * ahora. Responde con el resultado de ESTA pasada mas el conteo acumulado
+ * de TODO el conjunto, para que el JS sepa si terminar o pedir la siguiente.
+ */
+function handleFacturacionMasivaConfirmarSubLotePost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
+
+    $ids = is_array($_POST['notas'] ?? null) ? $_POST['notas'] : [];
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn ($v): bool => $v > 0)));
+    if ($ids === []) {
+        responderJsonFacturacionMasiva(422, ['status' => 'error', 'mensaje' => 'No seleccionaste ninguna nota.']);
+    }
+
+    // Recupera 'en_proceso' abandonadas de la cuenta ANTES de decidir que
+    // sigue pendiente: si este conjunto incluye notas trabadas de un intento
+    // anterior (pestana cerrada), vuelven a estar disponibles para procesar
+    // aqui mismo, sin perderlas ni duplicarlas.
+    recuperarNotasVentaEnProcesoViejas($pdo, $cuentaId);
+
+    $pendientesDelConjunto = obtenerNotasVentaPendientesPorIds($pdo, $cuentaId, $ids);
+    if ($pendientesDelConjunto === []) {
+        // Nada pendiente: ya se proceso todo (o el conjunto no tenia notas
+        // de esta cuenta). El conteo acumulado le confirma al JS que termino.
+        responderJsonFacturacionMasiva(200, [
+            'status'    => 'ok',
+            'conteo'    => contarNotasVentaPorEstado($pdo, $cuentaId, $ids),
+            'terminado' => true,
+        ]);
+    }
+
+    // Resumen de folios ANTES DE TOCAR NADA, sobre TODO lo que sigue
+    // pendiente del conjunto (no solo este sub-lote): si no alcanza para
+    // terminar, se aborta aqui sin marcar ninguna nota en_proceso ni llamar
+    // al motor (mismo criterio fail-fast que la emision unitaria de M3). Se
+    // revalida en CADA pasada (no solo la primera) porque la disponibilidad
+    // de folios puede cambiar entre sub-lotes.
+    $necesitaFactura   = count($pendientesDelConjunto);
+    $necesitaNc        = count(array_filter($pendientesDelConjunto, static fn (array $n): bool => ! empty($n['boleta_ref_folio'])));
+    $disponibleFactura = sumarFoliosDisponibles($pdo, $rutEmisor, 33);
+    $disponibleNc      = sumarFoliosDisponibles($pdo, $rutEmisor, 61);
+    if ($necesitaFactura > $disponibleFactura || $necesitaNc > $disponibleNc) {
+        responderJsonFacturacionMasiva(409, ['status' => 'error', 'mensaje' => sprintf(
+            'Folios insuficientes: faltan %d factura(s) (disponibles %d) y %d nota(s) de credito (disponibles %d). No se toco ninguna nota.',
+            $necesitaFactura,
+            $disponibleFactura,
+            $necesitaNc,
+            $disponibleNc
+        )]);
+    }
+
+    $subLote = obtenerNotasVentaPendientesPorIds($pdo, $cuentaId, $ids, FACTURACION_MASIVA_SUBLOTE);
+
+    $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+    facturarSubLote($pdo, $keyServicio, $subLote);
+
+    $conteo = contarNotasVentaPorEstado($pdo, $cuentaId, $ids);
+    responderJsonFacturacionMasiva(200, [
+        'status'    => 'ok',
+        'subLote'   => ['procesadas' => count($subLote)],
+        'conteo'    => $conteo,
+        'terminado' => ($conteo['pendiente'] + $conteo['en_proceso']) === 0,
+    ]);
+}
+
 /** Endpoint JSON: resuelve el cliente por RUT para el autocompletado del form. */
 function handleClientePorRutGet(): void
 {
@@ -2205,6 +3202,37 @@ if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/xml$#',
 if ($metodo === 'POST' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/estado-sii$#', $ruta, $mDocEstado)) {
     Auth::requerirSesion();
     handleDocumentoEstadoSiiPost((int) $mDocEstado[1], (int) $mDocEstado[2]);
+}
+
+// --- Ventas > Carga masiva de notas de venta (M4) ---
+if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva') {
+    Auth::requerirSesion();
+    handleCargaMasivaGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/ventas/carga-masiva') {
+    Auth::requerirSesion();
+    handleCargaMasivaPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/plantilla') {
+    Auth::requerirSesion();
+    handlePlantillaExcelGet();
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/carga-masiva/(\d+)$#', $ruta, $mLote)) {
+    Auth::requerirSesion();
+    handleCargaMasivaDetalleGet((int) $mLote[1]);
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/facturacion-masiva') {
+    Auth::requerirSesion();
+    handleFacturacionMasivaGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/ventas/facturacion-masiva/confirmar-sublote') {
+    Auth::requerirSesion();
+    handleFacturacionMasivaConfirmarSubLotePost();
 }
 
 if ($metodo === 'GET' && $ruta === '/empresa') {

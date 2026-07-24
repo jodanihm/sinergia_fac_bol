@@ -2,12 +2,16 @@ FROM php:8.2-cli
 RUN docker-php-ext-install pdo_mysql
 # Extension zip (clase ZipArchive): la imagen base NO la trae. Necesaria para
 # empaquetar las muestras impresas (Set Basico + Simulacion) en un solo ZIP
-# descargable desde el panel (ver src/Pdf/MuestrasImpresasZipBuilder.php).
+# descargable desde el panel (ver src/Pdf/MuestrasImpresasZipBuilder.php), y
+# tambien la usa PhpSpreadsheet internamente (un .xlsx es un ZIP).
 # docker-php-ext-install la compila desde el .so del sistema: requiere
 # libzip-dev en tiempo de build (Debian, imagen base de php:8.2-cli).
+# Extension gd: requerida por phpoffice/phpspreadsheet (M4, carga masiva de
+# notas de venta) para el lector/escritor de .xlsx; libpng-dev es su
+# dependencia de build.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libzip-dev \
-    && docker-php-ext-install zip \
+    && apt-get install -y --no-install-recommends libzip-dev libpng-dev \
+    && docker-php-ext-install zip gd \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 # Timezone Chile para TODO proceso PHP (HTTP y CLI). PHP no lee el env TZ para su
