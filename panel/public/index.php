@@ -71,6 +71,7 @@ require __DIR__ . '/../src/Db.php';
 require __DIR__ . '/../src/Auth.php';
 require __DIR__ . '/../src/Rut.php';
 require __DIR__ . '/../src/Csrf.php';
+require __DIR__ . '/../src/FechaExcel.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -1468,13 +1469,62 @@ const FACTURACION_MASIVA_SUBLOTE = 20;
  *  realidad sigue siendo procesada por una request lenta legitima. */
 const FACTURACION_MASIVA_RECUPERAR_MINUTOS = 5;
 
+/** Filas de la plantilla que vienen con formato de fecha preaplicado. Cubre de
+ *  sobra una carga mensual tipica (200-300 filas); mas abajo la celda queda sin
+ *  formato y el valor cae al parseo de texto, que igual la acepta. */
+const NOTA_VENTA_PLANTILLA_FILAS_FORMATEADAS = 1000;
+
 /** Genera el .xlsx vacio con los encabezados de la plantilla, directo a la
  *  salida HTTP (nunca toca disco propio, igual criterio que las descargas
- *  de PDF/XML de M5). */
+ *  de PDF/XML de M5).
+ *
+ *  Las dos columnas de fecha (H fecha_nota, N fecha_boleta_a_anular) salen con
+ *  formato de FECHA 'yyyy-mm-dd', no con formato de texto. La diferencia
+ *  importa:
+ *
+ *    - Con formato de fecha, lo que el usuario escribe lo convierte Excel a su
+ *      numero de serie interno y el lector lo recupera exacto, sin depender del
+ *      idioma del Excel. Ademas se ve al tiro si Excel NO lo reconocio como
+ *      fecha: queda alineado a la izquierda como texto.
+ *    - Con formato de TEXTO el valor queda literal, pero entonces toda fecha
+ *      depende del parseo de texto (que para DD/MM vs MM/DD es ambiguo), Excel
+ *      marca las celdas con el triangulo verde de "numero guardado como texto",
+ *      y pegar una fecha real dentro deja un numero de serie crudo (46228) que
+ *      el validador rechazaria.
+ *
+ *  Por eso: formato de fecha, que empuja el dato al camino exacto.
+ */
 function handlePlantillaExcelGet(): void
 {
     $libro = new Spreadsheet();
-    $libro->getActiveSheet()->fromArray(NOTA_VENTA_ENCABEZADOS, null, 'A1');
+    $hoja  = $libro->getActiveSheet();
+    $hoja->setTitle('Notas de venta');
+    $hoja->fromArray(NOTA_VENTA_ENCABEZADOS, null, 'A1');
+
+    $ultima = NOTA_VENTA_PLANTILLA_FILAS_FORMATEADAS + 1;
+    foreach (['H', 'N'] as $col) {
+        $hoja->getStyle("{$col}2:{$col}{$ultima}")
+            ->getNumberFormat()
+            ->setFormatCode('yyyy-mm-dd');
+    }
+
+    // Los formatos aceptados quedan a la vista al pasar por el encabezado. Va
+    // como comentario y no como celda extra ni hoja aparte: cualquier contenido
+    // adicional en la fila 1 rompe la comparacion exacta de encabezados que
+    // hace leerFilasExcelCargaMasiva().
+    $ayuda = 'Formatos aceptados: ' . FechaExcel::FORMATOS
+        . '. Lo mas seguro es escribir la fecha y dejar que Excel la reconozca'
+        . ' (queda alineada a la derecha).';
+    $hoja->getComment('H1')->getText()->createText($ayuda);
+    $hoja->getComment('N1')->getText()->createText($ayuda . ' Dejar vacia si la nota no anula una boleta.');
+
+    $hoja->getStyle('A1:N1')->getFont()->setBold(true);
+    $hoja->freezePane('A2');
+    foreach (range('A', 'N') as $col) {
+        $hoja->getColumnDimension($col)->setAutoSize(true);
+    }
+
+    $libro->setActiveSheetIndex(0);
 
     header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     header('Content-Disposition: attachment; filename="plantilla_notas_venta.xlsx"');
@@ -1520,7 +1570,42 @@ function leerFilasExcelCargaMasiva(string $rutaArchivo): array
         throw new RuntimeException('El archivo no es un .xlsx valido.', 0, $e);
     }
 
-    $filasCrudas = $libro->getActiveSheet()->toArray(null, true, true, false);
+    // Lectura celda por celda en vez de toArray(..., formatData: true).
+    //
+    // POR QUE: con formatData el valor de una celda de FECHA sale ya
+    // convertido a texto usando el formato de visualizacion del archivo, que
+    // depende del locale de quien lo creo. Una celda que en pantalla decia
+    // 2026-07-25 llegaba aca como "7/25/2025" y la validacion la rechazaba.
+    //
+    // Una celda de fecha de Excel guarda un NUMERO DE SERIE, no un texto: leer
+    // ese numero y convertirlo con Date::excelToDateTimeObject() da la fecha
+    // exacta, sin depender del formato ni del idioma. El resto de las celdas
+    // se sigue leyendo con getFormattedValue(), que es exactamente lo que
+    // hacia toArray() antes: este cambio NO altera como se leen los montos,
+    // las cantidades ni los textos.
+    $hoja = $libro->getActiveSheet();
+
+    // El rectangulo se acota a los datos REALES, igual que hacia toArray():
+    // getRowIterator() por si solo recorre todo el rango pedido aunque las
+    // filas no existan, y el iterador de celdas sin columna final se detiene
+    // en la ultima columna DE CADA FILA (dejaria filas de largo distinto y
+    // array_combine fallaria). El min() con $limite conserva la deteccion de
+    // "archivo demasiado grande": el IReadFilter ya no cargo mas alla de ahi.
+    $ultimaFila    = min($hoja->getHighestDataRow(), $limite);
+    $ultimaColumna = $hoja->getHighestDataColumn();
+
+    $filasCrudas = [];
+    foreach ($hoja->getRowIterator(1, $ultimaFila) as $fila) {
+        $celdas = $fila->getCellIterator('A', $ultimaColumna);
+        $celdas->setIterateOnlyExistingCells(false);
+        $valores = [];
+        foreach ($celdas as $celda) {
+            $valores[] = FechaExcel::esCeldaDeFecha($celda)
+                ? FechaExcel::aIso($celda)
+                : $celda->getFormattedValue();
+        }
+        $filasCrudas[] = $valores;
+    }
     if ($filasCrudas === []) {
         throw new RuntimeException('El archivo esta vacio.');
     }
@@ -1595,9 +1680,11 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
         $errores[] = 'rut_receptor invalido';
     }
 
-    $fechaNota = $fila['fecha_nota'];
-    if ($fechaNota === '' || ! fechaValida($fechaNota)) {
-        $errores[] = 'fecha_nota debe ser una fecha YYYY-MM-DD valida';
+    $fechaNota = FechaExcel::normalizar($fila['fecha_nota']);
+    if ($fechaNota === null) {
+        $errores[] = $fila['fecha_nota'] === ''
+            ? 'fecha_nota es obligatoria (' . FechaExcel::FORMATOS . ')'
+            : 'fecha_nota no es una fecha valida. Formatos aceptados: ' . FechaExcel::FORMATOS;
     }
 
     if ($fila['producto_servicio'] === '') {
@@ -1630,10 +1717,13 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
         } else {
             $folioBoleta = (int) $folioBoletaRaw;
         }
-        if ($fechaBoletaRaw === '' || ! fechaValida($fechaBoletaRaw)) {
-            $errores[] = 'fecha_boleta_a_anular es obligatoria y debe ser YYYY-MM-DD valida cuando viene folio_boleta_a_anular';
+        $fechaBoletaNormalizada = FechaExcel::normalizar($fechaBoletaRaw);
+        if ($fechaBoletaNormalizada === null) {
+            $errores[] = $fechaBoletaRaw === ''
+                ? 'fecha_boleta_a_anular es obligatoria cuando viene folio_boleta_a_anular (' . FechaExcel::FORMATOS . ')'
+                : 'fecha_boleta_a_anular no es una fecha valida. Formatos aceptados: ' . FechaExcel::FORMATOS;
         } else {
-            $fechaBoleta = $fechaBoletaRaw;
+            $fechaBoleta = $fechaBoletaNormalizada;
         }
     }
 
