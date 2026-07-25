@@ -320,6 +320,20 @@ function definicionMenu(): array
                 ['clave' => 'config.caf', 'label' => 'Folios y CAF', 'destino' => '/caf', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'config.certificacion', 'label' => 'Certificacion SII', 'destino' => '/certificacion-elegir', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'config.apikeys', 'label' => 'API keys', 'destino' => '/apikeys', 'construido' => true, 'requiereProduccion' => false],
+                [
+                    // requiereProduccion=false a proposito: estas son las rutas
+                    // que LLEVAN a completar produccion, no funciones que
+                    // dependan de estar ya en produccion. Marcarlas
+                    // 'bloqueado_cert' las volveria inalcanzables justo cuando
+                    // hay que usarlas.
+                    'label' => 'Produccion',
+                    'items' => [
+                        ['clave' => 'config.empresa-prod', 'label' => 'Empresa', 'destino' => '/empresa-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
+                        ['clave' => 'config.certificado-prod', 'label' => 'Certificado digital', 'destino' => '/certificado-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
+                        ['clave' => 'config.caf-prod', 'label' => 'Folios y CAF', 'destino' => '/caf-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
+                        ['clave' => 'config.apikeys-prod', 'label' => 'API keys', 'destino' => '/apikeys-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
+                    ],
+                ],
                 ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => true, 'requiereProduccion' => false],
             ],
         ],
@@ -3037,6 +3051,109 @@ function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
 }
 
 /**
+ * Estado de los 4 pasos de PRODUCCION de un tenant, en solo lectura.
+ *
+ * Es la version OBSERVABLE de exigirProduccionCompleto(): mismas condiciones,
+ * pero devolviendo el estado en vez de redirigir. El guard sigue siendo la
+ * unica autoridad para dejar pasar o no; esta funcion existe para PINTAR el
+ * avance (estacion 7 del dashboard) sin duplicar el criterio.
+ *
+ * Las consultas de certificado y CAF son las mismas que ya usaba
+ * handleAdminTenantsGet() para su resumen de superadmin; se centralizan aqui
+ * para que tenant y superadmin no puedan divergir.
+ *
+ * La api_key se filtra por tipo='externa' y estado='activa'. Las de tipo
+ * 'servicio' (migracion 017) las genera el panel solo, cifradas e invisibles al
+ * usuario, cuando emite: contarlas haria que el paso apareciera "configurado"
+ * despues de la primera emision sin que el tenant hubiera generado nunca una
+ * credencial. handleAdminTenantsGet() aplica el mismo criterio en su propia
+ * consulta por cuenta.
+ *
+ * @return array{empresa:bool, certificado:bool, caf:bool, apiKey:bool}
+ */
+function estadoProduccion(PDO $pdo, int $cuentaId, string $rutEmisor): array
+{
+    // Mismas condiciones que exigirProduccionCompleto(): no basta la fila de
+    // produccion, tiene que traer la Resolucion real informada.
+    $stmtEmpresa = $pdo->prepare(
+        'SELECT 1 FROM dte_emisor '
+        . "WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' "
+        . 'AND resolucion_fecha IS NOT NULL AND resolucion_numero > 0 LIMIT 1'
+    );
+    $stmtEmpresa->execute([':cuenta_id' => $cuentaId]);
+
+    $stmtCert = $pdo->prepare(
+        "SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmtCert->execute([':rut' => $rutEmisor]);
+
+    $stmtCaf = $pdo->prepare(
+        "SELECT 1 FROM dte_caf WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmtCaf->execute([':rut' => $rutEmisor]);
+
+    $stmtApiKey = $pdo->prepare(
+        'SELECT 1 FROM api_key '
+        . "WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' "
+        . "AND tipo = 'externa' AND estado = 'activa' LIMIT 1"
+    );
+    $stmtApiKey->execute([':cuenta_id' => $cuentaId]);
+
+    return [
+        'empresa'     => $stmtEmpresa->fetchColumn() !== false,
+        'certificado' => $stmtCert->fetchColumn() !== false,
+        'caf'         => $stmtCaf->fetchColumn() !== false,
+        'apiKey'      => $stmtApiKey->fetchColumn() !== false,
+    ];
+}
+
+/**
+ * Los 4 sub-pasos de la estacion 7, listos para pintar.
+ *
+ * 'obligatorio' distingue los 3 que exigirProduccionCompleto() realmente
+ * verifica (sin ellos no se puede emitir) del 4to, que es para consumidores
+ * externos del motor y NO bloquea la emision desde el panel: para eso el panel
+ * usa su key de servicio, que se genera sola.
+ *
+ * El texto dice "Configurado" a proposito, nunca "autorizado": la app sabe que
+ * el dato esta cargado, no sabe si el SII autorizo al contribuyente. Mismo
+ * criterio que la estacion 6.
+ *
+ * @param array{empresa:bool, certificado:bool, caf:bool, apiKey:bool} $estado
+ *
+ * @return list<array<string,mixed>>
+ */
+function subpasosProduccion(array $estado): array
+{
+    return [
+        [
+            'titulo'      => 'Datos de empresa (Resolucion SII)',
+            'destino'     => '/empresa-produccion',
+            'obligatorio' => true,
+            'completado'  => $estado['empresa'],
+        ],
+        [
+            'titulo'      => 'Certificado digital de produccion',
+            'destino'     => '/certificado-produccion',
+            'obligatorio' => true,
+            'completado'  => $estado['certificado'],
+        ],
+        [
+            'titulo'      => 'CAF de produccion (folios reales)',
+            'destino'     => '/caf-produccion',
+            'obligatorio' => true,
+            'completado'  => $estado['caf'],
+        ],
+        [
+            'titulo'      => 'API key de produccion (opcional)',
+            'destino'     => '/apikeys-produccion',
+            'obligatorio' => false,
+            'completado'  => $estado['apiKey'],
+        ],
+    ];
+}
+
+/**
  * Duplicado de exigirOnboardingCompleto() para el ambiente de PRODUCCION --
  * funcion NUEVA e independiente (exigirOnboardingCompleto() no se toca).
  * Exige, para ambiente='produccion': fila dte_emisor con resolucion_fecha/
@@ -5288,15 +5405,15 @@ function handleAdminTenantsGet(): void
             $etapasManuales   = calcularEtapasManuales(obtenerEtapasManualesRaw($pdo, $cuentaId), $todosAprobados);
             $certConfirmadaAt = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
 
-            $stmtCertProd = $pdo->prepare(
-                "SELECT 1 FROM dte_certificado WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
-            );
-            $stmtCertProd->execute([':rut' => $rutEmisor]);
-
-            $stmtCafProd = $pdo->prepare(
-                "SELECT 1 FROM dte_caf WHERE rut_emisor = :rut AND ambiente = 'produccion' LIMIT 1"
-            );
-            $stmtCafProd->execute([':rut' => $rutEmisor]);
+            // Mismas consultas de produccion que pinta la estacion 7 del
+            // dashboard del tenant, centralizadas en estadoProduccion() para
+            // que superadmin y tenant no puedan divergir.
+            //
+            // De las 4 aqui solo se usan certificado y CAF: son las que van por
+            // rut_emisor y por eso viven dentro de este loop. La api_key va por
+            // CUENTA y se consulta mas abajo, fuera del loop, porque una cuenta
+            // sin emisores igual tiene que reportarla.
+            $prod = estadoProduccion($pdo, $cuentaId, $rutEmisor);
 
             $emisores[] = [
                 'rutEmisor'           => $rutEmisor,
@@ -5307,13 +5424,19 @@ function handleAdminTenantsGet(): void
                 'etapasManuales'      => $etapasManuales,
                 'certConfirmadaAt'    => $certConfirmadaAt,
                 'barra'               => resumenEtapasBarra($todosAprobados, $etapasManuales, $certConfirmadaAt),
-                'tieneCertProduccion' => $stmtCertProd->fetchColumn() !== false,
-                'tieneCafProduccion'  => $stmtCafProd->fetchColumn() !== false,
+                'tieneCertProduccion' => $prod['certificado'],
+                'tieneCafProduccion'  => $prod['caf'],
             ];
         }
 
+        // Mismo criterio que estadoProduccion(): solo keys EXTERNAS activas.
+        // Sin el filtro de tipo, la key de servicio que el panel genera solo al
+        // emitir (migracion 017, invisible al usuario) marcaria esta columna
+        // como si el tenant hubiera creado una credencial.
         $stmtApiKeyProd = $pdo->prepare(
-            "SELECT 1 FROM api_key WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' LIMIT 1"
+            'SELECT 1 FROM api_key '
+            . "WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' "
+            . "AND tipo = 'externa' AND estado = 'activa' LIMIT 1"
         );
         $stmtApiKeyProd->execute([':cuenta_id' => $cuentaId]);
 
@@ -7620,6 +7743,28 @@ function handlePanelGet(): void
         $certConfirmada = obtenerCertificacionConfirmadaAt($pdo, $cuentaId) !== null;
     }
 
+    // Estacion 7 (en produccion): mientras la estacion 6 no este confirmada se
+    // comporta igual que antes ("Proximamente"), porque los 4 pasos de
+    // produccion no tienen sentido antes de que el SII autorice al
+    // contribuyente. Ya confirmada, deja de ser un placeholder y muestra el
+    // avance real de esos 4 pasos.
+    //
+    // El estado agregado mira SOLO los 3 obligatorios (los que
+    // exigirProduccionCompleto() verifica). La api_key externa no bloquea
+    // emitir, asi que no puede impedir que la estacion se vea completa.
+    $estacion7 = ['titulo' => 'En produccion', 'estado' => 'inactiva'];
+    if ($tieneEmisor && $certConfirmada) {
+        $estadoProd         = estadoProduccion($pdo, $cuentaId, (string) $rutEmisor);
+        $obligatoriosListos = $estadoProd['empresa'] && $estadoProd['certificado'] && $estadoProd['caf'];
+
+        $estacion7 = [
+            'titulo'             => 'En produccion',
+            'estado'             => $obligatoriosListos ? 'completado' : 'pendiente',
+            'subpasos'           => subpasosProduccion($estadoProd),
+            'obligatoriosListos' => $obligatoriosListos,
+        ];
+    }
+
     $estaciones = [
         ['titulo' => 'Registrado',                        'estado' => 'completado'],
         ['titulo' => 'Datos de empresa cargados',         'estado' => $tieneEmisor ? 'completado' : 'pendiente', 'enlace' => '/empresa'],
@@ -7627,7 +7772,7 @@ function handlePanelGet(): void
         ['titulo' => 'CAF de certificacion',              'estado' => $tieneCaf ? 'completado' : ($tieneCertificado ? 'pendiente' : 'inactiva'), 'enlace' => '/caf'],
         ['titulo' => 'En certificacion (sets de prueba)', 'estado' => $estacion5Completa ? 'completado' : ($tieneCaf ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-elegir'],
         ['titulo' => 'Certificacion aprobada',            'estado' => $certConfirmada ? 'completado' : ($estacion5Completa ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-aprobada'],
-        ['titulo' => 'En produccion',                     'estado' => 'inactiva'],
+        $estacion7,
     ];
 
     // "Credenciales de API" no es una estacion numerada del ciclo de 7: es una
