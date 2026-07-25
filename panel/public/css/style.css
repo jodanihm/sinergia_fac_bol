@@ -271,44 +271,72 @@ body.con-sidebar > main {
     box-sizing: border-box;
     background: #f7f7f8;
     border-right: 1px solid #ddd;
-    padding: 1rem 0.75rem 1.5rem;
+    padding: 0.85rem 0.6rem 1.1rem;
     display: flex;
     flex-direction: column;
 }
-.sidebar__marca { font-weight: 700; font-size: 1.05rem; padding: 0.25rem 0.5rem 1rem; }
-.sidebar__grupo { margin-bottom: 0.85rem; }
-/* #6e6e6e y no #888: sobre #f7f7f8 da 4.76:1 (antes 3.31:1, no cumplia AA). */
+.sidebar__marca { font-weight: 700; font-size: 0.98rem; padding: 0.2rem 0.5rem 0.75rem; }
+.sidebar__grupo { margin-bottom: 0.55rem; }
+
+/* JERARQUIA DEL MENU: seccion > subgrupo > item > subitem.
+   Antes el subtitulo de subgrupo (0.72rem) era MAS GRANDE que el titulo de
+   seccion (0.68rem) y no llevaba uppercase, asi que "Produccion" competia con
+   "Configuracion" en vez de subordinarse. Ahora la jerarquia se lee por cuatro
+   ejes a la vez -- tamano, peso, color y sangria -- y no solo por el tamano,
+   que a estas escalas se percibe poco.
+   Contrastes sobre #f7f7f8: #5c5c5c 6.24:1, #6e6e6e 4.76:1. Ambos cumplen AA. */
 .sidebar__grupo-titulo {
-    font-size: 0.68rem;
+    font-size: 0.66rem;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    color: #5c5c5c;
+    padding: 0 0.5rem;
+    margin: 0.45rem 0 0.2rem;
+}
+/* Agrupacion ligera: una linea vertical y sangria, sin card ni fondo. El mismo
+   tratamiento vale para Ventas > Emision y para Configuracion > Produccion: es
+   el mismo componente y no se disena uno distinto del otro. */
+.sidebar__subgrupo {
+    margin: 0.3rem 0 0.35rem;
+    padding-left: 0.5rem;
+    border-left: 1px solid #e2e2e6;
+}
+.sidebar__subtitulo {
+    font-size: 0.64rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
     color: #6e6e6e;
     padding: 0 0.5rem;
-    margin: 0.5rem 0 0.3rem;
+    margin: 0.15rem 0;
 }
-.sidebar__subgrupo { margin: 0.15rem 0; }
-.sidebar__subtitulo {
-    font-size: 0.72rem;
-    color: #666;
-    padding: 0 0.5rem;
-    margin: 0.35rem 0 0.15rem;
-}
-.sidebar__pie { margin-top: auto; padding-top: 1rem; border-top: 1px solid #e2e2e6; }
+.sidebar__pie { margin-top: auto; padding-top: 0.75rem; border-top: 1px solid #e2e2e6; }
 
 .nav-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
-    padding: 0.35rem 0.5rem;
+    padding: 0.3rem 0.5rem;
     border-radius: 4px;
-    font-size: 0.9rem;
+    font-size: 0.82rem;
     text-decoration: none;
     color: #222;
 }
-.nav-item--sub { padding-left: 1.25rem; font-size: 0.85rem; }
+.nav-item--sub { padding-left: 0.85rem; font-size: 0.78rem; }
 a.nav-item:hover { background: #ececf0; }
-.nav-item--activo { background: #e8f0fe; color: #1a56db; font-weight: 600; }
+/* Indicador lateral con box-shadow inset y NO con border-left: un borde
+   desplazaria el texto 3px solo en el item activo, descuadrandolo respecto de
+   sus vecinos, y quedaria recortado si el contenedor tuviera overflow. El
+   inset-shadow no ocupa espacio de layout. El estado sigue comunicandose
+   ademas por fondo, color y peso: la barra no es la unica senal. */
+.nav-item--activo {
+    background: #e8f0fe;
+    color: #1a56db;
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 #1a56db;
+}
 /* #6e6e6e y no #aaa: sobre #f7f7f8 da 4.76:1 (antes 2.17:1, no cumplia AA). */
 .nav-item--proximo,
 .nav-item--bloqueado { color: #6e6e6e; cursor: default; }
@@ -512,8 +540,36 @@ a.nav-item:hover { background: #ececf0; }
    grillas caen a una sola columna. */
 @media (max-width: 720px) {
     body.con-sidebar { flex-direction: column; }
-    .sidebar { flex: none; width: 100%; border-right: none; border-bottom: 1px solid #ddd; }
+    /* El menu apilado medía 954px de alto: el contenido de la pagina empezaba
+       1.19 pantallas mas abajo, en CADA carga. Se le acota la altura y se le da
+       scroll propio, asi el contenido queda visible de inmediato y el menu
+       completo sigue alcanzable dentro de su caja.
+       dvh va DESPUES de vh: los navegadores que no lo soportan se quedan con la
+       primera declaracion. No se usa overscroll-behavior a proposito -- con el
+       valor por defecto, al agotar el scroll del menu la pagina sigue
+       desplazandose, que es lo que evita la sensacion de scroll atrapado. */
+    .sidebar {
+        flex: none;
+        width: 100%;
+        border-right: none;
+        border-bottom: 1px solid #ddd;
+        max-height: 50vh;
+        max-height: 50dvh;
+        overflow-y: auto;
+        scrollbar-width: thin;
+    }
     .sidebar__pie { margin-top: 1rem; }
+    /* Objetivo tactil: la densidad del escritorio (28px) es demasiado chica
+       para el dedo. En movil los enlaces vuelven a 40px de alto minimo y a un
+       cuerpo de 0.9rem, aunque el menu tenga que desplazarse. */
+    .sidebar .nav-item {
+        font-size: 0.9rem;
+        padding: 0.55rem 0.65rem;
+        min-height: 2.5rem;
+        box-sizing: border-box;
+    }
+    .sidebar .nav-item--sub { font-size: 0.86rem; padding-left: 1.1rem; }
+    .sidebar__grupo { margin-bottom: 0.35rem; }
     body.con-sidebar > main { padding: 1rem; }
     .dash-grid,
     .dash-grid--2 { grid-template-columns: minmax(0, 1fr); }
