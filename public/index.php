@@ -671,19 +671,23 @@ function emitirDte(array $tenant): never
     $ambiente = ambienteDesdeTenant($tenant);
     $pdo      = pdo();
 
-    // --- Idempotencia opcional por (ambiente, Idempotency-Key) ---
+    // --- Idempotencia opcional por (rut_emisor, ambiente, Idempotency-Key) ---
+    //
+    // El rut_emisor sale del tenant autenticado, NUNCA del payload: es parte de
+    // la PK de dte_idempotencia (migracion 001) y lo que impide que dos cuentas
+    // que usen la misma Idempotency-Key se pisen entre si.
     $clave = trim((string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''));
     $idem  = $clave !== '' ? new MySqlIdempotenciaRepository($pdo) : null;
-    if ($idem !== null && ! $idem->reclamar($ambiente, $clave)) {
-        // La clave ya existe en este ambiente.
-        $previo = $idem->obtener($ambiente, $clave);
+    if ($idem !== null && ! $idem->reclamar($tenant['rut_emisor'], $ambiente, $clave)) {
+        // La clave ya existe para este emisor en este ambiente.
+        $previo = $idem->obtener($tenant['rut_emisor'], $ambiente, $clave);
         if ($previo !== null && $previo['folio'] !== null) {
             // Camino REPETIDO: devolver el resultado guardado SIN tocar el SII ni consumir folio.
             header('Idempotent-Replay: true');
             responder($previo['httpStatus'] ?? 201, json_decode((string) $previo['respuestaJson'], true));
         }
         // Sin folio: emision en curso, o claim muerto (servidor caido a mitad).
-        if (! $idem->reactivarSiMuerto($ambiente, $clave, IDEMPOTENCIA_TTL_SEGUNDOS)) {
+        if (! $idem->reactivarSiMuerto($tenant['rut_emisor'], $ambiente, $clave, IDEMPOTENCIA_TTL_SEGUNDOS)) {
             responder(409, ['error' => 'solicitud en proceso']);
         }
         // Claim reactivado por TTL: continuamos a emitir.
@@ -721,6 +725,7 @@ function emitirDte(array $tenant): never
     // Guardar el resultado para reintentos con la misma clave (at-most-once).
     if ($idem !== null) {
         $idem->completar(
+            $tenant['rut_emisor'],
             $ambiente,
             $clave,
             $res->tipoDte->value,
