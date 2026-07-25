@@ -1,3 +1,20 @@
+/* ==========================================================================
+   Paleta del panel (consolidada; no inventar colores nuevos fuera de aqui).
+
+     verde  #2e7d32 sobre #f1f8f1  -> completado / OK        (4.75:1)
+     ambar  #b45309 sobre #fff8f0  -> pendiente / atencion   (4.77:1)
+     rojo   #b00020 sobre #fdecea  -> error / critico        (6.41:1)
+     azul   #1a56db sobre #e8f0fe  -> activo / seleccionado  (5.39:1)
+     gris   #6e6e6e sobre #f7f7f8  -> secundario / inactivo  (4.76:1)
+
+   OJO con el ambar: #ed6c02 se conserva para BORDES y RELLENOS, donde no hay
+   requisito de contraste de texto, pero como color de TEXTO da 2.96:1 y no
+   cumple WCAG AA. Para texto ambar usar siempre #b45309.
+
+   Todos los pares de arriba estan medidos y superan el 4.5:1 de WCAG 2.1 AA
+   para texto normal.
+   ========================================================================== */
+
 body {
     font-family: system-ui, sans-serif;
     max-width: 640px;
@@ -11,7 +28,45 @@ input { display: block; width: 100%; padding: 0.4rem; box-sizing: border-box; }
 button { margin-top: 1rem; padding: 0.5rem 1rem; }
 .errores { color: #b00020; }
 .error { color: #b00020; font-size: 0.9rem; margin: 0.2rem 0 0; }
-.estaciones { display: flex; flex-direction: column; gap: 0.5rem; }
+
+/* Foco visible en todo elemento interactivo. Antes no habia ningun estilo de
+   foco: navegando con teclado no se veia donde estabas (WCAG 2.4.7). */
+:focus-visible {
+    outline: 3px solid #1a56db;
+    outline-offset: 2px;
+    border-radius: 3px;
+}
+
+/* Salto al contenido: invisible hasta recibir foco (WCAG 2.4.1). */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    background: #1a56db;
+    color: #fff;
+    padding: 0.6rem 1rem;
+    text-decoration: none;
+    border-radius: 0 0 4px 0;
+}
+.skip-link:focus {
+    left: 0;
+}
+
+/* Texto solo para lectores de pantalla. */
+.visualmente-oculto {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.estaciones { display: flex; flex-direction: column; gap: 0.5rem; list-style: none; padding: 0; margin: 1rem 0; }
 .estacion {
     display: flex;
     align-items: center;
@@ -22,8 +77,46 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
 }
 .estacion--completado { border-color: #2e7d32; background: #f1f8f1; }
 .estacion--pendiente { border-color: #ed6c02; background: #fff8f0; }
-.estacion--inactiva { border-color: #ccc; background: #fafafa; color: #888; }
+/* #6e6e6e y no #888: sobre #fafafa da 4.89:1 (antes 3.40:1, no cumplia AA). */
+.estacion--inactiva { border-color: #ccc; background: #fafafa; color: #6e6e6e; }
 .estacion__numero { font-weight: 700; width: 1.5rem; }
+.estacion__titulo { flex: 1 1 auto; }
+.estaciones__subpasos { list-style: none; }
+
+/* --------------------------------------------------------------------------
+   Sub-pasos de la estacion 7 (indicador de produccion). Antes eran estilos
+   inline dentro de panel.php; se promovieron a clases al crecer el dashboard.
+   -------------------------------------------------------------------------- */
+.subpasos {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin: 0.35rem 0 0 2.25rem;
+    padding: 0;
+    list-style: none;
+}
+.subpaso {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid #ccc;
+    border-left-width: 4px;
+    border-radius: 5px;
+    background: #fafafa;
+}
+.subpaso__titulo { flex: 1 1 12rem; }
+.subpaso__estado { font-weight: 600; white-space: nowrap; }
+.subpaso__icono { font-size: 0.9em; }
+.subpaso__aclaracion { color: #6e6e6e; font-size: 0.8rem; }
+.subpaso--ok { border-color: #2e7d32; background: #f1f8f1; }
+.subpaso--ok .subpaso__estado { color: #2e7d32; }
+.subpaso--falta { border-color: #ed6c02; background: #fff8f0; }
+.subpaso--falta .subpaso__estado { color: #b45309; }
+.subpaso--opcional { border-color: #ccc; background: #fafafa; }
+.subpaso--opcional .subpaso__estado { color: #6e6e6e; }
+.subpasos__nota { margin: 0.35rem 0 0 2.25rem; color: #6e6e6e; font-size: 0.85rem; }
 
 /* Barra de progreso de 6 etapas (certificacion.php). */
 .progreso-etapas { display: flex; gap: 0.35rem; margin: 1rem 0 1.5rem; }
@@ -42,7 +135,8 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
 .etapa__numero { display: block; font-size: 0.95rem; }
 .etapa--completada { background: #f1f8f1; border-color: #2e7d32; color: #2e7d32; }
 .etapa--activa { background: #e8f0fe; border-color: #1a56db; color: #1a56db; }
-.etapa--no-gestionada { background: #fafafa; border-color: #ddd; color: #999; cursor: help; }
+/* #6e6e6e y no #999: sobre #fafafa da 4.89:1 (antes 2.73:1, no cumplia AA). */
+.etapa--no-gestionada { background: #fafafa; border-color: #ddd; color: #6e6e6e; cursor: help; }
 /* Rechazada (boleta): el SII rechazo -SRH- la revision, no es lo mismo que
    "no gestionada" (esa es simplemente "aun no le toca"). Solo boleta la usa,
    factura no tiene este estado -- ver resumenEtapasBoletaBarra(). */
@@ -103,6 +197,55 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
 .seccion-manual h2 { margin-top: 0; }
 
 /* ==========================================================================
+   Tablas. Hasta ahora los listados (clientes, productos, documentos) usaban
+   los estilos por defecto del navegador: sin padding, sin separacion, sin
+   alineacion numerica. Esta es la primera hoja de estilo real para <table>.
+   ========================================================================== */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.75rem 0;
+    font-size: 0.92rem;
+}
+caption {
+    caption-side: top;
+    text-align: left;
+    color: #6e6e6e;
+    font-size: 0.85rem;
+    padding-bottom: 0.4rem;
+}
+th, td {
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid #e2e2e6;
+    text-align: left;
+    vertical-align: top;
+}
+thead th {
+    border-bottom: 2px solid #ccc;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #444;
+    white-space: nowrap;
+}
+tbody tr:hover { background: #fafafa; }
+/* Numeros y montos: alineados a la derecha y con cifras de ancho fijo, para
+   que las columnas se puedan comparar de un vistazo. */
+.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.fila-resta td, .fila-resta th { color: #b00020; }
+
+/* Clases que las vistas ya usaban pero que nunca existieron en el CSS. */
+.acciones { white-space: nowrap; }
+.acciones a { margin-right: 0.5rem; }
+.paginacion { display: flex; gap: 1rem; align-items: center; margin: 1rem 0; }
+
+.nota { color: #6e6e6e; font-size: 0.85rem; margin: 0.5rem 0 0; }
+
+/* ==========================================================================
    Shell con menu lateral (partials/_nav.php). Solo aplica cuando hay sesion:
    el <body> lleva la clase "con-sidebar" (ver header.php). Sin sesion, el body
    conserva el layout centrado de arriba (login/registro), intacto.
@@ -117,7 +260,7 @@ body.con-sidebar {
 body.con-sidebar > main {
     flex: 1 1 auto;
     min-width: 0;
-    max-width: 960px;
+    max-width: 1100px;
     padding: 1.5rem 2rem;
     box-sizing: border-box;
 }
@@ -134,11 +277,12 @@ body.con-sidebar > main {
 }
 .sidebar__marca { font-weight: 700; font-size: 1.05rem; padding: 0.25rem 0.5rem 1rem; }
 .sidebar__grupo { margin-bottom: 0.85rem; }
+/* #6e6e6e y no #888: sobre #f7f7f8 da 4.76:1 (antes 3.31:1, no cumplia AA). */
 .sidebar__grupo-titulo {
     font-size: 0.68rem;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #888;
+    color: #6e6e6e;
     padding: 0 0.5rem;
     margin: 0.5rem 0 0.3rem;
 }
@@ -165,8 +309,9 @@ body.con-sidebar > main {
 .nav-item--sub { padding-left: 1.25rem; font-size: 0.85rem; }
 a.nav-item:hover { background: #ececf0; }
 .nav-item--activo { background: #e8f0fe; color: #1a56db; font-weight: 600; }
+/* #6e6e6e y no #aaa: sobre #f7f7f8 da 4.76:1 (antes 2.17:1, no cumplia AA). */
 .nav-item--proximo,
-.nav-item--bloqueado { color: #aaa; cursor: default; }
+.nav-item--bloqueado { color: #6e6e6e; cursor: default; }
 .nav-item__badge {
     font-size: 0.58rem;
     text-transform: uppercase;
@@ -175,12 +320,210 @@ a.nav-item:hover { background: #ececf0; }
     padding: 0.05rem 0.3rem;
     white-space: nowrap;
 }
-.nav-item--proximo .nav-item__badge { background: #eaeaea; color: #999; }
+/* #5c5c5c y no #999: sobre #eaeaea da 5.56:1 (antes 2.37:1, no cumplia AA). */
+.nav-item--proximo .nav-item__badge,
+.badge--proximo { background: #eaeaea; color: #5c5c5c; }
 .nav-item--bloqueado .nav-item__badge { background: #fff7e6; color: #7a4b00; border: 1px solid #ed6c02; }
 
-/* En pantallas angostas el sidebar pasa arriba, apilado (no fixed, sin JS). */
+/* ==========================================================================
+   Dashboard de gestion (panel-gestion.php).
+   ========================================================================== */
+.dash-header {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    border-bottom: 1px solid #e2e2e6;
+    padding-bottom: 0.75rem;
+}
+.dash-header h1 { margin: 0 0 0.2rem; }
+.dash-header__emisor { margin: 0; color: #444; }
+.dash-header__rut { color: #6e6e6e; font-size: 0.85rem; margin-left: 0.5rem; }
+.dash-subtitulo { color: #6e6e6e; font-size: 0.9rem; margin: 0.6rem 0 1.25rem; }
+
+.dash-periodo { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.dash-periodo__etiqueta {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6e6e6e;
+    margin-right: 0.15rem;
+}
+.dash-periodo__opcion {
+    padding: 0.3rem 0.7rem;
+    border: 1px solid #ccc;
+    border-radius: 999px;
+    text-decoration: none;
+    color: #222;
+    font-size: 0.85rem;
+}
+.dash-periodo__opcion:hover { background: #f1f1f3; }
+.dash-periodo__opcion--activa {
+    background: #e8f0fe;
+    border-color: #1a56db;
+    color: #1a56db;
+    font-weight: 600;
+}
+
+/* Grilla responsiva: 4 columnas -> 2 (<=1024px) -> 1 (<=720px). */
+.dash-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin: 0 0 1.5rem;
+    padding: 0;
+    list-style: none;
+}
+.dash-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.kpi {
+    border: 1px solid #ddd;
+    border-top: 3px solid #1a56db;
+    border-radius: 6px;
+    padding: 0.85rem 0.9rem;
+    background: #fff;
+}
+.kpi__etiqueta {
+    margin: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6e6e6e;
+}
+.kpi__valor {
+    margin: 0.3rem 0 0.2rem;
+    font-size: 1.55rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.15;
+}
+.kpi__delta { font-size: 0.82rem; font-weight: 600; }
+.kpi__delta--sube { color: #2e7d32; }
+.kpi__delta--baja { color: #b00020; }
+.kpi__delta--igual,
+.kpi__delta--sin_base { color: #6e6e6e; font-weight: 400; }
+.kpi__formula { margin: 0.35rem 0 0; font-size: 0.75rem; color: #6e6e6e; }
+.kpi--ambar { border-top-color: #ed6c02; }
+.kpi--rojo { border-top-color: #b00020; }
+
+/* Estado vacio: el tenant esta habilitado pero nunca emitio. */
+.estado-vacio {
+    border: 1px solid #1a56db;
+    background: #e8f0fe;
+    border-radius: 6px;
+    padding: 1.25rem 1.4rem;
+    margin: 0 0 1.5rem;
+}
+.estado-vacio h2 { margin-top: 0; }
+.estado-vacio__acciones { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0; }
+.boton-principal {
+    display: inline-block;
+    background: #1a56db;
+    color: #fff;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    text-decoration: none;
+    font-weight: 600;
+}
+.boton-principal:hover { background: #1546b0; }
+.progreso-colapsado { margin: 1.5rem 0; }
+.progreso-colapsado > summary { cursor: pointer; font-weight: 600; padding: 0.4rem 0; }
+
+/* Folios por tipo. El nivel se comunica por color + palabra + icono. */
+.folios { display: flex; flex-direction: column; gap: 0.75rem; padding: 0; margin: 0.75rem 0 1.5rem; list-style: none; }
+.folio { border: 1px solid #ddd; border-left-width: 4px; border-radius: 6px; padding: 0.7rem 0.85rem; }
+.folio__cabecera { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; }
+.folio__tipo { font-weight: 600; }
+.folio__nivel { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.folio__barra {
+    height: 0.55rem;
+    background: #ececf0;
+    border-radius: 999px;
+    overflow: hidden;
+    margin: 0.5rem 0 0.4rem;
+}
+.folio__relleno { display: block; height: 100%; background: #6e6e6e; }
+.folio__detalle { margin: 0; font-size: 0.85rem; color: #444; font-variant-numeric: tabular-nums; }
+.folio--ok { border-color: #2e7d32; }
+.folio--ok .folio__nivel { color: #2e7d32; }
+.folio--ok .folio__relleno { background: #2e7d32; }
+.folio--ambar { border-color: #ed6c02; background: #fff8f0; }
+.folio--ambar .folio__nivel { color: #b45309; }
+.folio--ambar .folio__relleno { background: #ed6c02; }
+.folio--rojo { border-color: #b00020; background: #fdecea; }
+.folio--rojo .folio__nivel { color: #b00020; }
+.folio--rojo .folio__relleno { background: #b00020; }
+
+/* Grafico de ventas por dia. */
+.grafico { margin: 0.75rem 0 0.5rem; }
+.grafico__svg { width: 100%; height: auto; max-height: 260px; display: block; }
+/* La linea base del grafico es un objeto grafico con significado (separa
+   ventas de notas de credito): WCAG 1.4.11 exige 3:1. #999 daba 2.85:1. */
+.grafico__eje { stroke: #6e6e6e; stroke-width: 1; }
+.grafico__venta { fill: #1a56db; }
+.grafico__nc { fill: #b00020; }
+.grafico__dia { fill: #6e6e6e; font-size: 9px; }
+.grafico__leyenda { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.82rem; color: #444; margin-top: 0.4rem; }
+.grafico__clave { display: flex; align-items: center; gap: 0.35rem; }
+.grafico__clave::before { content: ""; width: 0.7rem; height: 0.7rem; border-radius: 2px; display: inline-block; }
+.grafico__clave--venta::before { background: #1a56db; }
+.grafico__clave--nc::before { background: #b00020; }
+.grafico__datos { margin-top: 0.5rem; }
+.grafico__datos > summary { cursor: pointer; font-weight: 600; }
+
+.tarjeta--proximamente { background: #fafafa; border-style: dashed; }
+.tarjeta--proximamente h2 { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 1.05rem; }
+.dash-vacio-inline { color: #6e6e6e; font-style: italic; }
+
+.accesos { margin-top: 2rem; border-top: 1px solid #e2e2e6; padding-top: 1rem; }
+.accesos__lista { display: flex; flex-wrap: wrap; gap: 0.6rem; padding: 0; margin: 0.5rem 0 0; list-style: none; }
+.accesos__lista a {
+    display: inline-block;
+    padding: 0.45rem 0.9rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    text-decoration: none;
+    color: #1a56db;
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+.accesos__lista a:hover { background: #e8f0fe; border-color: #1a56db; }
+
+/* ==========================================================================
+   Responsivo
+   ========================================================================== */
+
+/* Tablet / pantalla mediana: la grilla de 4 KPIs pasa a 2 columnas. */
+@media (max-width: 1024px) {
+    .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    body.con-sidebar > main { padding: 1.25rem 1.5rem; }
+}
+
+/* Angosto: el sidebar pasa arriba, apilado (no fixed, sin JS), y todas las
+   grillas caen a una sola columna. */
 @media (max-width: 720px) {
     body.con-sidebar { flex-direction: column; }
     .sidebar { flex: none; width: 100%; border-right: none; border-bottom: 1px solid #ddd; }
     .sidebar__pie { margin-top: 1rem; }
+    body.con-sidebar > main { padding: 1rem; }
+    .dash-grid,
+    .dash-grid--2 { grid-template-columns: minmax(0, 1fr); }
+    .dash-header { flex-direction: column; }
+    .subpasos,
+    .subpasos__nota { margin-left: 0; }
+    .subpaso { align-items: flex-start; }
+}
+
+/* Respeta la preferencia del sistema de reducir animaciones (WCAG 2.3.3). */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
 }

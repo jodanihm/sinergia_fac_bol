@@ -70,7 +70,7 @@ $navRender = static function (array $nodos) use (&$navRender, $navPintarItem): v
 
 $navMenu = definicionMenu();
 ?>
-<nav class="sidebar">
+<nav class="sidebar" aria-label="Menu principal">
     <div class="sidebar__marca">Sinergia</div>
     <?php foreach ($navMenu as $seccion): ?>
         <?php if (isset($seccion['items'])): ?>
