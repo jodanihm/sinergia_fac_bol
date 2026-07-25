@@ -188,6 +188,32 @@ const NOMBRES_TIPO_DTE = [
     39 => 'Boleta',
 ];
 
+// ---------------------------------------------------------------------------
+//  Constantes del dashboard de gestion (sus funciones viven al final del
+//  archivo, junto a handlePanelGet()).
+//
+//  Van declaradas AQUI, y no junto a esas funciones, porque las declaraciones
+//  de funcion se elevan pero las de constante NO: se ejecutan cuando el flujo
+//  llega a ellas. El router if-chain despacha y termina mucho antes del final
+//  del archivo, asi que una constante declarada alla nunca llegaria a existir.
+// ---------------------------------------------------------------------------
+
+/** Tipo de DTE que RESTA al neto del periodo: nota de credito. */
+const DASH_TIPO_NOTA_CREDITO = 61;
+
+/** Bajo este porcentaje de folios disponibles el indicador pasa a rojo. */
+const DASH_FOLIOS_UMBRAL_ROJO = 10;
+
+/** Bajo este porcentaje (y sobre el rojo) el indicador pasa a ambar. */
+const DASH_FOLIOS_UMBRAL_AMBAR = 25;
+
+/** Nombres de mes sin tildes, para las etiquetas de periodo. */
+const DASH_MESES = [
+    1 => 'enero', 2 => 'febrero', 3 => 'marzo', 4 => 'abril',
+    5 => 'mayo', 6 => 'junio', 7 => 'julio', 8 => 'agosto',
+    9 => 'septiembre', 10 => 'octubre', 11 => 'noviembre', 12 => 'diciembre',
+];
+
 /** "Nombre (N)" usando NOMBRES_TIPO_DTE, o "Documento tipo N (N)" si el tipo no esta mapeado. */
 function nombreTipoDte(int $tipo): string
 {
@@ -7682,7 +7708,419 @@ function handleCertificacionAprobadaConfirmarPost(): void
 }
 
 // ===========================================================================
+//  DASHBOARD DE GESTION -- metricas de produccion (solo lectura).
+//
+//  Todo este bloque es ADITIVO: son consultas SELECT nuevas sobre tablas que
+//  ya existen. No toca el motor ni su contrato de API, no modifica ninguna
+//  fila y no cambia ningun handler de emision/certificacion.
+//
+//  AISLAMIENTO: cada consulta lleva SIEMPRE rut_emisor + ambiente='produccion'
+//  en el WHERE. dte_emitido/dte_folio/dte_caf NO tienen cuenta_id: se escopan
+//  por rut_emisor, que se resuelve desde la cuenta de la sesion (nunca del
+//  request). El indice idx_periodo (rut_emisor, ambiente, fecha_emision) cubre
+//  los filtros por periodo.
+//
+//  ZONA HORARIA: los limites del periodo se calculan SIEMPRE en PHP
+//  (America/Santiago), nunca con CURDATE()/NOW() de MySQL, que corre en UTC.
+//  Entre las 20:00 CL y medianoche el dia UTC ya avanzo, y en un cambio de mes
+//  eso mandaria las metricas al periodo equivocado.
+// ===========================================================================
+
+/**
+ * Limites del periodo elegido y del periodo inmediatamente anterior (el que se
+ * usa para la comparacion). $cual es 'actual' o 'anterior'.
+ *
+ * @return array{clave:string, desde:string, hasta:string, etiqueta:string, prevDesde:string, prevHasta:string, prevEtiqueta:string}
+ */
+function dashPeriodo(string $cual): array
+{
+    $clave = $cual === 'anterior' ? 'anterior' : 'actual';
+    $hoy   = new DateTimeImmutable('today');
+    $base  = $clave === 'anterior'
+        ? $hoy->modify('first day of last month')
+        : $hoy->modify('first day of this month');
+    $prev = $base->modify('first day of last month');
+
+    $etiquetar = static function (DateTimeImmutable $d): string {
+        return DASH_MESES[(int) $d->format('n')] . ' ' . $d->format('Y');
+    };
+
+    return [
+        'clave'        => $clave,
+        'desde'        => $base->format('Y-m-d'),
+        'hasta'        => $base->modify('last day of this month')->format('Y-m-d'),
+        'etiqueta'     => $etiquetar($base),
+        'prevDesde'    => $prev->format('Y-m-d'),
+        'prevHasta'    => $prev->modify('last day of this month')->format('Y-m-d'),
+        'prevEtiqueta' => $etiquetar($prev),
+    ];
+}
+
+/**
+ * Q1. Agregado por tipo de documento en un rango de fechas.
+ *
+ * @return array<int,array{documentos:int, neto:int, iva:int, total:int}> indexado por tipo_dte
+ */
+function dashMetricasPorTipo(PDO $pdo, string $rutEmisor, string $desde, string $hasta): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT tipo_dte, '
+        . '       COUNT(*)   AS documentos, '
+        . '       SUM(neto)  AS neto, '
+        . '       SUM(iva)   AS iva, '
+        . '       SUM(total) AS total '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+        . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        . 'GROUP BY tipo_dte ORDER BY tipo_dte'
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':desde' => $desde, ':hasta' => $hasta]);
+
+    $porTipo = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+        $porTipo[(int) $fila['tipo_dte']] = [
+            'documentos' => (int) $fila['documentos'],
+            'neto'       => (int) $fila['neto'],
+            'iva'        => (int) $fila['iva'],
+            'total'      => (int) $fila['total'],
+        ];
+    }
+
+    return $porTipo;
+}
+
+/**
+ * REGLA DE NEGOCIO DEL DASHBOARD.
+ *
+ * Vive aqui, en PHP, y NO dentro del SQL, a proposito: es una decision de
+ * negocio, no de consulta. Si manana cambia, se cambia en este unico lugar y
+ * queda a la vista de quien lea el codigo. La UI ademas imprime la formula
+ * debajo de la cifra, para que el numero no sea una caja negra.
+ *
+ *   Neto del periodo = (33 factura + 39 boleta + 56 nota de debito) - (61 nota de credito)
+ *   IVA debito       = mismo criterio, aplicado sobre la columna iva
+ *
+ * Las notas de credito REBAJAN lo facturado: sumarlas como una venta mas
+ * inflaria los ingresos. Por eso el dashboard nunca muestra un unico "total
+ * facturado" sin desglose: cada tipo se ve por separado y el neto va aparte,
+ * etiquetado.
+ *
+ * @param array<int,array{documentos:int, neto:int, iva:int, total:int}> $porTipo
+ *
+ * @return array{documentos:int, netoPeriodo:int, ivaDebito:int, porTipo:array<int,array{documentos:int, neto:int, iva:int, total:int}>, formula:string}
+ */
+function dashResumen(array $porTipo): array
+{
+    $vacio = ['documentos' => 0, 'neto' => 0, 'iva' => 0, 'total' => 0];
+
+    // Normaliza: los 4 tipos conocidos siempre presentes, en cero si no hubo.
+    $normalizado = [];
+    foreach (array_keys(NOMBRES_TIPO_DTE) as $tipo) {
+        $normalizado[$tipo] = $porTipo[$tipo] ?? $vacio;
+    }
+    // Un tipo inesperado (no mapeado) igual se conserva: no se pierde plata.
+    foreach ($porTipo as $tipo => $datos) {
+        if (! isset($normalizado[$tipo])) {
+            $normalizado[$tipo] = $datos;
+        }
+    }
+
+    $documentos = 0;
+    $neto       = 0;
+    $iva        = 0;
+    foreach ($normalizado as $tipo => $datos) {
+        $documentos += $datos['documentos'];
+        $signo = $tipo === DASH_TIPO_NOTA_CREDITO ? -1 : 1;
+        $neto += $signo * $datos['neto'];
+        $iva  += $signo * $datos['iva'];
+    }
+
+    return [
+        'documentos'  => $documentos,
+        'netoPeriodo' => $neto,
+        'ivaDebito'   => $iva,
+        'porTipo'     => $normalizado,
+        'formula'     => 'Factura + Boleta + Nota de debito - Nota de credito',
+    ];
+}
+
+/**
+ * Q3. Folios de produccion por tipo de documento.
+ *
+ * La condicion de "disponible" NO se inventa aqui: es exactamente la misma que
+ * aplica MySqlFolioRepository al asignar un folio real
+ * (estado 'agotado' O proximo_folio > folio_hasta -> ese CAF no sirve). El
+ * estado 'agotado' se marca de forma diferida, asi que filtrar solo por estado
+ * reportaria folios que en realidad ya no existen.
+ *
+ * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, nivel:string}>
+ */
+function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT f.tipo_dte, '
+        . "       SUM(CASE WHEN c.estado <> 'agotado' AND f.proximo_folio <= f.folio_hasta "
+        . '                THEN f.folio_hasta - f.proximo_folio + 1 ELSE 0 END) AS disponibles, '
+        . '       SUM(GREATEST(f.proximo_folio - c.folio_desde, 0))             AS usados, '
+        . '       SUM(f.folio_hasta - c.folio_desde + 1)                        AS total_rango, '
+        . '       COUNT(*)                                                      AS cafs '
+        . 'FROM dte_folio f '
+        . 'INNER JOIN dte_caf c ON c.id = f.caf_id '
+        . "WHERE f.rut_emisor = :rut AND f.ambiente = 'produccion' "
+        . 'GROUP BY f.tipo_dte ORDER BY f.tipo_dte'
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+
+    $salida = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+        $disponibles = (int) $fila['disponibles'];
+        $totalRango  = (int) $fila['total_rango'];
+        $pct         = $totalRango > 0 ? (int) round($disponibles * 100 / $totalRango) : 0;
+
+        if ($disponibles === 0 || $pct < DASH_FOLIOS_UMBRAL_ROJO) {
+            $nivel = 'rojo';
+        } elseif ($pct < DASH_FOLIOS_UMBRAL_AMBAR) {
+            $nivel = 'ambar';
+        } else {
+            $nivel = 'ok';
+        }
+
+        $salida[] = [
+            'tipo'          => (int) $fila['tipo_dte'],
+            'disponibles'   => $disponibles,
+            'usados'        => (int) $fila['usados'],
+            'totalRango'    => $totalRango,
+            'cafs'          => (int) $fila['cafs'],
+            'pctDisponible' => $pct,
+            'nivel'         => $nivel,
+        ];
+    }
+
+    return $salida;
+}
+
+/**
+ * Q4. Serie diaria del periodo: ventas y notas de credito por separado, mas el
+ * neto. Los dias sin documentos NO vienen del SQL; los rellena
+ * dashSerieCompleta() para que el eje temporal no mienta sobre la densidad.
+ *
+ * @return array<string,array{documentos:int, ventas:int, notasCredito:int, neto:int}> indexado por fecha
+ */
+function dashVentasPorDia(PDO $pdo, string $rutEmisor, string $desde, string $hasta): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT fecha_emision, '
+        . '       COUNT(*) AS documentos, '
+        . '       SUM(CASE WHEN tipo_dte = :nc1 THEN 0 ELSE total END)      AS ventas, '
+        . '       SUM(CASE WHEN tipo_dte = :nc2 THEN total ELSE 0 END)      AS notas_credito, '
+        . '       SUM(CASE WHEN tipo_dte = :nc3 THEN -total ELSE total END) AS neto '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+        . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        . 'GROUP BY fecha_emision ORDER BY fecha_emision'
+    );
+    $stmt->execute([
+        ':rut'   => $rutEmisor,
+        ':desde' => $desde,
+        ':hasta' => $hasta,
+        ':nc1'   => DASH_TIPO_NOTA_CREDITO,
+        ':nc2'   => DASH_TIPO_NOTA_CREDITO,
+        ':nc3'   => DASH_TIPO_NOTA_CREDITO,
+    ]);
+
+    $porFecha = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+        $porFecha[(string) $fila['fecha_emision']] = [
+            'documentos'   => (int) $fila['documentos'],
+            'ventas'       => (int) $fila['ventas'],
+            'notasCredito' => (int) $fila['notas_credito'],
+            'neto'         => (int) $fila['neto'],
+        ];
+    }
+
+    return $porFecha;
+}
+
+/**
+ * Rellena con ceros todos los dias del rango que no tuvieron documentos.
+ *
+ * @param array<string,array{documentos:int, ventas:int, notasCredito:int, neto:int}> $porFecha
+ *
+ * @return list<array{fecha:string, dia:string, documentos:int, ventas:int, notasCredito:int, neto:int}>
+ */
+function dashSerieCompleta(array $porFecha, string $desde, string $hasta): array
+{
+    $cursor = new DateTimeImmutable($desde);
+    $fin    = new DateTimeImmutable($hasta);
+    $serie  = [];
+
+    while ($cursor <= $fin) {
+        $fecha = $cursor->format('Y-m-d');
+        $datos = $porFecha[$fecha] ?? ['documentos' => 0, 'ventas' => 0, 'notasCredito' => 0, 'neto' => 0];
+        $serie[] = ['fecha' => $fecha, 'dia' => $cursor->format('j')] + $datos;
+        $cursor  = $cursor->modify('+1 day');
+    }
+
+    return $serie;
+}
+
+/**
+ * Q5. Distribucion CRUDA de dte_emitido.estado en el periodo.
+ *
+ * Sin ninguna interpretacion: el codigo se muestra tal cual lo guardo el motor
+ * ('enviado', 'EPR', 'DOK', 'desconocido', lo que devuelva el SII), igual que
+ * ya hace el listado de M5. Traducirlos a aceptado/rechazado/pendiente seria
+ * una regla de negocio que hoy no existe en el proyecto.
+ *
+ * @return list<array{estado:string, documentos:int}>
+ */
+function dashDistribucionEstado(PDO $pdo, string $rutEmisor, string $desde, string $hasta): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT estado, COUNT(*) AS documentos '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+        . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        . 'GROUP BY estado ORDER BY documentos DESC, estado ASC'
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':desde' => $desde, ':hasta' => $hasta]);
+
+    $salida = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+        $salida[] = [
+            'estado'     => (string) $fila['estado'],
+            'documentos' => (int) $fila['documentos'],
+        ];
+    }
+
+    return $salida;
+}
+
+/**
+ * Q6. Top 5 receptores por neto del periodo, agrupando por RUT NORMALIZADO.
+ *
+ * La expresion SQL replica exactamente a Rut::normalizar():
+ *   strtoupper(str_replace(['.', ' '], '', trim($rut)))
+ * Sin eso, el mismo cliente cargado una vez con puntos y otra sin puntos
+ * apareceria como dos filas distintas (dte_emitido.receptor_rut solo pasa por
+ * trim al emitir, ver armarDocumentoEmision()).
+ *
+ * La razon social se resuelve contra el maestro con buscarPorRuts(), escopado
+ * por cuenta_id: el nombre de un cliente de otra cuenta no puede filtrarse
+ * aunque el RUT coincidiera. Si el receptor no esta en el maestro se muestra
+ * solo el RUT, sin fallar.
+ *
+ * @return list<array{rut:string, razonSocial:?string, documentos:int, neto:int}>
+ */
+function dashTopClientes(PDO $pdo, int $cuentaId, string $rutEmisor, string $desde, string $hasta): array
+{
+    $stmt = $pdo->prepare(
+        "SELECT UPPER(REPLACE(REPLACE(TRIM(receptor_rut), '.', ''), ' ', '')) AS rut_normalizado, "
+        . '       COUNT(*) AS documentos, '
+        . '       SUM(CASE WHEN tipo_dte = :nc THEN -total ELSE total END) AS neto '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+        . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        . 'GROUP BY rut_normalizado ORDER BY neto DESC LIMIT 5'
+    );
+    $stmt->execute([
+        ':rut'   => $rutEmisor,
+        ':desde' => $desde,
+        ':hasta' => $hasta,
+        ':nc'    => DASH_TIPO_NOTA_CREDITO,
+    ]);
+    $filas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    if ($filas === []) {
+        return [];
+    }
+
+    $ruts  = array_map(static fn (array $f): string => (string) $f['rut_normalizado'], $filas);
+    $mapa  = clienteRepo()->buscarPorRuts($cuentaId, $ruts);
+
+    $salida = [];
+    foreach ($filas as $fila) {
+        $rut = (string) $fila['rut_normalizado'];
+        $salida[] = [
+            'rut'         => $rut,
+            'razonSocial' => isset($mapa[$rut]) ? (string) $mapa[$rut]['razon_social'] : null,
+            'documentos'  => (int) $fila['documentos'],
+            'neto'        => (int) $fila['neto'],
+        ];
+    }
+
+    return $salida;
+}
+
+/**
+ * Q7. Documentos de produccion en TODA la historia del emisor (sin periodo).
+ *
+ * Decide el estado vacio del dashboard. Sin filtro de fecha a proposito: hay
+ * que distinguir "nunca emitiste nada" (mensaje de bienvenida) de "no emitiste
+ * este mes pero tienes historial" (KPIs en cero con comparacion real).
+ */
+function dashTotalHistorico(PDO $pdo, string $rutEmisor): int
+{
+    $stmt = $pdo->prepare(
+        "SELECT COUNT(*) FROM dte_emitido WHERE rut_emisor = :rut AND ambiente = 'produccion'"
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+
+    return (int) $stmt->fetchColumn();
+}
+
+/**
+ * Variacion contra el periodo anterior.
+ *
+ * Si la base es cero NO se calcula porcentaje: no existe "+100%" respecto de
+ * nada. Se informa explicitamente que no hay base de comparacion, en vez de
+ * mostrar un numero inventado.
+ *
+ * @return array{tipo:string, texto:string}
+ */
+function dashDelta(int $actual, int $anterior): array
+{
+    if ($anterior === 0) {
+        return [
+            'tipo'  => 'sin_base',
+            'texto' => $actual === 0 ? 'sin datos del mes anterior' : 'sin base de comparacion',
+        ];
+    }
+
+    $pct = (int) round(($actual - $anterior) * 100 / abs($anterior));
+    if ($pct === 0) {
+        return ['tipo' => 'igual', 'texto' => 'igual que el mes anterior'];
+    }
+
+    return [
+        'tipo'  => $pct > 0 ? 'sube' : 'baja',
+        'texto' => ($pct > 0 ? '+' : '') . $pct . '% vs mes anterior',
+    ];
+}
+
+/** Razon social del emisor de produccion, para el header de contexto. */
+function dashRazonSocialProduccion(PDO $pdo, int $cuentaId): string
+{
+    $stmt = $pdo->prepare(
+        "SELECT razon_social FROM dte_emisor WHERE cuenta_id = :c AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmt->execute([':c' => $cuentaId]);
+
+    return (string) ($stmt->fetchColumn() ?: '');
+}
+
+// ===========================================================================
 //  Handler: GET /panel
+//
+//  Dos dashboards distintos detras de la misma ruta:
+//
+//    - Progreso (el de siempre, 7 estaciones): mientras el tenant NO tenga
+//      completos los 3 pasos obligatorios de produccion.
+//    - Gestion (metricas reales): cuando los tiene.
+//
+//  El switch usa EXACTAMENTE la misma condicion que exigirProduccionCompleto()
+//  (empresa + certificado + CAF de produccion), via estadoProduccion(). No se
+//  inventa un tercer criterio de "esta en produccion". La api_key externa no
+//  participa: no bloquea emitir, asi que tampoco puede decidir esto.
 // ===========================================================================
 function handlePanelGet(): void
 {
@@ -7752,17 +8190,24 @@ function handlePanelGet(): void
     // El estado agregado mira SOLO los 3 obligatorios (los que
     // exigirProduccionCompleto() verifica). La api_key externa no bloquea
     // emitir, asi que no puede impedir que la estacion se vea completa.
-    $estacion7 = ['titulo' => 'En produccion', 'estado' => 'inactiva'];
-    if ($tieneEmisor && $certConfirmada) {
-        $estadoProd         = estadoProduccion($pdo, $cuentaId, (string) $rutEmisor);
-        $obligatoriosListos = $estadoProd['empresa'] && $estadoProd['certificado'] && $estadoProd['caf'];
+    // El estado de produccion se calcula en cuanto hay emisor, porque decide el
+    // switch de dashboard. Los SUB-PASOS de la estacion 7, en cambio, solo se
+    // muestran con la certificacion ya confirmada: ese criterio no cambia.
+    $produccionLista = false;
+    $estacion7       = ['titulo' => 'En produccion', 'estado' => 'inactiva'];
 
-        $estacion7 = [
-            'titulo'             => 'En produccion',
-            'estado'             => $obligatoriosListos ? 'completado' : 'pendiente',
-            'subpasos'           => subpasosProduccion($estadoProd),
-            'obligatoriosListos' => $obligatoriosListos,
-        ];
+    if ($tieneEmisor) {
+        $estadoProd      = estadoProduccion($pdo, $cuentaId, (string) $rutEmisor);
+        $produccionLista = $estadoProd['empresa'] && $estadoProd['certificado'] && $estadoProd['caf'];
+
+        if ($certConfirmada) {
+            $estacion7 = [
+                'titulo'             => 'En produccion',
+                'estado'             => $produccionLista ? 'completado' : 'pendiente',
+                'subpasos'           => subpasosProduccion($estadoProd),
+                'obligatoriosListos' => $produccionLista,
+            ];
+        }
     }
 
     $estaciones = [
@@ -7774,6 +8219,63 @@ function handlePanelGet(): void
         ['titulo' => 'Certificacion aprobada',            'estado' => $certConfirmada ? 'completado' : ($estacion5Completa ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-aprobada'],
         $estacion7,
     ];
+
+    // --- Dashboard de GESTION: solo con los 3 pasos de produccion completos ---
+    if ($produccionLista) {
+        $periodo   = dashPeriodo((string) ($_GET['periodo'] ?? 'actual'));
+        $rut       = (string) $rutEmisor;
+        $historico = dashTotalHistorico($pdo, $rut);
+
+        // Nunca emitio nada: estado vacio explicito. El progreso de
+        // certificacion se conserva colapsado debajo hasta la primera emision,
+        // para que el tenant no pierda de vista lo que acaba de completar.
+        if ($historico === 0) {
+            vista('panel-gestion', [
+                'vacio'       => true,
+                'contexto'    => [
+                    'razonSocial' => dashRazonSocialProduccion($pdo, $cuentaId),
+                    'rut'         => $rut,
+                    'periodo'     => $periodo,
+                ],
+                'estaciones'  => $estaciones,
+                'resumen'     => null,
+                'deltas'      => null,
+                'folios'      => dashFoliosPorTipo($pdo, $rut),
+                'serie'       => [],
+                'estados'     => [],
+                'topClientes' => [],
+            ]);
+        }
+
+        $porTipo     = dashMetricasPorTipo($pdo, $rut, $periodo['desde'], $periodo['hasta']);
+        $porTipoPrev = dashMetricasPorTipo($pdo, $rut, $periodo['prevDesde'], $periodo['prevHasta']);
+        $resumen     = dashResumen($porTipo);
+        $resumenPrev = dashResumen($porTipoPrev);
+
+        vista('panel-gestion', [
+            'vacio'    => false,
+            'contexto' => [
+                'razonSocial' => dashRazonSocialProduccion($pdo, $cuentaId),
+                'rut'         => $rut,
+                'periodo'     => $periodo,
+            ],
+            'estaciones' => $estaciones,
+            'resumen'    => $resumen,
+            'deltas'     => [
+                'documentos' => dashDelta($resumen['documentos'], $resumenPrev['documentos']),
+                'neto'       => dashDelta($resumen['netoPeriodo'], $resumenPrev['netoPeriodo']),
+                'iva'        => dashDelta($resumen['ivaDebito'], $resumenPrev['ivaDebito']),
+            ],
+            'folios'      => dashFoliosPorTipo($pdo, $rut),
+            'serie'       => dashSerieCompleta(
+                dashVentasPorDia($pdo, $rut, $periodo['desde'], $periodo['hasta']),
+                $periodo['desde'],
+                $periodo['hasta']
+            ),
+            'estados'     => dashDistribucionEstado($pdo, $rut, $periodo['desde'], $periodo['hasta']),
+            'topClientes' => dashTopClientes($pdo, $cuentaId, $rut, $periodo['desde'], $periodo['hasta']),
+        ]);
+    }
 
     // "Credenciales de API" no es una estacion numerada del ciclo de 7: es una
     // seccion aparte que solo aparece cuando el onboarding base esta completo.
