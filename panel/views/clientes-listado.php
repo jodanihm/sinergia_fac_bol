@@ -1,67 +1,144 @@
 <?php
+/**
+ * Maestros > Clientes: listado.
+ *
+ * Recibe: $clientes, $q, $incluirInactivos, $pagina, $totalPaginas, $total,
+ * $flash, $navActivo. Todo de handleClientesListar(), 25 por pagina.
+ *
+ * Cada cliente trae los campos de MySqlClienteRepository::mapear():
+ *   id, rut_cliente, razon_social, giro, direccion, comuna, email, telefono,
+ *   activo, created_at, updated_at.
+ * giro, direccion, comuna, email y telefono pueden ser null.
+ *
+ * FILTROS REALES: solo dos parametros GET, q e inactivos (mas pagina). La
+ * busqueda es LIKE sobre rut_cliente Y razon_social -- no busca por email ni
+ * por comuna, y el placeholder no promete mas que eso. El orden lo fija el
+ * repositorio: razon_social ASC.
+ *
+ * ACTIVO/INACTIVO: activar() y desactivar() son un UPDATE de la columna activo
+ * (cambiarActivo()), no un borrado. Por eso "Inactivo" es un estado neutro y no
+ * un error: el registro sigue existiendo y se puede reactivar.
+ *
+ * NO SE MUESTRA la direccion: la vista la recibe, pero en una tabla es una
+ * columna larga que no ayuda a identificar al cliente. Esta en el formulario de
+ * edicion. Tampoco se agrega ninguna consulta.
+ */
 $titulo = 'Clientes';
 require __DIR__ . '/partials/header.php';
 
+// Query string de paginacion: arrastra los filtros activos. Identico al que
+// habia; si se pierde, la paginacion navega sobre otro conjunto.
 $qs = ($q !== '' ? '&q=' . urlencode($q) : '') . ($incluirInactivos ? '&inactivos=1' : '');
+
+$hayFiltros = $q !== '' || $incluirInactivos;
+
+/** Valor de texto opcional: si viene vacio se marca como ausente, no en blanco. */
+$oVacio = static function (?string $v): string {
+    $v = trim((string) $v);
+    return $v === '' ? '<span class="dash-vacio-inline">&mdash;</span>' : htmlspecialchars($v);
+};
 ?>
 
-<h1>Clientes</h1>
+<div class="dash-header">
+    <div>
+        <h1>Clientes</h1>
+    </div>
+    <div class="acciones-grupo acciones-grupo--header">
+        <a class="boton-principal" href="/maestros/clientes/nuevo">Nuevo cliente</a>
+    </div>
+</div>
+<p class="dash-subtitulo">
+    Administra los datos de tus clientes para reutilizarlos al emitir documentos.
+</p>
 
-<?php if (! empty($flash)): ?>
-    <p style="padding:0.5rem 0.75rem;border-radius:4px;<?= ($flash['tipo'] ?? '') === 'exito'
-        ? 'background:#f1f8f1;color:#2e7d32;border:1px solid #2e7d32;'
-        : 'background:#fdecea;color:#b00020;border:1px solid #b00020;'; ?>">
-        <?= htmlspecialchars($flash['mensaje']); ?>
+<?php if (! empty($flash['mensaje'])): ?>
+    <p class="alerta alerta--<?= ($flash['tipo'] ?? '') === 'exito' ? 'exito' : 'error'; ?>" role="status">
+        <span class="alerta__icono" aria-hidden="true"><?= ($flash['tipo'] ?? '') === 'exito' ? '&#10003;' : '&#9888;'; ?></span>
+        <span><?= htmlspecialchars($flash['mensaje']); ?></span>
     </p>
 <?php endif; ?>
 
-<form method="get" action="/maestros/clientes" style="display:flex;gap:0.5rem;align-items:center;margin:0.75rem 0;">
-    <input type="text" name="q" value="<?= htmlspecialchars($q); ?>"
-           placeholder="Buscar por RUT o razon social" style="flex:1;">
-    <?php if ($incluirInactivos): ?><input type="hidden" name="inactivos" value="1"><?php endif; ?>
-    <button type="submit" style="margin:0;">Buscar</button>
+<form method="get" action="/maestros/clientes" class="filtros">
+    <label class="filtros__campo">Buscar
+        <input type="text" name="q" class="filtros__input" value="<?= htmlspecialchars($q); ?>"
+               placeholder="RUT o razon social">
+    </label>
+    <label class="filtros__campo form-check">
+        <input type="checkbox" name="inactivos" value="1" <?= $incluirInactivos ? 'checked' : ''; ?>>
+        Incluir inactivos
+    </label>
+    <button type="submit" class="boton-secundario">Filtrar</button>
+    <?php if ($hayFiltros): ?>
+        <a class="boton-texto" href="/maestros/clientes">Limpiar filtros</a>
+    <?php endif; ?>
 </form>
 
-<p>
-    <a href="/maestros/clientes/nuevo">+ Nuevo cliente</a>
-    &nbsp;|&nbsp;
-    <?php if ($incluirInactivos): ?>
-        <a href="/maestros/clientes<?= $q !== '' ? '?q=' . urlencode($q) : ''; ?>">Ver solo activos</a>
-    <?php else: ?>
-        <a href="/maestros/clientes?inactivos=1<?= $q !== '' ? '&q=' . urlencode($q) : ''; ?>">Incluir inactivos</a>
-    <?php endif; ?>
-</p>
-
 <?php if ($clientes === []): ?>
-    <p>No hay clientes<?= $q !== '' ? ' que coincidan con la busqueda' : ''; ?>.</p>
+    <div class="estado-vacio">
+        <?php if ($q !== ''): ?>
+            <h2>Sin resultados</h2>
+            <p>Ningun cliente coincide con "<?= htmlspecialchars($q); ?>". La busqueda mira el RUT y la razon social.</p>
+            <p class="estado-vacio__acciones">
+                <a class="boton-principal" href="/maestros/clientes">Limpiar filtros</a>
+            </p>
+        <?php else: ?>
+            <h2>Aun no tienes clientes</h2>
+            <p>Los clientes que guardes aqui se autocompletan al emitir un documento con su RUT.</p>
+            <p class="estado-vacio__acciones">
+                <a class="boton-principal" href="/maestros/clientes/nuevo">Nuevo cliente</a>
+            </p>
+        <?php endif; ?>
+    </div>
 <?php else: ?>
     <div class="tabla-scroll">
-        <table class="tabla-clientes">
+        <table class="tabla-datos tabla-clientes">
+            <caption>
+                <?= $total; ?> cliente<?= $total === 1 ? '' : 's'; ?><?= $hayFiltros ? ' con los filtros aplicados' : ''; ?><?php
+                if ($totalPaginas > 1): ?> &middot; pagina <?= $pagina; ?> de <?= $totalPaginas; ?><?php endif; ?>
+            </caption>
             <thead>
                 <tr>
-                    <th>RUT</th><th>Razon social</th><th>Comuna</th><th>Email</th>
-                    <th>Estado</th><th>Acciones</th>
+                    <th>Cliente</th>
+                    <th>Giro</th>
+                    <th>Comuna</th>
+                    <th>Contacto</th>
+                    <th class="tabla-datos__estado">Estado</th>
+                    <th class="tabla-datos__acciones">Acciones</th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($clientes as $c): ?>
-                    <tr<?= $c['activo'] ? '' : ' class="fila-inactiva"'; ?>>
-                        <td><?= htmlspecialchars($c['rut_cliente']); ?></td>
-                        <td><?= htmlspecialchars($c['razon_social']); ?></td>
-                        <td><?= htmlspecialchars((string) ($c['comuna'] ?? '')); ?></td>
-                        <td><?= htmlspecialchars((string) ($c['email'] ?? '')); ?></td>
-                        <td><?= $c['activo'] ? 'Activo' : 'Inactivo'; ?></td>
-                        <td class="acciones">
+                    <tr<?= $c['activo'] ? '' : ' class="tabla-datos__fila--inactiva"'; ?>>
+                        <td>
+                            <?= htmlspecialchars($c['razon_social']); ?>
+                            <span class="tabla-datos__secundario"><?= htmlspecialchars($c['rut_cliente']); ?></span>
+                        </td>
+                        <td><?= $oVacio($c['giro'] ?? null); ?></td>
+                        <td><?= $oVacio($c['comuna'] ?? null); ?></td>
+                        <td>
+                            <?= $oVacio($c['email'] ?? null); ?>
+                            <?php if (trim((string) ($c['telefono'] ?? '')) !== ''): ?>
+                                <span class="tabla-datos__secundario"><?= htmlspecialchars((string) $c['telefono']); ?></span>
+                            <?php endif; ?>
+                        </td>
+                        <td class="tabla-datos__estado">
+                            <?php if ($c['activo']): ?>
+                                <span class="badge badge--ok">Activo</span>
+                            <?php else: ?>
+                                <span class="badge badge--neutro">Inactivo</span>
+                            <?php endif; ?>
+                        </td>
+                        <td class="tabla-datos__acciones">
                             <a href="/maestros/clientes/<?= (int) $c['id']; ?>/editar">Editar</a>
                             <?php if ($c['activo']): ?>
                                 <form method="post" action="/maestros/clientes/<?= (int) $c['id']; ?>/desactivar" style="display:inline;">
                                     <?= csrfInput(); ?>
-                                    <button type="submit">Desactivar</button>
+                                    <button type="submit" class="boton-texto">Desactivar</button>
                                 </form>
                             <?php else: ?>
                                 <form method="post" action="/maestros/clientes/<?= (int) $c['id']; ?>/activar" style="display:inline;">
                                     <?= csrfInput(); ?>
-                                    <button type="submit">Activar</button>
+                                    <button type="submit" class="boton-texto">Activar</button>
                                 </form>
                             <?php endif; ?>
                         </td>
@@ -74,11 +151,11 @@ $qs = ($q !== '' ? '&q=' . urlencode($q) : '') . ($incluirInactivos ? '&inactivo
     <?php if ($totalPaginas > 1): ?>
         <p class="paginacion">
             <?php if ($pagina > 1): ?>
-                <a href="/maestros/clientes?pagina=<?= $pagina - 1; ?><?= $qs; ?>">&larr; Anterior</a>
+                <a class="boton-secundario" href="/maestros/clientes?pagina=<?= $pagina - 1; ?><?= $qs; ?>">&larr; Anterior</a>
             <?php endif; ?>
-            Pagina <?= $pagina; ?> de <?= $totalPaginas; ?> (<?= $total; ?> clientes)
+            <span class="nota">Pagina <?= $pagina; ?> de <?= $totalPaginas; ?> (<?= $total; ?> clientes)</span>
             <?php if ($pagina < $totalPaginas): ?>
-                <a href="/maestros/clientes?pagina=<?= $pagina + 1; ?><?= $qs; ?>">Siguiente &rarr;</a>
+                <a class="boton-secundario" href="/maestros/clientes?pagina=<?= $pagina + 1; ?><?= $qs; ?>">Siguiente &rarr;</a>
             <?php endif; ?>
         </p>
     <?php endif; ?>

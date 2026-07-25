@@ -426,6 +426,13 @@ a.nav-item:hover { background: #ececf0; }
     border-radius: 4px;
     text-decoration: none;
     font-weight: 600;
+    /* Declarado explicitamente: sin esto un <button> hereda el tamano por
+       defecto del navegador (13.3px) y un <a> hereda el del body (16px), y el
+       mismo boton se veia de dos tamanos distintos segun la pantalla. */
+    font-size: 0.9rem;
+    line-height: 1.2;
+    cursor: pointer;
+    border: 1px solid #1a56db;
 }
 .boton-principal:hover { background: #1546b0; }
 .progreso-colapsado { margin: 1.5rem 0; }
@@ -526,4 +533,775 @@ a.nav-item:hover { background: #ececf0; }
         transition-duration: 0.01ms !important;
         scroll-behavior: auto !important;
     }
+}
+
+/* ==========================================================================
+   BASE VISUAL DEL FLUJO DE FACTURACION MASIVA (bloque 1)
+   ==========================================================================
+
+   Bloque puramente ADITIVO: no modifica ninguna regla anterior. Todas las
+   clases de aqui son nuevas y ninguna existe hoy en las vistas, asi que no
+   pueden alterar el render actual de ninguna pantalla.
+
+   Reutiliza los tokens de la paleta declarada arriba. Los pares texto/fondo
+   nuevos estan medidos y superan el 4.5:1 de WCAG 2.1 AA:
+
+     ok          #2e7d32 sobre #f1f8f1  4.75:1
+     advertencia #b45309 sobre #fff8f0  4.77:1
+     error       #b00020 sobre #fdecea  6.41:1
+     proceso     #1a56db sobre #e8f0fe  5.39:1
+     neutro      #5c5c5c sobre #eaeaea  5.56:1
+     azul sobre blanco                  6.18:1
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Stepper del flujo (partials/_stepper.php)
+
+   Clases propias, NO una evolucion de .progreso-etapas: esa barra es de la
+   certificacion, tiene otra anatomia y hoy la consumen cuatro vistas.
+   -------------------------------------------------------------------------- */
+.stepper { margin: 1rem 0 1.5rem; }
+.stepper__lista {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.stepper__paso {
+    display: flex;
+    align-items: center;
+    flex: 1 1 0;
+    min-width: 0;
+}
+/* Conector: linea entre pasos. Se dibuja despues de la etiqueta y se omite en
+   el ultimo paso, para no dejar una linea colgando. */
+.stepper__paso:not(:last-child)::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 2px;
+    min-width: 1.5rem;
+    margin: 0 0.75rem;
+    background: #dcdce1;
+    border-radius: 1px;
+}
+.stepper__paso--completado:not(:last-child)::after { background: #2e7d32; }
+.stepper__contenido {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 0 0 auto;
+    text-decoration: none;
+    color: #6e6e6e;
+    font-size: 0.9rem;
+    border-radius: 4px;
+    padding: 0.15rem 0.2rem;
+}
+a.stepper__contenido:hover { color: #1a56db; }
+.stepper__marca {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 1.65rem;
+    height: 1.65rem;
+    border-radius: 50%;
+    border: 2px solid #dcdce1;
+    background: #fff;
+    color: #6e6e6e;
+    font-size: 0.8rem;
+    font-weight: 700;
+    line-height: 1;
+}
+.stepper__etiqueta { white-space: nowrap; }
+.stepper__paso--activo .stepper__contenido { color: #1a56db; font-weight: 600; }
+.stepper__paso--activo .stepper__marca {
+    background: #1a56db;
+    border-color: #1a56db;
+    color: #fff;
+}
+.stepper__paso--completado .stepper__contenido { color: #2e7d32; }
+.stepper__paso--completado .stepper__marca {
+    background: #2e7d32;
+    border-color: #2e7d32;
+    color: #fff;
+}
+
+/* --------------------------------------------------------------------------
+   Badges semanticos
+
+   Nunca solo color: cada badge lleva texto, y .badge__icono agrega una marca
+   de forma distinta por variante (WCAG 1.4.1).
+   -------------------------------------------------------------------------- */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.12rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.badge__icono { font-size: 0.85em; line-height: 1; }
+.badge--ok          { background: #f1f8f1; border-color: #cbe3cc; color: #2e7d32; }
+.badge--advertencia { background: #fff8f0; border-color: #f3d9bb; color: #b45309; }
+.badge--error       { background: #fdecea; border-color: #f2c9c4; color: #b00020; }
+.badge--proceso     { background: #e8f0fe; border-color: #c6d8fb; color: #1a56db; }
+.badge--neutro      { background: #eaeaea; border-color: #d8d8d8; color: #5c5c5c; }
+
+/* --------------------------------------------------------------------------
+   Panel informativo (variante de .tarjeta para bloques de ayuda o resumen)
+   -------------------------------------------------------------------------- */
+.panel-info {
+    border: 1px solid #dbe4f5;
+    background: #f8fafd;
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    margin: 0 0 1rem;
+    color: #444;
+}
+.panel-info__titulo {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0 0 0.5rem;
+    /* Mismo tamano que .tarjeta h2 y .titulo-seccion: los titulos de bloque no
+       pueden variar entre 24px, 16.8px y 15.7px segun el componente. */
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #222;
+}
+.panel-info__icono { color: #1a56db; flex: none; line-height: 1; }
+/* :not(.panel-info__titulo) -- sin esto esta regla pisa el tamano del titulo:
+   ambas tienen especificidad 0-1-1 y esta va declarada despues. */
+.panel-info p:not(.panel-info__titulo) { margin: 0 0 0.5rem; font-size: 0.88rem; }
+.panel-info p:last-child { margin-bottom: 0; }
+.panel-info__lista { margin: 0; padding: 0; list-style: none; }
+.panel-info__lista li {
+    position: relative;
+    padding-left: 1.15rem;
+    margin: 0.35rem 0;
+    font-size: 0.88rem;
+}
+.panel-info__lista li::before {
+    content: "\2713";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: #1a56db;
+    font-size: 0.85em;
+}
+.panel-info--advertencia { border-color: #f3d9bb; background: #fff8f0; }
+.panel-info--advertencia .panel-info__icono,
+.panel-info--advertencia .panel-info__lista li::before { color: #b45309; }
+
+/* --------------------------------------------------------------------------
+   Layout de contenido principal + panel lateral
+
+   Complementa a .dash-grid (que resuelve la fila de KPIs). No introduce un
+   sistema de grid nuevo: es una sola regla de dos columnas.
+   -------------------------------------------------------------------------- */
+.layout-principal-lateral {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+    margin: 0 0 1.5rem;
+}
+
+/* --------------------------------------------------------------------------
+   Tablas de datos del flujo
+
+   Clases propias a proposito: los estilos globales de table/th/td ya aplican a
+   clientes, productos, documentos y certificacion, y no se tocan. .tabla-datos
+   solo AJUSTA densidad y jerarquia sobre esa base, dentro de su propio scope.
+   Para el scroll horizontal se sigue usando el .tabla-scroll existente.
+   -------------------------------------------------------------------------- */
+.tabla-datos { font-size: 0.88rem; }
+.tabla-datos thead th {
+    background: #f7f7f8;
+    border-bottom: 1px solid #d8d8dd;
+    color: #444;
+    font-size: 0.72rem;
+    padding: 0.5rem 0.6rem;
+}
+.tabla-datos tbody th,
+.tabla-datos tbody td {
+    padding: 0.45rem 0.6rem;
+    vertical-align: middle;
+    border-bottom: 1px solid #ececf0;
+}
+.tabla-datos tbody tr:hover { background: #f7f9fc; }
+.tabla-datos tbody th { font-weight: 600; }
+/* Alineacion numerica con cifras de ancho fijo, para comparar columnas de un
+   vistazo. Equivalente a .num, pero acotado a estas tablas. */
+.tabla-datos__num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.tabla-datos__estado { white-space: nowrap; }
+.tabla-datos__acciones { white-space: nowrap; text-align: right; }
+.tabla-datos__acciones a,
+.tabla-datos__acciones button { margin-left: 0.5rem; }
+.tabla-datos__secundario { display: block; color: #6e6e6e; font-size: 0.8rem; }
+.tabla-datos tbody tr.tabla-datos__fila--inactiva { color: #6e6e6e; background: #fafafa; }
+
+/* --------------------------------------------------------------------------
+   Botones
+
+   .boton-principal ya existe mas arriba y no se toca: estas dos son sus
+   companeras, con la misma geometria, para acciones de menor jerarquia.
+   -------------------------------------------------------------------------- */
+.boton-secundario,
+.boton-texto {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.9rem;
+    text-decoration: none;
+    cursor: pointer;
+    line-height: 1.2;
+}
+.boton-secundario {
+    background: #fff;
+    color: #1a56db;
+    border: 1px solid #c6d8fb;
+}
+.boton-secundario:hover { background: #e8f0fe; border-color: #1a56db; }
+.boton-texto {
+    background: none;
+    border: 1px solid transparent;
+    color: #1a56db;
+    padding-left: 0.35rem;
+    padding-right: 0.35rem;
+}
+.boton-texto:hover { text-decoration: underline; }
+.boton-principal[disabled],
+.boton-secundario[disabled],
+.boton-texto[disabled],
+.boton-principal[aria-disabled="true"],
+.boton-secundario[aria-disabled="true"] {
+    opacity: 0.55;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+/* Fila de acciones: la principal primero, las secundarias al lado. */
+.acciones-grupo {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 1rem 0 0;
+}
+
+/* --------------------------------------------------------------------------
+   Responsivo de este bloque. Media queries propias para que el bloque quede
+   autocontenido y el diff sea puramente aditivo.
+   -------------------------------------------------------------------------- */
+@media (max-width: 1024px) {
+    .layout-principal-lateral { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 720px) {
+    /* El stepper pasa a columna: los conectores horizontales dejan de tener
+       sentido y se ocultan, el estado se sigue leyendo por circulo y color. */
+    .stepper__lista { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+    .stepper__paso { flex: none; width: 100%; }
+    .stepper__paso:not(:last-child)::after { display: none; }
+    .acciones-grupo > * { flex: 1 1 auto; text-align: center; }
+}
+
+/* ==========================================================================
+   CARGA MASIVA -- paso 1 (bloque 2)
+
+   Aditivo. Lo unico especifico de esta pantalla es la zona de archivo; el
+   resto se resuelve con .tarjeta, .panel-info, .tabla-datos, .badge,
+   .layout-principal-lateral y los botones del bloque 1.
+   ========================================================================== */
+
+/* Alerta en linea. No existia un patron para esto: las vistas la resolvian con
+   estilos inline. Se define aqui para poder reusarla en los pasos 2 y 3. */
+.alerta {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.6rem 0.8rem;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+}
+.alerta__icono { flex: none; line-height: 1.4; }
+.alerta--error { background: #fdecea; border-color: #f2c9c4; color: #b00020; }
+.alerta--exito { background: #f1f8f1; border-color: #cbe3cc; color: #2e7d32; }
+
+/* Zona de carga de archivo. El <input type="file"> real sigue en el DOM con
+   .visualmente-oculto; lo que se ve es esta area y el <label> que lo dispara. */
+.upload { margin: 0.75rem 0 0; }
+.upload__area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1.25rem 1rem;
+    border: 2px dashed #c6d8fb;
+    border-radius: 8px;
+    background: #f8fafd;
+    text-align: center;
+}
+/* El foco del teclado cae en el input oculto: el anillo se dibuja en el area,
+   que es lo que el usuario ve (WCAG 2.4.7). */
+.upload__area:focus-within {
+    outline: 3px solid #1a56db;
+    outline-offset: 2px;
+    border-color: #1a56db;
+}
+.upload__icono { font-size: 1.6rem; line-height: 1; color: #1a56db; }
+.upload__texto { margin: 0; font-size: 0.92rem; color: #444; }
+.upload__boton { cursor: pointer; }
+.upload__meta { margin: 0; font-size: 0.8rem; color: #6e6e6e; }
+.upload__seleccionado { margin: 0; font-size: 0.85rem; font-weight: 600; color: #2e7d32; }
+.upload__seleccionado:empty { display: none; }
+
+.carga-masiva__intro { margin: 0 0 0.75rem; font-size: 0.9rem; color: #444; }
+/* La columna de descripcion es la que debe absorber el ancho sobrante. */
+.tabla-lotes-carga td:first-child { white-space: nowrap; }
+
+/* ==========================================================================
+   RESUMEN DE CARGA -- paso 2 (bloque 3)
+
+   Aditivo y corto: casi todo se resuelve con lo del bloque 1 (.kpi, .badge,
+   .tarjeta, .tabla-datos, .acciones-grupo, .estado-vacio, .stepper).
+   ========================================================================== */
+
+/* Tres columnas para la fila resumen / validacion / acciones. Sigue el mismo
+   patron de .dash-grid, no un sistema nuevo. */
+.dash-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* Ficha de datos: pares etiqueta/valor en dos columnas. */
+.ficha {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.3rem 0.75rem;
+    margin: 0;
+    font-size: 0.88rem;
+}
+.ficha dt { color: #6e6e6e; }
+.ficha dd { margin: 0; word-break: break-word; }
+.ficha--compacta { font-size: 0.82rem; margin-top: 0.4rem; }
+
+/* Ficha de montos (resultado de emision y ficha del documento emitido): cifras
+   a la derecha y de ancho fijo, para que se comparen en vertical. .ficha__total
+   separa la ultima fila con una linea, que es como se lee un total. */
+.ficha--montos dd { text-align: right; font-variant-numeric: tabular-nums; }
+.ficha--montos .ficha__total {
+    border-top: 1px solid #e2e2e6;
+    margin-top: 0.15rem;
+    padding-top: 0.35rem;
+    font-weight: 700;
+}
+
+/* Subtitulo dentro de una card. .titulo-seccion vale 1.15rem, el mismo tamano
+   que .tarjeta h2: un h3 con esa clase no se leeria como subordinado. */
+.titulo-sub { font-size: 0.95rem; font-weight: 600; color: #222; margin: 1.25rem 0 0.35rem; }
+
+/* Lista de resultados de validacion: badge a la izquierda, cifra a la derecha. */
+.validacion { list-style: none; margin: 0 0 0.5rem; padding: 0; }
+.validacion__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.3rem 0;
+}
+.validacion__dato { font-weight: 700; font-variant-numeric: tabular-nums; }
+.validacion__pct { font-weight: 400; color: #6e6e6e; font-size: 0.85rem; }
+
+/* Motivos de error de una fila: legibles, no apagados. El atenuado de
+   .tabla-datos__fila--inactiva no debe aplicarse al mensaje, que es
+   justamente lo que el usuario necesita leer. */
+.celda-observacion { min-width: 16rem; }
+.motivos { margin: 0; padding-left: 1.1rem; }
+.motivos li { color: #b00020; font-size: 0.84rem; margin: 0.1rem 0; }
+.fila-original > summary { cursor: pointer; font-size: 0.82rem; color: #1a56db; }
+
+@media (max-width: 1024px) {
+    .dash-grid--3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 720px) {
+    .dash-grid--3 { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ==========================================================================
+   FACTURACION MASIVA -- paso 3 (bloque 4)
+   ========================================================================== */
+
+.oculto { display: none; }
+.texto-error { color: #b00020; }
+
+/* Barra de filtros: compacta y alineada en una linea. */
+.filtros {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.75rem 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid #e2e2e6;
+    border-radius: 6px;
+    background: #fafafb;
+}
+.filtros__campo { margin: 0; font-size: 0.85rem; font-weight: 600; color: #444; }
+/* El input global es display:block y width:100%; aca tiene que caber en linea. */
+.filtros__input {
+    display: inline-block;
+    width: auto;
+    min-width: 14rem;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+.filtros .boton-secundario,
+.filtros .boton-texto { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+/* Anchos por campo. El min-width de 14rem de .filtros__input es correcto para
+   una barra de un solo filtro (facturacion masiva), pero el panel de emision
+   tiene seis y no caben: un folio no necesita 224px y una fecha tampoco. */
+.filtros__input--medio { min-width: 9rem; }
+.filtros__input--corto { min-width: 6rem; }
+
+/* Acciones dentro del encabezado de pagina. .acciones-grupo trae margin-top de
+   1rem porque normalmente cierra un bloque; en el header desalinearia los
+   botones respecto del titulo. */
+.acciones-grupo--header { margin-top: 0; }
+
+/* Checkbox dentro de la barra de filtros (ej. "Incluir inactivos"). Sin esto la
+   regla global input lo estira a todo el ancho de la barra. Mismo tratamiento
+   que en .form-compacto, pero .filtros no abre ese contexto. */
+.filtros input[type="checkbox"] {
+    display: inline-block;
+    width: auto;
+    margin: 0;
+    accent-color: #1a56db;
+    cursor: pointer;
+}
+
+/* Boton de accion dentro de una celda de tabla (activar/desactivar). Sin esto
+   queda desalineado respecto del enlace vecino: el boton global trae margin-top
+   de 1rem y .boton-texto agrega 0.5rem de padding vertical, asi que "Desactivar"
+   caia mas abajo que "Editar". Medido: con estas cuatro declaraciones ambos
+   comparten linea base. Hoy ninguna otra vista tiene un <button> en esta celda,
+   asi que la regla es puramente aditiva. */
+.tabla-datos__acciones button {
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    font-size: inherit;
+    vertical-align: baseline;
+}
+
+/* Tabla con seleccion. */
+.tabla-seleccion .col-check { width: 2.5rem; text-align: center; }
+.tabla-seleccion .col-check input[type="checkbox"] {
+    display: inline-block;
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+.tabla-seleccion tbody tr.fila-seleccionada { background: #e8f0fe; }
+.tabla-seleccion tbody tr.fila-seleccionada:hover { background: #dde8fd; }
+
+/* Progreso de la emision. Refleja unicamente el conteo que devuelve
+   confirmar-sublote (facturada + error sobre total): no hay etapas ni
+   estimaciones inventadas. Oculto hasta que el proceso arranca. */
+.progreso-emision {
+    display: none;
+    margin: 1rem 0 0;
+    padding: 0.85rem 1rem;
+    border: 1px solid #c6d8fb;
+    border-radius: 6px;
+    background: #f8fafd;
+}
+.progreso-emision--activo { display: block; }
+.progreso-emision--error { border-color: #f2c9c4; background: #fdecea; }
+.progreso-emision__titulo { margin: 0 0 0.5rem; font-size: 0.9rem; font-weight: 600; color: #222; }
+.progreso-emision--error .progreso-emision__titulo { color: #b00020; }
+.barra-progreso {
+    height: 0.6rem;
+    background: #dcdce1;
+    border-radius: 999px;
+    overflow: hidden;
+}
+.barra-progreso__relleno {
+    display: block;
+    height: 100%;
+    width: 0;
+    background: #1a56db;
+}
+.progreso-emision--error .barra-progreso__relleno { background: #b00020; }
+
+/* ==========================================================================
+   NORMALIZACION TRANSVERSAL DEL FLUJO (bloque 5)
+
+   Correcciones de inconsistencias detectadas comparando las tres pantallas
+   con los mismos estilos computados y el mismo ancho. No agrega componentes:
+   solo alinea lo que habia quedado distinto sin motivo.
+   ========================================================================== */
+
+/* 1. Jerarquia de titulos. El h2 por defecto del navegador es 1.5em (24px), o
+      sea MAS GRANDE que el h1 de la pagina (1.4rem = 22.4px): los titulos de
+      card se veian por encima del titulo de la pantalla. Se igualan los tres
+      tipos de titulo de bloque (.tarjeta h2, .estado-vacio h2 y los h2 de
+      seccion) con .panel-info__titulo.
+
+      POR QUE 1.15rem Y NO MENOS: .tarjeta es compartida con vistas anteriores
+      (dashboard, certificacion, boleta) donde el texto del cuerpo sigue en
+      16px. Con 1.05rem el titulo quedaba en 16.8px, apenas un 5% sobre su
+      propio cuerpo, y dejaba de leerse como titulo. Con 1.15rem la relacion
+      es 1.15 contra un cuerpo de 16px y 1.31 contra los 14.08px del flujo
+      nuevo, y sigue claramente por debajo del h1 (22.4px). Es el valor que
+      funciona en los dos contextos sin tocar las vistas antiguas. */
+.tarjeta h2,
+.estado-vacio h2,
+.titulo-seccion {
+    font-size: 1.15rem;
+    margin-top: 0;
+}
+.titulo-seccion { margin-bottom: 0.6rem; }
+
+/* 2. Alineacion de columnas. .tarjeta trae margin de 1.25rem arriba y abajo,
+      pensado para apilarse suelta. Dentro de una grilla eso descuadra: en
+      carga masiva la card izquierda arrancaba 20px mas abajo que el panel de
+      la derecha. Dentro de grillas manda el gap, no el margen. */
+.dash-grid > .tarjeta,
+.dash-grid > .panel-info {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+.layout-principal-lateral > * > :first-child { margin-top: 0; }
+
+/* 3. Badge informativo. Los badges de color comunican ESTADO (ok, error,
+      proceso). Etiquetas como "Factura" o "Factura + nota de credito" no son
+      un estado y no deben teñirse de verde, rojo ni azul: usan esta variante
+      neutra, sin relleno semantico. */
+.badge--etiqueta {
+    background: #fff;
+    border-color: #ccc;
+    color: #444;
+    font-weight: 500;
+}
+
+/* ==========================================================================
+   FORMULARIOS COMPACTOS (fase documentos individuales, bloque 1)
+   ==========================================================================
+
+   Aditivo: no modifica ninguna regla anterior. Todas las clases de aqui son
+   nuevas y hoy no aparecen en ninguna vista (verificado por grep antes de
+   escribir), asi que este bloque no puede alterar el render de ninguna
+   pantalla existente.
+
+   POR QUE UN CONTEXTO Y NO UN ARREGLO GLOBAL: la regla global
+   "input { display: block; width: 100% }" (linea 27) es la causa de que los
+   formularios actuales ocupen todo el ancho, pero la comparten ~40 vistas,
+   incluida boleta, que esta fuera de alcance. Cambiarla seria una regresion
+   masiva. En su lugar, .form-compacto abre un contexto con anatomia propia:
+   fuera de ese contexto no cambia absolutamente nada.
+
+   ESPECIFICIDAD: las exclusiones por tipo van dentro de :where(), que aporta
+   cero, de modo que las reglas base de control quedan en 0-1-1 y cualquier
+   modificador de clase (0-2-x) las pisa sin !important.
+
+   CONVIVENCIA CON $errStyle(): la vista inyecta hoy style="border-color:#b00020"
+   campo por campo. La base declara "border: 1px solid #ccc" como shorthand, asi
+   que un border-color inline solo pisa el color y conserva ancho y estilo. El
+   modificador .form-campo--error existe para el dia que se pueda pasar a clase;
+   en este bloque no se toca ni la vista ni el handler.
+   ========================================================================== */
+
+/* --------------------------------------------------------------------------
+   Grilla de formulario. Dos columnas, con campos que pueden ocupar la fila
+   completa. No es un sistema de grid nuevo: misma forma que .dash-grid, con su
+   propio gap. .form-grid--1 es para columnas angostas (ej. la card lateral de
+   .layout-principal-lateral, que a 1440px mide ~335px y no admite dos campos).
+   -------------------------------------------------------------------------- */
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.7rem 1rem;
+    align-items: start;
+}
+.form-grid--1 { grid-template-columns: minmax(0, 1fr); }
+.form-campo { min-width: 0; }
+/* 1 / -1 y no 1 / 3: asi el campo sigue ocupando la fila completa cuando la
+   grilla colapsa a una columna. */
+.form-campo--ancho { grid-column: 1 / -1; }
+/* Marca de campo obligatorio. Obligatorio SEGUN EL MOTOR, no segun el
+   navegador: la vista no agrega el atributo required. El asterisco va
+   aria-hidden y acompanado de un texto para lector de pantalla, porque un
+   simbolo solo no comunica el requisito (WCAG 1.3.1). */
+.campo-obligatorio { color: #b00020; font-weight: 700; }
+
+/* Campo de dato corto (un porcentaje, un folio, un codigo). Sin esto, en una
+   grilla de una sola columna que se ensancha -- la card lateral cuando
+   .layout-principal-lateral colapsa a 1024px -- un input de porcentaje termina
+   midiendo 660px. Es un tope por campo, no depende del contenedor. */
+.form-campo--corto { max-width: 12rem; }
+
+/* Etiqueta del campo. Soporta las dos formas de markup: <label> que envuelve al
+   control, y <label for> hermano del control. :not(.form-check) evita que esta
+   regla pise a la etiqueta de checkbox, que es un <label> con otra anatomia. */
+.form-campo > label:not(.form-check) {
+    display: block;
+    margin: 0 0 0.2rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #444;
+}
+/* Ayuda o aclaracion bajo un campo. Reemplaza a los estilos inline que hoy usan
+   cliente-form.php y producto-form.php ("Opcional.", "Recomendado..."), sin
+   tocarlos todavia. #6e6e6e sobre blanco da 5.60:1. */
+.form-ayuda { display: block; margin: 0.2rem 0 0; font-size: 0.78rem; color: #6e6e6e; }
+
+/* --------------------------------------------------------------------------
+   Controles. Misma geometria que .filtros__input (padding 0.35/0.5, borde 1px,
+   radio 4px, 0.9rem), que ya esta en produccion: no se inventa una segunda
+   escala de campos. Altura resultante ~33px, compacta para uso repetido.
+   -------------------------------------------------------------------------- */
+.form-compacto input:where(:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"])),
+.form-compacto select,
+.form-compacto textarea {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0.35rem 0.5rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    color: #222;
+    font-family: inherit;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+/* min-height igual en input y select: Chrome le da al <select> una caja de
+   contenido algo mayor que la del <input> con el mismo padding y font-size, y
+   dos controles de la misma fila quedaban con 2px de diferencia de alto. */
+.form-compacto input:where(:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"])),
+.form-compacto select { min-height: 2.2rem; }
+.form-compacto textarea { min-height: 4.5rem; resize: vertical; }
+/* El anillo de foco global (:focus-visible) ya se ve; el borde azul refuerza
+   cual es el campo activo cuando hay varios en la misma fila. */
+.form-compacto input:focus-visible,
+.form-compacto select:focus-visible,
+.form-compacto textarea:focus-visible { border-color: #1a56db; }
+.form-compacto input:disabled,
+.form-compacto select:disabled,
+.form-compacto textarea:disabled {
+    background: #f2f2f4;
+    color: #5c5c5c;
+    cursor: not-allowed;
+}
+.form-compacto ::placeholder { color: #6e6e6e; opacity: 1; }
+
+/* Campo en error. El inline de $errStyle() sigue ganando sobre esta regla, y
+   pinta el mismo rojo. El mensaje usa la clase .error que ya existe (linea 30),
+   no se duplica.
+
+   Lleva .form-compacto delante para empatar en especificidad (0-2-1) con la
+   regla de :focus-visible y, al estar declarada despues, ganarle: sin eso el
+   campo perdia el rojo justo mientras el usuario lo estaba corrigiendo. El
+   error por style inline ya se comportaba asi. */
+.form-compacto .form-campo--error input,
+.form-compacto .form-campo--error select,
+.form-compacto .form-campo--error textarea { border-color: #b00020; }
+
+/* --------------------------------------------------------------------------
+   Checkbox y radio. Sin esto la regla global los estira a todo el ancho con
+   0.4rem de padding. Se mantiene el control nativo: nada de JS ni de sustitutos
+   dibujados. accent-color pinta el nativo con el azul del panel.
+   -------------------------------------------------------------------------- */
+.form-compacto input[type="checkbox"],
+.form-compacto input[type="radio"] {
+    display: inline-block;
+    flex: none;
+    width: auto;
+    margin: 0;
+    padding: 0;
+    accent-color: #1a56db;
+    cursor: pointer;
+}
+/* Etiqueta de checkbox: casilla y texto en linea, alineados al centro. */
+.form-check {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
+   Tabla editable (detalle del documento). Variante de .tabla-datos: hereda de
+   ahi cabecera, bordes y densidad, y solo ajusta lo propio de una tabla cuyas
+   celdas contienen inputs. No duplica .tabla-datos.
+
+   Los anchos van por COLUMNA, no por control: hoy cada input trae su width en
+   un style inline duplicado entre el PHP y la plantilla del JS. Con clases de
+   columna el ancho se declara una vez y el input llena la celda.
+   -------------------------------------------------------------------------- */
+.tabla-editable tbody td { padding: 0.3rem 0.4rem; vertical-align: middle; }
+.tabla-editable tbody tr:hover { background: transparent; }
+.form-compacto .tabla-editable input:where(:not([type="checkbox"])),
+.form-compacto .tabla-editable select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+
+/* border-box para que el ancho declarado sea el ancho REAL de la columna: una
+   celda es content-box por defecto y le sumaba los 19.2px de padding, con lo
+   que cada columna salia 1.2rem mas ancha de lo pedido. */
+.tabla-editable th,
+.tabla-editable td { box-sizing: border-box; }
+
+.tabla-editable .col-producto { width: auto; }
+.tabla-editable .col-cantidad { width: 6.5rem; }
+.tabla-editable .col-precio   { width: 8rem; }
+.tabla-editable .col-unidad   { width: 5.5rem; }
+.tabla-editable .col-exento   { width: 5rem; text-align: center; }
+.tabla-editable .col-accion   { width: 3rem; text-align: center; }
+
+/* Boton de quitar linea. La CLASE y el markup no se tocan (el JS los usa por
+   classList.contains y por e.target): esto es solo presentacion. Sin elementos
+   hijos, para que e.target siga siendo el propio boton. */
+.tabla-editable .quitar-linea {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.7rem;
+    height: 1.7rem;
+    margin: 0;
+    padding: 0;
+    border: 1px solid #f2c9c4;
+    border-radius: 4px;
+    background: #fff;
+    color: #b00020;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.tabla-editable .quitar-linea:hover { background: #fdecea; border-color: #b00020; }
+
+/* --------------------------------------------------------------------------
+   Responsivo. La grilla de dos columnas aguanta hasta 720px: a 1024 el
+   contenido principal mide ~750px (main menos sidebar y padding) y dos campos
+   siguen siendo comodos. Bajo 720px manda la misma regla que el resto del
+   panel: una sola columna.
+   -------------------------------------------------------------------------- */
+@media (max-width: 720px) {
+    .form-grid { grid-template-columns: minmax(0, 1fr); }
 }

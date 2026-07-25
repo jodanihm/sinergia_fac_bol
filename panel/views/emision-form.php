@@ -1,4 +1,33 @@
 <?php
+/**
+ * Emision unitaria: factura 33, nota de credito 61, nota de debito 56.
+ *
+ * UNA SOLA VISTA PARA LOS TRES TIPOS. La unica bifurcacion es $esNota, que
+ * agrega la card de referencia. Cualquier cambio aqui sale simultaneamente en
+ * /ventas/factura, /ventas/nota-credito y /ventas/nota-debito: hay que probar
+ * las tres rutas, no solo la primera.
+ *
+ * Recibe (sin cambios respecto de antes): $tipoDte, $tituloDoc, $accion,
+ * $idemKey, $form, $errorCampo, $errorMsg, $flashError, $productos, $navActivo.
+ *
+ * LO QUE ESTA PANTALLA NO PUEDE PROMETER, y por eso no aparece:
+ *   - Totales antes de emitir. Neto/exento/IVA/total se calculan en el motor
+ *     (DteXmlBuilder::totales()) al construir el XML, o sea DESPUES de asignar
+ *     folio. Aqui no existe ese numero y no se estima.
+ *   - Fecha de emision, forma de pago, vencimiento y moneda: no existen en el
+ *     payload ni en el motor. La fecha la pone el motor al emitir.
+ *   - Descripcion y descuento por linea: el backend los lee, pero no forman
+ *     parte de la interfaz autorizada todavia.
+ *
+ * CONTRATO CON EL BACKEND Y EL JS -- no tocar sin revisar handleEmisionPost():
+ *   - name de cada control (incluida la sintaxis de arrays) y el hidden
+ *     idem_key, que es lo que impide una doble emision con folio real.
+ *   - id/clase que usa el JS: #form-emision, #tabla-detalle, #agregar-linea,
+ *     .quitar-linea, .det-nombre, .det-precio, .det-unidad, .det-exento,
+ *     #productos-list, #receptor-* y #rut-aviso.
+ *   - La fila del detalle esta duplicada: aqui en PHP y en nuevaFilaHTML() del
+ *     JS. Las dos deben producir el mismo DOM.
+ */
 $titulo = $tituloDoc;
 require __DIR__ . '/partials/header.php';
 
@@ -29,121 +58,204 @@ foreach ($productos as $p) {
     ];
 }
 $esNota = in_array($tipoDte, [61, 56], true);
+
+// "Emitir factura electronica" / "Emitir nota de credito" / "Emitir nota de
+// debito". strtolower y no mb_strtolower: los titulos de metaTipoEmision() son
+// ASCII sin tildes y mbstring no esta garantizada en la imagen.
+$textoEmitir = 'Emitir ' . strtolower($tituloDoc);
+
+// Marca de campo obligatorio. Obligatorio SEGUN EL MOTOR
+// (validarDocumentoDte()), no segun el navegador: no se agrega el atributo
+// required, que introduciria una validacion frontend que hoy no existe.
+$req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
+    . '<span class="visualmente-oculto">(obligatorio)</span>';
 ?>
 
-<h1><?= htmlspecialchars($tituloDoc); ?></h1>
+<div class="dash-header">
+    <div>
+        <h1><?= htmlspecialchars($tituloDoc); ?></h1>
+    </div>
+    <a class="boton-secundario" href="/ventas/panel-emision">Ver documentos emitidos</a>
+</div>
+<p class="dash-subtitulo">
+    Completa los datos del receptor y el detalle antes de emitir.
+    Los campos marcados con <span class="campo-obligatorio">*</span> son obligatorios para el SII.
+</p>
 
 <?php if (! empty($flashError)): ?>
-    <p style="padding:0.5rem 0.75rem;border-radius:4px;background:#fdecea;color:#b00020;border:1px solid #b00020;">
-        <?= htmlspecialchars($flashError); ?>
+    <p class="alerta alerta--error" role="alert">
+        <span class="alerta__icono" aria-hidden="true">&#9888;</span>
+        <span><?= htmlspecialchars($flashError); ?></span>
     </p>
 <?php endif; ?>
 <?php if (! empty($errorMsg)): ?>
-    <p style="padding:0.5rem 0.75rem;border-radius:4px;background:#fdecea;color:#b00020;border:1px solid #b00020;">
-        <?= htmlspecialchars($errorMsg); ?>
-        <?php if (! empty($errorCampo)): ?><br><small>Campo: <?= htmlspecialchars($errorCampo); ?></small><?php endif; ?>
+    <p class="alerta alerta--error" role="alert">
+        <span class="alerta__icono" aria-hidden="true">&#9888;</span>
+        <span>
+            <?= htmlspecialchars($errorMsg); ?>
+            <?php if (! empty($errorCampo)): ?>
+                <br><small>Campo: <?= htmlspecialchars($errorCampo); ?></small>
+            <?php endif; ?>
+        </span>
     </p>
 <?php endif; ?>
 
-<form method="post" action="<?= htmlspecialchars($accion); ?>" id="form-emision">
+<form method="post" action="<?= htmlspecialchars($accion); ?>" id="form-emision" class="form-compacto">
     <?= csrfInput(); ?>
     <input type="hidden" name="idem_key" value="<?= htmlspecialchars($idemKey); ?>">
 
-    <h2>Receptor</h2>
-    <label>RUT
-        <input type="text" name="receptor[rut]" id="receptor-rut" value="<?= $vr('rut'); ?>" placeholder="76543210-9"<?= $errStyle('receptor.rut'); ?>>
-    </label>
-    <small id="rut-aviso" style="display:block;margin:0.15rem 0 0;color:#666;font-size:0.82rem;"></small>
-    <label>Razon social
-        <input type="text" name="receptor[razonSocial]" id="receptor-razonSocial" value="<?= $vr('razonSocial'); ?>"<?= $errStyle('receptor.razonSocial'); ?>>
-    </label>
-    <label>Giro
-        <input type="text" name="receptor[giro]" id="receptor-giro" value="<?= $vr('giro'); ?>"<?= $errStyle('receptor.giro'); ?>>
-    </label>
-    <label>Direccion
-        <input type="text" name="receptor[direccion]" id="receptor-direccion" value="<?= $vr('direccion'); ?>"<?= $errStyle('receptor.direccion'); ?>>
-    </label>
-    <label>Comuna
-        <input type="text" name="receptor[comuna]" id="receptor-comuna" value="<?= $vr('comuna'); ?>"<?= $errStyle('receptor.comuna'); ?>>
-    </label>
-    <label>Email
-        <input type="email" name="receptor[email]" id="receptor-email" value="<?= $vr('email'); ?>"<?= $errStyle('receptor.email'); ?>>
-    </label>
-    <label style="display:flex;align-items:center;gap:0.5rem;font-weight:600;">
-        <input type="checkbox" name="guardar_cliente" value="1" style="width:auto;margin:0;" <?= ! empty($form['guardar_cliente']) ? 'checked' : ''; ?>>
-        Guardar en mis clientes
-    </label>
+    <div class="layout-principal-lateral">
+        <div>
+            <section class="tarjeta" aria-labelledby="titulo-receptor">
+                <h2 id="titulo-receptor">Datos del receptor</h2>
+                <div class="form-grid">
+                    <div class="form-campo">
+                        <label for="receptor-rut">RUT <?= $req; ?></label>
+                        <input type="text" name="receptor[rut]" id="receptor-rut" value="<?= $vr('rut'); ?>" placeholder="76543210-9" aria-describedby="rut-aviso"<?= $errStyle('receptor.rut'); ?>>
+                        <small class="form-ayuda" id="rut-aviso" aria-live="polite"></small>
+                    </div>
+                    <div class="form-campo">
+                        <label for="receptor-razonSocial">Razon social <?= $req; ?></label>
+                        <input type="text" name="receptor[razonSocial]" id="receptor-razonSocial" value="<?= $vr('razonSocial'); ?>"<?= $errStyle('receptor.razonSocial'); ?>>
+                    </div>
+                    <div class="form-campo form-campo--ancho">
+                        <label for="receptor-giro">Giro <?= $req; ?></label>
+                        <input type="text" name="receptor[giro]" id="receptor-giro" value="<?= $vr('giro'); ?>"<?= $errStyle('receptor.giro'); ?>>
+                    </div>
+                    <div class="form-campo form-campo--ancho">
+                        <label for="receptor-direccion">Direccion <?= $req; ?></label>
+                        <input type="text" name="receptor[direccion]" id="receptor-direccion" value="<?= $vr('direccion'); ?>"<?= $errStyle('receptor.direccion'); ?>>
+                    </div>
+                    <div class="form-campo">
+                        <label for="receptor-comuna">Comuna <?= $req; ?></label>
+                        <input type="text" name="receptor[comuna]" id="receptor-comuna" value="<?= $vr('comuna'); ?>"<?= $errStyle('receptor.comuna'); ?>>
+                    </div>
+                    <div class="form-campo">
+                        <label for="receptor-email">Email</label>
+                        <input type="email" name="receptor[email]" id="receptor-email" value="<?= $vr('email'); ?>"<?= $errStyle('receptor.email'); ?>>
+                    </div>
+                    <div class="form-campo form-campo--ancho">
+                        <label class="form-check" for="guardar-cliente">
+                            <input type="checkbox" name="guardar_cliente" id="guardar-cliente" value="1" <?= ! empty($form['guardar_cliente']) ? 'checked' : ''; ?>>
+                            Guardar en mis clientes
+                        </label>
+                    </div>
+                </div>
+            </section>
+        </div>
 
-    <h2>Detalle</h2>
-    <div class="tabla-scroll">
-        <table id="tabla-detalle">
-            <thead>
-                <tr>
-                    <th>Producto / servicio</th><th>Cantidad</th><th>Precio unit.</th>
-                    <th>Unidad</th><th>Exento</th><th></th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($detalles as $i => $d): ?>
-                    <tr>
-                        <td><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre"<?= $errStyle("detalles[{$i}].nombre"); ?>></td>
-                        <td><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" style="width:6rem;"<?= $errStyle("detalles[{$i}].cantidad"); ?>></td>
-                        <td><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][precioUnitario]" value="<?= htmlspecialchars((string) ($d['precioUnitario'] ?? '')); ?>" class="det-precio" style="width:8rem;"<?= $errStyle("detalles[{$i}].precioUnitario"); ?>></td>
-                        <td><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" style="width:5rem;"></td>
-                        <td style="text-align:center;"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" <?= ! empty($d['exento']) ? 'checked' : ''; ?>></td>
-                        <td><button type="button" class="quitar-linea" title="Quitar">&times;</button></td>
-                    </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+        <div>
+            <section class="tarjeta" aria-labelledby="titulo-condiciones">
+                <h2 id="titulo-condiciones">Condiciones del documento</h2>
+                <div class="form-grid form-grid--1">
+                    <div class="form-campo">
+                        <label class="form-check" for="montos-brutos">
+                            <input type="checkbox" name="montosSonBrutos" id="montos-brutos" value="1" <?= ! empty($form['montosSonBrutos']) ? 'checked' : ''; ?>>
+                            Los precios ingresados incluyen IVA (brutos)
+                        </label>
+                    </div>
+                    <div class="form-campo form-campo--corto">
+                        <label for="descuento-global">Descuento global (%)</label>
+                        <input type="text" inputmode="decimal" name="descuentoGlobalPct" id="descuento-global" value="<?= htmlspecialchars((string) ($form['descuentoGlobalPct'] ?? '')); ?>"<?= $errStyle('descuentoGlobalPct'); ?>>
+                        <small class="form-ayuda">Opcional. Aplica sobre los items afectos.</small>
+                    </div>
+                    <div class="form-campo">
+                        <label for="observaciones">Observaciones</label>
+                        <input type="text" name="observaciones" id="observaciones" value="<?= htmlspecialchars((string) ($form['observaciones'] ?? '')); ?>">
+                    </div>
+                </div>
+            </section>
+
+            <?php if ($esNota): ?>
+                <section class="tarjeta" aria-labelledby="titulo-referencia">
+                    <h2 id="titulo-referencia">Referencia del documento</h2>
+                    <p class="nota">Una nota de credito o debito debe referenciar el documento que corrige o anula.</p>
+                    <div class="form-grid">
+                        <div class="form-campo">
+                            <label for="ref-tipo">Tipo de documento <?= $req; ?></label>
+                            <input type="text" inputmode="numeric" name="referencias[0][tipoDocumento]" id="ref-tipo" value="<?= $vref('tipoDocumento'); ?>" placeholder="33"<?= $errStyle('referencias'); ?>>
+                            <small class="form-ayuda">TpoDocRef. 33 para factura.</small>
+                        </div>
+                        <div class="form-campo">
+                            <label for="ref-folio">Folio <?= $req; ?></label>
+                            <input type="text" inputmode="numeric" name="referencias[0][folio]" id="ref-folio" value="<?= $vref('folio'); ?>">
+                        </div>
+                        <div class="form-campo form-campo--ancho form-campo--corto">
+                            <label for="ref-fecha">Fecha</label>
+                            <input type="date" name="referencias[0][fecha]" id="ref-fecha" value="<?= $vref('fecha'); ?>">
+                        </div>
+                        <div class="form-campo form-campo--ancho">
+                            <label for="ref-codigo">Codigo de referencia</label>
+                            <select name="referencias[0][codigo]" id="ref-codigo">
+                                <?php $codSel = (string) ($form['referencias'][0]['codigo'] ?? ''); ?>
+                                <option value="1" <?= $codSel === '1' ? 'selected' : ''; ?>>1 - Anula documento</option>
+                                <option value="2" <?= $codSel === '2' ? 'selected' : ''; ?>>2 - Corrige texto</option>
+                                <option value="3" <?= $codSel === '3' ? 'selected' : ''; ?>>3 - Corrige montos</option>
+                            </select>
+                        </div>
+                        <div class="form-campo form-campo--ancho">
+                            <label for="ref-razon">Razon de la referencia</label>
+                            <input type="text" name="referencias[0][razon]" id="ref-razon" value="<?= $vref('razon'); ?>" placeholder="Anula factura N...">
+                        </div>
+                    </div>
+                </section>
+            <?php else: ?>
+                <div class="panel-info">
+                    <p class="panel-info__titulo">
+                        <span class="panel-info__icono" aria-hidden="true">&#9432;</span>
+                        Antes de emitir
+                    </p>
+                    <ul class="panel-info__lista">
+                        <li>El detalle necesita al menos una linea, con cantidad mayor que 0.</li>
+                        <li>Si el receptor no esta en tus clientes, marca "Guardar en mis clientes" para reutilizarlo despues.</li>
+                        <li>Cada emision aceptada consume un folio de tu CAF.</li>
+                    </ul>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
-    <datalist id="productos-list">
-        <?php foreach ($productos as $p): ?>
-            <option value="<?= htmlspecialchars((string) $p['nombre']); ?>"></option>
-        <?php endforeach; ?>
-    </datalist>
-    <p><button type="button" id="agregar-linea">+ Agregar linea</button></p>
 
-    <label style="display:flex;align-items:center;gap:0.5rem;font-weight:600;">
-        <input type="checkbox" name="montosSonBrutos" value="1" style="width:auto;margin:0;" <?= ! empty($form['montosSonBrutos']) ? 'checked' : ''; ?>>
-        Los precios ingresados incluyen IVA (brutos)
-    </label>
-    <label>Descuento global (%)
-        <input type="text" inputmode="decimal" name="descuentoGlobalPct" value="<?= htmlspecialchars((string) ($form['descuentoGlobalPct'] ?? '')); ?>" style="width:8rem;"<?= $errStyle('descuentoGlobalPct'); ?>>
-    </label>
-    <label>Observaciones
-        <input type="text" name="observaciones" value="<?= htmlspecialchars((string) ($form['observaciones'] ?? '')); ?>">
-    </label>
+    <section class="tarjeta" aria-labelledby="titulo-detalle">
+        <h2 id="titulo-detalle">Detalle del documento</h2>
+        <div class="tabla-scroll">
+            <table id="tabla-detalle" class="tabla-datos tabla-editable">
+                <thead>
+                    <tr>
+                        <th class="col-producto">Producto / servicio</th>
+                        <th class="col-cantidad">Cantidad</th>
+                        <th class="col-precio">Precio unit.</th>
+                        <th class="col-unidad">Unidad</th>
+                        <th class="col-exento">Exento</th>
+                        <th class="col-accion"><span class="visualmente-oculto">Accion</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($detalles as $i => $d): ?>
+                        <tr>
+                            <td class="col-producto"><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" aria-label="Producto o servicio"<?= $errStyle("detalles[{$i}].nombre"); ?>></td>
+                            <td class="col-cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" aria-label="Cantidad"<?= $errStyle("detalles[{$i}].cantidad"); ?>></td>
+                            <td class="col-precio"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][precioUnitario]" value="<?= htmlspecialchars((string) ($d['precioUnitario'] ?? '')); ?>" class="det-precio" aria-label="Precio unitario"<?= $errStyle("detalles[{$i}].precioUnitario"); ?>></td>
+                            <td class="col-unidad"><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" aria-label="Unidad"></td>
+                            <td class="col-exento"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" aria-label="Exento de IVA" <?= ! empty($d['exento']) ? 'checked' : ''; ?>></td>
+                            <td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <datalist id="productos-list">
+            <?php foreach ($productos as $p): ?>
+                <option value="<?= htmlspecialchars((string) $p['nombre']); ?>"></option>
+            <?php endforeach; ?>
+        </datalist>
+        <p><button type="button" id="agregar-linea" class="boton-secundario">+ Agregar linea</button></p>
+    </section>
 
-    <?php if ($esNota): ?>
-        <h2>Referencia al documento de origen</h2>
-        <p><small>Una nota de credito/debito debe referenciar el documento que corrige o anula.</small></p>
-        <label>Tipo de documento de referencia (TpoDocRef)
-            <input type="text" inputmode="numeric" name="referencias[0][tipoDocumento]" value="<?= $vref('tipoDocumento'); ?>" placeholder="33"<?= $errStyle('referencias'); ?>>
-        </label>
-        <label>Folio de referencia
-            <input type="text" inputmode="numeric" name="referencias[0][folio]" value="<?= $vref('folio'); ?>">
-        </label>
-        <label>Fecha de referencia (YYYY-MM-DD)
-            <input type="date" name="referencias[0][fecha]" value="<?= $vref('fecha'); ?>">
-        </label>
-        <label>Codigo de referencia
-            <select name="referencias[0][codigo]">
-                <?php $codSel = (string) ($form['referencias'][0]['codigo'] ?? ''); ?>
-                <option value="1" <?= $codSel === '1' ? 'selected' : ''; ?>>1 - Anula documento</option>
-                <option value="2" <?= $codSel === '2' ? 'selected' : ''; ?>>2 - Corrige texto</option>
-                <option value="3" <?= $codSel === '3' ? 'selected' : ''; ?>>3 - Corrige montos</option>
-            </select>
-        </label>
-        <label>Razon de la referencia
-            <input type="text" name="referencias[0][razon]" value="<?= $vref('razon'); ?>" placeholder="Anula factura N...">
-        </label>
-    <?php endif; ?>
-
-    <button type="submit" style="margin-top:1.25rem;">Emitir <?= htmlspecialchars($tituloDoc); ?></button>
+    <div class="acciones-grupo">
+        <button type="submit" class="boton-principal"><?= htmlspecialchars($textoEmitir); ?></button>
+        <a class="boton-texto" href="/panel">Volver al panel</a>
+    </div>
 </form>
-
-<p><a href="/panel">Volver al panel</a></p>
 
 <script>
 (function () {
@@ -163,13 +275,16 @@ $esNota = in_array($tipoDte, [61, 56], true);
         if (exento) { exento.checked = p.exento === 1; }
     }
 
+    // Debe producir el MISMO DOM que la fila que renderiza el PHP de arriba
+    // (mismas celdas, clases de columna, clases de control, aria-label y
+    // nombres con el indice). Si cambia una, cambia la otra.
     function nuevaFilaHTML(n) {
-        return '<td><input type="text" list="productos-list" name="detalles[' + n + '][nombre]" class="det-nombre"></td>' +
-            '<td><input type="text" inputmode="decimal" name="detalles[' + n + '][cantidad]" style="width:6rem;"></td>' +
-            '<td><input type="text" inputmode="decimal" name="detalles[' + n + '][precioUnitario]" class="det-precio" style="width:8rem;"></td>' +
-            '<td><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" style="width:5rem;"></td>' +
-            '<td style="text-align:center;"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento"></td>' +
-            '<td><button type="button" class="quitar-linea" title="Quitar">&times;</button></td>';
+        return '<td class="col-producto"><input type="text" list="productos-list" name="detalles[' + n + '][nombre]" class="det-nombre" aria-label="Producto o servicio"></td>' +
+            '<td class="col-cantidad"><input type="text" inputmode="decimal" name="detalles[' + n + '][cantidad]" aria-label="Cantidad"></td>' +
+            '<td class="col-precio"><input type="text" inputmode="decimal" name="detalles[' + n + '][precioUnitario]" class="det-precio" aria-label="Precio unitario"></td>' +
+            '<td class="col-unidad"><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" aria-label="Unidad"></td>' +
+            '<td class="col-exento"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento" aria-label="Exento de IVA"></td>' +
+            '<td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>';
     }
 
     document.getElementById('agregar-linea').addEventListener('click', function () {
