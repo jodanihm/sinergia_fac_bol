@@ -17,12 +17,35 @@
 *.pfx
 *.p12
 *.crt
+# Mismo material que los de arriba, en las otras extensiones habituales:
+# .cer y .der son certificados igual que .crt; .jks y .keystore son almacenes
+# de claves; .p8 es una clave privada PKCS#8; .ppk es el formato de PuTTY.
+# De estos solo existen hoy oracle/LibreDTE-master/certs/{100,300}.cer, que ya
+# quedaban fuera por /oracle/; ahora tienen cobertura por extension tambien.
+# El resto se agrega antes de tener remoto: con un remoto configurado, un
+# descuido deja de ser reversible.
+*.cer
+*.der
+*.jks
+*.keystore
+*.p8
+*.ppk
 
 # --- Bloque A2: secretos por nombre (cualquier nivel) ---
 .crypto_master_key
 .crypto_master_key.*
 .fact_api_key
 .rcv_internal_key
+# Claves SSH y archivos de credenciales de herramientas. Tampoco existen hoy
+# aqui, pero son los que se cuelan al copiar un home o un contenedor.
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+.netrc
+.npmrc
+.pgpass
+.htpasswd
 
 # --- Bloque A3: archivos de entorno con valores (no el example) ---
 .env
