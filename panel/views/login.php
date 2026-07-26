@@ -19,6 +19,13 @@
  * despues de un error -- igual que antes --, no aparece en ningun atributo y
  * esta pantalla no tiene JavaScript.
  *
+ * TODOS LOS <svg> LLEVAN width Y height COMO ATRIBUTO, ademas de la regla CSS.
+ * No es redundancia: un <svg> con viewBox pero SIN dimensiones intrinsecas se
+ * estira hasta llenar su contenedor cuando el CSS no llega. Medido: sin hoja de
+ * estilos estos mismos iconos renderizaban a 1409x1409 px en un viewport de
+ * 1440 -- que es como se vieron en produccion la primera vez. Con el atributo,
+ * el peor caso posible es un icono de 20px; el CSS solo lo afina.
+ *
  * NO HAY ENLACE A /registro. Es una decision de producto: el alta de tenants no
  * es autoregistro publico. La RUTA sigue existiendo y funcionando igual por URL
  * directa; aqui solo deja de ofrecerse.
@@ -50,7 +57,8 @@ require __DIR__ . '/partials/header.php';
                sobre HTTP en LAN y no se puede respaldar "plataforma segura". */
         ?>
         <p class="auth-header__nota">
-            <svg class="auth-icono" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <svg class="auth-icono" width="20" height="20" viewBox="0 0 24 24"
+                 aria-hidden="true" focusable="false">
                 <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"
                       fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
                 <path d="m9 12 2 2 4-4" fill="none" stroke="currentColor"
@@ -65,11 +73,14 @@ require __DIR__ . '/partials/header.php';
         <?php
             /* Zona decorativa. Es una abstraccion del panel: sin cifras, sin
                nombres, sin RUT y sin ningun dato que pueda leerse como real.
-               aria-hidden porque no aporta informacion, solo contexto visual. */
+               aria-hidden porque no aporta informacion, solo contexto visual.
+               width/height = su viewBox: sin CSS se ve a tamano natural en vez
+               de estirarse a la pantalla completa. */
         ?>
         <div class="auth-visual" aria-hidden="true">
             <div class="auth-visual__fondo"></div>
-            <svg class="auth-visual__panel" viewBox="0 0 420 300" role="presentation" focusable="false">
+            <svg class="auth-visual__panel" width="420" height="300" viewBox="0 0 420 300"
+                 role="presentation" focusable="false">
                 <rect x="0" y="0" width="420" height="300" rx="14" fill="#ffffff"/>
                 <rect x="0" y="0" width="64" height="300" rx="14" fill="#1e3a8a"/>
                 <rect x="52" y="0" width="12" height="300" fill="#1e3a8a"/>
@@ -132,7 +143,8 @@ require __DIR__ . '/partials/header.php';
                 <div class="auth-campo">
                     <label for="login-email">Email</label>
                     <div class="auth-input">
-                        <svg class="auth-input__icono" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <svg class="auth-input__icono" width="20" height="20" viewBox="0 0 24 24"
+                             aria-hidden="true" focusable="false">
                             <rect x="3" y="5" width="18" height="14" rx="2.5" fill="none"
                                   stroke="currentColor" stroke-width="1.6"/>
                             <path d="m4 7 8 5.5L20 7" fill="none" stroke="currentColor"
@@ -146,7 +158,8 @@ require __DIR__ . '/partials/header.php';
                 <div class="auth-campo">
                     <label for="login-password">Contrasena</label>
                     <div class="auth-input">
-                        <svg class="auth-input__icono" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <svg class="auth-input__icono" width="20" height="20" viewBox="0 0 24 24"
+                             aria-hidden="true" focusable="false">
                             <rect x="4.5" y="10" width="15" height="10" rx="2.5" fill="none"
                                   stroke="currentColor" stroke-width="1.6"/>
                             <path d="M8 10V7.5a4 4 0 0 1 8 0V10" fill="none" stroke="currentColor"
