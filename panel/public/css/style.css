@@ -1488,3 +1488,246 @@ a.stepper__contenido:hover { color: #1a56db; }
 @media (max-width: 720px) {
     .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ==========================================================================
+   PANTALLA DE ACCESO (/login)
+
+   TODO va bajo .auth-page, la clase que login.php pide al <body> via
+   partials/header.php. Ninguna regla global se modifica: body, input, button,
+   label, h1 y a siguen exactamente como estaban, porque las usan las otras ~40
+   vistas -- incluida /registro, que comparte el mismo layout sin sesion y NO
+   se toca en esta fase.
+
+   Lo que hay que neutralizar dentro del scope es el body global
+   (max-width: 640px + margin: 2rem auto), que encierra el contenido en una
+   columna estrecha, y las reglas sueltas de input/button/label/h1.
+
+   Paleta: la ya consolidada del panel. El azul es #1a56db, el mismo del foco y
+   de los botones del sistema. No se introduce ningun color nuevo salvo grises
+   y azules muy claros de fondo, que no llevan texto encima.
+   ========================================================================== */
+body.auth-page {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    background: #f7f9fd;
+}
+body.auth-page > main {
+    display: block;
+    min-height: 100vh;
+    min-height: 100dvh;
+}
+
+.auth-layout {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    min-height: 100dvh;
+    box-sizing: border-box;
+}
+
+/* --- Header ------------------------------------------------------------- */
+.auth-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: 0.9rem 1.5rem;
+    background: #fff;
+    border-bottom: 1px solid #e6ebf5;
+}
+.auth-marca { display: inline-flex; align-items: center; text-decoration: none; }
+/* Mismo criterio que .sidebar__logo: se acota la ALTURA, nunca el ancho, para
+   que el logo no se deforme ni crezca al ensancharse su contenedor. */
+.auth-marca__logo { display: block; width: auto; height: auto; max-width: 100%; max-height: 2.9rem; }
+.auth-header__nota {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0;
+    color: #5c5c5c;          /* 6.24:1 sobre #fff */
+    font-size: 0.85rem;
+}
+.auth-icono { width: 1.05rem; height: 1.05rem; flex: none; color: #1a56db; }
+
+/* --- Cuerpo: dos columnas en escritorio --------------------------------- */
+.auth-main {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 500px);
+    align-items: center;
+    justify-items: center;
+    gap: 3rem;
+    width: 100%;
+    max-width: 1220px;
+    margin: 0 auto;
+    /* Asimetrico a proposito: con align-items:center, un padding inferior mayor
+       que el superior sube el bloque sin romper el centrado. Antes quedaba
+       demasiado aire arriba. */
+    padding: 1.75rem 1.5rem 4.5rem;
+    box-sizing: border-box;
+}
+
+/* --- Zona decorativa ---------------------------------------------------- */
+.auth-visual { position: relative; width: 100%; max-width: 560px; }
+.auth-visual__fondo {
+    position: absolute;
+    inset: -12% -8% -12% -8%;
+    border-radius: 28px;
+    background:
+        radial-gradient(60% 60% at 20% 20%, rgba(26, 86, 219, 0.10), transparent 70%),
+        radial-gradient(50% 50% at 85% 80%, rgba(26, 86, 219, 0.08), transparent 70%);
+}
+.auth-visual__panel {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 14px;
+    box-shadow: 0 18px 45px rgba(20, 40, 90, 0.13);
+}
+
+/* --- Card de acceso ----------------------------------------------------- */
+.auth-card {
+    width: 100%;
+    max-width: 500px;
+    box-sizing: border-box;
+    padding: 2.25rem 2.4rem;
+    background: #fff;
+    border: 1px solid #e6ebf5;
+    border-radius: 14px;
+    box-shadow: 0 12px 34px rgba(20, 40, 90, 0.09);
+}
+.auth-card__logo { display: block; width: auto; height: auto; max-height: 3.3rem; margin: 0 auto 1.1rem; }
+.auth-card__titulo {
+    margin: 0 0 0.35rem;
+    font-size: 1.6rem;      /* el h1 global es 1.4rem; aqui es el foco de la pantalla */
+    font-weight: 700;
+    text-align: center;
+    color: #1a2b4b;         /* 11.5:1 sobre #fff */
+}
+.auth-card__bajada {
+    margin: 0 0 1.5rem;
+    text-align: center;
+    color: #5c5c5c;         /* 6.24:1 sobre #fff */
+    font-size: 0.92rem;
+}
+.auth-alerta { margin-bottom: 1.1rem; }
+
+/* --- Formulario --------------------------------------------------------- */
+/* Sin margen propio: el espaciado lo reparten los campos y el boton. Algunos
+   UA todavia traen un margin inferior por defecto en <form>. */
+.auth-form { margin: 0; }
+.auth-campo { margin-bottom: 1.05rem; }
+.auth-campo label {
+    display: block;
+    margin: 0 0 0.4rem;     /* la regla global de label trae 0.75rem arriba */
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #1a2b4b;
+}
+/* El icono se posiciona sobre el input y este reserva el espacio con
+   padding-left, en vez de meterlo dentro del control: asi el area clickeable y
+   el foco siguen siendo los del <input>, sin trucos. */
+.auth-input { position: relative; display: block; }
+.auth-input__icono {
+    position: absolute;
+    left: 0.85rem;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 1.15rem;
+    height: 1.15rem;
+    color: #8a93a6;
+    pointer-events: none;   /* el clic siempre llega al input */
+}
+.auth-page .auth-input input {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.75rem 0.9rem 0.75rem 2.75rem;
+    border: 1px solid #d5dcea;
+    border-radius: 9px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 0.95rem;
+    color: #222;
+}
+.auth-page .auth-input input::placeholder { color: #9aa3b4; }
+.auth-page .auth-input input:hover { border-color: #b9c4d9; }
+/* El anillo global de :focus-visible sigue mandando; el borde azul solo lo
+   refuerza, igual que hace .form-compacto en el resto del panel. */
+.auth-page .auth-input input:focus-visible { border-color: #1a56db; }
+
+.auth-page .auth-boton {
+    display: block;
+    width: 100%;
+    margin-top: 1.4rem;     /* la regla global de button trae 1rem */
+    padding: 0.8rem 1rem;
+    /* Cierra la card: antes el espacio inferior lo daba el bloque de registro,
+       que se retiro. Sin esto el boton queda pegado al borde. */
+    margin-bottom: 0.4rem;
+    border: 1px solid #1a56db;
+    border-radius: 9px;
+    background: #1a56db;
+    color: #fff;            /* 6.18:1 */
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+}
+.auth-page .auth-boton:hover { background: #1848b8; border-color: #1848b8; }
+.auth-page .auth-boton:active { background: #143c99; border-color: #143c99; }
+
+/* --- Footer ------------------------------------------------------------- */
+.auth-footer {
+    padding: 1.25rem 1.5rem 1.6rem;
+    border-top: 1px solid #e6ebf5;
+    background: #fff;
+    text-align: center;
+}
+.auth-footer p { margin: 0; }
+.auth-footer__marca { font-weight: 700; color: #1a2b4b; font-size: 0.95rem; }
+.auth-footer__nota { margin-top: 0.25rem; color: #5c5c5c; font-size: 0.85rem; }
+.auth-footer__legal { margin-top: 0.5rem; color: #6e6e6e; font-size: 0.8rem; }
+
+/* --- Responsivo ---------------------------------------------------------
+   1024px: la decoracion pierde la mitad del ancho util y ya no aporta; se
+   retira y la card pasa a ser la pantalla completa, centrada. Intentar
+   sostener dos columnas mas abajo solo aplasta el formulario.
+   ------------------------------------------------------------------------ */
+@media (max-width: 1024px) {
+    .auth-main {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        max-width: 580px;
+    }
+    .auth-visual { display: none; }
+}
+
+@media (max-width: 560px) {
+    .auth-header { padding: 0.75rem 1rem; }
+    .auth-marca__logo { max-height: 2rem; }
+    .auth-main { padding: 1.5rem 1rem; }
+    /* La card se integra al fondo: sin borde ni sombra gana ancho util para
+       los inputs, que es lo que importa a este tamano. */
+    .auth-card {
+        padding: 1.5rem 1.05rem;
+        border: none;
+        box-shadow: none;
+        background: transparent;
+    }
+    .auth-card__titulo { font-size: 1.4rem; }
+    .auth-footer { padding: 1rem 1rem 1.25rem; }
+    .auth-footer__nota { font-size: 0.8rem; }
+}
+
+/* Alto reducido (portatiles de 768px o menos, o movil apaisado): la decoracion
+   y el footer no pueden empujar el formulario fuera de la vista. */
+@media (max-height: 720px) {
+    .auth-main { padding-top: 1.25rem; padding-bottom: 1.25rem; }
+    .auth-card { padding-top: 1.5rem; padding-bottom: 1.5rem; }
+    .auth-card__logo { max-height: 2.1rem; margin-bottom: 0.8rem; }
+    .auth-footer__nota { display: none; }
+}

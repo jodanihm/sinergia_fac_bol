@@ -16,6 +16,14 @@
  * cuando recibe foco.
  */
 $panelAutenticado = class_exists('Auth') && Auth::autenticado();
+
+// Clase extra opcional para el <body>. Existe porque la regla global
+// body { max-width: 640px; margin: 2rem auto } encierra el contenido en una
+// columna estrecha, y una pantalla de acceso a ancho completo necesita
+// anularla SIN tocar esa regla, que usan el resto de las vistas sin sesion
+// (registro, activar-cuenta). La vista la declara antes del require; si no la
+// declara, el <body> sale exactamente igual que antes.
+$bodyClaseExtra = trim(($bodyClase ?? '') . ($panelAutenticado ? ' con-sidebar' : ''));
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -25,7 +33,7 @@ $panelAutenticado = class_exists('Auth') && Auth::autenticado();
 <title><?= htmlspecialchars($titulo ?? 'Panel'); ?></title>
 <link rel="stylesheet" href="/css/style.css">
 </head>
-<body class="<?= $panelAutenticado ? 'con-sidebar' : ''; ?>">
+<body class="<?= htmlspecialchars($bodyClaseExtra); ?>">
 <?php if ($panelAutenticado): ?>
 <a class="skip-link" href="#contenido">Saltar al contenido</a>
 <?php require __DIR__ . '/_nav.php'; ?>
