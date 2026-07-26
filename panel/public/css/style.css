@@ -1049,18 +1049,57 @@ a.stepper__contenido:hover { color: #1a56db; }
     cursor: pointer;
 }
 
-/* Boton de accion dentro de una celda de tabla (activar/desactivar). Sin esto
-   queda desalineado respecto del enlace vecino: el boton global trae margin-top
-   de 1rem y .boton-texto agrega 0.5rem de padding vertical, asi que "Desactivar"
-   caia mas abajo que "Editar". Medido: con estas cuatro declaraciones ambos
-   comparten linea base. Hoy ninguna otra vista tiene un <button> en esta celda,
-   asi que la regla es puramente aditiva. */
+/* --------------------------------------------------------------------------
+   Controles de la celda de acciones: enlaces y botones con LA MISMA CAJA.
+
+   Esta regla nacio solo para el <button>, aplastandole el padding vertical
+   para que no cayera mas abajo que el enlace de texto plano de al lado. Eso
+   igualaba a los dos por abajo: ambos quedaban en ~19px de alto.
+
+   Ahora los iguala por arriba. Enlace y boton reciben el mismo padding
+   vertical y comparten linea base, que era el objetivo original; la diferencia
+   es que el tamano de referencia ya no lo pone el texto suelto.
+
+   OBJETIVO DE TAMANO: ~30px de alto (0.35rem por lado sobre una caja de
+   ~19px). El minimo es 24x24 CSS px -- WCAG 2.2 SC 2.5.8, nivel AA -- y se
+   deja holgura deliberada. No hace falta variante para movil: la tipografia
+   de la celda no cambia con el ancho (medido a 1440 y a 420).
+
+   ALCANCE, al dia de hoy 7 vistas: apikeys, apikeys-produccion, usuarios,
+   clientes, productos, documentos y carga-masiva. Cinco tienen <button> y
+   cuatro tienen <a>; clientes y productos tienen los dos en la misma celda.
+   Si agregas un control aqui, hereda la caja: no le pongas clases de tamano.
+
+   El <a> va a inline-block a proposito. Con display:inline el padding pinta
+   area clickeable pero no participa del flujo, asi que la caja del enlace y
+   la del boton se calculan distinto y la alineacion depende del line-height.
+   Con inline-block ambos son cajas reales y .boton-texto ya lo es: misma
+   naturaleza, misma alineacion por baseline, resultado predecible.
+
+   EFECTO EN EL ALTO DE FILA, medido antes y despues en las 7 vistas: la celda
+   aporta 7.2px de padding por lado, asi que la fila solo crece donde su
+   contenido mas alto era menor que el nuevo control. Sin cambio en clientes
+   (85.4px), productos (68.4), documentos (51.4) y las dos de apikeys (53.4);
+   +6.8px en usuarios (38.7 -> 45.5) y +6.9 en carga-masiva (38.2 -> 45.1),
+   que son las de filas de una sola linea. Es el costo minimo del objetivo de
+   30px, no un efecto colateral evitable.
+
+   EFECTO EN EL ANCHO: la columna crece donde hay <a>, porque el enlace pasa a
+   tener padding horizontal -- +11.1px en clientes, +13.1 en productos, +12.4
+   en documentos; sin cambio en usuarios, que solo tiene botones. El ancho
+   TOTAL de la tabla no se mueve (1036px y 646px antes y despues): las demas
+   columnas ceden esos pixeles. La separacion entre controles tampoco cambia
+   (11.9px), porque el enlace gana padding a ambos lados por igual.
+   -------------------------------------------------------------------------- */
+.tabla-datos__acciones a,
+.tabla-datos__acciones button {
+    display: inline-block;
+    padding: 0.35rem;
+    vertical-align: baseline;
+}
 .tabla-datos__acciones button {
     margin-top: 0;
-    padding-top: 0;
-    padding-bottom: 0;
     font-size: inherit;
-    vertical-align: baseline;
 }
 
 /* Tabla con seleccion. */
@@ -1412,30 +1451,6 @@ a.stepper__contenido:hover { color: #1a56db; }
     cursor: pointer;
 }
 .tabla-editable .quitar-linea:hover { background: #fdecea; border-color: #b00020; }
-
-/* --------------------------------------------------------------------------
-   Area interactiva de las acciones dentro de una tabla.
-
-   .tabla-datos__acciones button (mas arriba) anula el padding vertical de
-   cualquier boton de esa celda. Sobre un .boton-texto eso deja un objetivo de
-   18.9px de alto: por debajo de los 24px que pide WCAG 2.2 SC 2.5.8.
-
-   Este modificador devuelve el padding vertical SOLO donde se aplica de forma
-   explicita. No se toca .tabla-datos__acciones button ni .boton-texto, para no
-   alterar los modulos que ya dependen de ellos.
-
-   Va con doble clase (.boton-texto.boton-texto--accion-tabla, 0-2-0) para
-   ganarle en especificidad a .tabla-datos__acciones button (0-1-1) sin depender
-   del contenedor ni del orden de declaracion.
-
-   0.35rem por lado sobre una caja de 18.9px da ~30px: holgado sobre el minimo
-   y sin necesidad de una variante aparte para movil, porque la tipografia de
-   la celda no cambia con el ancho.
-   -------------------------------------------------------------------------- */
-.boton-texto.boton-texto--accion-tabla {
-    padding-top: 0.35rem;
-    padding-bottom: 0.35rem;
-}
 
 /* --------------------------------------------------------------------------
    Responsivo. La grilla de dos columnas aguanta hasta 720px: a 1024 el

@@ -115,12 +115,12 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                                         <?php if ($u['estado'] === 'activo'): ?>
                                             <form method="post" action="/configuracion/usuarios/<?= (int) $u['id']; ?>/desactivar" style="display:inline;">
                                                 <?= csrfInput(); ?>
-                                                <button type="submit" class="boton-texto boton-texto--accion-tabla">Desactivar</button>
+                                                <button type="submit" class="boton-texto">Desactivar</button>
                                             </form>
                                         <?php elseif (! $pendienteActivacion): ?>
                                             <form method="post" action="/configuracion/usuarios/<?= (int) $u['id']; ?>/activar" style="display:inline;">
                                                 <?= csrfInput(); ?>
-                                                <button type="submit" class="boton-texto boton-texto--accion-tabla">Reactivar</button>
+                                                <button type="submit" class="boton-texto">Reactivar</button>
                                             </form>
                                         <?php else: ?>
                                             <span class="tabla-datos__secundario">invita de nuevo arriba para reenviar el link</span>

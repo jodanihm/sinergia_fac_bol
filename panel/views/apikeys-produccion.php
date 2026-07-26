@@ -145,7 +145,7 @@ $badgeEstado = static function (string $estado): array {
                                               onsubmit="return confirm('Revocar esta API key de produccion? No se puede deshacer.');">
                                             <?= csrfInput(); ?>
                                             <input type="hidden" name="id" value="<?= (int) $k['id']; ?>">
-                                            <button type="submit" class="boton-texto boton-texto--accion-tabla">Revocar</button>
+                                            <button type="submit" class="boton-texto">Revocar</button>
                                         </form>
                                         <?php endif; ?>
                                     </td>
