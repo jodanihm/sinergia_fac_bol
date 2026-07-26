@@ -276,6 +276,19 @@ body.con-sidebar > main {
     flex-direction: column;
 }
 .sidebar__marca { font-weight: 700; font-size: 0.98rem; padding: 0.2rem 0.5rem 0.75rem; }
+
+/* Logo de la marca. El max-height es la pieza que importa: bajo 720px el
+   sidebar pasa a ancho completo y .sidebar__marca se ensancha con el, asi que
+   un ancho porcentual solo dejaria crecer el logo hasta comerse el menu (que
+   ahi vive en una caja de 50dvh con scroll propio). Acotando la ALTURA, el
+   limite manda igual en 232px que en pantalla completa. */
+.sidebar__logo {
+    display: block;
+    width: auto;
+    max-width: 100%;
+    max-height: 2.5rem;
+    height: auto;
+}
 .sidebar__grupo { margin-bottom: 0.55rem; }
 
 /* JERARQUIA DEL MENU: seccion > subgrupo > item > subitem.

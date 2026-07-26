@@ -71,7 +71,9 @@ $navRender = static function (array $nodos) use (&$navRender, $navPintarItem): v
 $navMenu = definicionMenu();
 ?>
 <nav class="sidebar" aria-label="Menu principal">
-    <div class="sidebar__marca">Sinergia</div>
+    <div class="sidebar__marca">
+        <img src="/img/logo.png" alt="Sinergia" class="sidebar__logo">
+    </div>
     <?php foreach ($navMenu as $seccion): ?>
         <?php if (isset($seccion['items'])): ?>
             <div class="sidebar__grupo">
