@@ -78,6 +78,10 @@ require __DIR__ . '/../src/FechaExcel.php';
 // libreria que usa public/index.php, sin reimplementar nada de cifrado, firma
 // ni consulta al SII.
 require __DIR__ . '/../../vendor/autoload.php';
+// InformePdf extiende TCPDF, asi que va DESPUES del autoloader de Composer: al
+// declarar la clase, PHP necesita que la clase padre ya sea resoluble. Con los
+// require de arriba (antes del autoload) fallaria con "Class TCPDF not found".
+require __DIR__ . '/../src/InformePdf.php';
 
 Auth::iniciar();
 
@@ -215,6 +219,49 @@ const DASH_MESES = [
     9 => 'septiembre', 10 => 'octubre', 11 => 'noviembre', 12 => 'diciembre',
 ];
 
+/**
+ * CATALOGO CERRADO de informes. La clave es la que viaja en la URL
+ * (/informes/{clave}), asi que esta constante es tambien la lista blanca: una
+ * clave que no este aqui es 404, no hay ruta dinamica que construir.
+ *
+ * 'periodo' => false significa que el informe NO admite rango de fechas. Hoy
+ * solo folios: es una foto del stock actual de folios disponibles, no un
+ * agregado de un periodo, asi que un desde/hasta ahi no significaria nada y se
+ * ignora explicitamente (ver handleInformeGet()).
+ */
+const INFORMES = [
+    'facturacion' => [
+        'label'       => 'Facturacion por tipo de documento',
+        'descripcion' => 'Documentos, neto, IVA y total agrupados por tipo de DTE.',
+        'periodo'     => true,
+    ],
+    'ventas-dia' => [
+        'label'       => 'Ventas por dia',
+        'descripcion' => 'Serie diaria con ventas, notas de credito y neto. Incluye los dias sin emision.',
+        'periodo'     => true,
+    ],
+    'clientes' => [
+        'label'       => 'Clientes por facturacion',
+        'descripcion' => 'Ranking completo de receptores por neto facturado en el periodo.',
+        'periodo'     => true,
+    ],
+    'estados' => [
+        'label'       => 'Documentos por estado del SII',
+        'descripcion' => 'Cuantos documentos hay en cada estado, tal cual lo devolvio el SII.',
+        'periodo'     => true,
+    ],
+    'detalle' => [
+        'label'       => 'Detalle documento a documento',
+        'descripcion' => 'Una fila por documento emitido, con receptor, montos y estado.',
+        'periodo'     => true,
+    ],
+    'folios' => [
+        'label'       => 'Estado de folios',
+        'descripcion' => 'Folios disponibles, usados y CAF cargados por tipo de documento.',
+        'periodo'     => false,
+    ],
+];
+
 /** "Nombre (N)" usando NOMBRES_TIPO_DTE, o "Documento tipo N (N)" si el tipo no esta mapeado. */
 function nombreTipoDte(int $tipo): string
 {
@@ -337,6 +384,21 @@ function definicionMenu(): array
             'items' => [
                 ['clave' => 'maestros.clientes', 'label' => 'Clientes', 'destino' => '/maestros/clientes', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'maestros.productos', 'label' => 'Productos y servicios', 'destino' => '/maestros/productos', 'construido' => true, 'requiereProduccion' => false],
+            ],
+        ],
+        // Los seis informes leen dte_emitido de PRODUCCION, asi que todos van
+        // con requiereProduccion => true, igual que el Panel de emision. El
+        // guard real es exigirProduccionCompleto() en cada handler; esto solo
+        // evita mostrar enlaces que llevarian a un bloqueo.
+        [
+            'label' => 'Informes',
+            'items' => [
+                ['clave' => 'informes.facturacion', 'label' => 'Facturacion por tipo', 'destino' => '/informes/facturacion', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.ventas-dia', 'label' => 'Ventas por dia', 'destino' => '/informes/ventas-dia', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.clientes', 'label' => 'Clientes por facturacion', 'destino' => '/informes/clientes', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.estados', 'label' => 'Documentos por estado', 'destino' => '/informes/estados', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.detalle', 'label' => 'Detalle documento a documento', 'destino' => '/informes/detalle', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.folios', 'label' => 'Estado de folios', 'destino' => '/informes/folios', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
         [
@@ -3840,6 +3902,35 @@ if ($metodo === 'GET' && $ruta === '/ventas/nota-debito') {
 if ($metodo === 'POST' && $ruta === '/ventas/nota-debito') {
     Auth::requerirSesion();
     handleEmisionPost(56);
+}
+
+// --- Informes ---
+// Tres bloques para seis informes: la clave viaja en la URL y INFORMES es la
+// lista blanca, asi que no hay ruta que construir por informe. El formato de
+// descarga va como SUB-RUTA (/pdf, /excel) siguiendo el patron que ya usan
+// /ventas/panel-emision/{tipo}/{folio}/pdf y /certificacion/intercambio/*.xml;
+// los filtros van por query string, como en /auditoria.
+if ($metodo === 'GET' && $ruta === '/informes') {
+    Auth::requerirSesion();
+    handleInformesIndexGet();
+}
+
+if ($metodo === 'GET' && preg_match('#^/informes/([a-z-]+)/(pdf|excel)$#', $ruta, $mInfDesc)) {
+    Auth::requerirSesion();
+    if (! isset(INFORMES[$mInfDesc[1]])) {
+        http_response_code(404);
+        exit;
+    }
+    handleInformeDescargaGet($mInfDesc[1], $mInfDesc[2]);
+}
+
+if ($metodo === 'GET' && preg_match('#^/informes/([a-z-]+)$#', $ruta, $mInf)) {
+    Auth::requerirSesion();
+    if (! isset(INFORMES[$mInf[1]])) {
+        http_response_code(404);
+        exit;
+    }
+    handleInformeGet($mInf[1]);
 }
 
 // --- Ventas > Panel de emision (M5) ---
@@ -8196,6 +8287,596 @@ function dashRazonSocialProduccion(PDO $pdo, int $cuentaId): string
     $stmt->execute([':c' => $cuentaId]);
 
     return (string) ($stmt->fetchColumn() ?: '');
+}
+
+// ===========================================================================
+//  INFORMES: consultas propias
+//
+//  Los cinco primeros informes reusan TAL CUAL las funciones dash* de arriba,
+//  que NO se modifican: el dashboard y los informes leen exactamente los mismos
+//  numeros. Aqui viven solo las dos consultas que el dashboard no tiene.
+// ===========================================================================
+
+/**
+ * Informe 6. Detalle documento a documento del periodo.
+ *
+ * Mismo scope que las consultas del dashboard (rut_emisor + produccion + rango)
+ * y misma decision de arquitectura: lee dte_emitido DIRECTO, no via el motor.
+ *
+ * A diferencia de dashTopClientes(), aqui NO se normaliza el RUT en SQL: esta
+ * consulta no agrupa, asi que no hace falta que la normalizacion ocurra dentro
+ * de un GROUP BY. Se usa Rut::normalizar() en PHP, que es la fuente unica del
+ * proyecto, y asi no se duplica la regla en dos lenguajes.
+ *
+ * LO QUE NO PUEDE MOSTRAR: monto exento. dte_emitido no lo guarda (mismo motivo
+ * por el que no aparece en documentos-listado.php). No se estima.
+ *
+ * @return list<array{tipoDte:int, folio:int, fechaEmision:string, receptorRut:string,
+ *                    razonSocial:?string, neto:int, iva:int, total:int, estado:string}>
+ */
+function informeDetalleDocumentos(
+    PDO $pdo,
+    int $cuentaId,
+    string $rutEmisor,
+    string $desde,
+    string $hasta
+): array {
+    $stmt = $pdo->prepare(
+        'SELECT tipo_dte, folio, fecha_emision, receptor_rut, neto, iva, total, estado '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+        . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        . 'ORDER BY fecha_emision ASC, tipo_dte ASC, folio ASC'
+    );
+    $stmt->execute([':rut' => $rutEmisor, ':desde' => $desde, ':hasta' => $hasta]);
+    $filas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if ($filas === []) {
+        return [];
+    }
+
+    // Un mismo receptor puede venir escrito con y sin puntos en filas
+    // distintas: normalizar en PHP hace que las dos formas resuelvan la misma
+    // razon social contra el maestro.
+    $normalizados = [];
+    foreach ($filas as $f) {
+        $normalizados[] = Rut::normalizar((string) $f['receptor_rut']);
+    }
+    $mapa = clienteRepo()->buscarPorRuts($cuentaId, $normalizados);
+
+    $salida = [];
+    foreach ($filas as $i => $f) {
+        $rut = $normalizados[$i];
+        $salida[] = [
+            'tipoDte'      => (int) $f['tipo_dte'],
+            'folio'        => (int) $f['folio'],
+            'fechaEmision' => (string) $f['fecha_emision'],
+            'receptorRut'  => $rut,
+            'razonSocial'  => isset($mapa[$rut]) ? (string) $mapa[$rut]['razon_social'] : null,
+            'neto'         => (int) $f['neto'],
+            'iva'          => (int) $f['iva'],
+            'total'        => (int) $f['total'],
+            'estado'       => (string) $f['estado'],
+        ];
+    }
+
+    return $salida;
+}
+
+/**
+ * Informe 3. Clientes por facturacion, SIN limite.
+ *
+ * Hermana de dashTopClientes(), NO su reemplazo. Esa funcion se deja intacta a
+ * proposito: su LIMIT 5 es parte de lo que el dashboard promete ("top 5"), y
+ * parametrizarla la convertiria en una funcion de dos caras al servicio de dos
+ * consumidores con requisitos distintos.
+ *
+ * Mismo SQL salvo el LIMIT, mismo criterio de signo para notas de credito
+ * (DASH_TIPO_NOTA_CREDITO resta) y mismo cruce a buscarPorRuts(). Aqui SI se
+ * normaliza en SQL, porque la normalizacion tiene que ocurrir dentro del
+ * GROUP BY para que las variantes con y sin puntos caigan en el mismo grupo.
+ *
+ * @return list<array{rut:string, razonSocial:?string, documentos:int, neto:int}>
+ */
+function informeClientes(
+    PDO $pdo,
+    int $cuentaId,
+    string $rutEmisor,
+    string $desde,
+    string $hasta
+): array {
+    $stmt = $pdo->prepare(
+        "SELECT UPPER(REPLACE(REPLACE(TRIM(receptor_rut), '.', ''), ' ', '')) AS rut_normalizado, "
+        . '       COUNT(*) AS documentos, '
+        . '       SUM(CASE WHEN tipo_dte = :nc THEN -total ELSE total END) AS neto '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+        . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        . 'GROUP BY rut_normalizado ORDER BY neto DESC'
+    );
+    $stmt->execute([
+        ':rut'   => $rutEmisor,
+        ':desde' => $desde,
+        ':hasta' => $hasta,
+        ':nc'    => DASH_TIPO_NOTA_CREDITO,
+    ]);
+    $filas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if ($filas === []) {
+        return [];
+    }
+
+    $ruts = array_map(static fn (array $f): string => (string) $f['rut_normalizado'], $filas);
+    $mapa = clienteRepo()->buscarPorRuts($cuentaId, $ruts);
+
+    $salida = [];
+    foreach ($filas as $fila) {
+        $rut = (string) $fila['rut_normalizado'];
+        $salida[] = [
+            'rut'         => $rut,
+            'razonSocial' => isset($mapa[$rut]) ? (string) $mapa[$rut]['razon_social'] : null,
+            'documentos'  => (int) $fila['documentos'],
+            'neto'        => (int) $fila['neto'],
+        ];
+    }
+
+    return $salida;
+}
+
+// ===========================================================================
+//  INFORMES: estructura y salida
+// ===========================================================================
+
+/** Miles con punto, sin decimales. Mismo formato que el resto del panel. */
+function informeMonto(int|float $v): string
+{
+    return number_format((float) $v, 0, ',', '.');
+}
+
+/**
+ * Formatea UNA celda para mostrarla (pantalla o PDF).
+ *
+ * informeColumnasYFilas() devuelve los valores NUMERICOS EN CRUDO, no como
+ * texto ya formateado, y esto es deliberado: si las filas llevaran "100.000",
+ * PhpSpreadsheet interpretaria el punto como separador DECIMAL al escribir el
+ * .xlsx y la celda terminaria valiendo 100. Se detecto exactamente asi, leyendo
+ * de vuelta un Excel descargado.
+ *
+ * Asi que el numero viaja crudo hasta el ultimo momento: la pantalla y el PDF
+ * lo formatean aqui, y el Excel lo escribe como numero y le aplica el formato
+ * #,##0 de celda, que es lo que permite sumar en la planilla.
+ */
+function informeCelda(mixed $valor, bool $esNumerica): string
+{
+    if (! $esNumerica || $valor === '' || $valor === null) {
+        return (string) $valor;
+    }
+
+    return informeMonto(is_numeric($valor) ? 0 + $valor : 0);
+}
+
+/**
+ * FUENTE UNICA de la estructura de cada informe.
+ *
+ * Devuelve columnas, filas y totales ya formateados como texto. Lo consumen los
+ * TRES formatos -- vista previa en pantalla, PDF y Excel -- justamente para que
+ * no puedan desincronizarse: si una columna cambia, cambia en los tres a la vez.
+ *
+ * Los anchos de columna estan en mm y suman ~273 (A4 horizontal menos margenes:
+ * 297 - 24). Solo los usa el PDF; la vista y el Excel los ignoran.
+ *
+ * @param array $datos salida cruda de la consulta correspondiente (dash... o informe...)
+ *
+ * @return array{columnas:list<array{titulo:string, ancho:float, alineacion:string}>,
+ *               filas:list<list<string>>, totales:list<string>|null}
+ */
+function informeColumnasYFilas(string $clave, array $datos): array
+{
+    $der = 'R';
+    $izq = 'L';
+
+    switch ($clave) {
+        case 'facturacion':
+            // $datos = salida de dashMetricasPorTipo(): [tipo => [documentos, neto, iva, total]]
+            $columnas = [
+                ['titulo' => 'Tipo de documento', 'ancho' => 93, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Documentos',        'ancho' => 45, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Neto',              'ancho' => 45, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'IVA',               'ancho' => 45, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Total',             'ancho' => 45, 'alineacion' => $der, 'num' => true],
+            ];
+            $filas = [];
+            foreach ($datos as $tipo => $d) {
+                $filas[] = [
+                    nombreTipoDte((int) $tipo),
+                    (int) $d['documentos'],
+                    (int) $d['neto'],
+                    (int) $d['iva'],
+                    (int) $d['total'],
+                ];
+            }
+            // El total NO es una suma plana: dashResumen() aplica la regla de
+            // negocio (las notas de credito RESTAN). Se reusa esa funcion en vez
+            // de sumar aqui, para que el informe no pueda contradecir al
+            // dashboard.
+            $r = dashResumen($datos);
+            $totales = [
+                'Neto del periodo (' . $r['formula'] . ')',
+                (int) $r['documentos'],
+                (int) $r['netoPeriodo'],
+                (int) $r['ivaDebito'],
+                '',
+            ];
+            break;
+
+        case 'ventas-dia':
+            // $datos = salida de dashSerieCompleta(): list con fecha/dia/...
+            $columnas = [
+                ['titulo' => 'Fecha',            'ancho' => 63, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Documentos',       'ancho' => 52, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Ventas',           'ancho' => 52, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Notas de credito', 'ancho' => 53, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Neto',             'ancho' => 53, 'alineacion' => $der, 'num' => true],
+            ];
+            $filas = [];
+            $tDoc = $tVen = $tNc = $tNeto = 0;
+            foreach ($datos as $d) {
+                $filas[] = [
+                    (string) $d['fecha'],
+                    (int) $d['documentos'],
+                    (int) $d['ventas'],
+                    (int) $d['notasCredito'],
+                    (int) $d['neto'],
+                ];
+                $tDoc  += (int) $d['documentos'];
+                $tVen  += (int) $d['ventas'];
+                $tNc   += (int) $d['notasCredito'];
+                $tNeto += (int) $d['neto'];
+            }
+            $totales = ['Total', $tDoc, $tVen, $tNc, $tNeto];
+            break;
+
+        case 'clientes':
+            // $datos = salida de informeClientes()
+            $columnas = [
+                ['titulo' => 'RUT',          'ancho' => 55, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Razon social', 'ancho' => 128, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Documentos',   'ancho' => 45, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Neto',         'ancho' => 45, 'alineacion' => $der, 'num' => true],
+            ];
+            $filas = [];
+            $tDoc = $tNeto = 0;
+            foreach ($datos as $d) {
+                $filas[] = [
+                    (string) $d['rut'],
+                    // null = el receptor no esta en el maestro de clientes. Se
+                    // dice, no se inventa un nombre.
+                    $d['razonSocial'] ?? 'No esta en tu maestro de clientes',
+                    (int) $d['documentos'],
+                    (int) $d['neto'],
+                ];
+                $tDoc  += (int) $d['documentos'];
+                $tNeto += (int) $d['neto'];
+            }
+            $totales = ['Total', '', $tDoc, $tNeto];
+            break;
+
+        case 'estados':
+            // $datos = salida de dashDistribucionEstado()
+            $columnas = [
+                ['titulo' => 'Estado en el SII', 'ancho' => 183, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Documentos',       'ancho' => 90, 'alineacion' => $der, 'num' => true],
+            ];
+            $filas = [];
+            $tDoc = 0;
+            foreach ($datos as $d) {
+                $filas[] = [(string) $d['estado'], (int) $d['documentos']];
+                $tDoc += (int) $d['documentos'];
+            }
+            $totales = ['Total', $tDoc];
+            break;
+
+        case 'detalle':
+            // $datos = salida de informeDetalleDocumentos()
+            $columnas = [
+                ['titulo' => 'Fecha',        'ancho' => 26, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Tipo',         'ancho' => 47, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Folio',        'ancho' => 20, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'RUT receptor', 'ancho' => 30, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Razon social', 'ancho' => 70, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Neto',         'ancho' => 27, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'IVA',          'ancho' => 25, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Total',        'ancho' => 28, 'alineacion' => $der, 'num' => true],
+            ];
+            $filas = [];
+            $tNeto = $tIva = $tTotal = 0;
+            foreach ($datos as $d) {
+                $filas[] = [
+                    (string) $d['fechaEmision'],
+                    nombreTipoDte((int) $d['tipoDte']),
+                    (int) $d['folio'],
+                    (string) $d['receptorRut'],
+                    $d['razonSocial'] ?? 'No esta en tu maestro',
+                    (int) $d['neto'],
+                    (int) $d['iva'],
+                    (int) $d['total'],
+                ];
+                $tNeto  += (int) $d['neto'];
+                $tIva   += (int) $d['iva'];
+                $tTotal += (int) $d['total'];
+            }
+            // Suma plana a proposito: es el total de lo LISTADO, no el neto del
+            // periodo. Las notas de credito aparecen como fila propia con su
+            // monto positivo, igual que en el Panel de emision.
+            $totales = ['Total de lo listado', '', '', '', '', $tNeto, $tIva, $tTotal];
+            break;
+
+        case 'folios':
+            // $datos = salida de dashFoliosPorTipo()
+            $columnas = [
+                ['titulo' => 'Tipo de documento', 'ancho' => 83, 'alineacion' => $izq, 'num' => false],
+                ['titulo' => 'Disponibles',       'ancho' => 40, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Usados',            'ancho' => 40, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'Rango total',       'ancho' => 40, 'alineacion' => $der, 'num' => true],
+                ['titulo' => 'CAF cargados',      'ancho' => 35, 'alineacion' => $der, 'num' => true],
+                ['titulo' => '% disponible',      'ancho' => 35, 'alineacion' => $der, 'num' => false],
+            ];
+            $filas = [];
+            foreach ($datos as $d) {
+                $filas[] = [
+                    nombreTipoDte((int) $d['tipo']),
+                    (int) $d['disponibles'],
+                    (int) $d['usados'],
+                    (int) $d['totalRango'],
+                    (int) $d['cafs'],
+                    $d['pctDisponible'] . '%',
+                ];
+            }
+            // Sin fila de totales: sumar folios de tipos distintos no significa
+            // nada (no son la misma serie).
+            $totales = null;
+            break;
+
+        default:
+            $columnas = [];
+            $filas    = [];
+            $totales  = null;
+    }
+
+    return ['columnas' => $columnas, 'filas' => $filas, 'totales' => $totales];
+}
+
+/**
+ * Nombre del archivo de una descarga de informe.
+ *
+ * El proyecto NO tiene un helper compartido para esto: los seis
+ * Content-Disposition que ya existen arman su nombre en linea, cada uno con su
+ * convencion. Este helper es solo para informes; unificar los otros seis es una
+ * limpieza aparte que no se mezcla con esta tarea.
+ */
+function nombreArchivoInforme(string $clave, ?string $desde, ?string $hasta, string $ext): string
+{
+    $sufijo = ($desde !== null && $hasta !== null) ? "{$desde}_{$hasta}" : date('Y-m-d');
+
+    return "informe_{$clave}_{$sufijo}.{$ext}";
+}
+
+/**
+ * Ejecuta la consulta que corresponde a la clave y devuelve los datos crudos.
+ *
+ * Las cinco primeras llaman a funciones dash* SIN MODIFICAR: es lo que garantiza
+ * que un informe y el dashboard nunca muestren cifras distintas del mismo dato.
+ */
+function informeDatos(string $clave, PDO $pdo, int $cuentaId, string $rutEmisor, ?string $desde, ?string $hasta): array
+{
+    return match ($clave) {
+        'facturacion' => dashMetricasPorTipo($pdo, $rutEmisor, (string) $desde, (string) $hasta),
+        'ventas-dia'  => dashSerieCompleta(
+            dashVentasPorDia($pdo, $rutEmisor, (string) $desde, (string) $hasta),
+            (string) $desde,
+            (string) $hasta
+        ),
+        'clientes'    => informeClientes($pdo, $cuentaId, $rutEmisor, (string) $desde, (string) $hasta),
+        'estados'     => dashDistribucionEstado($pdo, $rutEmisor, (string) $desde, (string) $hasta),
+        'detalle'     => informeDetalleDocumentos($pdo, $cuentaId, $rutEmisor, (string) $desde, (string) $hasta),
+        'folios'      => dashFoliosPorTipo($pdo, $rutEmisor),
+        default       => [],
+    };
+}
+
+/**
+ * Rango efectivo de un informe.
+ *
+ * Misma validacion que handleAuditoriaGet(): si cualquiera de las dos fechas no
+ * es valida, se descartan LAS DOS (un rango a medias filtraria de forma
+ * impredecible) y se cae al mes en curso via dashPeriodo().
+ *
+ * @return array{desde:?string, hasta:?string, etiqueta:string}
+ */
+function informePeriodo(string $clave): array
+{
+    if (! (INFORMES[$clave]['periodo'] ?? false)) {
+        // El informe no admite periodo: se ignora cualquier desde/hasta que
+        // venga por query string en vez de aplicarlo a medias.
+        return ['desde' => null, 'hasta' => null, 'etiqueta' => ''];
+    }
+
+    $desdeRaw = trim((string) ($_GET['desde'] ?? ''));
+    $hastaRaw = trim((string) ($_GET['hasta'] ?? ''));
+    $desde    = ($desdeRaw !== '' && fechaValida($desdeRaw)) ? $desdeRaw : null;
+    $hasta    = ($hastaRaw !== '' && fechaValida($hastaRaw)) ? $hastaRaw : null;
+
+    if ($desde === null || $hasta === null || $desde > $hasta) {
+        $p     = dashPeriodo('actual');
+        $desde = $p['desde'];
+        $hasta = $p['hasta'];
+    }
+
+    return ['desde' => $desde, 'hasta' => $hasta, 'etiqueta' => "{$desde} a {$hasta}"];
+}
+
+// ===========================================================================
+//  Handlers de informes
+//
+//  Los tres exigen produccion completa, igual que el Panel de emision: los seis
+//  informes leen dte_emitido con ambiente='produccion', asi que un tenant en
+//  certificacion no tiene nada que ver aqui.
+// ===========================================================================
+
+/** GET /informes -- landing con las seis tarjetas. */
+function handleInformesIndexGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    vista('informes-index', [
+        'informes'  => INFORMES,
+        'navActivo' => 'informes',
+    ]);
+}
+
+/** GET /informes/{clave} -- filtros + vista previa. */
+function handleInformeGet(string $clave): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    $rut      = exigirProduccionCompleto($pdo, $cuentaId);
+
+    $periodo = informePeriodo($clave);
+    $datos   = informeDatos($clave, $pdo, $cuentaId, $rut, $periodo['desde'], $periodo['hasta']);
+    $tabla   = informeColumnasYFilas($clave, $datos);
+
+    vista('informe', [
+        'clave'       => $clave,
+        'definicion'  => INFORMES[$clave],
+        'columnas'    => $tabla['columnas'],
+        'filas'       => $tabla['filas'],
+        'totales'     => $tabla['totales'],
+        'desde'       => $periodo['desde'] ?? '',
+        'hasta'       => $periodo['hasta'] ?? '',
+        'razonSocial' => dashRazonSocialProduccion($pdo, $cuentaId),
+        'rutEmisor'   => $rut,
+        'navActivo'   => 'informes.' . $clave,
+    ]);
+}
+
+/** GET /informes/{clave}/pdf y /excel -- descarga. */
+function handleInformeDescargaGet(string $clave, string $formato): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    $rut      = exigirProduccionCompleto($pdo, $cuentaId);
+
+    $periodo = informePeriodo($clave);
+    $datos   = informeDatos($clave, $pdo, $cuentaId, $rut, $periodo['desde'], $periodo['hasta']);
+    $tabla   = informeColumnasYFilas($clave, $datos);
+    $titulo  = INFORMES[$clave]['label'];
+    $nombre  = nombreArchivoInforme($clave, $periodo['desde'], $periodo['hasta'], $formato === 'pdf' ? 'pdf' : 'xlsx');
+
+    if ($formato === 'pdf') {
+        informePdfSalida(
+            $titulo,
+            dashRazonSocialProduccion($pdo, $cuentaId),
+            $rut,
+            $periodo['etiqueta'],
+            $tabla,
+            $nombre
+        );
+    }
+
+    informeExcelSalida($titulo, $tabla, $nombre);
+}
+
+/**
+ * Emite el PDF del informe y termina la request.
+ *
+ * @param array{columnas:list<array{titulo:string, ancho:float, alineacion:string}>,
+ *              filas:list<list<string>>, totales:list<string>|null} $tabla
+ */
+function informePdfSalida(
+    string $titulo,
+    string $razonSocial,
+    string $rutEmisor,
+    string $periodo,
+    array $tabla,
+    string $nombreArchivo
+): never {
+    $pdf = new InformePdf($titulo, $razonSocial, $rutEmisor, $periodo);
+    $pdf->tabla($tabla['columnas'], $tabla['filas'], $tabla['totales']);
+
+    $binario = $pdf->Output('', 'S');
+
+    header('Content-Type: application/pdf');
+    header(sprintf('Content-Disposition: attachment; filename="%s"', $nombreArchivo));
+    header('Content-Length: ' . strlen($binario));
+    echo $binario;
+    exit;
+}
+
+/**
+ * Emite el .xlsx del informe y termina la request.
+ *
+ * Mismo patron que handlePlantillaExcelGet(): encabezados en negrita,
+ * freezePane bajo la fila 1, autoSize por columna y Content-Disposition de
+ * descarga. La diferencia es que aqui van las filas reales del informe.
+ *
+ * @param array{columnas:list<array{titulo:string, ancho:float, alineacion:string}>,
+ *              filas:list<list<string>>, totales:list<string>|null} $tabla
+ */
+function informeExcelSalida(string $titulo, array $tabla, string $nombreArchivo): never
+{
+    $libro = new Spreadsheet();
+    $hoja  = $libro->getActiveSheet();
+    // setTitle limita a 31 caracteres y prohibe algunos simbolos; el label de
+    // un informe puede pasarse de largo.
+    $hoja->setTitle(substr(str_replace(['/', '\\', '?', '*', ':', '[', ']'], '-', $titulo), 0, 31));
+
+    $encabezados = array_map(static fn (array $c): string => $c['titulo'], $tabla['columnas']);
+    $hoja->fromArray($encabezados, null, 'A1');
+
+    $fila = 2;
+    foreach ($tabla['filas'] as $f) {
+        $hoja->fromArray($f, null, 'A' . $fila);
+        $fila++;
+    }
+    // $fila quedo apuntando a la SIGUIENTE fila libre. La ultima escrita es la
+    // anterior, salvo que ademas se escriba la de totales.
+    $ultimaFila = $fila - 1;
+    if ($tabla['totales'] !== null && $tabla['filas'] !== []) {
+        $hoja->fromArray($tabla['totales'], null, 'A' . $fila);
+        $ultimaCol = chr(64 + max(1, count($tabla['columnas'])));
+        $hoja->getStyle("A{$fila}:{$ultimaCol}{$fila}")->getFont()->setBold(true);
+        $ultimaFila = $fila;
+    }
+
+    $ultima = chr(64 + max(1, count($tabla['columnas'])));
+    $hoja->getStyle("A1:{$ultima}1")->getFont()->setBold(true);
+    $hoja->freezePane('A2');
+
+    // Las columnas numericas llevan el valor CRUDO (ver informeCelda()): el
+    // separador de miles lo pone Excel como formato de celda, no el texto. Asi
+    // la planilla se puede sumar y ordenar, que es el motivo de ofrecer Excel.
+    foreach ($tabla['columnas'] as $i => $c) {
+        if (! ($c['num'] ?? false)) {
+            continue;
+        }
+        $letra = chr(65 + $i);
+        $hoja->getStyle("{$letra}2:{$letra}{$ultimaFila}")
+            ->getNumberFormat()
+            ->setFormatCode('#,##0');
+    }
+
+    foreach (range('A', $ultima) as $col) {
+        $hoja->getColumnDimension($col)->setAutoSize(true);
+    }
+
+    $libro->setActiveSheetIndex(0);
+
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header(sprintf('Content-Disposition: attachment; filename="%s"', $nombreArchivo));
+    (new XlsxWriter($libro))->save('php://output');
+    exit;
 }
 
 // ===========================================================================
