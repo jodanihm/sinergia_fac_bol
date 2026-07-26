@@ -1,73 +1,172 @@
-<?php $titulo = 'CAF de certificacion'; require __DIR__ . '/partials/header.php'; ?>
+<?php
+/**
+ * Configuracion > Folios y CAF (ambiente de CERTIFICACION).
+ *
+ * Recibe: $error (string|null) y $cafs (list<array>), de procesarCafGet/Post().
+ * Cada CAF trae exactamente lo que devuelve listarCafs():
+ *   tipo_dte, folio_desde, folio_hasta, estado, proximo_folio
+ * mas folios_restantes, que la propia funcion calcula como
+ * folio_hasta - proximo_folio + 1. Aqui NO se recalcula nada: los cuatro
+ * numeros se muestran tal como llegan.
+ *
+ * ESTADO: la columna de dte_caf es un ENUM cerrado -- 'activo' o 'agotado'
+ * (default 'activo'; MySqlFolioRepository lo pasa a 'agotado' al consumirse el
+ * rango). Por eso se pueden mapear los dos con semantica; cualquier otro valor
+ * caeria en neutro con su texto crudo.
+ *
+ * "CARGADO / FALTA" del resumen por tipo NO es el estado del CAF: solo dice si
+ * existe al menos un CAF de ese tipo en la lista. Un tipo puede figurar como
+ * CARGADO y tener su unico CAF agotado. Son dos conceptos distintos y por eso
+ * no comparten badge.
+ *
+ * VARIOS CAF POR TIPO: el UNIQUE de dte_caf es por (rut, tipo, ambiente,
+ * folio_desde, folio_hasta), asi que un mismo tipo puede tener varios rangos.
+ * La tabla los lista todos, en el orden del repositorio (tipo ASC, desde ASC),
+ * sin agrupar ni ocultar ninguno.
+ *
+ * NO HAY MENSAJE DE EXITO: tras una carga correcta el handler redirige a esta
+ * misma ruta sin flash, asi que la vista no puede confirmarla. Queda anotado
+ * como pendiente; no se inventa un aviso que el backend no envia.
+ */
+$titulo = 'CAF de certificacion';
+require __DIR__ . '/partials/header.php';
 
-<h1>CAF de certificacion</h1>
-<p>Cada CAF autoriza UN tipo de documento y un rango de folios: si necesitas emitir
-varios tipos (factura, nota de credito, nota de debito, boleta), debes subir un CAF
-por cada uno. El tipo y el rango se leen directo del archivo, no hace falta
-escribirlos. La boleta (39) suele certificarse en un proceso aparte del resto
-(factura/NC/ND) ante el SII.</p>
+/** Badge del estado del CAF. ENUM cerrado; el default cubre un valor inesperado. */
+$badgeEstado = static function (string $estado): array {
+    return match ($estado) {
+        'activo'  => ['badge--ok', 'Activo'],
+        'agotado' => ['badge--neutro', 'Agotado'],
+        default   => ['badge--neutro', $estado],
+    };
+};
+
+/* Separador de miles SOLO para la cantidad de folios restantes. El rango y el
+   proximo folio son identificadores, no cantidades, y se muestran crudos igual
+   que el folio en el panel de emision. */
+$fmtNum = static function ($v): string {
+    return number_format((float) $v, 0, ',', '.');
+};
+
+$req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
+    . '<span class="visualmente-oculto">(obligatorio)</span>';
+
+// Tipos que ya tienen al menos un CAF en la lista.
+$tiposConCaf = [];
+foreach ($cafs as $c) {
+    $tiposConCaf[(int) $c['tipo_dte']] = true;
+}
+?>
+
+<div class="dash-header">
+    <div>
+        <h1>Folios y CAF <span class="badge badge--etiqueta">Certificacion</span></h1>
+    </div>
+    <div class="acciones-grupo acciones-grupo--header">
+        <a class="boton-secundario" href="/panel">Volver al panel</a>
+    </div>
+</div>
+<p class="dash-subtitulo">
+    Administra los archivos CAF y los rangos de folios disponibles para emitir en el
+    ambiente de certificacion.
+</p>
 
 <?php if (! empty($error)): ?>
-<p class="errores"><?= htmlspecialchars($error); ?></p>
+    <p class="alerta alerta--error" role="alert">
+        <span class="alerta__icono" aria-hidden="true">&#9888;</span>
+        <span><?= htmlspecialchars($error); ?></span>
+    </p>
 <?php endif; ?>
 
-<h2>Tipos de documento</h2>
-<ul style="list-style:none;padding:0;">
-<?php foreach (NOMBRES_TIPO_DTE as $tipo => $nombre): ?>
-    <?php
-        $cargado = false;
-        foreach ($cafs as $c) {
-            if ((int) $c['tipo_dte'] === $tipo) {
-                $cargado = true;
-                break;
-            }
-        }
-        $estiloEstado = $cargado ? 'color:#2e7d32;font-weight:600;' : 'color:#ed6c02;font-weight:600;';
-    ?>
-    <li style="margin:0.25rem 0;">
-        <?= htmlspecialchars($nombre); ?> (<?= (int) $tipo; ?>):
-        <span style="<?= htmlspecialchars($estiloEstado); ?>"><?= $cargado ? 'CARGADO' : 'FALTA'; ?></span>
-    </li>
-<?php endforeach; ?>
-</ul>
+<div class="layout-principal-lateral">
+    <div>
+        <section class="tarjeta" aria-labelledby="titulo-tipos">
+            <h2 id="titulo-tipos">Tipos de documento</h2>
+            <ul class="validacion">
+                <?php foreach (NOMBRES_TIPO_DTE as $tipo => $nombre): ?>
+                    <?php $cargado = isset($tiposConCaf[$tipo]); ?>
+                    <li class="validacion__item">
+                        <span><?= htmlspecialchars($nombre); ?> (<?= (int) $tipo; ?>)</span>
+                        <?php if ($cargado): ?>
+                            <span class="badge badge--ok">Cargado</span>
+                        <?php else: ?>
+                            <span class="badge badge--advertencia">Falta</span>
+                        <?php endif; ?>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
+            <p class="nota">"Cargado" significa que existe al menos un CAF de ese tipo, no que
+            queden folios disponibles.</p>
+        </section>
 
-<h2>CAF cargados</h2>
-<?php if ($cafs === []): ?>
-<p>Aun no tienes ningun CAF cargado.</p>
-<?php else: ?>
-<table>
-    <thead>
-        <tr>
-            <th>Tipo</th>
-            <th>Rango</th>
-            <th>Proximo folio</th>
-            <th>Folios restantes</th>
-            <th>Estado</th>
-        </tr>
-    </thead>
-    <tbody>
-    <?php foreach ($cafs as $c): ?>
-        <tr>
-            <td><?= htmlspecialchars(nombreTipoDte((int) $c['tipo_dte'])); ?></td>
-            <td><?= htmlspecialchars((string) $c['folio_desde']); ?>&ndash;<?= htmlspecialchars((string) $c['folio_hasta']); ?></td>
-            <td><?= htmlspecialchars((string) $c['proximo_folio']); ?></td>
-            <td><?= htmlspecialchars((string) $c['folios_restantes']); ?></td>
-            <td><?= htmlspecialchars((string) $c['estado']); ?></td>
-        </tr>
-    <?php endforeach; ?>
-    </tbody>
-</table>
-<?php endif; ?>
+        <section class="tarjeta" aria-labelledby="titulo-cafs">
+            <h2 id="titulo-cafs">CAF cargados</h2>
+            <?php if ($cafs === []): ?>
+                <div class="estado-vacio">
+                    <h2>Aun no hay CAF cargados</h2>
+                    <p>Sube tu primer archivo CAF para habilitar la emision en este ambiente.</p>
+                </div>
+            <?php else: ?>
+                <div class="tabla-scroll">
+                    <table class="tabla-datos">
+                        <caption><?= count($cafs); ?> CAF cargado<?= count($cafs) === 1 ? '' : 's'; ?></caption>
+                        <thead>
+                            <tr>
+                                <th>Tipo</th>
+                                <th class="tabla-datos__num">Rango</th>
+                                <th class="tabla-datos__num">Proximo folio</th>
+                                <th class="tabla-datos__num">Folios restantes</th>
+                                <th class="tabla-datos__estado">Estado</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($cafs as $c): ?>
+                                <?php [$claseBadge, $textoBadge] = $badgeEstado((string) $c['estado']); ?>
+                                <tr>
+                                    <td><span class="badge badge--etiqueta"><?= htmlspecialchars(nombreTipoDte((int) $c['tipo_dte'])); ?></span></td>
+                                    <td class="tabla-datos__num"><?= (int) $c['folio_desde']; ?>&ndash;<?= (int) $c['folio_hasta']; ?></td>
+                                    <td class="tabla-datos__num"><?= (int) $c['proximo_folio']; ?></td>
+                                    <td class="tabla-datos__num"><?= $fmtNum($c['folios_restantes']); ?></td>
+                                    <td class="tabla-datos__estado"><span class="badge <?= $claseBadge; ?>"><?= htmlspecialchars($textoBadge); ?></span></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </section>
+    </div>
 
-<h2>Subir un CAF nuevo</h2>
-<form method="post" action="/caf" enctype="multipart/form-data">
-    <?= csrfInput(); ?>
-    <label>Archivo CAF (.xml)
-        <input type="file" name="caf" accept=".xml" required>
-    </label>
-    <button type="submit">Subir CAF</button>
-</form>
+    <div>
+        <div class="panel-info">
+            <p class="panel-info__titulo">
+                <span class="panel-info__icono" aria-hidden="true">&#9432;</span>
+                Ambiente de certificacion
+            </p>
+            <ul class="panel-info__lista">
+                <li>Cada CAF autoriza UN tipo de documento y un rango de folios: para emitir varios tipos necesitas un CAF por cada uno.</li>
+                <li>El tipo y el rango se leen directo del archivo; no hace falta escribirlos.</li>
+                <li>La boleta (39) suele certificarse en un proceso aparte del resto (factura, NC y ND) ante el SII.</li>
+                <li>Estos folios son independientes de los de produccion.</li>
+            </ul>
+        </div>
 
-<p><a href="/panel">Volver al panel</a></p>
+        <section class="tarjeta" aria-labelledby="titulo-subir">
+            <h2 id="titulo-subir">Subir un CAF nuevo</h2>
+            <form method="post" action="/caf" enctype="multipart/form-data" class="form-compacto">
+                <?= csrfInput(); ?>
+                <div class="form-grid form-grid--1">
+                    <div class="form-campo">
+                        <label for="caf">Archivo CAF (.xml) <?= $req; ?></label>
+                        <input type="file" name="caf" id="caf" accept=".xml" required>
+                        <small class="form-ayuda">Descargado del SII para este ambiente.</small>
+                    </div>
+                </div>
+                <div class="acciones-grupo">
+                    <button type="submit" class="boton-principal">Subir CAF</button>
+                </div>
+            </form>
+        </section>
+    </div>
+</div>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>

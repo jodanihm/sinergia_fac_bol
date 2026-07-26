@@ -1204,6 +1204,48 @@ a.stepper__contenido:hover { color: #1a56db; }
    simbolo solo no comunica el requisito (WCAG 1.3.1). */
 .campo-obligatorio { color: #b00020; font-weight: 700; }
 
+/* Bloque de contenido tecnico largo dentro de un <details> (JSON crudo de la
+   auditoria, por ejemplo). Regla acotada a su clase: NO toca el <pre> global.
+   pre-wrap + overflow-wrap para que una cadena larga no provoque scroll
+   horizontal de la pagina, y un tope de altura con scroll propio para que un
+   payload grande no empuje el resto de la tabla. */
+.bloque-codigo {
+    margin: 0.2rem 0 0.6rem;
+    padding: 0.5rem 0.6rem;
+    max-width: 100%;
+    max-height: 14rem;
+    overflow: auto;
+    border: 1px solid #e2e2e6;
+    border-radius: 4px;
+    background: #fafafb;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+/* Secreto que se muestra UNA sola vez (API key recien generada). Regla acotada
+   a su propia clase, no a todos los <code>/<pre> del sistema.
+   overflow-wrap:anywhere y NO truncado: la cadena es larga y sin puntos
+   suspensivos, porque cortarla impediria copiarla, que es lo unico que el
+   usuario puede hacer con ella. user-select:all permite seleccionarla de una
+   pasada si la copia automatica falla, que es el escenario real cuando el panel
+   corre sobre HTTP plano. */
+.secreto-unico {
+    display: block;
+    margin: 0.5rem 0;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    user-select: all;
+}
+
 /* Campo de dato corto (un porcentaje, un folio, un codigo). Sin esto, en una
    grilla de una sola columna que se ensancha -- la card lateral cuando
    .layout-principal-lateral colapsa a 1024px -- un input de porcentaje termina
@@ -1252,6 +1294,25 @@ a.stepper__contenido:hover { color: #1a56db; }
 .form-compacto input:where(:not([type="checkbox"], [type="radio"], [type="file"], [type="hidden"])),
 .form-compacto select { min-height: 2.2rem; }
 .form-compacto textarea { min-height: 4.5rem; resize: vertical; }
+/* Input de archivo. Va aparte de la regla base porque [type="file"] esta
+   excluido de ella: el control nativo trae su propio boton y no admite el mismo
+   tratamiento. Solo se le da la caja (borde, radio, alto) para que no desentone
+   junto a un input de texto de la misma grilla; el boton interno queda nativo.
+   :not(.visualmente-oculto) protege el patron de carga-masiva, donde el file
+   real esta oculto a proposito y esta regla lo volveria visible. */
+.form-compacto input[type="file"]:not(.visualmente-oculto) {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0.3rem 0.5rem;
+    min-height: 2.2rem;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    background: #fff;
+    font-family: inherit;
+    font-size: 0.85rem;
+}
 /* El anillo de foco global (:focus-visible) ya se ve; el borde azul refuerza
    cual es el campo activo cuando hay varios en la misma fila. */
 .form-compacto input:focus-visible,
@@ -1351,6 +1412,30 @@ a.stepper__contenido:hover { color: #1a56db; }
     cursor: pointer;
 }
 .tabla-editable .quitar-linea:hover { background: #fdecea; border-color: #b00020; }
+
+/* --------------------------------------------------------------------------
+   Area interactiva de las acciones dentro de una tabla.
+
+   .tabla-datos__acciones button (mas arriba) anula el padding vertical de
+   cualquier boton de esa celda. Sobre un .boton-texto eso deja un objetivo de
+   18.9px de alto: por debajo de los 24px que pide WCAG 2.2 SC 2.5.8.
+
+   Este modificador devuelve el padding vertical SOLO donde se aplica de forma
+   explicita. No se toca .tabla-datos__acciones button ni .boton-texto, para no
+   alterar los modulos que ya dependen de ellos.
+
+   Va con doble clase (.boton-texto.boton-texto--accion-tabla, 0-2-0) para
+   ganarle en especificidad a .tabla-datos__acciones button (0-1-1) sin depender
+   del contenedor ni del orden de declaracion.
+
+   0.35rem por lado sobre una caja de 18.9px da ~30px: holgado sobre el minimo
+   y sin necesidad de una variante aparte para movil, porque la tipografia de
+   la celda no cambia con el ancho.
+   -------------------------------------------------------------------------- */
+.boton-texto.boton-texto--accion-tabla {
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+}
 
 /* --------------------------------------------------------------------------
    Responsivo. La grilla de dos columnas aguanta hasta 720px: a 1024 el

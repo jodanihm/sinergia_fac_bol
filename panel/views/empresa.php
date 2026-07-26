@@ -1,4 +1,26 @@
 <?php
+/**
+ * Configuracion > Datos de la empresa (ambiente de CERTIFICACION).
+ *
+ * Recibe: $emisor (array<string,mixed>|null) y $errores (array<string,string>).
+ * handleEmpresaGet() arma $emisor desde dte_emisor; si no hay fila guardada y
+ * llegan los parametros de /empresa/importar-datos-sii ("Usar estos datos"),
+ * lo arma desde el query string. Tras un POST invalido, $emisor son los datos
+ * enviados y $errores el detalle por campo.
+ *
+ * LOS 8 CAMPOS SON OBLIGATORIOS y todos llevan required, igual que antes. La
+ * marca visual con .campo-obligatorio es solo eso: la validacion sigue siendo
+ * la del navegador mas la de handleEmpresaPost().
+ *
+ * LAS AYUDAS SON NORMATIVAS: describen que espera el SII, no como se ve el
+ * formulario. Se conservan textuales; solo cambia el contenedor (.form-ayuda en
+ * vez de un <small> con estilo inline). Ojo con resolucion_fecha: en
+ * CERTIFICACION es la fecha de POSTULACION, no la de autorizacion real. Esa
+ * distincion no puede intercambiarse con la de empresa-produccion.php.
+ *
+ * AMBIENTE: mismo patron que certificado.php -- badge en el titulo y panel
+ * lateral, dos canales para no depender solo del color.
+ */
 $titulo = 'Datos de la empresa';
 require __DIR__ . '/partials/header.php';
 
@@ -8,81 +30,160 @@ $val = static function (string $campo) use ($emisor): string {
 $err = static function (string $campo) use ($errores): ?string {
     return $errores[$campo] ?? null;
 };
-$ayudaEstilo = 'display:block;margin:0.15rem 0 0;color:#666;font-size:0.85rem;';
+/** Agrega .form-campo--error al contenedor cuando ese campo trae error. */
+$claseCampo = static function (string $campo, string $extra = '') use ($errores): string {
+    $c = 'form-campo' . ($extra !== '' ? ' ' . $extra : '');
+    return isset($errores[$campo]) ? $c . ' form-campo--error' : $c;
+};
+
+$req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
+    . '<span class="visualmente-oculto">(obligatorio)</span>';
 ?>
 
-<h1>Datos de la empresa</h1>
-<p>Estos datos se usan para emitir tus documentos tributarios electronicos en el SII
-(ambiente de certificacion).</p>
-
-<p><a href="/empresa/importar-datos-sii">Importar datos desde el archivo del SII (opcional) &rarr;</a></p>
-
-<details style="margin:0.75rem 0;">
-    <summary style="cursor:pointer;font-weight:600;">Ayuda: el SII rechaza mis envios con
-    "Rechazado por Error en Caratula"</summary>
-    <div style="margin:0.5rem 0 0;padding:0.5rem 0.75rem;border-left:3px solid #999;">
-        <p>La razon social, direccion y comuna deben calzar <strong>EXACTAMENTE</strong>
-        con los datos que el SII tiene registrados: en <strong>MAYUSCULAS</strong> y sin
-        abreviar ni truncar por cuenta propia. Descarga los datos oficiales de tu empresa
-        desde
-        <a href="https://maullin.sii.cl/cvc_cgi/dte/pe_construccion_dte" target="_blank" rel="noopener noreferrer">Datos para Construccion DTE (pe_construccion_dte)</a>
-        y copialos tal cual.</p>
+<div class="dash-header">
+    <div>
+        <h1>Datos de la empresa <span class="badge badge--etiqueta">Certificacion</span></h1>
     </div>
-</details>
+    <div class="acciones-grupo acciones-grupo--header">
+        <a class="boton-secundario" href="/empresa/importar-datos-sii">Importar datos del SII</a>
+        <a class="boton-secundario" href="/panel">Volver al panel</a>
+    </div>
+</div>
+<p class="dash-subtitulo">
+    Estos datos se usan para emitir tus documentos tributarios electronicos en el SII
+    (ambiente de certificacion). Los campos marcados con
+    <span class="campo-obligatorio">*</span> son obligatorios.
+</p>
 
-<form method="post" action="/empresa">
+<?php if ($errores !== []): ?>
+    <p class="alerta alerta--error" role="alert">
+        <span class="alerta__icono" aria-hidden="true">&#9888;</span>
+        <span>Revisa los campos marcados; el detalle esta bajo cada uno.</span>
+    </p>
+<?php endif; ?>
+
+<form method="post" action="/empresa" class="form-compacto">
     <?= csrfInput(); ?>
-    <label>RUT emisor (ej. 77724622-4)
-        <input type="text" name="rut_emisor" value="<?= $val('rut_emisor'); ?>" placeholder="77724622-4" required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">RUT de la empresa, con guion y digito verificador.</small>
-    <?php if ($err('rut_emisor')): ?><p class="error"><?= htmlspecialchars($err('rut_emisor')); ?></p><?php endif; ?>
 
-    <label>Razon social
-        <input type="text" name="razon_social" value="<?= $val('razon_social'); ?>" placeholder="Mi Empresa SpA" required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">Nombre legal de la empresa, EN MAYUSCULAS y exactamente como esta registrado en el SII (ver ayuda arriba).</small>
-    <?php if ($err('razon_social')): ?><p class="error"><?= htmlspecialchars($err('razon_social')); ?></p><?php endif; ?>
+    <div class="layout-principal-lateral">
+        <div>
+            <section class="tarjeta" aria-labelledby="titulo-emisor">
+                <h2 id="titulo-emisor">Datos del emisor</h2>
+                <div class="form-grid">
+                    <div class="<?= $claseCampo('rut_emisor'); ?>">
+                        <label for="rut_emisor">RUT emisor <?= $req; ?></label>
+                        <input type="text" name="rut_emisor" id="rut_emisor" value="<?= $val('rut_emisor'); ?>" placeholder="77724622-4" required>
+                        <?php if ($err('rut_emisor')): ?>
+                            <p class="error"><?= htmlspecialchars($err('rut_emisor')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">RUT de la empresa, con guion y digito verificador.</small>
+                        <?php endif; ?>
+                    </div>
 
-    <label>Giro
-        <input type="text" name="giro" value="<?= $val('giro'); ?>" placeholder="Venta al por menor de ..." required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">Giro comercial registrado en el SII.</small>
-    <?php if ($err('giro')): ?><p class="error"><?= htmlspecialchars($err('giro')); ?></p><?php endif; ?>
+                    <div class="<?= $claseCampo('razon_social'); ?>">
+                        <label for="razon_social">Razon social <?= $req; ?></label>
+                        <input type="text" name="razon_social" id="razon_social" value="<?= $val('razon_social'); ?>" placeholder="Mi Empresa SpA" required>
+                        <?php if ($err('razon_social')): ?>
+                            <p class="error"><?= htmlspecialchars($err('razon_social')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">Nombre legal de la empresa, EN MAYUSCULAS y exactamente como esta registrado en el SII (ver ayuda al costado).</small>
+                        <?php endif; ?>
+                    </div>
 
-    <label>Codigo de actividad economica (acteco)
-        <input type="text" inputmode="numeric" name="acteco" value="<?= $val('acteco'); ?>" placeholder="620100" required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">Codigo numerico de actividad economica del SII (solo numeros, sin texto).</small>
-    <?php if ($err('acteco')): ?><p class="error"><?= htmlspecialchars($err('acteco')); ?></p><?php endif; ?>
+                    <div class="<?= $claseCampo('giro', 'form-campo--ancho'); ?>">
+                        <label for="giro">Giro <?= $req; ?></label>
+                        <input type="text" name="giro" id="giro" value="<?= $val('giro'); ?>" placeholder="Venta al por menor de ..." required>
+                        <?php if ($err('giro')): ?>
+                            <p class="error"><?= htmlspecialchars($err('giro')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">Giro comercial registrado en el SII.</small>
+                        <?php endif; ?>
+                    </div>
 
-    <label>Direccion
-        <input type="text" name="dir_origen" value="<?= $val('dir_origen'); ?>" placeholder="Calle Ejemplo 123" required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">Direccion de origen del emisor, EN MAYUSCULAS y exactamente como esta registrada en el SII (ver ayuda arriba).</small>
-    <?php if ($err('dir_origen')): ?><p class="error"><?= htmlspecialchars($err('dir_origen')); ?></p><?php endif; ?>
+                    <div class="<?= $claseCampo('acteco', 'form-campo--corto'); ?>">
+                        <label for="acteco">Codigo de actividad economica <?= $req; ?></label>
+                        <input type="text" inputmode="numeric" name="acteco" id="acteco" value="<?= $val('acteco'); ?>" placeholder="620100" required>
+                        <?php if ($err('acteco')): ?>
+                            <p class="error"><?= htmlspecialchars($err('acteco')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">Codigo numerico del SII (acteco), solo numeros y sin texto.</small>
+                        <?php endif; ?>
+                    </div>
 
-    <label>Comuna
-        <input type="text" name="cmna_origen" value="<?= $val('cmna_origen'); ?>" placeholder="Valdivia" required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">Comuna de la direccion de origen, EN MAYUSCULAS y exactamente como esta registrada en el SII (ver ayuda arriba).</small>
-    <?php if ($err('cmna_origen')): ?><p class="error"><?= htmlspecialchars($err('cmna_origen')); ?></p><?php endif; ?>
+                    <div class="<?= $claseCampo('dir_origen', 'form-campo--ancho'); ?>">
+                        <label for="dir_origen">Direccion <?= $req; ?></label>
+                        <input type="text" name="dir_origen" id="dir_origen" value="<?= $val('dir_origen'); ?>" placeholder="Calle Ejemplo 123" required>
+                        <?php if ($err('dir_origen')): ?>
+                            <p class="error"><?= htmlspecialchars($err('dir_origen')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">Direccion de origen del emisor, EN MAYUSCULAS y exactamente como esta registrada en el SII (ver ayuda al costado).</small>
+                        <?php endif; ?>
+                    </div>
 
-    <label>Fecha de resolucion SII
-        <input type="date" name="resolucion_fecha" value="<?= $val('resolucion_fecha'); ?>" required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">Fecha de la resolucion del SII que autoriza facturacion electronica. En AMBIENTE DE CERTIFICACION esta fecha es la FECHA EN QUE TU EMPRESA POSTULO a la certificacion (NO una fecha generica ni la de produccion, ej. NO uses 2014-08-22/Res. 80 salvo que sea realmente tu caso).</small>
-    <?php if ($err('resolucion_fecha')): ?><p class="error"><?= htmlspecialchars($err('resolucion_fecha')); ?></p><?php endif; ?>
+                    <div class="<?= $claseCampo('cmna_origen'); ?>">
+                        <label for="cmna_origen">Comuna <?= $req; ?></label>
+                        <input type="text" name="cmna_origen" id="cmna_origen" value="<?= $val('cmna_origen'); ?>" placeholder="Valdivia" required>
+                        <?php if ($err('cmna_origen')): ?>
+                            <p class="error"><?= htmlspecialchars($err('cmna_origen')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">Comuna de la direccion de origen, EN MAYUSCULAS y exactamente como esta registrada en el SII (ver ayuda al costado).</small>
+                        <?php endif; ?>
+                    </div>
 
-    <label>Numero de resolucion SII
-        <input type="text" inputmode="numeric" name="resolucion_numero" value="<?= $val('resolucion_numero'); ?>" placeholder="80" required>
-    </label>
-    <small style="<?= htmlspecialchars($ayudaEstilo); ?>">Normalmente 80 (Res. Ex. N&deg;80 de 2014) en produccion. En ambiente de certificacion suele ser un numero distinto; consulta tu caso en el SII.</small>
-    <?php if ($err('resolucion_numero')): ?><p class="error"><?= htmlspecialchars($err('resolucion_numero')); ?></p><?php endif; ?>
+                    <div class="<?= $claseCampo('resolucion_fecha'); ?>">
+                        <label for="resolucion_fecha">Fecha de resolucion SII <?= $req; ?></label>
+                        <input type="date" name="resolucion_fecha" id="resolucion_fecha" value="<?= $val('resolucion_fecha'); ?>" required>
+                        <?php if ($err('resolucion_fecha')): ?>
+                            <p class="error"><?= htmlspecialchars($err('resolucion_fecha')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">En AMBIENTE DE CERTIFICACION es la FECHA EN QUE TU EMPRESA POSTULO a la certificacion, no una fecha generica ni la de produccion (ej. NO uses 2014-08-22/Res. 80 salvo que sea realmente tu caso).</small>
+                        <?php endif; ?>
+                    </div>
 
-    <button type="submit">Guardar</button>
+                    <div class="<?= $claseCampo('resolucion_numero', 'form-campo--corto'); ?>">
+                        <label for="resolucion_numero">Numero de resolucion SII <?= $req; ?></label>
+                        <input type="text" inputmode="numeric" name="resolucion_numero" id="resolucion_numero" value="<?= $val('resolucion_numero'); ?>" placeholder="80" required>
+                        <?php if ($err('resolucion_numero')): ?>
+                            <p class="error"><?= htmlspecialchars($err('resolucion_numero')); ?></p>
+                        <?php else: ?>
+                            <small class="form-ayuda">Normalmente 80 (Res. Ex. N&deg;80 de 2014) en produccion. En certificacion suele ser un numero distinto; consulta tu caso en el SII.</small>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <div>
+            <div class="panel-info">
+                <p class="panel-info__titulo">
+                    <span class="panel-info__icono" aria-hidden="true">&#9432;</span>
+                    Ambiente de certificacion
+                </p>
+                <ul class="panel-info__lista">
+                    <li>Con estos datos se arma la caratula de los documentos de prueba que envias al SII.</li>
+                    <li>Razon social, direccion y comuna deben calzar exactamente con el registro del SII.</li>
+                    <li>La configuracion de produccion se guarda por separado.</li>
+                </ul>
+            </div>
+
+            <section class="tarjeta">
+                <details>
+                    <summary>Ayuda: el SII rechaza mis envios con "Rechazado por Error en Caratula"</summary>
+                    <p>La razon social, direccion y comuna deben calzar <strong>EXACTAMENTE</strong>
+                    con los datos que el SII tiene registrados: en <strong>MAYUSCULAS</strong> y sin
+                    abreviar ni truncar por cuenta propia. Descarga los datos oficiales de tu empresa
+                    desde
+                    <a href="https://maullin.sii.cl/cvc_cgi/dte/pe_construccion_dte" target="_blank" rel="noopener noreferrer">Datos para Construccion DTE (pe_construccion_dte)</a>
+                    y copialos tal cual.</p>
+                </details>
+            </section>
+        </div>
+    </div>
+
+    <div class="acciones-grupo">
+        <button type="submit" class="boton-principal">Guardar</button>
+        <a class="boton-texto" href="/panel">Cancelar</a>
+    </div>
 </form>
-
-<p><a href="/panel">Volver al panel</a></p>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>
