@@ -67,6 +67,14 @@ $textoEmitir = 'Emitir ' . strtolower($tituloDoc);
 // Marca de campo obligatorio. Obligatorio SEGUN EL MOTOR
 // (validarDocumentoDte()), no segun el navegador: no se agrega el atributo
 // required, que introduciria una validacion frontend que hoy no existe.
+//
+// UNICA EXCEPCION: el <select> del codigo de referencia SI lleva required, y
+// no por simetria con el motor sino porque sin el es imposible NO enviar un
+// valor. Un <select> sin opcion marcada envia su primera opcion, asi que el
+// campo nunca llega vacio al backend y el motor no puede detectar la omision.
+// Se quemaron dos folios reales de nota de debito por eso: el formulario
+// mandaba CodRef=1 sin que nadie lo hubiera elegido. La opcion vacia mas el
+// required son lo que hace que "no elegir" sea un estado representable.
 $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     . '<span class="visualmente-oculto">(obligatorio)</span>';
 ?>
@@ -185,13 +193,33 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                             <input type="date" name="referencias[0][fecha]" id="ref-fecha" value="<?= $vref('fecha'); ?>">
                         </div>
                         <div class="form-campo form-campo--ancho">
-                            <label for="ref-codigo">Codigo de referencia</label>
-                            <select name="referencias[0][codigo]" id="ref-codigo">
-                                <?php $codSel = (string) ($form['referencias'][0]['codigo'] ?? ''); ?>
+                            <label for="ref-codigo">Codigo de referencia <?= $req; ?></label>
+                            <?php
+                                // La opcion vacia NO es decorativa: sin ella el navegador marca la
+                                // primera opcion y el formulario envia CodRef=1 aunque el usuario no
+                                // haya elegido nada. Junto con required, obliga a una eleccion
+                                // consciente venga el codigo prellenado por query string o vacio.
+                                $codSel = (string) ($form['referencias'][0]['codigo'] ?? '');
+                            ?>
+                            <select name="referencias[0][codigo]" id="ref-codigo" required aria-describedby="ayuda-ref-codigo">
+                                <option value="">Selecciona un codigo</option>
                                 <option value="1" <?= $codSel === '1' ? 'selected' : ''; ?>>1 - Anula documento</option>
                                 <option value="2" <?= $codSel === '2' ? 'selected' : ''; ?>>2 - Corrige texto</option>
                                 <option value="3" <?= $codSel === '3' ? 'selected' : ''; ?>>3 - Corrige montos</option>
                             </select>
+                            <small class="form-ayuda" id="ayuda-ref-codigo">
+                                CodRef. Que puede referenciar cada codigo, segun el Formato DTE del SII:
+                            </small>
+                            <ul class="lista-ayuda">
+                                <li><strong>1 &mdash; Anula:</strong> una nota de credito anula una factura,
+                                una nota de debito o una factura de compra. Una nota de debito
+                                <strong>solo puede anular una nota de credito</strong>.</li>
+                                <li><strong>2 &mdash; Corrige texto:</strong> solo nota de credito, sobre el
+                                documento cuyo texto se corrige.</li>
+                                <li><strong>3 &mdash; Corrige montos:</strong> nota de credito o de debito,
+                                sobre cualquier documento. Es el unico codigo con el que una nota de
+                                debito puede referenciar una factura.</li>
+                            </ul>
                         </div>
                         <div class="form-campo form-campo--ancho">
                             <label for="ref-razon">Razon de la referencia</label>

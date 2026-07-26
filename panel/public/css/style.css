@@ -1306,6 +1306,20 @@ a.stepper__contenido:hover { color: #1a56db; }
    tocarlos todavia. #6e6e6e sobre blanco da 5.60:1. */
 .form-ayuda { display: block; margin: 0.2rem 0 0; font-size: 0.78rem; color: #6e6e6e; }
 
+/* Ayuda de varias lineas bajo un campo, cuando lo que hay que explicar es una
+   enumeracion y no una frase. Misma escala y color que .form-ayuda: es el mismo
+   nivel de informacion, solo cambia la forma. Hoy la usa el codigo de
+   referencia de NC/ND, donde cada valor admite documentos distintos y elegir
+   mal cuesta un folio real. */
+.lista-ayuda {
+    margin: 0.15rem 0 0;
+    padding-left: 1.1rem;
+    font-size: 0.78rem;
+    color: #6e6e6e;
+    line-height: 1.5;
+}
+.lista-ayuda li { margin: 0.15rem 0; }
+
 /* --------------------------------------------------------------------------
    Controles. Misma geometria que .filtros__input (padding 0.35/0.5, borde 1px,
    radio 4px, 0.9rem), que ya esta en produccion: no se inventa una segunda
