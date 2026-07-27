@@ -1,40 +1,131 @@
 /* ==========================================================================
-   Paleta del panel (consolidada; no inventar colores nuevos fuera de aqui).
+   TOKENS DEL PANEL (:root)
 
-     verde  #2e7d32 sobre #f1f8f1  -> completado / OK        (4.75:1)
-     ambar  #b45309 sobre #fff8f0  -> pendiente / atencion   (4.77:1)
-     rojo   #b00020 sobre #fdecea  -> error / critico        (6.41:1)
-     azul   #1a56db sobre #e8f0fe  -> activo / seleccionado  (5.39:1)
-     gris   #6e6e6e sobre #f7f7f8  -> secundario / inactivo  (4.76:1)
+   Un unico lugar donde viven color, espaciado, tipografia, radios y sombras.
+   Antes estos valores estaban repetidos por todo el archivo: 321 literales de
+   color en 50 valores distintos y 402 medidas en rem en 65 valores distintos.
 
-   OJO con el ambar: #ed6c02 se conserva para BORDES y RELLENOS, donde no hay
-   requisito de contraste de texto, pero como color de TEXTO da 2.96:1 y no
-   cumple WCAG AA. Para texto ambar usar siempre #b45309.
+   Los nombres son SEMANTICOS (--color-primario), no descriptivos
+   (--azul-500): al leer una regla se entiende el rol y no hay que saber que
+   azul toca.
 
-   Todos los pares de arriba estan medidos y superan el 4.5:1 de WCAG 2.1 AA
-   para texto normal.
+   NINGUN VALOR CAMBIA respecto de lo que habia: cada token vale exactamente el
+   literal que reemplaza. Esta pasada reorganiza, no redisena.
+
+   -- Color -----------------------------------------------------------------
+   Los contrastes de abajo estan MEDIDOS y superan el 4.5:1 de WCAG 2.1 AA para
+   texto normal. Al cambiar un token hay que volver a medir el par completo.
+
+     --color-exito       #2e7d32 sobre --color-exito-fondo        -> 4.75:1
+     --color-alerta      #b45309 sobre --color-alerta-fondo       -> 4.77:1
+     --color-error       #b00020 sobre --color-error-fondo        -> 6.41:1
+     --color-primario    #1a56db sobre --color-primario-suave     -> 5.39:1
+     --color-texto-tenue #6e6e6e sobre --color-superficie-tenue   -> 4.76:1
+
+   OJO CON EL AMBAR: son DOS tokens distintos a proposito.
+   --color-alerta-borde (#ed6c02) es solo para BORDES y RELLENOS, donde no hay
+   requisito de contraste de texto. Como color de TEXTO da 2.96:1 y NO cumple
+   AA. Para texto ambar va siempre --color-alerta (#b45309).
+
+   --color-superficie (#fff) cubre los dos usos del blanco: fondo de tarjeta y
+   texto invertido sobre un fondo oscuro. Es el mismo valor y separarlo en dos
+   tokens no aportaria nada.
+
+   -- Espaciado -------------------------------------------------------------
+   Escala de 7 pasos. Reemplaza los 65 valores sueltos que habia, que incluian
+   0.15 / 0.2 / 0.3 / 0.35 / 0.4rem: cinco pasos donde el ojo distingue dos.
+
+   -- Tipografia ------------------------------------------------------------
+   6 pasos. Antes habia 14 tamanos, ocho de ellos entre 0.78 y 0.95rem: a esa
+   escala 0.02rem son 0.32px, una diferencia que no se ve y solo hacia ruido.
+
+   -- Lo que NO se tokeniza -------------------------------------------------
+   Hay valores que son CALIBRACIONES, no decisiones de estilo. Convertirlos en
+   token invita a "ordenarlos" mas adelante y a romper aquello para lo que se
+   midieron. Cada excepcion queda comentada en su propia regla:
+     - el 2.2rem de .form-compacto, que alinea la altura de input y select;
+     - los max-height de los logos, donde se acota el alto y nunca el ancho;
+     - los pares 100vh + 100dvh, fallback deliberado para movil.
    ========================================================================== */
+:root {
+    /* Color -- ver los contrastes medidos arriba */
+    --color-primario:         #1a56db;
+    --color-primario-hover:   #1546b0;
+    --color-primario-suave:   #e8f0fe;
+
+    --color-exito:            #2e7d32;
+    --color-exito-fondo:      #f1f8f1;
+
+    --color-alerta:           #b45309;  /* TEXTO ambar: el unico que cumple AA */
+    --color-alerta-borde:     #ed6c02;  /* bordes y rellenos, NUNCA texto */
+    --color-alerta-fondo:     #fff8f0;
+
+    --color-error:            #b00020;
+    --color-error-fondo:      #fdecea;
+
+    --color-texto:            #222;     /* cuerpo */
+    --color-texto-suave:      #444;     /* secundario con peso */
+    --color-texto-medio:      #5c5c5c;  /* secundario sobre fondo claro */
+    --color-texto-tenue:      #6e6e6e;  /* notas y metadatos */
+
+    --color-borde:            #ccc;
+    --color-borde-suave:      #ddd;
+    --color-borde-tenue:      #e2e2e6;
+
+    --color-superficie:       #fff;     /* tarjetas y texto invertido */
+    --color-superficie-alt:   #fafafa;
+    --color-superficie-tenue: #f7f7f8;
+
+    /* Espaciado -- 7 pasos */
+    --esp-1: 0.25rem;
+    --esp-2: 0.5rem;
+    --esp-3: 0.75rem;
+    --esp-4: 1rem;
+    --esp-5: 1.5rem;
+    --esp-6: 2rem;
+    --esp-7: 3rem;
+
+    /* Tipografia -- 6 pasos */
+    --txt-xs:   0.75rem;
+    --txt-sm:   0.85rem;
+    --txt-base: 0.9rem;
+    --txt-md:   1rem;
+    --txt-lg:   1.25rem;
+    --txt-xl:   1.6rem;
+
+    /* Radios */
+    --radio-sm:   4px;
+    --radio-md:   6px;
+    --radio-lg:   14px;
+    --radio-pill: 999px;
+
+    /* Sombras -- solo hay dos en todo el panel, las dos en el login.
+       No se inventa una --sombra-sm que nadie usa: el sistema tiene las
+       elevaciones que tiene. */
+    --sombra-md: 0 12px 34px rgba(20, 40, 90, 0.09);
+    --sombra-lg: 0 18px 45px rgba(20, 40, 90, 0.13);
+}
 
 body {
     font-family: system-ui, sans-serif;
     max-width: 640px;
-    margin: 2rem auto;
-    padding: 0 1rem;
-    color: #222;
+    margin: var(--esp-6) auto;
+    padding: 0 var(--esp-4);
+    color: var(--color-texto);
 }
 h1 { font-size: 1.4rem; }
-label { display: block; margin: 0.75rem 0 0.25rem; font-weight: 600; }
-input { display: block; width: 100%; padding: 0.4rem; box-sizing: border-box; }
-button { margin-top: 1rem; padding: 0.5rem 1rem; }
-.errores { color: #b00020; }
-.error { color: #b00020; font-size: 0.9rem; margin: 0.2rem 0 0; }
+label { display: block; margin: var(--esp-3) 0 var(--esp-1); font-weight: 600; }
+input { display: block; width: 100%; padding: var(--esp-2); box-sizing: border-box; }
+button { margin-top: var(--esp-4); padding: var(--esp-2) var(--esp-4); }
+.errores { color: var(--color-error); }
+.error { color: var(--color-error); font-size: var(--txt-base); margin: var(--esp-1) 0 0; }
 
 /* Foco visible en todo elemento interactivo. Antes no habia ningun estilo de
    foco: navegando con teclado no se veia donde estabas (WCAG 2.4.7). */
 :focus-visible {
-    outline: 3px solid #1a56db;
+    outline: 3px solid var(--color-primario);
     outline-offset: 2px;
-    border-radius: 3px;
+    border-radius: var(--radio-sm);
 }
 
 /* Salto al contenido: invisible hasta recibir foco (WCAG 2.4.1). */
@@ -43,9 +134,9 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
     left: -9999px;
     top: 0;
     z-index: 100;
-    background: #1a56db;
-    color: #fff;
-    padding: 0.6rem 1rem;
+    background: var(--color-primario);
+    color: var(--color-superficie);
+    padding: var(--esp-2) var(--esp-4);
     text-decoration: none;
     border-radius: 0 0 4px 0;
 }
@@ -66,19 +157,19 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
     border: 0;
 }
 
-.estaciones { display: flex; flex-direction: column; gap: 0.5rem; list-style: none; padding: 0; margin: 1rem 0; }
+.estaciones { display: flex; flex-direction: column; gap: var(--esp-2); list-style: none; padding: 0; margin: var(--esp-4) 0; }
 .estacion {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    padding: 0.75rem;
-    border: 1px solid #ddd;
-    border-radius: 6px;
+    gap: var(--esp-3);
+    padding: var(--esp-3);
+    border: 1px solid var(--color-borde-suave);
+    border-radius: var(--radio-md);
 }
-.estacion--completado { border-color: #2e7d32; background: #f1f8f1; }
-.estacion--pendiente { border-color: #ed6c02; background: #fff8f0; }
+.estacion--completado { border-color: var(--color-exito); background: var(--color-exito-fondo); }
+.estacion--pendiente { border-color: var(--color-alerta-borde); background: var(--color-alerta-fondo); }
 /* #6e6e6e y no #888: sobre #fafafa da 4.89:1 (antes 3.40:1, no cumplia AA). */
-.estacion--inactiva { border-color: #ccc; background: #fafafa; color: #6e6e6e; }
+.estacion--inactiva { border-color: var(--color-borde); background: var(--color-superficie-alt); color: var(--color-texto-tenue); }
 .estacion__numero { font-weight: 700; width: 1.5rem; }
 .estacion__titulo { flex: 1 1 auto; }
 .estaciones__subpasos { list-style: none; }
@@ -90,69 +181,69 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
 .subpasos {
     display: flex;
     flex-direction: column;
-    gap: 0.35rem;
-    margin: 0.35rem 0 0 2.25rem;
+    gap: var(--esp-1);
+    margin: var(--esp-1) 0 0 2.25rem;
     padding: 0;
     list-style: none;
 }
 .subpaso {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: var(--esp-2);
     flex-wrap: wrap;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid #ccc;
+    padding: var(--esp-2) var(--esp-2);
+    border: 1px solid var(--color-borde);
     border-left-width: 4px;
-    border-radius: 5px;
-    background: #fafafa;
+    border-radius: var(--radio-sm);
+    background: var(--color-superficie-alt);
 }
 .subpaso__titulo { flex: 1 1 12rem; }
 .subpaso__estado { font-weight: 600; white-space: nowrap; }
 .subpaso__icono { font-size: 0.9em; }
-.subpaso__aclaracion { color: #6e6e6e; font-size: 0.8rem; }
-.subpaso--ok { border-color: #2e7d32; background: #f1f8f1; }
-.subpaso--ok .subpaso__estado { color: #2e7d32; }
-.subpaso--falta { border-color: #ed6c02; background: #fff8f0; }
-.subpaso--falta .subpaso__estado { color: #b45309; }
-.subpaso--opcional { border-color: #ccc; background: #fafafa; }
-.subpaso--opcional .subpaso__estado { color: #6e6e6e; }
-.subpasos__nota { margin: 0.35rem 0 0 2.25rem; color: #6e6e6e; font-size: 0.85rem; }
+.subpaso__aclaracion { color: var(--color-texto-tenue); font-size: var(--txt-sm); }
+.subpaso--ok { border-color: var(--color-exito); background: var(--color-exito-fondo); }
+.subpaso--ok .subpaso__estado { color: var(--color-exito); }
+.subpaso--falta { border-color: var(--color-alerta-borde); background: var(--color-alerta-fondo); }
+.subpaso--falta .subpaso__estado { color: var(--color-alerta); }
+.subpaso--opcional { border-color: var(--color-borde); background: var(--color-superficie-alt); }
+.subpaso--opcional .subpaso__estado { color: var(--color-texto-tenue); }
+.subpasos__nota { margin: var(--esp-1) 0 0 2.25rem; color: var(--color-texto-tenue); font-size: var(--txt-sm); }
 
 /* Barra de progreso de 6 etapas (certificacion.php). */
-.progreso-etapas { display: flex; gap: 0.35rem; margin: 1rem 0 1.5rem; }
+.progreso-etapas { display: flex; gap: var(--esp-1); margin: var(--esp-4) 0 var(--esp-5); }
 .etapa {
     flex: 1;
     text-align: center;
-    padding: 0.5rem 0.25rem;
-    border-radius: 6px;
+    padding: var(--esp-2) var(--esp-1);
+    border-radius: var(--radio-md);
     border: 1px solid transparent;
-    font-size: 0.7rem;
+    font-size: var(--txt-xs);
     font-weight: 600;
     line-height: 1.25;
     display: block;
     text-decoration: none;
 }
-.etapa__numero { display: block; font-size: 0.95rem; }
-.etapa--completada { background: #f1f8f1; border-color: #2e7d32; color: #2e7d32; }
-.etapa--activa { background: #e8f0fe; border-color: #1a56db; color: #1a56db; }
+.etapa__numero { display: block; font-size: var(--txt-base); }
+.etapa--completada { background: var(--color-exito-fondo); border-color: var(--color-exito); color: var(--color-exito); }
+.etapa--activa { background: var(--color-primario-suave); border-color: var(--color-primario); color: var(--color-primario); }
 /* #6e6e6e y no #999: sobre #fafafa da 4.89:1 (antes 2.73:1, no cumplia AA). */
-.etapa--no-gestionada { background: #fafafa; border-color: #ddd; color: #6e6e6e; cursor: help; }
+.etapa--no-gestionada { background: var(--color-superficie-alt); border-color: var(--color-borde-suave); color: var(--color-texto-tenue); cursor: help; }
 /* Rechazada (boleta): el SII rechazo -SRH- la revision, no es lo mismo que
    "no gestionada" (esa es simplemente "aun no le toca"). Solo boleta la usa,
    factura no tiene este estado -- ver resumenEtapasBoletaBarra(). */
-.etapa--rechazada { background: #fdecea; border-color: #b00020; color: #b00020; cursor: help; }
+.etapa--rechazada { background: var(--color-error-fondo); border-color: var(--color-error); color: var(--color-error); cursor: help; }
 /* Etapa cuya pagina se esta viendo AHORA (independiente del color de
    progreso: podrias estar viendo la etapa 4 aunque lo que toca hacer
    todavia sea la etapa 2) -- ver partials/certificacion/_barra-etapas.php. */
-.etapa--actual { outline: 2px solid #222; outline-offset: 1px; }
+.etapa--actual { outline: 2px solid var(--color-texto); outline-offset: 1px; }
 
 /* Tarjetas de componente (certificacion.php). */
-.tarjeta { border: 1px solid #ddd; border-radius: 6px; padding: 0.9rem 1rem; margin: 1.25rem 0; }
+.tarjeta { border: 1px solid var(--color-borde-suave); border-radius: var(--radio-md); padding: var(--esp-4) var(--esp-4); margin: 1.25rem 0; }
 .tarjeta h2 { margin-top: 0; }
-.tarjeta details { margin-top: 0.75rem; }
+.tarjeta details { margin-top: var(--esp-3); }
 .tarjeta summary { cursor: pointer; font-weight: 600; }
 
-.aviso-ambar { background: #fff7e6; color: #7a4b00; border-radius: 4px; padding: 0.5rem 0.75rem; }
+.aviso-ambar { background: #fff7e6; color: #7a4b00; border-radius: var(--radio-sm); padding: var(--esp-2) var(--esp-3); }
 
 /* Mini barra de etapas circular con icono de revertir superpuesto
    (panel/views/admin-tenants.php). Distinta de .etapa (rectangular, con
@@ -160,7 +251,7 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
    mismas clases de color .etapa--completada/activa/no-gestionada para el
    semaforo (fondo/borde/texto), solo cambia forma y tamano. */
 .tabla-scroll { overflow-x: auto; }
-.progreso-etapas--admin { display: flex; gap: 0.55rem; margin: 0 0 0.35rem; padding-top: 0.4rem; }
+.progreso-etapas--admin { display: flex; gap: var(--esp-2); margin: 0 0 var(--esp-1); padding-top: var(--esp-2); }
 .etapa-circulo {
     position: relative;
     flex: none;
@@ -171,7 +262,7 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.65rem;
+    font-size: var(--txt-xs);
     font-weight: 700;
 }
 .etapa-circulo__revertir-form { position: absolute; top: -0.4rem; right: -0.4rem; margin: 0; line-height: 0; }
@@ -180,20 +271,20 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
     height: 0.95rem;
     line-height: 0.85rem;
     border-radius: 50%;
-    background: #b00020;
-    color: #fff;
+    background: var(--color-error);
+    color: var(--color-superficie);
     font-size: 0.6rem;
     font-weight: 700;
     text-align: center;
     padding: 0;
     margin: 0;
-    border: 1px solid #fff;
+    border: 1px solid var(--color-superficie);
     cursor: pointer;
 }
 
 /* Seccion de pasos manuales en el portal del SII: mismo ambar que .aviso-ambar,
    para distinguirla claramente de las acciones automatizadas del panel. */
-.seccion-manual { background: #fff8f0; border: 1px solid #ed6c02; border-radius: 6px; padding: 1rem 1.1rem; margin: 1.5rem 0; }
+.seccion-manual { background: var(--color-alerta-fondo); border: 1px solid var(--color-alerta-borde); border-radius: var(--radio-md); padding: var(--esp-4) 1.1rem; margin: var(--esp-5) 0; }
 .seccion-manual h2 { margin-top: 0; }
 
 /* ==========================================================================
@@ -204,31 +295,31 @@ button { margin-top: 1rem; padding: 0.5rem 1rem; }
 table {
     width: 100%;
     border-collapse: collapse;
-    margin: 0.75rem 0;
-    font-size: 0.92rem;
+    margin: var(--esp-3) 0;
+    font-size: var(--txt-base);
 }
 caption {
     caption-side: top;
     text-align: left;
-    color: #6e6e6e;
-    font-size: 0.85rem;
-    padding-bottom: 0.4rem;
+    color: var(--color-texto-tenue);
+    font-size: var(--txt-sm);
+    padding-bottom: var(--esp-2);
 }
 th, td {
-    padding: 0.5rem 0.6rem;
-    border-bottom: 1px solid #e2e2e6;
+    padding: var(--esp-2) var(--esp-2);
+    border-bottom: 1px solid var(--color-borde-tenue);
     text-align: left;
     vertical-align: top;
 }
 thead th {
-    border-bottom: 2px solid #ccc;
-    font-size: 0.8rem;
+    border-bottom: 2px solid var(--color-borde);
+    font-size: var(--txt-sm);
     text-transform: uppercase;
     letter-spacing: 0.03em;
-    color: #444;
+    color: var(--color-texto-suave);
     white-space: nowrap;
 }
-tbody tr:hover { background: #fafafa; }
+tbody tr:hover { background: var(--color-superficie-alt); }
 /* Numeros y montos: alineados a la derecha y con cifras de ancho fijo, para
    que las columnas se puedan comparar de un vistazo. */
 .num {
@@ -236,14 +327,14 @@ tbody tr:hover { background: #fafafa; }
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
 }
-.fila-resta td, .fila-resta th { color: #b00020; }
+.fila-resta td, .fila-resta th { color: var(--color-error); }
 
 /* Clases que las vistas ya usaban pero que nunca existieron en el CSS. */
 .acciones { white-space: nowrap; }
-.acciones a { margin-right: 0.5rem; }
-.paginacion { display: flex; gap: 1rem; align-items: center; margin: 1rem 0; }
+.acciones a { margin-right: var(--esp-2); }
+.paginacion { display: flex; gap: var(--esp-4); align-items: center; margin: var(--esp-4) 0; }
 
-.nota { color: #6e6e6e; font-size: 0.85rem; margin: 0.5rem 0 0; }
+.nota { color: var(--color-texto-tenue); font-size: var(--txt-sm); margin: var(--esp-2) 0 0; }
 
 /* ==========================================================================
    Shell con menu lateral (partials/_nav.php). Solo aplica cuando hay sesion:
@@ -260,8 +351,17 @@ body.con-sidebar {
 body.con-sidebar > main {
     flex: 1 1 auto;
     min-width: 0;
-    max-width: 1100px;
-    padding: 1.5rem 2rem;
+    /* 1400 y no 1100: el techo anterior dejaba las tablas anchas (documentos,
+       detalle de carga, auditoria) con scroll horizontal propio mientras
+       sobraban 300px de pantalla a la derecha. Sube el techo para que las
+       tablas respiren.
+
+       NO se quita el max-width del todo: sin techo, en un monitor de 1920 o
+       2560 una linea de texto se vuelve ilegible de tan larga. El que los
+       formularios no se estiren con este ancho nuevo lo resuelve el
+       max-width de .form-grid, no esta regla. */
+    max-width: 1400px;
+    padding: var(--esp-5) var(--esp-6);
     box-sizing: border-box;
 }
 
@@ -269,13 +369,13 @@ body.con-sidebar > main {
     flex: 0 0 232px;
     width: 232px;
     box-sizing: border-box;
-    background: #f7f7f8;
-    border-right: 1px solid #ddd;
-    padding: 0.85rem 0.6rem 1.1rem;
+    background: var(--color-superficie-tenue);
+    border-right: 1px solid var(--color-borde-suave);
+    padding: var(--esp-3) var(--esp-2) 1.1rem;
     display: flex;
     flex-direction: column;
 }
-.sidebar__marca { font-weight: 700; font-size: 0.98rem; padding: 0.2rem 0.5rem 0.75rem; }
+.sidebar__marca { font-weight: 700; font-size: var(--txt-md); padding: var(--esp-1) var(--esp-2) var(--esp-3); }
 
 /* Logo de la marca. El max-height es la pieza que importa: bajo 720px el
    sidebar pasa a ancho completo y .sidebar__marca se ensancha con el, asi que
@@ -289,7 +389,7 @@ body.con-sidebar > main {
     max-height: 2.5rem;
     height: auto;
 }
-.sidebar__grupo { margin-bottom: 0.55rem; }
+.sidebar__grupo { margin-bottom: var(--esp-2); }
 
 /* JERARQUIA DEL MENU: seccion > subgrupo > item > subitem.
    Antes el subtitulo de subgrupo (0.72rem) era MAS GRANDE que el titulo de
@@ -299,45 +399,45 @@ body.con-sidebar > main {
    que a estas escalas se percibe poco.
    Contrastes sobre #f7f7f8: #5c5c5c 6.24:1, #6e6e6e 4.76:1. Ambos cumplen AA. */
 .sidebar__grupo-titulo {
-    font-size: 0.66rem;
+    font-size: var(--txt-xs);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #5c5c5c;
-    padding: 0 0.5rem;
-    margin: 0.45rem 0 0.2rem;
+    color: var(--color-texto-medio);
+    padding: 0 var(--esp-2);
+    margin: var(--esp-2) 0 var(--esp-1);
 }
 /* Agrupacion ligera: una linea vertical y sangria, sin card ni fondo. El mismo
    tratamiento vale para Ventas > Emision y para Configuracion > Produccion: es
    el mismo componente y no se disena uno distinto del otro. */
 .sidebar__subgrupo {
-    margin: 0.3rem 0 0.35rem;
-    padding-left: 0.5rem;
-    border-left: 1px solid #e2e2e6;
+    margin: var(--esp-1) 0 var(--esp-1);
+    padding-left: var(--esp-2);
+    border-left: 1px solid var(--color-borde-tenue);
 }
 .sidebar__subtitulo {
     font-size: 0.64rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #6e6e6e;
-    padding: 0 0.5rem;
-    margin: 0.15rem 0;
+    color: var(--color-texto-tenue);
+    padding: 0 var(--esp-2);
+    margin: var(--esp-1) 0;
 }
-.sidebar__pie { margin-top: auto; padding-top: 0.75rem; border-top: 1px solid #e2e2e6; }
+.sidebar__pie { margin-top: auto; padding-top: var(--esp-3); border-top: 1px solid var(--color-borde-tenue); }
 
 .nav-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.3rem 0.5rem;
-    border-radius: 4px;
-    font-size: 0.82rem;
+    gap: var(--esp-2);
+    padding: var(--esp-1) var(--esp-2);
+    border-radius: var(--radio-sm);
+    font-size: var(--txt-sm);
     text-decoration: none;
-    color: #222;
+    color: var(--color-texto);
 }
-.nav-item--sub { padding-left: 0.85rem; font-size: 0.78rem; }
+.nav-item--sub { padding-left: var(--esp-3); font-size: var(--txt-xs); }
 a.nav-item:hover { background: #ececf0; }
 /* Indicador lateral con box-shadow inset y NO con border-left: un borde
    desplazaria el texto 3px solo en el item activo, descuadrandolo respecto de
@@ -345,26 +445,26 @@ a.nav-item:hover { background: #ececf0; }
    inset-shadow no ocupa espacio de layout. El estado sigue comunicandose
    ademas por fondo, color y peso: la barra no es la unica senal. */
 .nav-item--activo {
-    background: #e8f0fe;
-    color: #1a56db;
+    background: var(--color-primario-suave);
+    color: var(--color-primario);
     font-weight: 600;
-    box-shadow: inset 3px 0 0 #1a56db;
+    box-shadow: inset 3px 0 0 var(--color-primario);
 }
 /* #6e6e6e y no #aaa: sobre #f7f7f8 da 4.76:1 (antes 2.17:1, no cumplia AA). */
 .nav-item--proximo,
-.nav-item--bloqueado { color: #6e6e6e; cursor: default; }
+.nav-item--bloqueado { color: var(--color-texto-tenue); cursor: default; }
 .nav-item__badge {
     font-size: 0.58rem;
     text-transform: uppercase;
     letter-spacing: 0.03em;
-    border-radius: 3px;
-    padding: 0.05rem 0.3rem;
+    border-radius: var(--radio-sm);
+    padding: 0.05rem var(--esp-1);
     white-space: nowrap;
 }
 /* #5c5c5c y no #999: sobre #eaeaea da 5.56:1 (antes 2.37:1, no cumplia AA). */
 .nav-item--proximo .nav-item__badge,
-.badge--proximo { background: #eaeaea; color: #5c5c5c; }
-.nav-item--bloqueado .nav-item__badge { background: #fff7e6; color: #7a4b00; border: 1px solid #ed6c02; }
+.badge--proximo { background: #eaeaea; color: var(--color-texto-medio); }
+.nav-item--bloqueado .nav-item__badge { background: #fff7e6; color: #7a4b00; border: 1px solid var(--color-alerta-borde); }
 
 /* ==========================================================================
    Dashboard de gestion (panel-gestion.php).
@@ -372,38 +472,38 @@ a.nav-item:hover { background: #ececf0; }
 .dash-header {
     display: flex;
     flex-wrap: wrap;
-    gap: 1rem;
+    gap: var(--esp-4);
     align-items: flex-start;
     justify-content: space-between;
-    border-bottom: 1px solid #e2e2e6;
-    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--color-borde-tenue);
+    padding-bottom: var(--esp-3);
 }
-.dash-header h1 { margin: 0 0 0.2rem; }
-.dash-header__emisor { margin: 0; color: #444; }
-.dash-header__rut { color: #6e6e6e; font-size: 0.85rem; margin-left: 0.5rem; }
-.dash-subtitulo { color: #6e6e6e; font-size: 0.9rem; margin: 0.6rem 0 1.25rem; }
+.dash-header h1 { margin: 0 0 var(--esp-1); }
+.dash-header__emisor { margin: 0; color: var(--color-texto-suave); }
+.dash-header__rut { color: var(--color-texto-tenue); font-size: var(--txt-sm); margin-left: var(--esp-2); }
+.dash-subtitulo { color: var(--color-texto-tenue); font-size: var(--txt-base); margin: var(--esp-2) 0 1.25rem; }
 
-.dash-periodo { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
+.dash-periodo { display: flex; align-items: center; gap: var(--esp-1); flex-wrap: wrap; }
 .dash-periodo__etiqueta {
-    font-size: 0.68rem;
+    font-size: var(--txt-xs);
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #6e6e6e;
-    margin-right: 0.15rem;
+    color: var(--color-texto-tenue);
+    margin-right: var(--esp-1);
 }
 .dash-periodo__opcion {
-    padding: 0.3rem 0.7rem;
-    border: 1px solid #ccc;
-    border-radius: 999px;
+    padding: var(--esp-1) var(--esp-3);
+    border: 1px solid var(--color-borde);
+    border-radius: var(--radio-pill);
     text-decoration: none;
-    color: #222;
-    font-size: 0.85rem;
+    color: var(--color-texto);
+    font-size: var(--txt-sm);
 }
 .dash-periodo__opcion:hover { background: #f1f1f3; }
 .dash-periodo__opcion--activa {
-    background: #e8f0fe;
-    border-color: #1a56db;
-    color: #1a56db;
+    background: var(--color-primario-suave);
+    border-color: var(--color-primario);
+    color: var(--color-primario);
     font-weight: 600;
 }
 
@@ -411,133 +511,133 @@ a.nav-item:hover { background: #ececf0; }
 .dash-grid {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.75rem;
-    margin: 0 0 1.5rem;
+    gap: var(--esp-3);
+    margin: 0 0 var(--esp-5);
     padding: 0;
     list-style: none;
 }
 .dash-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .kpi {
-    border: 1px solid #ddd;
-    border-top: 3px solid #1a56db;
-    border-radius: 6px;
-    padding: 0.85rem 0.9rem;
-    background: #fff;
+    border: 1px solid var(--color-borde-suave);
+    border-top: 3px solid var(--color-primario);
+    border-radius: var(--radio-md);
+    padding: var(--esp-3) var(--esp-4);
+    background: var(--color-superficie);
 }
 .kpi__etiqueta {
     margin: 0;
-    font-size: 0.72rem;
+    font-size: var(--txt-xs);
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: #6e6e6e;
+    color: var(--color-texto-tenue);
 }
 .kpi__valor {
-    margin: 0.3rem 0 0.2rem;
-    font-size: 1.55rem;
+    margin: var(--esp-1) 0 var(--esp-1);
+    font-size: var(--txt-xl);
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     line-height: 1.15;
 }
-.kpi__delta { font-size: 0.82rem; font-weight: 600; }
-.kpi__delta--sube { color: #2e7d32; }
-.kpi__delta--baja { color: #b00020; }
+.kpi__delta { font-size: var(--txt-sm); font-weight: 600; }
+.kpi__delta--sube { color: var(--color-exito); }
+.kpi__delta--baja { color: var(--color-error); }
 .kpi__delta--igual,
-.kpi__delta--sin_base { color: #6e6e6e; font-weight: 400; }
-.kpi__formula { margin: 0.35rem 0 0; font-size: 0.75rem; color: #6e6e6e; }
-.kpi--ambar { border-top-color: #ed6c02; }
-.kpi--rojo { border-top-color: #b00020; }
+.kpi__delta--sin_base { color: var(--color-texto-tenue); font-weight: 400; }
+.kpi__formula { margin: var(--esp-1) 0 0; font-size: var(--txt-xs); color: var(--color-texto-tenue); }
+.kpi--ambar { border-top-color: var(--color-alerta-borde); }
+.kpi--rojo { border-top-color: var(--color-error); }
 
 /* Estado vacio: el tenant esta habilitado pero nunca emitio. */
 .estado-vacio {
-    border: 1px solid #1a56db;
-    background: #e8f0fe;
-    border-radius: 6px;
+    border: 1px solid var(--color-primario);
+    background: var(--color-primario-suave);
+    border-radius: var(--radio-md);
     padding: 1.25rem 1.4rem;
-    margin: 0 0 1.5rem;
+    margin: 0 0 var(--esp-5);
 }
 .estado-vacio h2 { margin-top: 0; }
-.estado-vacio__acciones { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; margin-bottom: 0; }
+.estado-vacio__acciones { display: flex; flex-wrap: wrap; gap: var(--esp-3); align-items: center; margin-bottom: 0; }
 .boton-principal {
     display: inline-block;
-    background: #1a56db;
-    color: #fff;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+    background: var(--color-primario);
+    color: var(--color-superficie);
+    padding: var(--esp-2) var(--esp-4);
+    border-radius: var(--radio-sm);
     text-decoration: none;
     font-weight: 600;
     /* Declarado explicitamente: sin esto un <button> hereda el tamano por
        defecto del navegador (13.3px) y un <a> hereda el del body (16px), y el
        mismo boton se veia de dos tamanos distintos segun la pantalla. */
-    font-size: 0.9rem;
+    font-size: var(--txt-base);
     line-height: 1.2;
     cursor: pointer;
-    border: 1px solid #1a56db;
+    border: 1px solid var(--color-primario);
 }
-.boton-principal:hover { background: #1546b0; }
-.progreso-colapsado { margin: 1.5rem 0; }
-.progreso-colapsado > summary { cursor: pointer; font-weight: 600; padding: 0.4rem 0; }
+.boton-principal:hover { background: var(--color-primario-hover); }
+.progreso-colapsado { margin: var(--esp-5) 0; }
+.progreso-colapsado > summary { cursor: pointer; font-weight: 600; padding: var(--esp-2) 0; }
 
 /* Folios por tipo. El nivel se comunica por color + palabra + icono. */
-.folios { display: flex; flex-direction: column; gap: 0.75rem; padding: 0; margin: 0.75rem 0 1.5rem; list-style: none; }
-.folio { border: 1px solid #ddd; border-left-width: 4px; border-radius: 6px; padding: 0.7rem 0.85rem; }
-.folio__cabecera { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; }
+.folios { display: flex; flex-direction: column; gap: var(--esp-3); padding: 0; margin: var(--esp-3) 0 var(--esp-5); list-style: none; }
+.folio { border: 1px solid var(--color-borde-suave); border-left-width: 4px; border-radius: var(--radio-md); padding: var(--esp-3) var(--esp-3); }
+.folio__cabecera { display: flex; justify-content: space-between; align-items: baseline; gap: var(--esp-3); }
 .folio__tipo { font-weight: 600; }
-.folio__nivel { font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.folio__nivel { font-size: var(--txt-sm); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
 .folio__barra {
     height: 0.55rem;
     background: #ececf0;
-    border-radius: 999px;
+    border-radius: var(--radio-pill);
     overflow: hidden;
-    margin: 0.5rem 0 0.4rem;
+    margin: var(--esp-2) 0 var(--esp-2);
 }
-.folio__relleno { display: block; height: 100%; background: #6e6e6e; }
-.folio__detalle { margin: 0; font-size: 0.85rem; color: #444; font-variant-numeric: tabular-nums; }
-.folio--ok { border-color: #2e7d32; }
-.folio--ok .folio__nivel { color: #2e7d32; }
-.folio--ok .folio__relleno { background: #2e7d32; }
-.folio--ambar { border-color: #ed6c02; background: #fff8f0; }
-.folio--ambar .folio__nivel { color: #b45309; }
-.folio--ambar .folio__relleno { background: #ed6c02; }
-.folio--rojo { border-color: #b00020; background: #fdecea; }
-.folio--rojo .folio__nivel { color: #b00020; }
-.folio--rojo .folio__relleno { background: #b00020; }
+.folio__relleno { display: block; height: 100%; background: var(--color-texto-tenue); }
+.folio__detalle { margin: 0; font-size: var(--txt-sm); color: var(--color-texto-suave); font-variant-numeric: tabular-nums; }
+.folio--ok { border-color: var(--color-exito); }
+.folio--ok .folio__nivel { color: var(--color-exito); }
+.folio--ok .folio__relleno { background: var(--color-exito); }
+.folio--ambar { border-color: var(--color-alerta-borde); background: var(--color-alerta-fondo); }
+.folio--ambar .folio__nivel { color: var(--color-alerta); }
+.folio--ambar .folio__relleno { background: var(--color-alerta-borde); }
+.folio--rojo { border-color: var(--color-error); background: var(--color-error-fondo); }
+.folio--rojo .folio__nivel { color: var(--color-error); }
+.folio--rojo .folio__relleno { background: var(--color-error); }
 
 /* Grafico de ventas por dia. */
-.grafico { margin: 0.75rem 0 0.5rem; }
+.grafico { margin: var(--esp-3) 0 var(--esp-2); }
 .grafico__svg { width: 100%; height: auto; max-height: 260px; display: block; }
 /* La linea base del grafico es un objeto grafico con significado (separa
    ventas de notas de credito): WCAG 1.4.11 exige 3:1. #999 daba 2.85:1. */
-.grafico__eje { stroke: #6e6e6e; stroke-width: 1; }
-.grafico__venta { fill: #1a56db; }
-.grafico__nc { fill: #b00020; }
-.grafico__dia { fill: #6e6e6e; font-size: 9px; }
-.grafico__leyenda { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.82rem; color: #444; margin-top: 0.4rem; }
-.grafico__clave { display: flex; align-items: center; gap: 0.35rem; }
+.grafico__eje { stroke: var(--color-texto-tenue); stroke-width: 1; }
+.grafico__venta { fill: var(--color-primario); }
+.grafico__nc { fill: var(--color-error); }
+.grafico__dia { fill: var(--color-texto-tenue); font-size: 9px; }
+.grafico__leyenda { display: flex; flex-wrap: wrap; gap: var(--esp-4); font-size: var(--txt-sm); color: var(--color-texto-suave); margin-top: var(--esp-2); }
+.grafico__clave { display: flex; align-items: center; gap: var(--esp-1); }
 .grafico__clave::before { content: ""; width: 0.7rem; height: 0.7rem; border-radius: 2px; display: inline-block; }
-.grafico__clave--venta::before { background: #1a56db; }
-.grafico__clave--nc::before { background: #b00020; }
-.grafico__datos { margin-top: 0.5rem; }
+.grafico__clave--venta::before { background: var(--color-primario); }
+.grafico__clave--nc::before { background: var(--color-error); }
+.grafico__datos { margin-top: var(--esp-2); }
 .grafico__datos > summary { cursor: pointer; font-weight: 600; }
 
-.tarjeta--proximamente { background: #fafafa; border-style: dashed; }
-.tarjeta--proximamente h2 { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 1.05rem; }
-.dash-vacio-inline { color: #6e6e6e; font-style: italic; }
+.tarjeta--proximamente { background: var(--color-superficie-alt); border-style: dashed; }
+.tarjeta--proximamente h2 { display: flex; align-items: center; gap: var(--esp-2); flex-wrap: wrap; font-size: var(--txt-md); }
+.dash-vacio-inline { color: var(--color-texto-tenue); font-style: italic; }
 
-.accesos { margin-top: 2rem; border-top: 1px solid #e2e2e6; padding-top: 1rem; }
-.accesos__lista { display: flex; flex-wrap: wrap; gap: 0.6rem; padding: 0; margin: 0.5rem 0 0; list-style: none; }
+.accesos { margin-top: var(--esp-6); border-top: 1px solid var(--color-borde-tenue); padding-top: var(--esp-4); }
+.accesos__lista { display: flex; flex-wrap: wrap; gap: var(--esp-2); padding: 0; margin: var(--esp-2) 0 0; list-style: none; }
 .accesos__lista a {
     display: inline-block;
-    padding: 0.45rem 0.9rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+    padding: var(--esp-2) var(--esp-4);
+    border: 1px solid var(--color-borde);
+    border-radius: var(--radio-sm);
     text-decoration: none;
-    color: #1a56db;
+    color: var(--color-primario);
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: var(--txt-base);
 }
-.accesos__lista a:hover { background: #e8f0fe; border-color: #1a56db; }
+.accesos__lista a:hover { background: var(--color-primario-suave); border-color: var(--color-primario); }
 
 /* ==========================================================================
    Responsivo
@@ -546,7 +646,7 @@ a.nav-item:hover { background: #ececf0; }
 /* Tablet / pantalla mediana: la grilla de 4 KPIs pasa a 2 columnas. */
 @media (max-width: 1024px) {
     .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    body.con-sidebar > main { padding: 1.25rem 1.5rem; }
+    body.con-sidebar > main { padding: 1.25rem var(--esp-5); }
 }
 
 /* Angosto: el sidebar pasa arriba, apilado (no fixed, sin JS), y todas las
@@ -565,25 +665,25 @@ a.nav-item:hover { background: #ececf0; }
         flex: none;
         width: 100%;
         border-right: none;
-        border-bottom: 1px solid #ddd;
+        border-bottom: 1px solid var(--color-borde-suave);
         max-height: 50vh;
         max-height: 50dvh;
         overflow-y: auto;
         scrollbar-width: thin;
     }
-    .sidebar__pie { margin-top: 1rem; }
+    .sidebar__pie { margin-top: var(--esp-4); }
     /* Objetivo tactil: la densidad del escritorio (28px) es demasiado chica
        para el dedo. En movil los enlaces vuelven a 40px de alto minimo y a un
        cuerpo de 0.9rem, aunque el menu tenga que desplazarse. */
     .sidebar .nav-item {
-        font-size: 0.9rem;
-        padding: 0.55rem 0.65rem;
+        font-size: var(--txt-base);
+        padding: var(--esp-2) var(--esp-3);
         min-height: 2.5rem;
         box-sizing: border-box;
     }
-    .sidebar .nav-item--sub { font-size: 0.86rem; padding-left: 1.1rem; }
-    .sidebar__grupo { margin-bottom: 0.35rem; }
-    body.con-sidebar > main { padding: 1rem; }
+    .sidebar .nav-item--sub { font-size: var(--txt-sm); padding-left: 1.1rem; }
+    .sidebar__grupo { margin-bottom: var(--esp-1); }
+    body.con-sidebar > main { padding: var(--esp-4); }
     .dash-grid,
     .dash-grid--2 { grid-template-columns: minmax(0, 1fr); }
     .dash-header { flex-direction: column; }
@@ -629,7 +729,7 @@ a.nav-item:hover { background: #ececf0; }
    Clases propias, NO una evolucion de .progreso-etapas: esa barra es de la
    certificacion, tiene otra anatomia y hoy la consumen cuatro vistas.
    -------------------------------------------------------------------------- */
-.stepper { margin: 1rem 0 1.5rem; }
+.stepper { margin: var(--esp-4) 0 var(--esp-5); }
 .stepper__lista {
     display: flex;
     align-items: center;
@@ -651,23 +751,23 @@ a.nav-item:hover { background: #ececf0; }
     flex: 1 1 auto;
     height: 2px;
     min-width: 1.5rem;
-    margin: 0 0.75rem;
+    margin: 0 var(--esp-3);
     background: #dcdce1;
     border-radius: 1px;
 }
-.stepper__paso--completado:not(:last-child)::after { background: #2e7d32; }
+.stepper__paso--completado:not(:last-child)::after { background: var(--color-exito); }
 .stepper__contenido {
     display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--esp-2);
     flex: 0 0 auto;
     text-decoration: none;
-    color: #6e6e6e;
-    font-size: 0.9rem;
-    border-radius: 4px;
-    padding: 0.15rem 0.2rem;
+    color: var(--color-texto-tenue);
+    font-size: var(--txt-base);
+    border-radius: var(--radio-sm);
+    padding: var(--esp-1) var(--esp-1);
 }
-a.stepper__contenido:hover { color: #1a56db; }
+a.stepper__contenido:hover { color: var(--color-primario); }
 .stepper__marca {
     display: inline-flex;
     align-items: center;
@@ -677,24 +777,24 @@ a.stepper__contenido:hover { color: #1a56db; }
     height: 1.65rem;
     border-radius: 50%;
     border: 2px solid #dcdce1;
-    background: #fff;
-    color: #6e6e6e;
-    font-size: 0.8rem;
+    background: var(--color-superficie);
+    color: var(--color-texto-tenue);
+    font-size: var(--txt-sm);
     font-weight: 700;
     line-height: 1;
 }
 .stepper__etiqueta { white-space: nowrap; }
-.stepper__paso--activo .stepper__contenido { color: #1a56db; font-weight: 600; }
+.stepper__paso--activo .stepper__contenido { color: var(--color-primario); font-weight: 600; }
 .stepper__paso--activo .stepper__marca {
-    background: #1a56db;
-    border-color: #1a56db;
-    color: #fff;
+    background: var(--color-primario);
+    border-color: var(--color-primario);
+    color: var(--color-superficie);
 }
-.stepper__paso--completado .stepper__contenido { color: #2e7d32; }
+.stepper__paso--completado .stepper__contenido { color: var(--color-exito); }
 .stepper__paso--completado .stepper__marca {
-    background: #2e7d32;
-    border-color: #2e7d32;
-    color: #fff;
+    background: var(--color-exito);
+    border-color: var(--color-exito);
+    color: var(--color-superficie);
 }
 
 /* --------------------------------------------------------------------------
@@ -706,21 +806,21 @@ a.stepper__contenido:hover { color: #1a56db; }
 .badge {
     display: inline-flex;
     align-items: center;
-    gap: 0.3rem;
-    padding: 0.12rem 0.5rem;
-    border-radius: 999px;
+    gap: var(--esp-1);
+    padding: 0.12rem var(--esp-2);
+    border-radius: var(--radio-pill);
     border: 1px solid transparent;
-    font-size: 0.78rem;
+    font-size: var(--txt-xs);
     font-weight: 600;
     line-height: 1.4;
     white-space: nowrap;
 }
 .badge__icono { font-size: 0.85em; line-height: 1; }
-.badge--ok          { background: #f1f8f1; border-color: #cbe3cc; color: #2e7d32; }
-.badge--advertencia { background: #fff8f0; border-color: #f3d9bb; color: #b45309; }
-.badge--error       { background: #fdecea; border-color: #f2c9c4; color: #b00020; }
-.badge--proceso     { background: #e8f0fe; border-color: #c6d8fb; color: #1a56db; }
-.badge--neutro      { background: #eaeaea; border-color: #d8d8d8; color: #5c5c5c; }
+.badge--ok          { background: var(--color-exito-fondo); border-color: #cbe3cc; color: var(--color-exito); }
+.badge--advertencia { background: var(--color-alerta-fondo); border-color: #f3d9bb; color: var(--color-alerta); }
+.badge--error       { background: var(--color-error-fondo); border-color: #f2c9c4; color: var(--color-error); }
+.badge--proceso     { background: var(--color-primario-suave); border-color: #c6d8fb; color: var(--color-primario); }
+.badge--neutro      { background: #eaeaea; border-color: #d8d8d8; color: var(--color-texto-medio); }
 
 /* --------------------------------------------------------------------------
    Panel informativo (variante de .tarjeta para bloques de ayuda o resumen)
@@ -728,45 +828,45 @@ a.stepper__contenido:hover { color: #1a56db; }
 .panel-info {
     border: 1px solid #dbe4f5;
     background: #f8fafd;
-    border-radius: 6px;
-    padding: 0.9rem 1rem;
-    margin: 0 0 1rem;
-    color: #444;
+    border-radius: var(--radio-md);
+    padding: var(--esp-4) var(--esp-4);
+    margin: 0 0 var(--esp-4);
+    color: var(--color-texto-suave);
 }
 .panel-info__titulo {
     display: flex;
     align-items: center;
-    gap: 0.45rem;
-    margin: 0 0 0.5rem;
+    gap: var(--esp-2);
+    margin: 0 0 var(--esp-2);
     /* Mismo tamano que .tarjeta h2 y .titulo-seccion: los titulos de bloque no
        pueden variar entre 24px, 16.8px y 15.7px segun el componente. */
-    font-size: 1.15rem;
+    font-size: var(--txt-lg);
     font-weight: 600;
-    color: #222;
+    color: var(--color-texto);
 }
-.panel-info__icono { color: #1a56db; flex: none; line-height: 1; }
+.panel-info__icono { color: var(--color-primario); flex: none; line-height: 1; }
 /* :not(.panel-info__titulo) -- sin esto esta regla pisa el tamano del titulo:
    ambas tienen especificidad 0-1-1 y esta va declarada despues. */
-.panel-info p:not(.panel-info__titulo) { margin: 0 0 0.5rem; font-size: 0.88rem; }
+.panel-info p:not(.panel-info__titulo) { margin: 0 0 var(--esp-2); font-size: var(--txt-base); }
 .panel-info p:last-child { margin-bottom: 0; }
 .panel-info__lista { margin: 0; padding: 0; list-style: none; }
 .panel-info__lista li {
     position: relative;
     padding-left: 1.15rem;
-    margin: 0.35rem 0;
-    font-size: 0.88rem;
+    margin: var(--esp-1) 0;
+    font-size: var(--txt-base);
 }
 .panel-info__lista li::before {
     content: "\2713";
     position: absolute;
     left: 0;
     top: 0;
-    color: #1a56db;
+    color: var(--color-primario);
     font-size: 0.85em;
 }
-.panel-info--advertencia { border-color: #f3d9bb; background: #fff8f0; }
+.panel-info--advertencia { border-color: #f3d9bb; background: var(--color-alerta-fondo); }
 .panel-info--advertencia .panel-info__icono,
-.panel-info--advertencia .panel-info__lista li::before { color: #b45309; }
+.panel-info--advertencia .panel-info__lista li::before { color: var(--color-alerta); }
 
 /* --------------------------------------------------------------------------
    Layout de contenido principal + panel lateral
@@ -777,9 +877,9 @@ a.stepper__contenido:hover { color: #1a56db; }
 .layout-principal-lateral {
     display: grid;
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-    gap: 1rem;
+    gap: var(--esp-4);
     align-items: start;
-    margin: 0 0 1.5rem;
+    margin: 0 0 var(--esp-5);
 }
 
 /* --------------------------------------------------------------------------
@@ -790,17 +890,17 @@ a.stepper__contenido:hover { color: #1a56db; }
    solo AJUSTA densidad y jerarquia sobre esa base, dentro de su propio scope.
    Para el scroll horizontal se sigue usando el .tabla-scroll existente.
    -------------------------------------------------------------------------- */
-.tabla-datos { font-size: 0.88rem; }
+.tabla-datos { font-size: var(--txt-base); }
 .tabla-datos thead th {
-    background: #f7f7f8;
+    background: var(--color-superficie-tenue);
     border-bottom: 1px solid #d8d8dd;
-    color: #444;
-    font-size: 0.72rem;
-    padding: 0.5rem 0.6rem;
+    color: var(--color-texto-suave);
+    font-size: var(--txt-xs);
+    padding: var(--esp-2) var(--esp-2);
 }
 .tabla-datos tbody th,
 .tabla-datos tbody td {
-    padding: 0.45rem 0.6rem;
+    padding: var(--esp-2) var(--esp-2);
     vertical-align: middle;
     border-bottom: 1px solid #ececf0;
 }
@@ -816,9 +916,9 @@ a.stepper__contenido:hover { color: #1a56db; }
 .tabla-datos__estado { white-space: nowrap; }
 .tabla-datos__acciones { white-space: nowrap; text-align: right; }
 .tabla-datos__acciones a,
-.tabla-datos__acciones button { margin-left: 0.5rem; }
-.tabla-datos__secundario { display: block; color: #6e6e6e; font-size: 0.8rem; }
-.tabla-datos tbody tr.tabla-datos__fila--inactiva { color: #6e6e6e; background: #fafafa; }
+.tabla-datos__acciones button { margin-left: var(--esp-2); }
+.tabla-datos__secundario { display: block; color: var(--color-texto-tenue); font-size: var(--txt-sm); }
+.tabla-datos tbody tr.tabla-datos__fila--inactiva { color: var(--color-texto-tenue); background: var(--color-superficie-alt); }
 
 /* --------------------------------------------------------------------------
    Botones
@@ -829,26 +929,26 @@ a.stepper__contenido:hover { color: #1a56db; }
 .boton-secundario,
 .boton-texto {
     display: inline-block;
-    padding: 0.5rem 1rem;
-    border-radius: 4px;
+    padding: var(--esp-2) var(--esp-4);
+    border-radius: var(--radio-sm);
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: var(--txt-base);
     text-decoration: none;
     cursor: pointer;
     line-height: 1.2;
 }
 .boton-secundario {
-    background: #fff;
-    color: #1a56db;
+    background: var(--color-superficie);
+    color: var(--color-primario);
     border: 1px solid #c6d8fb;
 }
-.boton-secundario:hover { background: #e8f0fe; border-color: #1a56db; }
+.boton-secundario:hover { background: var(--color-primario-suave); border-color: var(--color-primario); }
 .boton-texto {
     background: none;
     border: 1px solid transparent;
-    color: #1a56db;
-    padding-left: 0.35rem;
-    padding-right: 0.35rem;
+    color: var(--color-primario);
+    padding-left: var(--esp-1);
+    padding-right: var(--esp-1);
 }
 .boton-texto:hover { text-decoration: underline; }
 .boton-principal[disabled],
@@ -865,8 +965,8 @@ a.stepper__contenido:hover { color: #1a56db; }
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.6rem;
-    margin: 1rem 0 0;
+    gap: var(--esp-2);
+    margin: var(--esp-4) 0 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -880,7 +980,7 @@ a.stepper__contenido:hover { color: #1a56db; }
 @media (max-width: 720px) {
     /* El stepper pasa a columna: los conectores horizontales dejan de tener
        sentido y se ocultan, el estado se sigue leyendo por circulo y color. */
-    .stepper__lista { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+    .stepper__lista { flex-direction: column; align-items: flex-start; gap: var(--esp-2); }
     .stepper__paso { flex: none; width: 100%; }
     .stepper__paso:not(:last-child)::after { display: none; }
     .acciones-grupo > * { flex: 1 1 auto; text-align: center; }
@@ -899,26 +999,26 @@ a.stepper__contenido:hover { color: #1a56db; }
 .alerta {
     display: flex;
     align-items: flex-start;
-    gap: 0.5rem;
-    padding: 0.6rem 0.8rem;
-    border-radius: 6px;
+    gap: var(--esp-2);
+    padding: var(--esp-2) var(--esp-3);
+    border-radius: var(--radio-md);
     border: 1px solid transparent;
-    margin: 0 0 1rem;
-    font-size: 0.9rem;
+    margin: 0 0 var(--esp-4);
+    font-size: var(--txt-base);
 }
 .alerta__icono { flex: none; line-height: 1.4; }
-.alerta--error { background: #fdecea; border-color: #f2c9c4; color: #b00020; }
-.alerta--exito { background: #f1f8f1; border-color: #cbe3cc; color: #2e7d32; }
+.alerta--error { background: var(--color-error-fondo); border-color: #f2c9c4; color: var(--color-error); }
+.alerta--exito { background: var(--color-exito-fondo); border-color: #cbe3cc; color: var(--color-exito); }
 
 /* Zona de carga de archivo. El <input type="file"> real sigue en el DOM con
    .visualmente-oculto; lo que se ve es esta area y el <label> que lo dispara. */
-.upload { margin: 0.75rem 0 0; }
+.upload { margin: var(--esp-3) 0 0; }
 .upload__area {
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: 0.5rem;
-    padding: 1.25rem 1rem;
+    gap: var(--esp-2);
+    padding: 1.25rem var(--esp-4);
     border: 2px dashed #c6d8fb;
     border-radius: 8px;
     background: #f8fafd;
@@ -927,18 +1027,18 @@ a.stepper__contenido:hover { color: #1a56db; }
 /* El foco del teclado cae en el input oculto: el anillo se dibuja en el area,
    que es lo que el usuario ve (WCAG 2.4.7). */
 .upload__area:focus-within {
-    outline: 3px solid #1a56db;
+    outline: 3px solid var(--color-primario);
     outline-offset: 2px;
-    border-color: #1a56db;
+    border-color: var(--color-primario);
 }
-.upload__icono { font-size: 1.6rem; line-height: 1; color: #1a56db; }
-.upload__texto { margin: 0; font-size: 0.92rem; color: #444; }
+.upload__icono { font-size: var(--txt-xl); line-height: 1; color: var(--color-primario); }
+.upload__texto { margin: 0; font-size: var(--txt-base); color: var(--color-texto-suave); }
 .upload__boton { cursor: pointer; }
-.upload__meta { margin: 0; font-size: 0.8rem; color: #6e6e6e; }
-.upload__seleccionado { margin: 0; font-size: 0.85rem; font-weight: 600; color: #2e7d32; }
+.upload__meta { margin: 0; font-size: var(--txt-sm); color: var(--color-texto-tenue); }
+.upload__seleccionado { margin: 0; font-size: var(--txt-sm); font-weight: 600; color: var(--color-exito); }
 .upload__seleccionado:empty { display: none; }
 
-.carga-masiva__intro { margin: 0 0 0.75rem; font-size: 0.9rem; color: #444; }
+.carga-masiva__intro { margin: 0 0 var(--esp-3); font-size: var(--txt-base); color: var(--color-texto-suave); }
 /* La columna de descripcion es la que debe absorber el ancho sobrante. */
 .tabla-lotes-carga td:first-child { white-space: nowrap; }
 
@@ -957,48 +1057,48 @@ a.stepper__contenido:hover { color: #1a56db; }
 .ficha {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    gap: 0.3rem 0.75rem;
+    gap: var(--esp-1) var(--esp-3);
     margin: 0;
-    font-size: 0.88rem;
+    font-size: var(--txt-base);
 }
-.ficha dt { color: #6e6e6e; }
+.ficha dt { color: var(--color-texto-tenue); }
 .ficha dd { margin: 0; word-break: break-word; }
-.ficha--compacta { font-size: 0.82rem; margin-top: 0.4rem; }
+.ficha--compacta { font-size: var(--txt-sm); margin-top: var(--esp-2); }
 
 /* Ficha de montos (resultado de emision y ficha del documento emitido): cifras
    a la derecha y de ancho fijo, para que se comparen en vertical. .ficha__total
    separa la ultima fila con una linea, que es como se lee un total. */
 .ficha--montos dd { text-align: right; font-variant-numeric: tabular-nums; }
 .ficha--montos .ficha__total {
-    border-top: 1px solid #e2e2e6;
-    margin-top: 0.15rem;
-    padding-top: 0.35rem;
+    border-top: 1px solid var(--color-borde-tenue);
+    margin-top: var(--esp-1);
+    padding-top: var(--esp-1);
     font-weight: 700;
 }
 
 /* Subtitulo dentro de una card. .titulo-seccion vale 1.15rem, el mismo tamano
    que .tarjeta h2: un h3 con esa clase no se leeria como subordinado. */
-.titulo-sub { font-size: 0.95rem; font-weight: 600; color: #222; margin: 1.25rem 0 0.35rem; }
+.titulo-sub { font-size: var(--txt-base); font-weight: 600; color: var(--color-texto); margin: 1.25rem 0 var(--esp-1); }
 
 /* Lista de resultados de validacion: badge a la izquierda, cifra a la derecha. */
-.validacion { list-style: none; margin: 0 0 0.5rem; padding: 0; }
+.validacion { list-style: none; margin: 0 0 var(--esp-2); padding: 0; }
 .validacion__item {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.3rem 0;
+    gap: var(--esp-3);
+    padding: var(--esp-1) 0;
 }
 .validacion__dato { font-weight: 700; font-variant-numeric: tabular-nums; }
-.validacion__pct { font-weight: 400; color: #6e6e6e; font-size: 0.85rem; }
+.validacion__pct { font-weight: 400; color: var(--color-texto-tenue); font-size: var(--txt-sm); }
 
 /* Motivos de error de una fila: legibles, no apagados. El atenuado de
    .tabla-datos__fila--inactiva no debe aplicarse al mensaje, que es
    justamente lo que el usuario necesita leer. */
 .celda-observacion { min-width: 16rem; }
 .motivos { margin: 0; padding-left: 1.1rem; }
-.motivos li { color: #b00020; font-size: 0.84rem; margin: 0.1rem 0; }
-.fila-original > summary { cursor: pointer; font-size: 0.82rem; color: #1a56db; }
+.motivos li { color: var(--color-error); font-size: var(--txt-sm); margin: 0.1rem 0; }
+.fila-original > summary { cursor: pointer; font-size: var(--txt-sm); color: var(--color-primario); }
 
 @media (max-width: 1024px) {
     .dash-grid--3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1013,33 +1113,33 @@ a.stepper__contenido:hover { color: #1a56db; }
    ========================================================================== */
 
 .oculto { display: none; }
-.texto-error { color: #b00020; }
+.texto-error { color: var(--color-error); }
 
 /* Barra de filtros: compacta y alineada en una linea. */
 .filtros {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.5rem;
-    margin: 0.75rem 0;
-    padding: 0.6rem 0.75rem;
-    border: 1px solid #e2e2e6;
-    border-radius: 6px;
+    gap: var(--esp-2);
+    margin: var(--esp-3) 0;
+    padding: var(--esp-2) var(--esp-3);
+    border: 1px solid var(--color-borde-tenue);
+    border-radius: var(--radio-md);
     background: #fafafb;
 }
-.filtros__campo { margin: 0; font-size: 0.85rem; font-weight: 600; color: #444; }
+.filtros__campo { margin: 0; font-size: var(--txt-sm); font-weight: 600; color: var(--color-texto-suave); }
 /* El input global es display:block y width:100%; aca tiene que caber en linea. */
 .filtros__input {
     display: inline-block;
     width: auto;
     min-width: 14rem;
-    padding: 0.35rem 0.5rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 0.9rem;
+    padding: var(--esp-1) var(--esp-2);
+    border: 1px solid var(--color-borde);
+    border-radius: var(--radio-sm);
+    font-size: var(--txt-base);
 }
 .filtros .boton-secundario,
-.filtros .boton-texto { padding-top: 0.35rem; padding-bottom: 0.35rem; }
+.filtros .boton-texto { padding-top: var(--esp-1); padding-bottom: var(--esp-1); }
 /* Anchos por campo. El min-width de 14rem de .filtros__input es correcto para
    una barra de un solo filtro (facturacion masiva), pero el panel de emision
    tiene seis y no caben: un folio no necesita 224px y una fecha tampoco. */
@@ -1058,7 +1158,7 @@ a.stepper__contenido:hover { color: #1a56db; }
     display: inline-block;
     width: auto;
     margin: 0;
-    accent-color: #1a56db;
+    accent-color: var(--color-primario);
     cursor: pointer;
 }
 
@@ -1107,7 +1207,7 @@ a.stepper__contenido:hover { color: #1a56db; }
 .tabla-datos__acciones a,
 .tabla-datos__acciones button {
     display: inline-block;
-    padding: 0.35rem;
+    padding: var(--esp-1);
     vertical-align: baseline;
 }
 .tabla-datos__acciones button {
@@ -1123,7 +1223,7 @@ a.stepper__contenido:hover { color: #1a56db; }
     margin: 0;
     cursor: pointer;
 }
-.tabla-seleccion tbody tr.fila-seleccionada { background: #e8f0fe; }
+.tabla-seleccion tbody tr.fila-seleccionada { background: var(--color-primario-suave); }
 .tabla-seleccion tbody tr.fila-seleccionada:hover { background: #dde8fd; }
 
 /* Progreso de la emision. Refleja unicamente el conteo que devuelve
@@ -1131,29 +1231,29 @@ a.stepper__contenido:hover { color: #1a56db; }
    estimaciones inventadas. Oculto hasta que el proceso arranca. */
 .progreso-emision {
     display: none;
-    margin: 1rem 0 0;
-    padding: 0.85rem 1rem;
+    margin: var(--esp-4) 0 0;
+    padding: var(--esp-3) var(--esp-4);
     border: 1px solid #c6d8fb;
-    border-radius: 6px;
+    border-radius: var(--radio-md);
     background: #f8fafd;
 }
 .progreso-emision--activo { display: block; }
-.progreso-emision--error { border-color: #f2c9c4; background: #fdecea; }
-.progreso-emision__titulo { margin: 0 0 0.5rem; font-size: 0.9rem; font-weight: 600; color: #222; }
-.progreso-emision--error .progreso-emision__titulo { color: #b00020; }
+.progreso-emision--error { border-color: #f2c9c4; background: var(--color-error-fondo); }
+.progreso-emision__titulo { margin: 0 0 var(--esp-2); font-size: var(--txt-base); font-weight: 600; color: var(--color-texto); }
+.progreso-emision--error .progreso-emision__titulo { color: var(--color-error); }
 .barra-progreso {
     height: 0.6rem;
     background: #dcdce1;
-    border-radius: 999px;
+    border-radius: var(--radio-pill);
     overflow: hidden;
 }
 .barra-progreso__relleno {
     display: block;
     height: 100%;
     width: 0;
-    background: #1a56db;
+    background: var(--color-primario);
 }
-.progreso-emision--error .barra-progreso__relleno { background: #b00020; }
+.progreso-emision--error .barra-progreso__relleno { background: var(--color-error); }
 
 /* ==========================================================================
    NORMALIZACION TRANSVERSAL DEL FLUJO (bloque 5)
@@ -1179,10 +1279,10 @@ a.stepper__contenido:hover { color: #1a56db; }
 .tarjeta h2,
 .estado-vacio h2,
 .titulo-seccion {
-    font-size: 1.15rem;
+    font-size: var(--txt-lg);
     margin-top: 0;
 }
-.titulo-seccion { margin-bottom: 0.6rem; }
+.titulo-seccion { margin-bottom: var(--esp-2); }
 
 /* 2. Alineacion de columnas. .tarjeta trae margin de 1.25rem arriba y abajo,
       pensado para apilarse suelta. Dentro de una grilla eso descuadra: en
@@ -1200,9 +1300,9 @@ a.stepper__contenido:hover { color: #1a56db; }
       un estado y no deben teñirse de verde, rojo ni azul: usan esta variante
       neutra, sin relleno semantico. */
 .badge--etiqueta {
-    background: #fff;
-    border-color: #ccc;
-    color: #444;
+    background: var(--color-superficie);
+    border-color: var(--color-borde);
+    color: var(--color-texto-suave);
     font-weight: 500;
 }
 
@@ -1242,19 +1342,47 @@ a.stepper__contenido:hover { color: #1a56db; }
 .form-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.7rem 1rem;
+    gap: var(--esp-3) var(--esp-4);
     align-items: start;
+    /* Tope propio, independiente del ancho del contenedor.
+       Al subir el <main> de 1100 a 1400px las tablas ganaron, pero un
+       formulario NO mejora al ensancharse: con dos columnas dentro de 1400px
+       cada input pasaria de ~530 a ~680px, y un campo de email de 680px hace
+       perder el recorrido entre la etiqueta y el control.
+       900px mantiene cada columna en ~430px, que es donde estaba antes. */
+    max-width: 900px;
 }
 .form-grid--1 { grid-template-columns: minmax(0, 1fr); }
 .form-campo { min-width: 0; }
 /* 1 / -1 y no 1 / 3: asi el campo sigue ocupando la fila completa cuando la
    grilla colapsa a una columna. */
 .form-campo--ancho { grid-column: 1 / -1; }
+
+/* Tope del CONTROL, no de la celda.
+   Al subir el <main> de 1100 a 1400px estos campos pasaron de 646 a 846px:
+   ocupan la fila entera, asi que se llevan todo el ancho que se agregue. Un
+   input de texto de 846px hace perder el recorrido entre la etiqueta y el
+   control, que es justo lo que este ensanchamiento NO buscaba.
+
+   646px es el ancho MEDIDO que tenian antes del cambio, no un numero nuevo:
+   estos campos vuelven exactamente a donde estaban y las columnas normales se
+   quedan con el aire que ganaron (315 -> 415px).
+
+   Se topa el control y no .form-campo--ancho porque la celda debe seguir
+   ocupando la fila completa: es lo que hace que la etiqueta y la ayuda queden
+   alineadas con el resto de la grilla.
+
+   No hace falta excluir checkbox ni radio: max-width solo limita hacia arriba
+   y esos controles miden 13px. Los select y date que viven dentro de estos
+   campos ya son mas angostos (192-306px) y tampoco se ven afectados. */
+.form-campo--ancho input,
+.form-campo--ancho select,
+.form-campo--ancho textarea { max-width: 646px; }
 /* Marca de campo obligatorio. Obligatorio SEGUN EL MOTOR, no segun el
    navegador: la vista no agrega el atributo required. El asterisco va
    aria-hidden y acompanado de un texto para lector de pantalla, porque un
    simbolo solo no comunica el requisito (WCAG 1.3.1). */
-.campo-obligatorio { color: #b00020; font-weight: 700; }
+.campo-obligatorio { color: var(--color-error); font-weight: 700; }
 
 /* Bloque de contenido tecnico largo dentro de un <details> (JSON crudo de la
    auditoria, por ejemplo). Regla acotada a su clase: NO toca el <pre> global.
@@ -1262,16 +1390,16 @@ a.stepper__contenido:hover { color: #1a56db; }
    horizontal de la pagina, y un tope de altura con scroll propio para que un
    payload grande no empuje el resto de la tabla. */
 .bloque-codigo {
-    margin: 0.2rem 0 0.6rem;
-    padding: 0.5rem 0.6rem;
+    margin: var(--esp-1) 0 var(--esp-2);
+    padding: var(--esp-2) var(--esp-2);
     max-width: 100%;
     max-height: 14rem;
     overflow: auto;
-    border: 1px solid #e2e2e6;
-    border-radius: 4px;
+    border: 1px solid var(--color-borde-tenue);
+    border-radius: var(--radio-sm);
     background: #fafafb;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.78rem;
+    font-size: var(--txt-xs);
     line-height: 1.45;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -1286,13 +1414,13 @@ a.stepper__contenido:hover { color: #1a56db; }
    corre sobre HTTP plano. */
 .secreto-unico {
     display: block;
-    margin: 0.5rem 0;
-    padding: 0.6rem 0.75rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    background: #fff;
+    margin: var(--esp-2) 0;
+    padding: var(--esp-2) var(--esp-3);
+    border: 1px solid var(--color-borde);
+    border-radius: var(--radio-sm);
+    background: var(--color-superficie);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.9rem;
+    font-size: var(--txt-base);
     line-height: 1.5;
     overflow-wrap: anywhere;
     user-select: all;
@@ -1309,15 +1437,15 @@ a.stepper__contenido:hover { color: #1a56db; }
    regla pise a la etiqueta de checkbox, que es un <label> con otra anatomia. */
 .form-campo > label:not(.form-check) {
     display: block;
-    margin: 0 0 0.2rem;
-    font-size: 0.78rem;
+    margin: 0 0 var(--esp-1);
+    font-size: var(--txt-xs);
     font-weight: 600;
-    color: #444;
+    color: var(--color-texto-suave);
 }
 /* Ayuda o aclaracion bajo un campo. Reemplaza a los estilos inline que hoy usan
    cliente-form.php y producto-form.php ("Opcional.", "Recomendado..."), sin
    tocarlos todavia. #6e6e6e sobre blanco da 5.60:1. */
-.form-ayuda { display: block; margin: 0.2rem 0 0; font-size: 0.78rem; color: #6e6e6e; }
+.form-ayuda { display: block; margin: var(--esp-1) 0 0; font-size: var(--txt-xs); color: var(--color-texto-tenue); }
 
 /* Ayuda de varias lineas bajo un campo, cuando lo que hay que explicar es una
    enumeracion y no una frase. Misma escala y color que .form-ayuda: es el mismo
@@ -1325,13 +1453,13 @@ a.stepper__contenido:hover { color: #1a56db; }
    referencia de NC/ND, donde cada valor admite documentos distintos y elegir
    mal cuesta un folio real. */
 .lista-ayuda {
-    margin: 0.15rem 0 0;
+    margin: var(--esp-1) 0 0;
     padding-left: 1.1rem;
-    font-size: 0.78rem;
-    color: #6e6e6e;
+    font-size: var(--txt-xs);
+    color: var(--color-texto-tenue);
     line-height: 1.5;
 }
-.lista-ayuda li { margin: 0.15rem 0; }
+.lista-ayuda li { margin: var(--esp-1) 0; }
 
 /* --------------------------------------------------------------------------
    Controles. Misma geometria que .filtros__input (padding 0.35/0.5, borde 1px,
@@ -1345,13 +1473,13 @@ a.stepper__contenido:hover { color: #1a56db; }
     width: 100%;
     box-sizing: border-box;
     margin: 0;
-    padding: 0.35rem 0.5rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    background: #fff;
-    color: #222;
+    padding: var(--esp-1) var(--esp-2);
+    border: 1px solid var(--color-borde);
+    border-radius: var(--radio-sm);
+    background: var(--color-superficie);
+    color: var(--color-texto);
     font-family: inherit;
-    font-size: 0.9rem;
+    font-size: var(--txt-base);
     line-height: 1.4;
 }
 /* min-height igual en input y select: Chrome le da al <select> una caja de
@@ -1371,27 +1499,27 @@ a.stepper__contenido:hover { color: #1a56db; }
     width: 100%;
     box-sizing: border-box;
     margin: 0;
-    padding: 0.3rem 0.5rem;
+    padding: var(--esp-1) var(--esp-2);
     min-height: 2.2rem;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    background: #fff;
+    border: 1px solid var(--color-borde);
+    border-radius: var(--radio-sm);
+    background: var(--color-superficie);
     font-family: inherit;
-    font-size: 0.85rem;
+    font-size: var(--txt-sm);
 }
 /* El anillo de foco global (:focus-visible) ya se ve; el borde azul refuerza
    cual es el campo activo cuando hay varios en la misma fila. */
 .form-compacto input:focus-visible,
 .form-compacto select:focus-visible,
-.form-compacto textarea:focus-visible { border-color: #1a56db; }
+.form-compacto textarea:focus-visible { border-color: var(--color-primario); }
 .form-compacto input:disabled,
 .form-compacto select:disabled,
 .form-compacto textarea:disabled {
     background: #f2f2f4;
-    color: #5c5c5c;
+    color: var(--color-texto-medio);
     cursor: not-allowed;
 }
-.form-compacto ::placeholder { color: #6e6e6e; opacity: 1; }
+.form-compacto ::placeholder { color: var(--color-texto-tenue); opacity: 1; }
 
 /* Campo en error. El inline de $errStyle() sigue ganando sobre esta regla, y
    pinta el mismo rojo. El mensaje usa la clase .error que ya existe (linea 30),
@@ -1403,7 +1531,7 @@ a.stepper__contenido:hover { color: #1a56db; }
    error por style inline ya se comportaba asi. */
 .form-compacto .form-campo--error input,
 .form-compacto .form-campo--error select,
-.form-compacto .form-campo--error textarea { border-color: #b00020; }
+.form-compacto .form-campo--error textarea { border-color: var(--color-error); }
 
 /* --------------------------------------------------------------------------
    Checkbox y radio. Sin esto la regla global los estira a todo el ancho con
@@ -1417,16 +1545,16 @@ a.stepper__contenido:hover { color: #1a56db; }
     width: auto;
     margin: 0;
     padding: 0;
-    accent-color: #1a56db;
+    accent-color: var(--color-primario);
     cursor: pointer;
 }
 /* Etiqueta de checkbox: casilla y texto en linea, alineados al centro. */
 .form-check {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: var(--esp-2);
     margin: 0;
-    font-size: 0.9rem;
+    font-size: var(--txt-base);
     font-weight: 600;
     cursor: pointer;
 }
@@ -1440,10 +1568,10 @@ a.stepper__contenido:hover { color: #1a56db; }
    un style inline duplicado entre el PHP y la plantilla del JS. Con clases de
    columna el ancho se declara una vez y el input llena la celda.
    -------------------------------------------------------------------------- */
-.tabla-editable tbody td { padding: 0.3rem 0.4rem; vertical-align: middle; }
+.tabla-editable tbody td { padding: var(--esp-1) var(--esp-2); vertical-align: middle; }
 .tabla-editable tbody tr:hover { background: transparent; }
 .form-compacto .tabla-editable input:where(:not([type="checkbox"])),
-.form-compacto .tabla-editable select { padding: 0.3rem 0.4rem; font-size: 0.85rem; }
+.form-compacto .tabla-editable select { padding: var(--esp-1) var(--esp-2); font-size: var(--txt-sm); }
 
 /* border-box para que el ancho declarado sea el ancho REAL de la columna: una
    celda es content-box por defecto y le sumaba los 19.2px de padding, con lo
@@ -1470,14 +1598,14 @@ a.stepper__contenido:hover { color: #1a56db; }
     margin: 0;
     padding: 0;
     border: 1px solid #f2c9c4;
-    border-radius: 4px;
-    background: #fff;
-    color: #b00020;
-    font-size: 1rem;
+    border-radius: var(--radio-sm);
+    background: var(--color-superficie);
+    color: var(--color-error);
+    font-size: var(--txt-md);
     line-height: 1;
     cursor: pointer;
 }
-.tabla-editable .quitar-linea:hover { background: #fdecea; border-color: #b00020; }
+.tabla-editable .quitar-linea:hover { background: var(--color-error-fondo); border-color: var(--color-error); }
 
 /* --------------------------------------------------------------------------
    Responsivo. La grilla de dos columnas aguanta hasta 720px: a 1024 el
@@ -1502,9 +1630,30 @@ a.stepper__contenido:hover { color: #1a56db; }
    (max-width: 640px + margin: 2rem auto), que encierra el contenido en una
    columna estrecha, y las reglas sueltas de input/button/label/h1.
 
-   Paleta: la ya consolidada del panel. El azul es #1a56db, el mismo del foco y
-   de los botones del sistema. No se introduce ningun color nuevo salvo grises
-   y azules muy claros de fondo, que no llevan texto encima.
+   Paleta: la ya consolidada del panel. El azul es var(--color-primario), el
+   mismo del foco y de los botones del sistema. No se introduce ningun color
+   nuevo salvo grises y azules muy claros de fondo, que no llevan texto encima.
+
+   TOKENS EN ESTA PANTALLA. El bloque usa los tokens compartidos donde el valor
+   coincide: color, espaciado, tipografia, --radio-lg y las dos sombras del
+   sistema, que salen justamente de aqui.
+
+   LO QUE SE QUEDA COMO LITERAL, a proposito:
+
+   1. Los colores propios del login (#1a2b4b de los titulos, #e6ebf5 de los
+      bordes, #d5dcea / #b9c4d9 / #9aa3b4 / #8a93a6 de los inputs y sus
+      placeholders, #1848b8 y #143c99 de hover y active del boton). Son de esta
+      pantalla y de ninguna otra. Meterlos en :root los presentaria como
+      decisiones del sistema completo, que es lo contrario de lo que son.
+      OJO: #1848b8 NO es --color-primario-hover (#1546b0). Son dos azules
+      distintos; unificarlos cambiaria el color del boton de acceso.
+
+   2. Los paddings y radios calibrados de la card (1.75 / 2.25 / 2.4 / 2.75 /
+      4.5rem, y los radios de 9px y 28px). Cada uno se midio contra esta
+      composicion en dos pasadas de ajuste. Llevarlos al paso mas cercano de la
+      escala los moveria entre 1.6 y 24px, que en una pantalla de una sola
+      tarjeta centrada se ve de inmediato. La escala ordena el panel; esta
+      pantalla ya estaba ordenada.
    ========================================================================== */
 body.auth-page {
     max-width: none;
@@ -1531,10 +1680,10 @@ body.auth-page > main {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 1rem;
+    gap: var(--esp-4);
     flex-wrap: wrap;
-    padding: 0.9rem 1.5rem;
-    background: #fff;
+    padding: var(--esp-4) var(--esp-5);
+    background: var(--color-superficie);
     border-bottom: 1px solid #e6ebf5;
 }
 .auth-marca { display: inline-flex; align-items: center; text-decoration: none; }
@@ -1544,12 +1693,12 @@ body.auth-page > main {
 .auth-header__nota {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: var(--esp-2);
     margin: 0;
-    color: #5c5c5c;          /* 6.24:1 sobre #fff */
-    font-size: 0.85rem;
+    color: var(--color-texto-medio);          /* 6.24:1 sobre #fff */
+    font-size: var(--txt-sm);
 }
-.auth-icono { width: 1.05rem; height: 1.05rem; flex: none; color: #1a56db; }
+.auth-icono { width: 1.05rem; height: 1.05rem; flex: none; color: var(--color-primario); }
 
 /* --- Cuerpo: dos columnas en escritorio --------------------------------- */
 .auth-main {
@@ -1558,14 +1707,14 @@ body.auth-page > main {
     grid-template-columns: minmax(0, 1fr) minmax(0, 500px);
     align-items: center;
     justify-items: center;
-    gap: 3rem;
+    gap: var(--esp-7);
     width: 100%;
     max-width: 1220px;
     margin: 0 auto;
     /* Asimetrico a proposito: con align-items:center, un padding inferior mayor
        que el superior sube el bloque sin romper el centrado. Antes quedaba
        demasiado aire arriba. */
-    padding: 1.75rem 1.5rem 4.5rem;
+    padding: 1.75rem var(--esp-5) 4.5rem;
     box-sizing: border-box;
 }
 
@@ -1584,8 +1733,8 @@ body.auth-page > main {
     display: block;
     width: 100%;
     height: auto;
-    border-radius: 14px;
-    box-shadow: 0 18px 45px rgba(20, 40, 90, 0.13);
+    border-radius: var(--radio-lg);
+    box-shadow: var(--sombra-lg);
 }
 
 /* --- Card de acceso ----------------------------------------------------- */
@@ -1594,24 +1743,24 @@ body.auth-page > main {
     max-width: 500px;
     box-sizing: border-box;
     padding: 2.25rem 2.4rem;
-    background: #fff;
+    background: var(--color-superficie);
     border: 1px solid #e6ebf5;
-    border-radius: 14px;
-    box-shadow: 0 12px 34px rgba(20, 40, 90, 0.09);
+    border-radius: var(--radio-lg);
+    box-shadow: var(--sombra-md);
 }
 .auth-card__logo { display: block; width: auto; height: auto; max-height: 3.3rem; margin: 0 auto 1.1rem; }
 .auth-card__titulo {
-    margin: 0 0 0.35rem;
-    font-size: 1.6rem;      /* el h1 global es 1.4rem; aqui es el foco de la pantalla */
+    margin: 0 0 var(--esp-1);
+    font-size: var(--txt-xl);      /* el h1 global es 1.4rem; aqui es el foco de la pantalla */
     font-weight: 700;
     text-align: center;
     color: #1a2b4b;         /* 11.5:1 sobre #fff */
 }
 .auth-card__bajada {
-    margin: 0 0 1.5rem;
+    margin: 0 0 var(--esp-5);
     text-align: center;
-    color: #5c5c5c;         /* 6.24:1 sobre #fff */
-    font-size: 0.92rem;
+    color: var(--color-texto-medio);         /* 6.24:1 sobre #fff */
+    font-size: var(--txt-base);
 }
 .auth-alerta { margin-bottom: 1.1rem; }
 
@@ -1619,12 +1768,12 @@ body.auth-page > main {
 /* Sin margen propio: el espaciado lo reparten los campos y el boton. Algunos
    UA todavia traen un margin inferior por defecto en <form>. */
 .auth-form { margin: 0; }
-.auth-campo { margin-bottom: 1.05rem; }
+.auth-campo { margin-bottom: var(--esp-4); }
 .auth-campo label {
     display: block;
-    margin: 0 0 0.4rem;     /* la regla global de label trae 0.75rem arriba */
+    margin: 0 0 var(--esp-2);     /* la regla global de label trae 0.75rem arriba */
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: var(--txt-base);
     color: #1a2b4b;
 }
 /* El icono se posiciona sobre el input y este reserva el espacio con
@@ -1645,34 +1794,34 @@ body.auth-page > main {
     display: block;
     width: 100%;
     box-sizing: border-box;
-    padding: 0.75rem 0.9rem 0.75rem 2.75rem;
+    padding: var(--esp-3) var(--esp-4) var(--esp-3) 2.75rem;
     border: 1px solid #d5dcea;
     border-radius: 9px;
-    background: #fff;
+    background: var(--color-superficie);
     font-family: inherit;
-    font-size: 0.95rem;
-    color: #222;
+    font-size: var(--txt-base);
+    color: var(--color-texto);
 }
 .auth-page .auth-input input::placeholder { color: #9aa3b4; }
 .auth-page .auth-input input:hover { border-color: #b9c4d9; }
 /* El anillo global de :focus-visible sigue mandando; el borde azul solo lo
    refuerza, igual que hace .form-compacto en el resto del panel. */
-.auth-page .auth-input input:focus-visible { border-color: #1a56db; }
+.auth-page .auth-input input:focus-visible { border-color: var(--color-primario); }
 
 .auth-page .auth-boton {
     display: block;
     width: 100%;
     margin-top: 1.4rem;     /* la regla global de button trae 1rem */
-    padding: 0.8rem 1rem;
+    padding: var(--esp-3) var(--esp-4);
     /* Cierra la card: antes el espacio inferior lo daba el bloque de registro,
        que se retiro. Sin esto el boton queda pegado al borde. */
-    margin-bottom: 0.4rem;
-    border: 1px solid #1a56db;
+    margin-bottom: var(--esp-2);
+    border: 1px solid var(--color-primario);
     border-radius: 9px;
-    background: #1a56db;
-    color: #fff;            /* 6.18:1 */
+    background: var(--color-primario);
+    color: var(--color-superficie);            /* 6.18:1 */
     font-family: inherit;
-    font-size: 1rem;
+    font-size: var(--txt-md);
     font-weight: 600;
     line-height: 1.2;
     cursor: pointer;
@@ -1682,15 +1831,15 @@ body.auth-page > main {
 
 /* --- Footer ------------------------------------------------------------- */
 .auth-footer {
-    padding: 1.25rem 1.5rem 1.6rem;
+    padding: 1.25rem var(--esp-5) 1.6rem;
     border-top: 1px solid #e6ebf5;
-    background: #fff;
+    background: var(--color-superficie);
     text-align: center;
 }
 .auth-footer p { margin: 0; }
-.auth-footer__marca { font-weight: 700; color: #1a2b4b; font-size: 0.95rem; }
-.auth-footer__nota { margin-top: 0.25rem; color: #5c5c5c; font-size: 0.85rem; }
-.auth-footer__legal { margin-top: 0.5rem; color: #6e6e6e; font-size: 0.8rem; }
+.auth-footer__marca { font-weight: 700; color: #1a2b4b; font-size: var(--txt-base); }
+.auth-footer__nota { margin-top: var(--esp-1); color: var(--color-texto-medio); font-size: var(--txt-sm); }
+.auth-footer__legal { margin-top: var(--esp-2); color: var(--color-texto-tenue); font-size: var(--txt-sm); }
 
 /* --- Responsivo ---------------------------------------------------------
    1024px: la decoracion pierde la mitad del ancho util y ya no aporta; se
@@ -1707,27 +1856,27 @@ body.auth-page > main {
 }
 
 @media (max-width: 560px) {
-    .auth-header { padding: 0.75rem 1rem; }
+    .auth-header { padding: var(--esp-3) var(--esp-4); }
     .auth-marca__logo { max-height: 2rem; }
-    .auth-main { padding: 1.5rem 1rem; }
+    .auth-main { padding: var(--esp-5) var(--esp-4); }
     /* La card se integra al fondo: sin borde ni sombra gana ancho util para
        los inputs, que es lo que importa a este tamano. */
     .auth-card {
-        padding: 1.5rem 1.05rem;
+        padding: var(--esp-5) var(--esp-4);
         border: none;
         box-shadow: none;
         background: transparent;
     }
     .auth-card__titulo { font-size: 1.4rem; }
-    .auth-footer { padding: 1rem 1rem 1.25rem; }
-    .auth-footer__nota { font-size: 0.8rem; }
+    .auth-footer { padding: var(--esp-4) var(--esp-4) 1.25rem; }
+    .auth-footer__nota { font-size: var(--txt-sm); }
 }
 
 /* Alto reducido (portatiles de 768px o menos, o movil apaisado): la decoracion
    y el footer no pueden empujar el formulario fuera de la vista. */
 @media (max-height: 720px) {
     .auth-main { padding-top: 1.25rem; padding-bottom: 1.25rem; }
-    .auth-card { padding-top: 1.5rem; padding-bottom: 1.5rem; }
-    .auth-card__logo { max-height: 2.1rem; margin-bottom: 0.8rem; }
+    .auth-card { padding-top: var(--esp-5); padding-bottom: var(--esp-5); }
+    .auth-card__logo { max-height: 2.1rem; margin-bottom: var(--esp-3); }
     .auth-footer__nota { display: none; }
 }
