@@ -1,0 +1,33 @@
+-- =============================================================================
+-- Migracion 023: proximo_folio_inicial pasa a NOT NULL.
+--
+-- *** NO APLICAR JUNTO CON LA 022. ***
+--
+-- Esta migracion se aplica SOLO despues de confirmar las dos cosas:
+--
+--   1. El codigo nuevo YA esta en produccion. Es decir, el INSERT de
+--      dte_folio que escribe proximo_folio_inicial (confirmarCafPost() en
+--      panel/public/index.php y scripts/cargar_caf.php) es el que esta
+--      corriendo. Si se aplicara con el codigo viejo, cualquier carga de CAF
+--      fallaria: su INSERT no menciona la columna y no hay DEFAULT.
+--
+--   2. No quedan nulos. Verificar ANTES de ejecutar:
+--
+--        SELECT COUNT(*) AS nulos
+--        FROM dte_folio
+--        WHERE proximo_folio_inicial IS NULL;
+--
+--      Debe devolver 0. Si devuelve mas, hay filas creadas por codigo viejo
+--      entre la 022 y este momento: reaplicar el backfill de la 022 antes de
+--      seguir.
+--
+-- POR QUE SEPARADA: partir la migracion en dos elimina por completo la ventana
+-- de incompatibilidad del despliegue. La 022 sola convive con el codigo viejo
+-- y con el nuevo; la 023 cierra la puerta cuando ya no queda codigo viejo
+-- escribiendo en la tabla.
+--
+-- Sin IF NOT EXISTS (exclusivo de MariaDB; MySQL 8.x de Oracle falla).
+-- =============================================================================
+
+ALTER TABLE dte_folio
+    MODIFY COLUMN proximo_folio_inicial INT UNSIGNED NOT NULL;

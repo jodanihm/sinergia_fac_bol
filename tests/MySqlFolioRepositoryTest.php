@@ -59,6 +59,11 @@ final class MySqlFolioRepositoryTest extends TestCase
                 tipo_dte       INTEGER NOT NULL,
                 ambiente       TEXT    NOT NULL CHECK (ambiente IN ('certificacion','produccion')),
                 proximo_folio  INTEGER NOT NULL,
+                -- Folio con el que arranco el contador (migracion 022/023).
+                -- NOT NULL sin default, igual que en MySQL: si el repositorio
+                -- o un helper dejaran de escribirla, el test falla aqui en vez
+                -- de pasar y romper recien en produccion.
+                proximo_folio_inicial INTEGER NOT NULL,
                 folio_hasta    INTEGER NOT NULL,
                 UNIQUE (caf_id),
                 FOREIGN KEY (caf_id) REFERENCES dte_caf (id) ON DELETE CASCADE
@@ -97,11 +102,17 @@ final class MySqlFolioRepositoryTest extends TestCase
         $cafId = (int) $this->pdo->lastInsertId();
 
         $this->pdo->prepare(
-            'INSERT INTO dte_folio (caf_id, rut_emisor, tipo_dte, ambiente, proximo_folio, folio_hasta) '
-            . 'VALUES (:caf, :rut, :tipo, :amb, :prox, :h)'
+            'INSERT INTO dte_folio (caf_id, rut_emisor, tipo_dte, ambiente, '
+            . 'proximo_folio, proximo_folio_inicial, folio_hasta) '
+            . 'VALUES (:caf, :rut, :tipo, :amb, :prox, :proxIni, :h)'
         )->execute([
             ':caf' => $cafId, ':rut' => $rut, ':tipo' => $tipo->value, ':amb' => $amb->value,
-            ':prox' => $desde, ':h' => $hasta,
+            // Siembra el caso normal (CAF no migrado): el contador arranca al
+            // inicio del rango, asi que las dos columnas valen lo mismo. Estos
+            // tests cubren la ASIGNACION de folios, que no lee
+            // proximo_folio_inicial; la columna se escribe solo para respetar
+            // el NOT NULL del esquema real.
+            ':prox' => $desde, ':proxIni' => $desde, ':h' => $hasta,
         ]);
 
         return $cafId;

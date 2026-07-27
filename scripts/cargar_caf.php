@@ -166,15 +166,24 @@ try {
     $cafId = (int) $pdo->lastInsertId();
 
     $pdo->prepare(
-        'INSERT INTO dte_folio (caf_id, rut_emisor, tipo_dte, ambiente, proximo_folio, folio_hasta) '
-        . 'VALUES (:caf, :rut, :tipo, :amb, :prox, :h)'
+        'INSERT INTO dte_folio (caf_id, rut_emisor, tipo_dte, ambiente, '
+        . 'proximo_folio, proximo_folio_inicial, folio_hasta) '
+        . 'VALUES (:caf, :rut, :tipo, :amb, :prox, :proxIni, :h)'
     )->execute([
-        ':caf'  => $cafId,
-        ':rut'  => $re,
-        ':tipo' => $tipo,
-        ':amb'  => $ambiente,
-        ':prox' => $desde,
-        ':h'    => $hasta,
+        ':caf'     => $cafId,
+        ':rut'     => $re,
+        ':tipo'    => $tipo,
+        ':amb'     => $ambiente,
+        ':prox'    => $desde,
+        // Este script no ofrece declarar un folio inicial distinto: carga el
+        // CAF completo desde el inicio del rango. proximo_folio_inicial es
+        // por lo tanto igual a proximo_folio, y el dashboard contara como
+        // usados solo los folios que se emitan de aqui en adelante.
+        //
+        // La columna se escribe explicitamente porque no tiene DEFAULT y la
+        // migracion 023 la deja NOT NULL: omitirla haria fallar el INSERT.
+        ':proxIni' => $desde,
+        ':h'       => $hasta,
     ]);
 
     $pdo->commit();

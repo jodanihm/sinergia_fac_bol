@@ -206,6 +206,16 @@ const NOMBRES_TIPO_DTE = [
 /** Tipo de DTE que RESTA al neto del periodo: nota de credito. */
 const DASH_TIPO_NOTA_CREDITO = 61;
 
+/**
+ * Segundos que sobrevive un CAF subido pero aun no confirmado.
+ *
+ * La carga de CAF es de DOS PASOS (subir -> revisar -> confirmar) y entre uno y
+ * otro el archivo YA CIFRADO espera en $_SESSION['caf_pendiente']. Pasado este
+ * plazo se descarta y hay que volver a subirlo: un CAF a medio cargar no debe
+ * quedar indefinidamente en la sesion de alguien que abandono el flujo.
+ */
+const CAF_PENDIENTE_TTL = 900;
+
 /** Bajo este porcentaje de folios disponibles el indicador pasa a rojo. */
 const DASH_FOLIOS_UMBRAL_ROJO = 10;
 
@@ -286,7 +296,11 @@ function cafTexto(DOMDocument $dom, string $tag): string
 function listarCafs(PDO $pdo, string $rutEmisor, string $ambiente = 'certificacion'): array
 {
     $stmt = $pdo->prepare(
-        'SELECT c.tipo_dte, c.folio_desde, c.folio_hasta, c.estado, f.proximo_folio '
+        // proximo_folio_inicial: con que folio arranco el contador. En un CAF
+        // normal vale folio_desde; si es mayor, el CAF vino MIGRADO de otro
+        // proveedor y la vista lo marca para que el salto no parezca un error.
+        'SELECT c.tipo_dte, c.folio_desde, c.folio_hasta, c.estado, '
+        . '       f.proximo_folio, f.proximo_folio_inicial '
         . 'FROM dte_caf c '
         . 'INNER JOIN dte_folio f ON f.caf_id = c.id '
         . 'WHERE c.rut_emisor = :rut AND c.ambiente = :amb '
@@ -4030,6 +4044,13 @@ if ($metodo === 'POST' && $ruta === '/caf') {
     handleCafPost();
 }
 
+// Paso 2 de la carga de CAF. El CSRF ya lo verifico el router mas arriba, una
+// sola vez para todos los POST.
+if ($metodo === 'POST' && $ruta === '/caf/confirmar') {
+    Auth::requerirSesion();
+    confirmarCafPost('certificacion', '/caf');
+}
+
 // ---------------------------------------------------------------------------
 // Rutas de PRODUCCION (estacion 7, nueva): a proposito NO enlazadas desde
 // ningun lado del panel visible todavia (ver panel/views/partials/header.php
@@ -4064,6 +4085,11 @@ if ($metodo === 'GET' && $ruta === '/caf-produccion') {
 if ($metodo === 'POST' && $ruta === '/caf-produccion') {
     Auth::requerirSesion();
     handleCafProduccionPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/caf-produccion/confirmar') {
+    Auth::requerirSesion();
+    confirmarCafPost('produccion', '/caf-produccion');
 }
 
 if ($metodo === 'GET' && $ruta === '/apikeys-produccion') {
@@ -5037,6 +5063,11 @@ function handleCafProduccionGet(): void
  */
 function procesarCafGet(string $ambiente, string $vista, string $rutaEmpresa, string $rutaCertificado): void
 {
+    // Volver a la pantalla de CAF descarta cualquier revision a medio hacer.
+    // Asi "Cancelar" es simplemente navegar aqui, y un CAF pendiente nunca
+    // sobrevive a que el usuario se vaya del flujo.
+    unset($_SESSION['caf_pendiente']);
+
     $pdo  = Db::conexion();
     $stmt = $pdo->prepare(
         'SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = :amb LIMIT 1'
@@ -5055,7 +5086,15 @@ function procesarCafGet(string $ambiente, string $vista, string $rutaEmpresa, st
         redirigir($rutaCertificado);
     }
 
-    vista($vista, ['error' => null, 'cafs' => listarCafs($pdo, (string) $rutEmisor, $ambiente)]);
+    vista($vista, [
+        'error' => null,
+        'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
+        // Resultado del paso 2 (confirmarCafPost), que redirige aqui despues
+        // de guardar o de fallar. Antes esta vista no podia confirmar nada:
+        // la carga redirigia sin flash y el usuario volvia a una tabla sin
+        // aviso. Con el flujo en dos pasos el mensaje si existe.
+        'flash' => flashTomar(),
+    ]);
 }
 
 // ===========================================================================
@@ -5063,7 +5102,7 @@ function procesarCafGet(string $ambiente, string $vista, string $rutaEmpresa, st
 // ===========================================================================
 function handleCafPost(): void
 {
-    procesarCafPost('certificacion', 'caf', '/empresa', '/certificado', '/caf');
+    procesarCafPost('certificacion', 'caf', '/empresa', '/certificado');
 }
 
 // ===========================================================================
@@ -5078,7 +5117,7 @@ function handleCafPost(): void
 // ===========================================================================
 function handleCafProduccionPost(): void
 {
-    procesarCafPost('produccion', 'caf-produccion', '/empresa-produccion', '/certificado-produccion', '/caf-produccion');
+    procesarCafPost('produccion', 'caf-produccion', '/empresa-produccion', '/certificado-produccion');
 }
 
 /**
@@ -5092,7 +5131,7 @@ function handleCafProduccionPost(): void
  * Envelope encryption identica a /certificado: DEK aleatoria cifra los bytes
  * originales, la KEK maestra envuelve la DEK.
  */
-function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, string $rutaCertificado, string $rutaExito): void
+function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, string $rutaCertificado): void
 {
     $pdo  = Db::conexion();
     $stmt = $pdo->prepare(
@@ -5194,7 +5233,115 @@ function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, s
         ]);
     }
 
-    // --- g. Guardar en transaccion (dte_caf + dte_folio) ---
+    // --- g. NO se guarda todavia: el CAF queda pendiente de confirmacion ---
+    //
+    // Cargar un CAF fija el folio desde el que Sinergia va a emitir documentos
+    // tributarios reales, y ese dato no se puede corregir despues sin apoyo.
+    // Por eso el flujo es de DOS PASOS y este handler solo prepara la revision.
+    //
+    // El XML NO viaja al paso 2 por HTTP: contiene la <RSASK>, la clave privada
+    // del CAF, y ponerla en un campo oculto la expondria en el HTML, en el
+    // historial del navegador y en cualquier log intermedio. Se guarda en
+    // sesion, y se guarda YA CIFRADO -- exactamente el mismo par
+    // (ciphertext + DEK envuelta) que terminaria en la base de datos. La KEK
+    // maestra NO esta en la sesion: vive en el entorno, asi que quien leyera el
+    // archivo de sesion del servidor tampoco podria descifrarlo.
+    $_SESSION['caf_pendiente'] = [
+        'ambiente'   => $ambiente,
+        'rut_emisor' => (string) $rutEmisor,
+        'tipo'       => $tipo,
+        'desde'      => $desde,
+        'hasta'      => $hasta,
+        'cifrado'    => $cifrado,
+        'dek'        => $dekEnvuelta,
+        // Huella del archivo original: deja rastro de QUE archivo exacto se
+        // confirmo, y detectaria una corrupcion del dato en sesion.
+        'huella'     => hash('sha256', $original),
+        'creado_at'  => time(),
+    ];
+
+    vista('caf-revision', [
+        'ambiente'  => $ambiente,
+        'tipo'      => $tipo,
+        'desde'     => $desde,
+        'hasta'     => $hasta,
+        'declarado' => '',
+        'error'     => null,
+        'navActivo' => $ambiente === 'produccion' ? 'config.caf-prod' : 'config.caf',
+    ]);
+}
+
+// ===========================================================================
+//  Handler: POST /caf/confirmar y POST /caf-produccion/confirmar
+//
+//  Paso 2 de la carga de CAF. Guarda lo que el usuario acaba de revisar.
+//
+//  El XML nunca vuelve a viajar por HTTP: quedo cifrado en sesion en el paso 1
+//  y aqui solo se lee. Lo unico que llega del cliente es el proximo folio
+//  declarado (opcional) y el token CSRF, que el router ya verifico antes de
+//  llegar hasta aqui.
+// ===========================================================================
+function confirmarCafPost(string $ambiente, string $rutaExito): void
+{
+    $pdo       = Db::conexion();
+    $pendiente = $_SESSION['caf_pendiente'] ?? null;
+
+    // Sin pendiente, de otro ambiente, o vencido: se vuelve a empezar. No se
+    // adivina ni se reconstruye nada -- guardar un CAF que el usuario no
+    // reviso en ESTE flujo es justo lo que el paso de confirmacion evita.
+    if (
+        ! is_array($pendiente)
+        || ($pendiente['ambiente'] ?? '') !== $ambiente
+        || (time() - (int) ($pendiente['creado_at'] ?? 0)) > CAF_PENDIENTE_TTL
+    ) {
+        unset($_SESSION['caf_pendiente']);
+        flashSet('error', 'La revision del CAF expiro o no se encontro. Vuelve a subir el archivo.');
+        redirigir($rutaExito);
+    }
+
+    $rutEmisor = (string) $pendiente['rut_emisor'];
+    $tipo      = (int) $pendiente['tipo'];
+    $desde     = (int) $pendiente['desde'];
+    $hasta     = (int) $pendiente['hasta'];
+
+    // --- Proximo folio declarado: OPCIONAL ---
+    //
+    // Vacio = CAF nuevo, sin folios usados antes: se arranca en folio_desde,
+    // exactamente el comportamiento que tenia el sistema antes de esta
+    // funcionalidad.
+    $declaradoRaw = trim((string) ($_POST['proximo_folio'] ?? ''));
+    $error        = null;
+
+    if ($declaradoRaw === '') {
+        $proximoInicial = $desde;
+    } elseif (! ctype_digit($declaradoRaw)) {
+        $error = 'El proximo folio debe ser un numero entero, sin puntos ni espacios.';
+    } else {
+        $proximoInicial = (int) $declaradoRaw;
+        if ($proximoInicial < $desde || $proximoInicial > $hasta) {
+            $error = sprintf(
+                'El proximo folio debe estar dentro del rango que autoriza este CAF (%d a %d).',
+                $desde,
+                $hasta
+            );
+        }
+    }
+
+    if ($error !== null) {
+        // Se re-renderiza la MISMA pantalla de revision. El CAF sigue en
+        // sesion: un error de tipeo no obliga a volver a subir el archivo.
+        vista('caf-revision', [
+            'ambiente'  => $ambiente,
+            'tipo'      => $tipo,
+            'desde'     => $desde,
+            'hasta'     => $hasta,
+            'declarado' => $declaradoRaw,
+            'error'     => $error,
+            'navActivo' => $ambiente === 'produccion' ? 'config.caf-prod' : 'config.caf',
+        ]);
+    }
+
+    // --- Guardar en transaccion (dte_caf + dte_folio) ---
     try {
         $pdo->beginTransaction();
 
@@ -5207,21 +5354,27 @@ function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, s
             ':amb'   => $ambiente,
             ':desde' => $desde,
             ':hasta' => $hasta,
-            ':xml'   => $cifrado,
-            ':dek'   => $dekEnvuelta,
+            ':xml'   => $pendiente['cifrado'],
+            ':dek'   => $pendiente['dek'],
         ]);
         $cafId = (int) $pdo->lastInsertId();
 
         $pdo->prepare(
-            'INSERT INTO dte_folio (caf_id, rut_emisor, tipo_dte, ambiente, proximo_folio, folio_hasta) '
-            . 'VALUES (:caf, :rut, :tipo, :amb, :prox, :hasta)'
+            'INSERT INTO dte_folio (caf_id, rut_emisor, tipo_dte, ambiente, '
+            . 'proximo_folio, proximo_folio_inicial, folio_hasta) '
+            . 'VALUES (:caf, :rut, :tipo, :amb, :prox, :proxIni, :hasta)'
         )->execute([
-            ':caf'   => $cafId,
-            ':rut'   => $rutEmisor,
-            ':tipo'  => $tipo,
-            ':amb'   => $ambiente,
-            ':prox'  => $desde,
-            ':hasta' => $hasta,
+            ':caf'     => $cafId,
+            ':rut'     => $rutEmisor,
+            ':tipo'    => $tipo,
+            ':amb'     => $ambiente,
+            // El contador arranca aqui...
+            ':prox'    => $proximoInicial,
+            // ...y se recuerda con que valor arranco, para que el dashboard
+            // pueda distinguir lo emitido EN Sinergia de lo que el emisor ya
+            // habia gastado con su proveedor anterior.
+            ':proxIni' => $proximoInicial,
+            ':hasta'   => $hasta,
         ]);
 
         $pdo->commit();
@@ -5234,9 +5387,15 @@ function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, s
         $mensaje = $e->getCode() === '23000'
             ? 'Este CAF ya esta cargado (mismo tipo y rango).'
             : 'No se pudo guardar el CAF. Intenta nuevamente.';
-        vista($vista, ['error' => $mensaje, 'cafs' => listarCafs($pdo, (string) $rutEmisor, $ambiente)]);
+        unset($_SESSION['caf_pendiente']);
+        flashSet('error', $mensaje);
+        redirigir($rutaExito);
     }
 
+    // Se consume una sola vez: nunca queda un pendiente que se pueda confirmar
+    // dos veces con un refresh.
+    unset($_SESSION['caf_pendiente']);
+    flashSet('exito', 'CAF cargado correctamente.');
     redirigir($rutaExito);
 }
 
@@ -8034,6 +8193,13 @@ function dashResumen(array $porTipo): array
  * estado 'agotado' se marca de forma diferida, asi que filtrar solo por estado
  * reportaria folios que en realidad ya no existen.
  *
+ * USADOS Y TOTAL SE MIDEN CONTRA proximo_folio_inicial, NO CONTRA folio_desde.
+ * En un CAF normal los dos valen lo mismo y el resultado es identico al de
+ * siempre. La diferencia aparece con un CAF MIGRADO desde otro proveedor, que
+ * arranca a mitad de rango: ahi folio_desde contaria como consumo propio los
+ * folios que el emisor gasto ANTES de llegar aqui, e inflaria el porcentaje
+ * usado desde el primer dia. El semaforo mide lo que Sinergia puede emitir.
+ *
  * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, nivel:string}>
  */
 function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
@@ -8042,8 +8208,8 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
         'SELECT f.tipo_dte, '
         . "       SUM(CASE WHEN c.estado <> 'agotado' AND f.proximo_folio <= f.folio_hasta "
         . '                THEN f.folio_hasta - f.proximo_folio + 1 ELSE 0 END) AS disponibles, '
-        . '       SUM(GREATEST(f.proximo_folio - c.folio_desde, 0))             AS usados, '
-        . '       SUM(f.folio_hasta - c.folio_desde + 1)                        AS total_rango, '
+        . '       SUM(GREATEST(f.proximo_folio - f.proximo_folio_inicial, 0))   AS usados, '
+        . '       SUM(f.folio_hasta - f.proximo_folio_inicial + 1)              AS total_rango, '
         . '       COUNT(*)                                                      AS cafs '
         . 'FROM dte_folio f '
         . 'INNER JOIN dte_caf c ON c.id = f.caf_id '
@@ -8617,7 +8783,11 @@ function informeColumnasYFilas(string $clave, array $datos): array
                 ['titulo' => 'Tipo de documento', 'ancho' => 83, 'alineacion' => $izq, 'num' => false],
                 ['titulo' => 'Disponibles',       'ancho' => 40, 'alineacion' => $der, 'num' => true],
                 ['titulo' => 'Usados',            'ancho' => 40, 'alineacion' => $der, 'num' => true],
-                ['titulo' => 'Rango total',       'ancho' => 40, 'alineacion' => $der, 'num' => true],
+                // No es el rango impreso en el CAF, sino lo que Sinergia puede
+                // emitir: en un CAF migrado excluye los folios que el emisor ya
+                // habia gastado con su proveedor anterior (ver
+                // dashFoliosPorTipo, que agrega sobre proximo_folio_inicial).
+                ['titulo' => 'Folios asignados a Sinergia', 'ancho' => 40, 'alineacion' => $der, 'num' => true],
                 ['titulo' => 'CAF cargados',      'ancho' => 35, 'alineacion' => $der, 'num' => true],
                 ['titulo' => '% disponible',      'ancho' => 35, 'alineacion' => $der, 'num' => false],
             ];

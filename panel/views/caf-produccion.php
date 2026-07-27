@@ -2,18 +2,20 @@
 /**
  * Configuracion > Produccion > Folios y CAF (ambiente de PRODUCCION).
  *
- * Estructuralmente identica a caf.php: mismas variables ($error, $cafs), mismo
- * handler parametrizado (procesarCafGet/Post), misma tabla, mismo resumen por
- * tipo y mismo formulario. Cambian la ruta del action, el texto del boton, el
- * color del badge y el panel lateral, que aqui advierte que los folios son
- * reales.
+ * Estructuralmente identica a caf.php: mismas variables ($error, $flash,
+ * $cafs), mismo handler parametrizado (procesarCafGet/Post), misma tabla,
+ * mismo resumen por tipo y mismo formulario. Cambian la ruta del action, el
+ * texto del boton, el color del badge y el panel lateral, que aqui advierte
+ * que los folios son reales.
  *
  * A diferencia de certificacion, esta vista NO menciona el proceso aparte de la
  * boleta: esa aclaracion es propia de la certificacion y no estaba aqui.
  *
  * Igual que en certificacion: los numeros se muestran tal como llegan, el ENUM
- * de estado es 'activo'/'agotado', "Cargado/Falta" no es el estado del CAF, y
- * no hay mensaje de exito tras una carga correcta.
+ * de estado es 'activo'/'agotado', "Cargado/Falta" no es el estado del CAF, la
+ * carga es de dos pasos (subir -> revisar -> confirmar) y el resultado llega
+ * como flash, y la nota de migracion aparece solo cuando
+ * proximo_folio_inicial es mayor que folio_desde.
  */
 $titulo = 'CAF de produccion';
 require __DIR__ . '/partials/header.php';
@@ -54,6 +56,13 @@ foreach ($cafs as $c) {
     Administra los archivos CAF y los rangos de folios con los que emites documentos
     tributarios reales ante el SII.
 </p>
+
+<?php if (! empty($flash['mensaje'])): ?>
+    <p class="alerta alerta--<?= ($flash['tipo'] ?? '') === 'exito' ? 'exito' : 'error'; ?>" role="status">
+        <span class="alerta__icono" aria-hidden="true"><?= ($flash['tipo'] ?? '') === 'exito' ? '&#10003;' : '&#9888;'; ?></span>
+        <span><?= htmlspecialchars($flash['mensaje']); ?></span>
+    </p>
+<?php endif; ?>
 
 <?php if (! empty($error)): ?>
     <p class="alerta alerta--error" role="alert">
@@ -106,9 +115,15 @@ foreach ($cafs as $c) {
                         <tbody>
                             <?php foreach ($cafs as $c): ?>
                                 <?php [$claseBadge, $textoBadge] = $badgeEstado((string) $c['estado']); ?>
+                                <?php $folioInicial = (int) $c['proximo_folio_inicial']; ?>
                                 <tr>
                                     <td><span class="badge badge--etiqueta"><?= htmlspecialchars(nombreTipoDte((int) $c['tipo_dte'])); ?></span></td>
-                                    <td class="tabla-datos__num"><?= (int) $c['folio_desde']; ?>&ndash;<?= (int) $c['folio_hasta']; ?></td>
+                                    <td class="tabla-datos__num">
+                                        <?= (int) $c['folio_desde']; ?>&ndash;<?= (int) $c['folio_hasta']; ?>
+                                        <?php if ($folioInicial > (int) $c['folio_desde']): ?>
+                                            <div class="nota">Migrado: Sinergia emite desde el <?= $folioInicial; ?></div>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="tabla-datos__num"><?= (int) $c['proximo_folio']; ?></td>
                                     <td class="tabla-datos__num"><?= $fmtNum($c['folios_restantes']); ?></td>
                                     <td class="tabla-datos__estado"><span class="badge <?= $claseBadge; ?>"><?= htmlspecialchars($textoBadge); ?></span></td>

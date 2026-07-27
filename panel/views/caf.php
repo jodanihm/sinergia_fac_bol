@@ -2,12 +2,21 @@
 /**
  * Configuracion > Folios y CAF (ambiente de CERTIFICACION).
  *
- * Recibe: $error (string|null) y $cafs (list<array>), de procesarCafGet/Post().
- * Cada CAF trae exactamente lo que devuelve listarCafs():
- *   tipo_dte, folio_desde, folio_hasta, estado, proximo_folio
+ * Recibe: $error (string|null), $flash (array|null) y $cafs (list<array>), de
+ * procesarCafGet/Post(). Cada CAF trae exactamente lo que devuelve
+ * listarCafs():
+ *   tipo_dte, folio_desde, folio_hasta, estado, proximo_folio,
+ *   proximo_folio_inicial
  * mas folios_restantes, que la propia funcion calcula como
  * folio_hasta - proximo_folio + 1. Aqui NO se recalcula nada: los cuatro
  * numeros se muestran tal como llegan.
+ *
+ * MIGRADO: proximo_folio_inicial guarda el folio con el que ARRANCO el
+ * contador. En un CAF normal vale igual que folio_desde; cuando el emisor
+ * venia de otro proveedor y declaro un folio inicial distinto, vale mas. Ese
+ * es el unico caso en que la fila muestra la nota de migracion, porque es el
+ * unico en que el rango del archivo y el rango que Sinergia va a usar no
+ * coinciden.
  *
  * ESTADO: la columna de dte_caf es un ENUM cerrado -- 'activo' o 'agotado'
  * (default 'activo'; MySqlFolioRepository lo pasa a 'agotado' al consumirse el
@@ -24,9 +33,11 @@
  * La tabla los lista todos, en el orden del repositorio (tipo ASC, desde ASC),
  * sin agrupar ni ocultar ninguno.
  *
- * NO HAY MENSAJE DE EXITO: tras una carga correcta el handler redirige a esta
- * misma ruta sin flash, asi que la vista no puede confirmarla. Queda anotado
- * como pendiente; no se inventa un aviso que el backend no envia.
+ * MENSAJE DE RESULTADO: la carga es de dos pasos (subir -> revisar en
+ * caf-revision.php -> confirmar). El paso de confirmacion redirige aqui con un
+ * flash, de exito o de error, y por eso esta vista si puede confirmar el
+ * resultado. Antes no podia: la carga era de un solo paso y redirigia sin
+ * flash.
  */
 $titulo = 'CAF de certificacion';
 require __DIR__ . '/partials/header.php';
@@ -69,6 +80,13 @@ foreach ($cafs as $c) {
     Administra los archivos CAF y los rangos de folios disponibles para emitir en el
     ambiente de certificacion.
 </p>
+
+<?php if (! empty($flash['mensaje'])): ?>
+    <p class="alerta alerta--<?= ($flash['tipo'] ?? '') === 'exito' ? 'exito' : 'error'; ?>" role="status">
+        <span class="alerta__icono" aria-hidden="true"><?= ($flash['tipo'] ?? '') === 'exito' ? '&#10003;' : '&#9888;'; ?></span>
+        <span><?= htmlspecialchars($flash['mensaje']); ?></span>
+    </p>
+<?php endif; ?>
 
 <?php if (! empty($error)): ?>
     <p class="alerta alerta--error" role="alert">
@@ -121,9 +139,15 @@ foreach ($cafs as $c) {
                         <tbody>
                             <?php foreach ($cafs as $c): ?>
                                 <?php [$claseBadge, $textoBadge] = $badgeEstado((string) $c['estado']); ?>
+                                <?php $folioInicial = (int) $c['proximo_folio_inicial']; ?>
                                 <tr>
                                     <td><span class="badge badge--etiqueta"><?= htmlspecialchars(nombreTipoDte((int) $c['tipo_dte'])); ?></span></td>
-                                    <td class="tabla-datos__num"><?= (int) $c['folio_desde']; ?>&ndash;<?= (int) $c['folio_hasta']; ?></td>
+                                    <td class="tabla-datos__num">
+                                        <?= (int) $c['folio_desde']; ?>&ndash;<?= (int) $c['folio_hasta']; ?>
+                                        <?php if ($folioInicial > (int) $c['folio_desde']): ?>
+                                            <div class="nota">Migrado: Sinergia emite desde el <?= $folioInicial; ?></div>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="tabla-datos__num"><?= (int) $c['proximo_folio']; ?></td>
                                     <td class="tabla-datos__num"><?= $fmtNum($c['folios_restantes']); ?></td>
                                     <td class="tabla-datos__estado"><span class="badge <?= $claseBadge; ?>"><?= htmlspecialchars($textoBadge); ?></span></td>
