@@ -26,6 +26,10 @@
  * 1440 -- que es como se vieron en produccion la primera vez. Con el atributo,
  * el peor caso posible es un icono de 20px; el CSS solo lo afina.
  *
+ * La <img> de la zona visual lleva width y height por la misma razon, y ademas
+ * reserva el espacio antes de que la imagen cargue, para que el bloque no salte
+ * al terminar la descarga (CLS).
+ *
  * NO HAY ENLACE A /registro. Es una decision de producto: el alta de tenants no
  * es autoregistro publico. La RUTA sigue existiendo y funcionando igual por URL
  * directa; aqui solo deja de ofrecerse.
@@ -43,6 +47,19 @@
 $titulo    = 'Iniciar sesion';
 $bodyClase = 'auth-page';
 require __DIR__ . '/partials/header.php';
+
+// Version del archivo, para invalidar la cache del navegador tras un
+// despliegue. Mismo criterio que /css/style.css en partials/header.php: una URL
+// fija deja servida la version anterior desde la cache o desde un proxy. Si el
+// archivo no se puede leer se cae a la URL sin parametro.
+$fondoRuta    = __DIR__ . '/../public/img/fondo.jpg';
+$fondoVersion = @filemtime($fondoRuta);
+$fondoSrc     = '/img/fondo.jpg' . ($fondoVersion ? '?v=' . $fondoVersion : '');
+
+// GIF transparente de 1x1 px, en linea. Ver el bloque de la zona decorativa:
+// es lo que el navegador carga en lugar de la foto cuando la decoracion esta
+// oculta. Al ir embebido no genera ninguna peticion de red.
+$pixelVacio = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
 ?>
 
 <div class="auth-layout">
@@ -71,50 +88,43 @@ require __DIR__ . '/partials/header.php';
     <div class="auth-main">
 
         <?php
-            /* Zona decorativa. Es una abstraccion del panel: sin cifras, sin
-               nombres, sin RUT y sin ningun dato que pueda leerse como real.
-               aria-hidden porque no aporta informacion, solo contexto visual.
-               width/height = su viewBox: sin CSS se ve a tamano natural en vez
-               de estirarse a la pantalla completa. */
+            /* Zona decorativa. Reemplaza al SVG abstracto que habia antes. El
+               CSS no cambia: .auth-visual__panel ya estaba escrito con
+               width:100% y height:auto, y funciona igual para una <img>.
+
+               QUE MUESTRA: un mockup de laptop con un dashboard generico. No hay
+               ningun dato real -- ni RUT, ni folios, ni razones sociales, ni
+               montos de clientes -- y el area de la pantalla va DESENFOCADA a
+               proposito: el mockup traia texto generado que no formaba palabras
+               reales, y difuminarlo evita mostrar algo que parece informacion
+               sin serlo. Queda la composicion: el grafico, la dona y la barra de
+               navegacion con la marca.
+
+               aria-hidden y alt vacio porque no aporta informacion, solo
+               contexto visual: un lector de pantalla debe saltarla.
+
+               POR QUE <picture> Y NO UNA <img> SUELTA. Bajo 1024px la regla
+               .auth-visual { display:none } retira la decoracion. Un display:none
+               en el elemento PADRE no impide la descarga: el preload scanner
+               encuentra el src en el HTML antes de que el CSS se aplique. Medido
+               con cache-buster para descartar la cache: con una <img> suelta, un
+               viewport de 768px transferia igual los 34 KB de la foto.
+
+               Con <picture>, el primer <source> gana en pantallas de hasta
+               1024px y apunta a un GIF de 1x1 embebido, asi que el navegador ni
+               siquiera pide la foto. Medido en las mismas condiciones: cero
+               peticiones a fondo.jpg bajo 1024px, y descarga normal por encima.
+               El breakpoint de los <source> es el mismo del CSS a proposito: si
+               se cambia uno hay que cambiar el otro. */
         ?>
         <div class="auth-visual" aria-hidden="true">
             <div class="auth-visual__fondo"></div>
-            <svg class="auth-visual__panel" width="420" height="300" viewBox="0 0 420 300"
-                 role="presentation" focusable="false">
-                <rect x="0" y="0" width="420" height="300" rx="14" fill="#ffffff"/>
-                <rect x="0" y="0" width="64" height="300" rx="14" fill="#1e3a8a"/>
-                <rect x="52" y="0" width="12" height="300" fill="#1e3a8a"/>
-                <g fill="#ffffff" opacity=".55">
-                    <rect x="18" y="30" width="28" height="6" rx="3"/>
-                    <rect x="18" y="52" width="28" height="6" rx="3"/>
-                    <rect x="18" y="74" width="28" height="6" rx="3"/>
-                    <rect x="18" y="96" width="28" height="6" rx="3"/>
-                </g>
-                <rect x="18" y="140" width="28" height="6" rx="3" fill="#93c5fd"/>
-
-                <rect x="86" y="26" width="150" height="86" rx="10" fill="#f5f8ff"/>
-                <rect x="102" y="44" width="62" height="7" rx="3.5" fill="#c7d7f5"/>
-                <rect x="102" y="62" width="94" height="13" rx="4" fill="#1a56db" opacity=".22"/>
-                <polyline points="102,98 124,88 146,93 168,74 190,80 212,62"
-                          fill="none" stroke="#1a56db" stroke-width="2.6"
-                          stroke-linecap="round" stroke-linejoin="round"/>
-
-                <rect x="252" y="26" width="150" height="86" rx="10" fill="#f5f8ff"/>
-                <rect x="268" y="44" width="52" height="7" rx="3.5" fill="#c7d7f5"/>
-                <rect x="268" y="62" width="72" height="13" rx="4" fill="#1a56db" opacity=".22"/>
-                <circle cx="366" cy="80" r="20" fill="none" stroke="#dbe6fb" stroke-width="8"/>
-                <path d="M366 60a20 20 0 0 1 17 30" fill="none" stroke="#1a56db"
-                      stroke-width="8" stroke-linecap="round"/>
-
-                <rect x="86" y="132" width="316" height="146" rx="10" fill="#f5f8ff"/>
-                <g fill="#dbe6fb">
-                    <rect x="104" y="152" width="280" height="9" rx="4.5"/>
-                    <rect x="104" y="178" width="240" height="9" rx="4.5"/>
-                    <rect x="104" y="204" width="264" height="9" rx="4.5"/>
-                    <rect x="104" y="230" width="210" height="9" rx="4.5"/>
-                    <rect x="104" y="256" width="248" height="9" rx="4.5"/>
-                </g>
-            </svg>
+            <picture>
+                <source media="(max-width: 1024px)" srcset="<?= $pixelVacio; ?>">
+                <source media="(min-width: 1025px)" srcset="<?= htmlspecialchars($fondoSrc); ?>">
+                <img class="auth-visual__panel" src="<?= htmlspecialchars($fondoSrc); ?>"
+                     width="1120" height="739" alt="" decoding="async">
+            </picture>
         </div>
 
         <section class="auth-card" aria-labelledby="titulo-login">

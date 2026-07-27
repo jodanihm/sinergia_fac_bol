@@ -13,6 +13,23 @@
  *   - el resto, de validarFilaCargaMasiva() y leerFilasExcelCargaMasiva().
  * Si manana cambia una validacion, esta pantalla no queda mintiendo sola:
  * columnas y formatos se leen de la fuente.
+ *
+ * DESCARGAR PLANTILLA VA ANTES DEL FORMULARIO, NO DENTRO. Antes era el segundo
+ * elemento del .acciones-grupo del form, al lado del submit: aparecia en el
+ * momento equivocado del flujo. Quien necesita la plantilla la necesita ANTES
+ * de tener un archivo que subir, no en el instante de enviarlo. Ahora el orden
+ * de la tarjeta sigue el orden real de la tarea: descargar -> llenar -> subir.
+ *
+ * Se sube ademas de .boton-texto a .boton-secundario. Es el mismo peso visual
+ * que .upload__boton ("Seleccionar archivo") en esta misma vista, que tambien
+ * es un paso previo al envio; el azul solido de .boton-principal queda
+ * reservado para el submit, que sigue siendo la accion principal.
+ *
+ * El glifo repite el patron de .upload__icono: <span aria-hidden> con entidad
+ * numerica, no imagen ni SVG. Va sin clase a proposito -- hereda el tamano del
+ * boton y no necesita ninguna regla CSS nueva. &#8615; (U+21A7, flecha hacia
+ * abajo desde barra) es el simetrico exacto del &#8613; (U+21A5) que usa el
+ * area de subida.
  */
 $titulo     = 'Carga masiva de notas de venta';
 $pasoActual = 1;
@@ -80,6 +97,18 @@ $badgeRequisito = [
                 sus datos del maestro. Si es nuevo, se crea con los datos del archivo.
             </p>
 
+            <?php
+                /* Fuera del <form> a proposito: es una descarga (GET), no tiene
+                   nada que ver con el envio del archivo y no debe competir con
+                   el submit. .acciones-grupo ya aporta el margen superior; el
+                   .upload que sigue trae el suyo. Sin CSS nuevo. */
+            ?>
+            <div class="acciones-grupo">
+                <a class="boton-secundario" href="/ventas/carga-masiva/plantilla">
+                    <span aria-hidden="true">&#8615;</span> Descargar plantilla Excel
+                </a>
+            </div>
+
             <form method="post" action="/ventas/carga-masiva" enctype="multipart/form-data">
                 <?= csrfInput(); ?>
 
@@ -105,7 +134,6 @@ $badgeRequisito = [
 
                 <div class="acciones-grupo">
                     <button class="boton-principal" type="submit">Cargar archivo</button>
-                    <a class="boton-texto" href="/ventas/carga-masiva/plantilla">Descargar plantilla Excel</a>
                 </div>
             </form>
         </section>
