@@ -804,6 +804,97 @@ a.nav-item:hover { background: var(--color-nav-hover); }
     border-top: 3px solid var(--color-primario);
 }
 
+/* --------------------------------------------------------------------------
+   FILAS DE LA COMPOSICION. Clases propias bajo .dash-page. .dash-grid y
+   .dash-grid--2 NO se tocan: las comparten carga-masiva-detalle,
+   facturacion-masiva-form e informes-index, ademas de los KPI de esta vista.
+
+   Ninguna fila usa 'order' ni 'grid-area'. Reordenar por CSS cambia el orden
+   visual y deja el del DOM atras, y el foco por teclado y los lectores de
+   pantalla siguen el DOM (WCAG 2.4.3 y 1.3.2). El unico bloque que cambio de
+   sitio lo hizo moviendo su markup.
+
+   FLEX-WRAP Y NO MEDIA QUERIES. Cada fila colapsa cuando SU CONTENEDOR ya no
+   alcanza, no cuando la pantalla cruza un numero. Es la misma correccion que
+   .folios: un @media de viewport miente en cuanto la caja deja de medir lo
+   mismo que la pantalla. Los flex-basis son los minimos MEDIDOS de cada
+   contenido, asi que el umbral de colapso sale solo de sumarlos con el gap:
+     fila de tablas   423 + 423 + 24 = 870px de contenedor
+     fila de grafico  434 + 339 + 24 = 797px de contenedor
+   El 339 de la tarjeta son sus 307px de tabla MAS sus 32px de padding: el
+   basis se mide en content-box, asi que el navegador reserva contenido +
+   padding. Medidos por biseccion sobre el contenedor real: 870 y 797 exactos,
+   y un pixel menos en cada caso cae a una columna.
+   Debajo de su umbral cada fila cae a una columna sin ninguna regla extra, y
+   cada una lo hace en su propio punto: la del grafico aguanta 73px mas.
+
+   min-width: 0 NO ES OPCIONAL. Un item flex trae min-width:auto, que respeta
+   el min-content del contenido y se niega a encogerse por debajo. Es la misma
+   trampa del minmax(420px, 1fr) que metio 47px de scroll de pagina en una
+   entrega anterior; con tablas adentro, sin esto la pagina vuelve a desbordar.
+
+   El reset de margenes reemplaza lo que las tarjetas perdian al salir de
+   .dash-grid (ver '.dash-grid > .tarjeta' mas abajo): .tarjeta trae
+   margin 1.25rem 0 para apilarse suelta y dentro de una fila manda el gap.
+   -------------------------------------------------------------------------- */
+.dash-page .dash-fila {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--esp-5);
+    align-items: flex-start;
+}
+.dash-page .dash-fila > * {
+    min-width: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+/* Fila 1: las dos tablas, mitades parejas. El basis es el mismo en las dos y
+   vale el MAYOR de los dos minimos (el de "Facturacion por tipo", 423px), asi
+   que a 995px de contenedor quedan 485,5 cada una. Con el reparto desigual de
+   la fila 2, "Clientes con mayor facturacion" habria quedado en 389px contra
+   su minimo de 381: 8px de margen, muy poco para sostenerlo. */
+.dash-page .dash-fila--tablas > * {
+    flex: 1 1 423px;
+}
+
+/* Fila 2: desigual a favor del grafico, 3:2 sobre el sobrante. Medido a 995px
+   de contenedor: 553px para el grafico y 418px para la tarjeta.
+   553 supera el minimo 1:1 de 434 y se queda 41px antes de 594, que es donde
+   la altura del SVG tocaria su max-height de 260px y todo el ancho de mas se
+   volveria aire a los lados. El texto del eje son 9px en unidades del viewBox,
+   o sea 9 x 553/434 = 11,5px reales.
+   En el peor caso, justo en el umbral de 797, el grafico queda en 434: su
+   tamano 1:1, con el eje en 9px exactos. Nunca baja de ahi en dos columnas. */
+.dash-page .dash-fila--grafico > :first-child {
+    flex: 3 1 434px;
+}
+.dash-page .dash-fila--grafico > .tarjeta {
+    flex: 2 1 307px;
+}
+
+/* "Documentos con problemas" queda a ancho completo debajo de la fila 2, y a
+   ancho completo su prosa se estiraba a 142 caracteres por linea (medido sobre
+   el parrafo real, con 963px utiles dentro de la tarjeta a 1366 de viewport).
+   El limite tipografico habitual es 45 a 75 caracteres, con 66 como valor
+   comodo: 142 es mas del doble del techo.
+
+   EL TOPE SE ELIGIO MIDIENDO, contando caracteres por linea a distintos anchos
+   sobre los dos parrafos de la tarjeta, descartando la ultima linea de cada uno
+   porque siempre queda corta:
+     45ch (388px)  promedio 54,8   linea mas larga 60
+     47ch (406px)  promedio 61,8   linea mas larga 75
+     48ch (414px)  promedio 62,6   linea mas larga 79
+     52ch (449px)  promedio 66,8   linea mas larga 79
+   47ch es el mayor valor con el que NINGUNA linea pasa de 75 caracteres; en 48
+   la mas larga ya se sale. Va en ch y no en px para que el tope siga al tamano
+   de la fuente si algun dia cambia. */
+.dash-page .tarjeta--proximamente p {
+    max-width: 47ch;
+}
+
+
+
 /* Folios por tipo. El nivel se comunica por color + palabra + icono. */
 /* GRILLA POR TAMANO DEL CONTENEDOR, no del viewport.
    La entrega anterior uso dos media queries de viewport. Funcionan solo mientras

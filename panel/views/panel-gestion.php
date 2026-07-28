@@ -154,6 +154,15 @@ $pintarDelta = static function (?array $d): string {
         </article>
     </section>
 
+    <?php
+        /* FILA 1. Las dos tablas del periodo, en mitades parejas. El
+           contenedor SOLO ENVUELVE. "Clientes con mayor facturacion" si
+           cambio de sitio: subio desde el final de la vista hasta aqui,
+           moviendo su markup completo. No se uso order ni grid-area, que
+           habrian cambiado el orden visual dejando el del DOM atras: el
+           foco por teclado y los lectores de pantalla siguen el DOM. */
+    ?>
+    <div class="dash-fila dash-fila--tablas">
     <section aria-labelledby="titulo-por-tipo">
         <h2 id="titulo-por-tipo">Facturacion por tipo de documento</h2>
         <div class="tabla-scroll">
@@ -187,57 +196,6 @@ $pintarDelta = static function (?array $d): string {
                 </tbody>
             </table>
         </div>
-    </section>
-
-    <section aria-labelledby="titulo-folios">
-        <h2 id="titulo-folios">Folios por tipo de documento</h2>
-        <?php require __DIR__ . '/partials/_folios.php'; ?>
-    </section>
-
-    <section aria-labelledby="titulo-grafico">
-        <h2 id="titulo-grafico">Ventas por dia</h2>
-        <?php require __DIR__ . '/partials/_grafico-ventas.php'; ?>
-    </section>
-
-    <section class="dash-grid dash-grid--2" aria-label="Estado de los documentos">
-        <article class="tarjeta">
-            <h2>Estado de los documentos</h2>
-            <?php if ($estados === []): ?>
-                <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
-            <?php else: ?>
-                <div class="tabla-scroll">
-                    <table>
-                        <caption>Codigo de estado tal como lo devolvio el SII, sin interpretar.</caption>
-                        <thead>
-                            <tr><th scope="col">Estado</th><th scope="col" class="num">Documentos</th></tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($estados as $e): ?>
-                                <tr>
-                                    <th scope="row"><code><?= htmlspecialchars($e['estado']); ?></code></th>
-                                    <td class="num"><?= $fmtNum($e['documentos']); ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php endif; ?>
-            <p class="nota">El estado solo avanza cuando se consulta al SII desde el
-            panel de emision: no hay un proceso automatico que lo actualice.</p>
-        </article>
-
-        <article class="tarjeta tarjeta--proximamente">
-            <h2>
-                Documentos con problemas
-                <span class="nav-item__badge badge--proximo">Proximamente</span>
-            </h2>
-            <p>Todavia no clasificamos los codigos del SII en aceptado, rechazado o
-            pendiente. Decidir que codigo significa "rechazado" es una regla
-            tributaria, y preferimos no mostrarte un numero antes de tenerla
-            definida y verificada.</p>
-            <p class="nota">Mientras tanto, la distribucion de estados de la izquierda
-            muestra los codigos crudos, que si son un dato verificable.</p>
-        </article>
     </section>
 
     <section aria-labelledby="titulo-clientes">
@@ -279,6 +237,65 @@ $pintarDelta = static function (?array $d): string {
                 </table>
             </div>
         <?php endif; ?>
+    </section>
+    </div>
+
+    <section aria-labelledby="titulo-folios">
+        <h2 id="titulo-folios">Folios por tipo de documento</h2>
+        <?php require __DIR__ . '/partials/_folios.php'; ?>
+    </section>
+
+    <?php
+        /* FILA 2. Reparto desigual a favor del grafico. Las dos secciones
+           ya eran adyacentes en el DOM y no se movieron; lo que se quito
+           fue la seccion de grilla de dos columnas que envolvia las dos
+           tarjetas con un aria-label que solo nombraba a una de ellas.
+           Cada tarjeta quedo como su propia region, con su propio nombre. */
+    ?>
+    <div class="dash-fila dash-fila--grafico">
+    <section aria-labelledby="titulo-grafico">
+        <h2 id="titulo-grafico">Ventas por dia</h2>
+        <?php require __DIR__ . '/partials/_grafico-ventas.php'; ?>
+    </section>
+
+    <section class="tarjeta" aria-labelledby="titulo-estados">
+        <h2 id="titulo-estados">Estado de los documentos</h2>
+        <?php if ($estados === []): ?>
+            <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
+        <?php else: ?>
+            <div class="tabla-scroll">
+                <table>
+                    <caption>Codigo de estado tal como lo devolvio el SII, sin interpretar.</caption>
+                    <thead>
+                        <tr><th scope="col">Estado</th><th scope="col" class="num">Documentos</th></tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($estados as $e): ?>
+                            <tr>
+                                <th scope="row"><code><?= htmlspecialchars($e['estado']); ?></code></th>
+                                <td class="num"><?= $fmtNum($e['documentos']); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+        <p class="nota">El estado solo avanza cuando se consulta al SII desde el
+        panel de emision: no hay un proceso automatico que lo actualice.</p>
+    </section>
+    </div>
+
+    <section class="tarjeta tarjeta--proximamente" aria-labelledby="titulo-problemas">
+        <h2 id="titulo-problemas">
+            Documentos con problemas
+            <span class="nav-item__badge badge--proximo">Proximamente</span>
+        </h2>
+        <p>Todavia no clasificamos los codigos del SII en aceptado, rechazado o
+        pendiente. Decidir que codigo significa "rechazado" es una regla
+        tributaria, y preferimos no mostrarte un numero antes de tenerla
+        definida y verificada.</p>
+        <p class="nota">Mientras tanto, la distribucion de estados de la izquierda
+        muestra los codigos crudos, que si son un dato verificable.</p>
     </section>
 
 <?php endif; ?>
