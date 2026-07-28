@@ -805,23 +805,36 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 }
 
 /* Folios por tipo. El nivel se comunica por color + palabra + icono. */
-/* GRILLA DE TRES. Antes era una columna: tres barras de 995px de ancho a
-   1366px de pantalla, cada una con 90px de alto util desperdiciado a la
-   derecha. En tres columnas cada folio mide ~322px y se lee como una tarjeta.
-   .folios es exclusiva de esta vista (solo _folios.php, que solo incluye
-   panel-gestion.php), asi que no hace falta scopearla a .dash-page.
-   Los media queries van DESPUES de la regla base a proposito: un @media no
-   sube la especificidad, gana el ultimo declarado. */
+/* GRILLA POR TAMANO DEL CONTENEDOR, no del viewport.
+   La entrega anterior uso dos media queries de viewport. Funcionan solo mientras
+   .folios ocupe exactamente el ancho del <main>: cualquier cambio de composicion
+   que le de un contenedor mas angosto los deja mintiendo, porque siguen mirando
+   la pantalla y no la caja real. Medido con un contenedor de 485px y el viewport
+   todavia en 1366, el @media de 1024px seguia pidiendo TRES columnas de 155px.
+   auto-fit + minmax mide el contenedor real y no necesita saber nada de la
+   pantalla, asi que los dos media queries sobran y se retiran.
+
+   POR QUE 240px Y NO OTRO VALOR. Es el umbral medido, con el gap de 12px:
+     contenedor 995px -> 3 columnas de 324px  (el <main> completo a 1366)
+     contenedor 485px -> 1 columna  de 485px
+     contenedor 330px -> 1 columna  de 330px
+     contenedor 296px -> 1 columna  de 296px
+   Con 230px o menos, un contenedor de 485px daria DOS columnas de 236px y el
+   detalle del folio envolveria mas que hoy; el umbral de envolvimiento medido
+   esta entre 329 y 341px.
+
+   EL min(240px, 100%) NO ES ADORNO. Con minmax(240px, 1fr) a secas el minimo es
+   rigido: si el contenedor mide menos de 240px la columna igual se planta en 240
+   y desborda. Con min(), el minimo nunca supera el ancho disponible. Es la misma
+   trampa que la Entrega A vino a arreglar. */
 .folios {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
     gap: var(--esp-3);
     padding: 0;
     margin: var(--esp-3) 0 var(--esp-5);
     list-style: none;
 }
-@media (max-width: 1024px) { .folios { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 720px)  { .folios { grid-template-columns: minmax(0, 1fr); } }
 
 /* Misma familia visual que el KPI: superficie blanca elevada y acento de color
    ARRIBA, no a la izquierda. Con los dos tipos de tarjeta compartiendo la barra
