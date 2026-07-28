@@ -34,6 +34,10 @@ $titulo    = 'Panel';
 // mecanismo con el que login.php pide .auth-page, y la unica linea de markup
 // que cambia en esta entrega: el resto es CSS.
 $bodyClase = 'dash-page';
+/* Iconos de los encabezados de seccion. require_once porque partials/_nav.php,
+   que incluye header.php un par de lineas mas abajo, tambien lo carga: una
+   constante o funcion redeclarada es error fatal. */
+require_once __DIR__ . '/partials/_iconos.php';
 require __DIR__ . '/partials/header.php';
 
 $periodo = $contexto['periodo'];
@@ -164,7 +168,7 @@ $pintarDelta = static function (?array $d): string {
     ?>
     <div class="dash-fila dash-fila--tablas">
     <section aria-labelledby="titulo-por-tipo">
-        <h2 id="titulo-por-tipo">Facturacion por tipo de documento</h2>
+        <h2 class="dash-titulo" id="titulo-por-tipo"><?= iconoSvg('informe-tipos', 18, 'dash-titulo__icono'); ?>Facturacion por tipo de documento</h2>
         <div class="tabla-scroll">
             <table>
                 <caption>Documentos y montos del periodo, separados por tipo. Las notas
@@ -199,7 +203,7 @@ $pintarDelta = static function (?array $d): string {
     </section>
 
     <section aria-labelledby="titulo-clientes">
-        <h2 id="titulo-clientes">Clientes con mayor facturacion</h2>
+        <h2 class="dash-titulo" id="titulo-clientes"><?= iconoSvg('informe-clientes', 18, 'dash-titulo__icono'); ?>Clientes con mayor facturacion</h2>
         <?php if ($topClientes === []): ?>
             <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
         <?php else: ?>
@@ -241,7 +245,7 @@ $pintarDelta = static function (?array $d): string {
     </div>
 
     <section aria-labelledby="titulo-folios">
-        <h2 id="titulo-folios">Folios por tipo de documento</h2>
+        <h2 class="dash-titulo" id="titulo-folios"><?= iconoSvg('informe-folios', 18, 'dash-titulo__icono'); ?>Folios por tipo de documento</h2>
         <?php require __DIR__ . '/partials/_folios.php'; ?>
     </section>
 
@@ -254,12 +258,12 @@ $pintarDelta = static function (?array $d): string {
     ?>
     <div class="dash-fila dash-fila--grafico">
     <section aria-labelledby="titulo-grafico">
-        <h2 id="titulo-grafico">Ventas por dia</h2>
+        <h2 class="dash-titulo" id="titulo-grafico"><?= iconoSvg('informe-dia', 18, 'dash-titulo__icono'); ?>Ventas por dia</h2>
         <?php require __DIR__ . '/partials/_grafico-ventas.php'; ?>
     </section>
 
     <section class="tarjeta" aria-labelledby="titulo-estados">
-        <h2 id="titulo-estados">Estado de los documentos</h2>
+        <h2 class="dash-titulo" id="titulo-estados"><?= iconoSvg('informe-estados', 18, 'dash-titulo__icono'); ?>Estado de los documentos</h2>
         <?php if ($estados === []): ?>
             <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
         <?php else: ?>
@@ -286,8 +290,8 @@ $pintarDelta = static function (?array $d): string {
     </div>
 
     <section class="tarjeta tarjeta--proximamente" aria-labelledby="titulo-problemas">
-        <h2 id="titulo-problemas">
-            Documentos con problemas
+        <h2 class="dash-titulo" id="titulo-problemas">
+            <?= iconoSvg('alerta', 18, 'dash-titulo__icono'); ?>Documentos con problemas
             <span class="nav-item__badge badge--proximo">Proximamente</span>
         </h2>
         <p>Todavia no clasificamos los codigos del SII en aceptado, rechazado o
@@ -301,7 +305,7 @@ $pintarDelta = static function (?array $d): string {
 <?php endif; ?>
 
 <section class="accesos" aria-labelledby="titulo-accesos">
-    <h2 id="titulo-accesos">Accesos rapidos</h2>
+    <h2 class="dash-titulo" id="titulo-accesos"><?= iconoSvg('accesos-rapidos', 18, 'dash-titulo__icono'); ?>Accesos rapidos</h2>
     <ul class="accesos__lista">
         <li><a href="/ventas/factura">Emitir factura</a></li>
         <li><a href="/ventas/carga-masiva">Carga masiva</a></li>

@@ -893,6 +893,65 @@ a.nav-item:hover { background: var(--color-nav-hover); }
     max-width: 47ch;
 }
 
+/* ENCABEZADOS DE SECCION CON ICONO. Clase propia y no un selector posicional
+   ('.dash-fila h2', 'main > section > h2' y parecidos): la composicion del
+   dashboard cambio dos veces en las ultimas entregas, y un selector que depende
+   de donde esta el elemento se rompe callado en la tercera. .dash-titulo dice
+   que es, no donde vive.
+
+   Cinco de los seis iconos ya existian para el informe equivalente de cada
+   seccion (ver partials/_iconos.php); el sexto, 'alerta', se agrego para
+   "Documentos con problemas", que no tiene informe porque todavia no existe la
+   clasificacion de codigos del SII.
+
+   EL ICONO VA DENTRO DEL <h2> Y ESO ES SEGURO. Cuatro de estos encabezados son
+   la fuente del nombre accesible de su <section> via aria-labelledby. Medido con
+   el motor de Chrome por CDP, no supuesto: un <svg aria-hidden="true"> no aporta
+   nada al nombre computado, ni siquiera si lleva un <title> adentro. Sin
+   aria-hidden si se cuela. El atributo lo pone iconoSvg() en todos los casos.
+
+   EL ICONO VA EN LINEA, NO COMO ITEM FLEX. La primera version uso display:flex
+   con flex-wrap, copiando lo que hace .tarjeta--proximamente h2 para su badge.
+   Se midio y estaba mal: un item flex cuyo tamano base no cabe en la linea baja
+   ENTERO a la siguiente antes de encogerse, asi que en pantallas angostas el
+   icono quedaba solo en la primera linea y el titulo entero debajo. Medido a
+   375px de viewport, "Facturacion por tipo de documento" pasaba de 64px de alto
+   (2 lineas, que es lo que mide hoy) a 90px (3, con el icono huerfano arriba).
+   Envolver el texto en un <span> con min-width:0 no lo arregla: flex-wrap
+   prefiere saltar de linea antes que encoger.
+
+   En linea, el icono se comporta como una palabra mas y el texto envuelve a su
+   alrededor. Mismo caso medido: 64px, identico a hoy.
+
+   vertical-align: baseline, que ademas es el valor por defecto, se eligio
+   midiendo el centro del icono contra el centro de la banda de mayusculas de
+   cada encabezado: desvia 0,5px en los cuatro titulos de 24px y 2px en los dos
+   de 20px. 'middle' desviaba 2,5 y 2. Se declara explicito para dejar dicho que
+   es una decision y no un descuido.
+
+   EL display:block NO ES REDUNDANTE aunque un <h2> ya sea bloque. Uno de los
+   seis, "Documentos con problemas", recibe display:flex de
+   '.tarjeta--proximamente h2', que es la regla que coloca su badge. Sin esta
+   linea el icono entra como item flex justo en ese encabezado y reaparece el
+   problema de arriba: medido a 375px, 75px de alto contra los 49 de hoy. Con
+   block, los seis se comportan igual y el badge sigue al texto en linea. */
+.dash-page .dash-titulo {
+    display: block;
+}
+
+/* MISMO TAMANO Y MISMO COLOR QUE EL ICONO DEL SIDEBAR: los dos son decoracion
+   de apoyo y no deben pesar mas que el texto que acompanan. Sobre superficie
+   blanca da 5,10:1 y sobre el fondo tenido del dashboard 4,84:1, muy por encima
+   del 3:1 que pide WCAG 1.4.11 para objetos graficos. */
+.dash-page .dash-titulo__icono {
+    display: inline-block;
+    vertical-align: baseline;
+    width: 18px;
+    height: 18px;
+    margin-right: var(--esp-2);
+    color: var(--color-texto-tenue);
+}
+
 
 
 /* Folios por tipo. El nivel se comunica por color + palabra + icono. */
