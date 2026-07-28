@@ -99,9 +99,18 @@
     --radio-lg:   14px;
     --radio-pill: 999px;
 
-    /* Sombras -- solo hay dos en todo el panel, las dos en el login.
-       No se inventa una --sombra-sm que nadie usa: el sistema tiene las
-       elevaciones que tiene. */
+    /* Sombras. Todas con tinte azul (rgba(20,40,90,...)) y no gris neutro: es
+       lo que hace que la elevacion se lea como profundidad y no como suciedad.
+
+       --sombra-borde separa el sidebar del contenido. NO es --sombra-md
+       aplicada de lado: esa se calculo para una card centrada y flotante (34px
+       de difuminado, 9% de opacidad) y en un borde lateral de 1047px de alto
+       se convierte en una mancha. Aqui van dos capas:
+         - 1px 0 0 -> la linea de definicion, que sustituye al border-right;
+         - 4px 0 16px al 5% -> el halo que da la profundidad.
+       Menos de la mitad de difuminado y casi la mitad de opacidad que la card
+       del login, que es lo que pide una superficie lateral fija. */
+    --sombra-borde: 1px 0 0 rgba(20, 40, 90, 0.08), 4px 0 16px rgba(20, 40, 90, 0.05);
     --sombra-md: 0 12px 34px rgba(20, 40, 90, 0.09);
     --sombra-lg: 0 18px 45px rgba(20, 40, 90, 0.13);
 }
@@ -365,17 +374,38 @@ body.con-sidebar > main {
     box-sizing: border-box;
 }
 
+/* La separacion con el contenido la da una SOMBRA y no un border-right de 1px.
+   Un borde plano es una linea; la sombra lee como una superficie que esta por
+   encima, que es lo que hace que un panel lateral se sienta como una aplicacion
+   y no como una tabla con marco.
+   La linea de 1px no se pierde: va como primera capa de --sombra-borde. Y como
+   la sombra NO ocupa espacio de layout, el ancho util interior sube 1px (de 231
+   a 232), sin mover nada del contenido principal. */
 .sidebar {
     flex: 0 0 232px;
     width: 232px;
     box-sizing: border-box;
     background: var(--color-superficie-tenue);
-    border-right: 1px solid var(--color-borde-suave);
+    box-shadow: var(--sombra-borde);
     padding: var(--esp-3) var(--esp-2) 1.1rem;
     display: flex;
     flex-direction: column;
+    /* La sombra del sidebar debe quedar POR ENCIMA del contenido, no debajo:
+       sin contexto de apilamiento propio, el <main> que viene despues en el DOM
+       la tapa y el efecto no se ve. */
+    position: relative;
+    z-index: 1;
 }
-.sidebar__marca { font-weight: 700; font-size: var(--txt-md); padding: var(--esp-1) var(--esp-2) var(--esp-3); }
+/* Separador bajo la marca, mismo tratamiento que .sidebar__pie: una linea
+   tenue que cierra el bloque. Antes el logo quedaba flotando pegado al primer
+   item del menu, sin nada que los distinguiera. */
+.sidebar__marca {
+    font-weight: 700;
+    font-size: var(--txt-md);
+    padding: var(--esp-1) var(--esp-2) var(--esp-3);
+    margin-bottom: var(--esp-2);
+    border-bottom: 1px solid var(--color-borde-tenue);
+}
 
 /* Logo de la marca. El max-height es la pieza que importa: bajo 720px el
    sidebar pasa a ancho completo y .sidebar__marca se ensancha con el, asi que
@@ -456,19 +486,42 @@ body.con-sidebar > main {
 .sidebar__subgrupo--produccion .sidebar__subtitulo { color: var(--color-alerta); }
 .sidebar__pie { margin-top: auto; padding-top: var(--esp-3); border-top: 1px solid var(--color-borde-tenue); }
 
+/* DENSIDAD. El padding vertical sube de --esp-1 (4px) a --esp-2 (8px) y el
+   radio de --radio-sm (4px) a --radio-md (6px): 4px es el radio de un control
+   de formulario de hace veinte anos y a 24px de alto los enlaces se leian como
+   filas de una tabla, no como destinos en los que se hace clic.
+   El alto pasa de 24-26px a 32-34px, que ademas cruza el minimo de 24px de
+   WCAG 2.5.8 sin depender de la excepcion de enlace en linea. */
 .nav-item {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: var(--esp-2);
-    padding: var(--esp-1) var(--esp-2);
-    border-radius: var(--radio-sm);
+    padding: var(--esp-2);
+    border-radius: var(--radio-md);
     font-size: var(--txt-sm);
     text-decoration: none;
     color: var(--color-texto);
+    /* PRIMERA TRANSICION DEL PROYECTO. Solo background-color: animar 'all'
+       arrastraria el box-shadow del item activo y el outline del foco, que
+       deben aparecer de inmediato. 150ms es el rango en que el cambio se
+       percibe como respuesta y no como retardo.
+       El bloque @media (prefers-reduced-motion: reduce) del final la reduce a
+       0.01ms; estaba preparado desde antes y hasta hoy no tenia nada que
+       neutralizar. */
+    transition: background-color 150ms ease;
 }
+/* Separacion entre enlaces. Antes iban pegados (0px) y el bloque se leia como
+   un parrafo continuo. Solo entre hermanos: no agrega aire sobrante al final
+   de cada grupo ni bajo el ultimo item. */
+.nav-item + .nav-item { margin-top: var(--esp-1); }
 .nav-item--sub { padding-left: var(--esp-3); font-size: var(--txt-xs); }
 a.nav-item:hover { background: #ececf0; }
+/* El radio del foco acompana al del item: la regla global :focus-visible usa
+   --radio-sm y con el item en --radio-md el anillo quedaria con las esquinas
+   mas cerradas que la caja que rodea. Se ajusta SOLO aqui; la global sigue
+   sirviendo al resto del panel, que no cambio de radio. */
+.nav-item:focus-visible { border-radius: var(--radio-md); }
 /* Indicador lateral con box-shadow inset y NO con border-left: un borde
    desplazaria el texto 3px solo en el item activo, descuadrandolo respecto de
    sus vecinos, y quedaria recortado si el contenedor tuviera overflow. El
