@@ -74,7 +74,26 @@
 
     --color-superficie:       #fff;     /* tarjetas y texto invertido */
     --color-superficie-alt:   #fafafa;
-    --color-superficie-tenue: #f7f7f8;
+    --color-superficie-tenue: #f7f7f8;  /* thead de tablas Y NADA MAS desde la R11 */
+
+    /* Fondo y hover del menu lateral. Son tokens PROPIOS y no reutilizan
+       --color-superficie-tenue ni el literal #ececf0 a proposito: los dos se
+       comparten con otros componentes (el thead de .tabla-datos usa el primero;
+       .folio__barra y el borde de celdas usan el segundo) y tenirlos de azul
+       arrastraria medio panel en una ronda que es solo del sidebar.
+
+       #f7f9fd es el mismo azulado del fondo del login: una superficie mas clara
+       (el <main> blanco) sobre un fondo levemente tenido. Medido, es 1.66% MAS
+       CLARO que el gris que reemplaza, asi que todos los contrastes del sidebar
+       mejoran en vez de degradarse -- importa porque el ambar de Produccion
+       estaba en 4.69:1, a 0.19 del minimo AA.
+
+       #eceef6 mantiene el salto de hover que ya habia: 9.5% mas oscuro que su
+       fondo, contra el 9.6% del par gris anterior. El tinte es un punto mas
+       marcado que el del fondo (B-R = +10 contra +6), que es lo que hace que se
+       lea como estado y no como una mancha gris sobre azul. */
+    --color-nav-fondo:        #f7f9fd;
+    --color-nav-hover:        #eceef6;
 
     /* Espaciado -- 7 pasos */
     --esp-1: 0.25rem;
@@ -379,13 +398,24 @@ body.con-sidebar > main {
    encima, que es lo que hace que un panel lateral se sienta como una aplicacion
    y no como una tabla con marco.
    La linea de 1px no se pierde: va como primera capa de --sombra-borde. Y como
-   la sombra NO ocupa espacio de layout, el ancho util interior sube 1px (de 231
-   a 232), sin mover nada del contenido principal. */
+   la sombra NO ocupa espacio de layout, el ancho util interior sube 1px (de 259
+   a 260), sin mover nada del contenido principal.
+
+   260 Y NO 232: con los iconos delante, cada item perdio 26px de ancho para el
+   texto (18 del icono + 8 del gap) y dos labels dejaron de caber en una linea
+   -- "Carga masiva de notas de venta" necesita 190.8px y "Detalle documento a
+   documento" 198.1px, contra los 174px que quedaban. Los dos pasaban a 52px de
+   alto y rompian la uniformidad del menu.
+   260 es el MINIMO medido que devuelve los 27 items a una linea: a 252 y 256
+   todavia envolvia uno. Se prefirio esto a acortar los labels, que son los
+   nombres reales de cada modulo.
+   El <main> no calcula nada a partir de este valor (flex: 1 1 auto con
+   max-width propio), asi que no hay ningun otro numero que ajustar. */
 .sidebar {
-    flex: 0 0 232px;
-    width: 232px;
+    flex: 0 0 260px;
+    width: 260px;
     box-sizing: border-box;
-    background: var(--color-superficie-tenue);
+    background: var(--color-nav-fondo);
     box-shadow: var(--sombra-borde);
     padding: var(--esp-3) var(--esp-2) 1.1rem;
     display: flex;
@@ -411,7 +441,7 @@ body.con-sidebar > main {
    sidebar pasa a ancho completo y .sidebar__marca se ensancha con el, asi que
    un ancho porcentual solo dejaria crecer el logo hasta comerse el menu (que
    ahi vive en una caja de 50dvh con scroll propio). Acotando la ALTURA, el
-   limite manda igual en 232px que en pantalla completa. */
+   limite manda igual en 260px que en pantalla completa. */
 .sidebar__logo {
     display: block;
     width: auto;
@@ -495,7 +525,11 @@ body.con-sidebar > main {
 .nav-item {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    /* flex-start y NO space-between: con el icono delante, un item con badge
+       pasa a tener tres hijos y space-between mandaria el texto al centro,
+       separandolo de su propio icono. El badge se mantiene a la derecha con un
+       margin-left:auto propio, mas abajo. */
+    justify-content: flex-start;
     gap: var(--esp-2);
     padding: var(--esp-2);
     border-radius: var(--radio-md);
@@ -516,7 +550,28 @@ body.con-sidebar > main {
    de cada grupo ni bajo el ultimo item. */
 .nav-item + .nav-item { margin-top: var(--esp-1); }
 .nav-item--sub { padding-left: var(--esp-3); font-size: var(--txt-xs); }
-a.nav-item:hover { background: #ececf0; }
+a.nav-item:hover { background: var(--color-nav-hover); }
+
+/* ICONO DEL MENU.
+   18px y no 20: el item mide 34px con 8px de padding, o sea 18px de caja util.
+   A 18 el icono entra exacto y la altura del item no se mueve; a 20 subiria a
+   36 y habria que recalcular el area tactil ya verificada.
+   flex:none para que no lo encoja un label largo ("Detalle documento a
+   documento" es el mas largo del menu).
+   El color por defecto es --color-texto-tenue y no el --color-texto del label:
+   el icono acompana, no compite con la palabra que si hay que leer.
+
+   NO HAY REGLA PARA EL ICONO ACTIVO, y es deliberado: el <svg> pinta con
+   stroke="currentColor", y .nav-item--activo ya declara
+   color: var(--color-primario). El icono se tine solo por herencia. Una regla
+   extra aqui seria una segunda fuente de verdad para el mismo color. */
+.nav-item__icono { width: 18px; height: 18px; flex: none; color: var(--color-texto-tenue); }
+.nav-item--activo .nav-item__icono { color: inherit; }
+
+/* El badge se va a la derecha por su cuenta, ahora que el item alinea a la
+   izquierda. SCOPEADO al sidebar: .nav-item__badge tambien lo usa
+   panel-gestion.php, donde el margin-left:auto no tiene nada que hacer. */
+.sidebar .nav-item__badge { margin-left: auto; }
 /* El radio del foco acompana al del item: la regla global :focus-visible usa
    --radio-sm y con el item en --radio-md el anillo quedaria con las esquinas
    mas cerradas que la caja que rodea. Se ajusta SOLO aqui; la global sigue

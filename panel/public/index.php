@@ -376,28 +376,28 @@ function navEstadoItem(array $item, bool $enProduccion): string
 function definicionMenu(): array
 {
     return [
-        ['clave' => 'dashboard', 'label' => 'Dashboard', 'destino' => '/panel', 'construido' => true, 'requiereProduccion' => false],
+        ['clave' => 'dashboard', 'label' => 'Dashboard', 'destino' => '/panel', 'icono' => 'dashboard', 'construido' => true, 'requiereProduccion' => false],
         [
             'label' => 'Ventas',
             'items' => [
                 [
                     'label' => 'Emision',
                     'items' => [
-                        ['clave' => 'ventas.factura', 'label' => 'Factura electronica', 'destino' => '/ventas/factura', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
-                        ['clave' => 'ventas.nc', 'label' => 'Nota de credito', 'destino' => '/ventas/nota-credito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
-                        ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.factura', 'label' => 'Factura electronica', 'destino' => '/ventas/factura', 'icono' => 'factura', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.nc', 'label' => 'Nota de credito', 'destino' => '/ventas/nota-credito', 'icono' => 'nota-credito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'icono' => 'nota-debito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
                 ],
-                ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'icono' => 'carga-masiva', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'icono' => 'facturacion-masiva', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'icono' => 'panel-emision', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
         [
             'label' => 'Maestros',
             'items' => [
-                ['clave' => 'maestros.clientes', 'label' => 'Clientes', 'destino' => '/maestros/clientes', 'construido' => true, 'requiereProduccion' => false],
-                ['clave' => 'maestros.productos', 'label' => 'Productos y servicios', 'destino' => '/maestros/productos', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'maestros.clientes', 'label' => 'Clientes', 'destino' => '/maestros/clientes', 'icono' => 'clientes', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'maestros.productos', 'label' => 'Productos y servicios', 'destino' => '/maestros/productos', 'icono' => 'productos', 'construido' => true, 'requiereProduccion' => false],
             ],
         ],
         // Los seis informes leen dte_emitido de PRODUCCION, asi que todos van
@@ -407,12 +407,12 @@ function definicionMenu(): array
         [
             'label' => 'Informes',
             'items' => [
-                ['clave' => 'informes.facturacion', 'label' => 'Facturacion por tipo', 'destino' => '/informes/facturacion', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'informes.ventas-dia', 'label' => 'Ventas por dia', 'destino' => '/informes/ventas-dia', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'informes.clientes', 'label' => 'Clientes por facturacion', 'destino' => '/informes/clientes', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'informes.estados', 'label' => 'Documentos por estado', 'destino' => '/informes/estados', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'informes.detalle', 'label' => 'Detalle documento a documento', 'destino' => '/informes/detalle', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'informes.folios', 'label' => 'Estado de folios', 'destino' => '/informes/folios', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.facturacion', 'label' => 'Facturacion por tipo', 'destino' => '/informes/facturacion', 'icono' => 'informe-tipos', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.ventas-dia', 'label' => 'Ventas por dia', 'destino' => '/informes/ventas-dia', 'icono' => 'informe-dia', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.clientes', 'label' => 'Clientes por facturacion', 'destino' => '/informes/clientes', 'icono' => 'informe-clientes', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.estados', 'label' => 'Documentos por estado', 'destino' => '/informes/estados', 'icono' => 'informe-estados', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.detalle', 'label' => 'Detalle documento a documento', 'destino' => '/informes/detalle', 'icono' => 'informe-detalle', 'construido' => true, 'requiereProduccion' => true],
+                ['clave' => 'informes.folios', 'label' => 'Estado de folios', 'destino' => '/informes/folios', 'icono' => 'informe-folios', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
         // CERTIFICACION Y PRODUCCION SON DOS SUBGRUPOS HERMANOS, de peso visual
@@ -438,14 +438,14 @@ function definicionMenu(): array
                     'label'    => 'Certificacion',
                     'variante' => 'certificacion',
                     'items'    => [
-                        ['clave' => 'config.empresa', 'label' => 'Empresa', 'destino' => '/empresa', 'construido' => true, 'requiereProduccion' => false],
-                        ['clave' => 'config.certificado', 'label' => 'Certificado digital', 'destino' => '/certificado', 'construido' => true, 'requiereProduccion' => false],
-                        ['clave' => 'config.caf', 'label' => 'Folios y CAF', 'destino' => '/caf', 'construido' => true, 'requiereProduccion' => false],
-                        ['clave' => 'config.apikeys', 'label' => 'API keys', 'destino' => '/apikeys', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.empresa', 'label' => 'Empresa', 'destino' => '/empresa', 'icono' => 'empresa', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.certificado', 'label' => 'Certificado digital', 'destino' => '/certificado', 'icono' => 'certificado', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.caf', 'label' => 'Folios y CAF', 'destino' => '/caf', 'icono' => 'caf', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.apikeys', 'label' => 'API keys', 'destino' => '/apikeys', 'icono' => 'apikeys', 'construido' => true, 'requiereProduccion' => false],
                         // Va al final del grupo y no al principio: es el tramite
                         // ante el SII, que se hace DESPUES de tener empresa,
                         // certificado y CAF cargados.
-                        ['clave' => 'config.certificacion', 'label' => 'Certificacion SII', 'destino' => '/certificacion-elegir', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.certificacion', 'label' => 'Certificacion SII', 'destino' => '/certificacion-elegir', 'icono' => 'certificacion-sii', 'construido' => true, 'requiereProduccion' => false],
                     ],
                 ],
                 [
@@ -459,10 +459,10 @@ function definicionMenu(): array
                     'label'    => 'Produccion',
                     'variante' => 'produccion',
                     'items'    => [
-                        ['clave' => 'config.empresa-prod', 'label' => 'Empresa', 'destino' => '/empresa-produccion', 'construido' => true, 'requiereProduccion' => false],
-                        ['clave' => 'config.certificado-prod', 'label' => 'Certificado digital', 'destino' => '/certificado-produccion', 'construido' => true, 'requiereProduccion' => false],
-                        ['clave' => 'config.caf-prod', 'label' => 'Folios y CAF', 'destino' => '/caf-produccion', 'construido' => true, 'requiereProduccion' => false],
-                        ['clave' => 'config.apikeys-prod', 'label' => 'API keys', 'destino' => '/apikeys-produccion', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.empresa-prod', 'label' => 'Empresa', 'destino' => '/empresa-produccion', 'icono' => 'empresa', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.certificado-prod', 'label' => 'Certificado digital', 'destino' => '/certificado-produccion', 'icono' => 'certificado', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.caf-prod', 'label' => 'Folios y CAF', 'destino' => '/caf-produccion', 'icono' => 'caf', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.apikeys-prod', 'label' => 'API keys', 'destino' => '/apikeys-produccion', 'icono' => 'apikeys', 'construido' => true, 'requiereProduccion' => false],
                     ],
                 ],
             ],
@@ -471,8 +471,8 @@ function definicionMenu(): array
         // quedaba al final de esa seccion, justo despues del bloque de
         // produccion, y se leia como si perteneciera a el. Aqui hace pareja con
         // Auditoria, que es lo que es: administracion transversal del tenant.
-        ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => true, 'requiereProduccion' => false],
-        ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'construido' => true, 'requiereProduccion' => false],
+        ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'icono' => 'usuarios', 'construido' => true, 'requiereProduccion' => false],
+        ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'icono' => 'auditoria', 'construido' => true, 'requiereProduccion' => false],
     ];
 }
 
