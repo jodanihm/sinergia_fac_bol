@@ -54,11 +54,19 @@ $navPintarItem = static function (array $item) use ($navEnProduccion, $navRutaAc
 /**
  * Render recursivo: un nodo puede ser un item (tiene 'label' y estado) o un
  * subgrupo (tiene 'items' anidados, ej. Ventas > Emision).
+ *
+ * 'variante' es OPCIONAL y solo la usan hoy los dos subgrupos de ambiente de
+ * "Configuracion empresa": agrega una clase modificadora al contenedor para que
+ * el CSS pueda marcar el bloque de produccion. Un subgrupo sin ella se pinta
+ * exactamente como antes. El valor se sanea contra [a-z-] porque termina dentro
+ * de un atributo class.
  */
 $navRender = static function (array $nodos) use (&$navRender, $navPintarItem): void {
     foreach ($nodos as $nodo) {
         if (isset($nodo['items'])) {
-            echo '<div class="sidebar__subgrupo">';
+            $variante = preg_replace('/[^a-z-]/', '', (string) ($nodo['variante'] ?? ''));
+            $claseSub = 'sidebar__subgrupo' . ($variante !== '' ? ' sidebar__subgrupo--' . $variante : '');
+            echo '<div class="' . $claseSub . '">';
             echo '<div class="sidebar__subtitulo">' . htmlspecialchars((string) $nodo['label']) . '</div>';
             $navRender($nodo['items']);
             echo '</div>';

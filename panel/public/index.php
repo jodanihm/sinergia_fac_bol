@@ -415,31 +415,63 @@ function definicionMenu(): array
                 ['clave' => 'informes.folios', 'label' => 'Estado de folios', 'destino' => '/informes/folios', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
+        // CERTIFICACION Y PRODUCCION SON DOS SUBGRUPOS HERMANOS, de peso visual
+        // identico. Antes los cuatro items de certificacion colgaban sueltos de
+        // "Configuracion" -- sin decir en ninguna parte que eran de
+        // certificacion -- y los de produccion iban en un subgrupo subordinado,
+        // mas pequeno y mas tenue. Los cuatro pares comparten label exacto
+        // (Empresa, Certificado digital, Folios y CAF, API keys), asi que la
+        // unica senal de en que ambiente estabas era la sangria: 9px de
+        // diferencia. Un CAF cargado por error en produccion quema folios
+        // reales ante el SII.
+        //
+        // Ahora el ambiente lo da el ENCABEZADO del subgrupo, no el item, y por
+        // eso los labels no repiten la palabra: dentro de "Produccion", el item
+        // "Empresa" solo puede ser la empresa de produccion.
+        //
+        // 'variante' la lee partials/_nav.php para agregar la clase modificadora
+        // del subgrupo; un subgrupo sin ella se pinta como siempre.
         [
-            'label' => 'Configuracion',
+            'label' => 'Configuracion empresa',
             'items' => [
-                ['clave' => 'config.empresa', 'label' => 'Empresa', 'destino' => '/empresa', 'construido' => true, 'requiereProduccion' => false],
-                ['clave' => 'config.certificado', 'label' => 'Certificado digital', 'destino' => '/certificado', 'construido' => true, 'requiereProduccion' => false],
-                ['clave' => 'config.caf', 'label' => 'Folios y CAF', 'destino' => '/caf', 'construido' => true, 'requiereProduccion' => false],
-                ['clave' => 'config.certificacion', 'label' => 'Certificacion SII', 'destino' => '/certificacion-elegir', 'construido' => true, 'requiereProduccion' => false],
-                ['clave' => 'config.apikeys', 'label' => 'API keys', 'destino' => '/apikeys', 'construido' => true, 'requiereProduccion' => false],
                 [
-                    // requiereProduccion=false a proposito: estas son las rutas
-                    // que LLEVAN a completar produccion, no funciones que
-                    // dependan de estar ya en produccion. Marcarlas
-                    // 'bloqueado_cert' las volveria inalcanzables justo cuando
-                    // hay que usarlas.
-                    'label' => 'Produccion',
-                    'items' => [
-                        ['clave' => 'config.empresa-prod', 'label' => 'Empresa', 'destino' => '/empresa-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
-                        ['clave' => 'config.certificado-prod', 'label' => 'Certificado digital', 'destino' => '/certificado-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
-                        ['clave' => 'config.caf-prod', 'label' => 'Folios y CAF', 'destino' => '/caf-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
-                        ['clave' => 'config.apikeys-prod', 'label' => 'API keys', 'destino' => '/apikeys-produccion', 'construido' => true, 'requiereProduccion' => false, 'sub' => true],
+                    'label'    => 'Certificacion',
+                    'variante' => 'certificacion',
+                    'items'    => [
+                        ['clave' => 'config.empresa', 'label' => 'Empresa', 'destino' => '/empresa', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.certificado', 'label' => 'Certificado digital', 'destino' => '/certificado', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.caf', 'label' => 'Folios y CAF', 'destino' => '/caf', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.apikeys', 'label' => 'API keys', 'destino' => '/apikeys', 'construido' => true, 'requiereProduccion' => false],
+                        // Va al final del grupo y no al principio: es el tramite
+                        // ante el SII, que se hace DESPUES de tener empresa,
+                        // certificado y CAF cargados.
+                        ['clave' => 'config.certificacion', 'label' => 'Certificacion SII', 'destino' => '/certificacion-elegir', 'construido' => true, 'requiereProduccion' => false],
                     ],
                 ],
-                ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => true, 'requiereProduccion' => false],
+                [
+                    // requiereProduccion=false a proposito, en los cuatro: estas
+                    // son las rutas que LLEVAN a completar produccion, no
+                    // funciones que dependan de estar ya en produccion.
+                    // Marcarlas 'bloqueado_cert' las volveria inalcanzables
+                    // justo cuando hay que usarlas. El aviso de que aqui los
+                    // folios son reales es visual (ver la variante en el CSS),
+                    // no un bloqueo.
+                    'label'    => 'Produccion',
+                    'variante' => 'produccion',
+                    'items'    => [
+                        ['clave' => 'config.empresa-prod', 'label' => 'Empresa', 'destino' => '/empresa-produccion', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.certificado-prod', 'label' => 'Certificado digital', 'destino' => '/certificado-produccion', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.caf-prod', 'label' => 'Folios y CAF', 'destino' => '/caf-produccion', 'construido' => true, 'requiereProduccion' => false],
+                        ['clave' => 'config.apikeys-prod', 'label' => 'API keys', 'destino' => '/apikeys-produccion', 'construido' => true, 'requiereProduccion' => false],
+                    ],
+                ],
             ],
         ],
+        // Fuera de "Configuracion empresa" a proposito: no tiene ambiente. Antes
+        // quedaba al final de esa seccion, justo despues del bloque de
+        // produccion, y se leia como si perteneciera a el. Aqui hace pareja con
+        // Auditoria, que es lo que es: administracion transversal del tenant.
+        ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => true, 'requiereProduccion' => false],
         ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'construido' => true, 'requiereProduccion' => false],
     ];
 }
@@ -4052,10 +4084,18 @@ if ($metodo === 'POST' && $ruta === '/caf/confirmar') {
 }
 
 // ---------------------------------------------------------------------------
-// Rutas de PRODUCCION (estacion 7, nueva): a proposito NO enlazadas desde
-// ningun lado del panel visible todavia (ver panel/views/partials/header.php
-// y views/panel.php, sin cambios) -- solo accesibles por URL directa hasta
-// que se habilite formalmente la estacion 7 (tarea aparte).
+// Rutas de PRODUCCION. Enlazadas desde el menu, en el subgrupo "Produccion"
+// de "Configuracion empresa" (ver definicionMenu()).
+//
+// SIN GATE DE CERTIFICACION, a proposito: son las rutas que LLEVAN a completar
+// produccion, no funciones que dependan de estar ya en produccion. Exigir la
+// certificacion terminada las volveria inalcanzables justo cuando hay que
+// usarlas. Cada una conserva su propio guard de cadena: /certificado-produccion
+// exige emisor de produccion, /caf-produccion exige emisor y certificado de
+// produccion, y /apikeys-produccion exige exigirProduccionCompleto().
+//
+// Por eso el menu las marca en ambar: el aviso de que aqui los folios son
+// reales es visual, no un bloqueo.
 // ---------------------------------------------------------------------------
 if ($metodo === 'GET' && $ruta === '/empresa-produccion') {
     Auth::requerirSesion();
@@ -7067,16 +7107,26 @@ function handleCertificacionSimulacionEmitirPost(): void
  * dinamico del RVD (RvdResumenCalculator). Mismo criterio de scope minimo de
  * columnas que listarEmitidosFactura().
  *
+ * $fecha acota a un dia (fecha_emision), como exige el RCOF: el RVD debe
+ * declarar SOLO los folios emitidos ese dia, no el historico completo del
+ * tenant. Con $fecha = null (default) devuelve todo, que es lo que necesitan
+ * el resumen de estado y los pasos del set.
+ *
  * @return list<array{tipoDte:int, folio:int, neto:int, iva:int, total:int}>
  */
-function listarBoletasEmitidas(PDO $pdo, string $rutEmisor): array
+function listarBoletasEmitidas(PDO $pdo, string $rutEmisor, ?string $fecha = null): array
 {
     $stmt = $pdo->prepare(
         "SELECT tipo_dte, folio, neto, iva, total FROM dte_emitido "
         . "WHERE rut_emisor = :rut AND ambiente = 'certificacion' AND tipo_dte IN (39, 41) "
+        . ($fecha !== null ? 'AND fecha_emision = :fecha ' : '')
         . 'ORDER BY tipo_dte ASC, folio ASC'
     );
-    $stmt->execute([':rut' => $rutEmisor]);
+    $params = [':rut' => $rutEmisor];
+    if ($fecha !== null) {
+        $params[':fecha'] = $fecha;
+    }
+    $stmt->execute($params);
 
     return array_map(static fn (array $r): array => [
         'tipoDte' => (int) $r['tipo_dte'],
@@ -7491,7 +7541,10 @@ function handleCertificacionBoletaRvdGet(): void
     $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
     exigirCafBoleta($pdo, $rutEmisor);
 
-    $boletas = listarBoletasEmitidas($pdo, $rutEmisor);
+    // Solo las boletas emitidas HOY: el RCOF declara los folios de ese dia,
+    // no el historico del tenant (si no, un RVD fechado hoy sale con folios y
+    // montos de dias anteriores).
+    $boletas = listarBoletasEmitidas($pdo, $rutEmisor, date('Y-m-d'));
     if ($boletas === []) {
         flashSet('error', 'Primero debes emitir el Set de Boleta antes de generar el RVD.');
         redirigir('/certificacion/boleta');
@@ -7529,7 +7582,10 @@ function handleCertificacionBoletaRvdEmitirPost(): void
     $rutEmisor = exigirOnboardingCompleto($pdo, Auth::cuentaId());
     exigirCafBoleta($pdo, $rutEmisor);
 
-    $boletas = listarBoletasEmitidas($pdo, $rutEmisor);
+    // Solo las boletas emitidas HOY: el RCOF declara los folios de ese dia,
+    // no el historico del tenant (si no, un RVD fechado hoy sale con folios y
+    // montos de dias anteriores).
+    $boletas = listarBoletasEmitidas($pdo, $rutEmisor, date('Y-m-d'));
     if ($boletas === []) {
         flashSet('error', 'Primero debes emitir el Set de Boleta antes de generar el RVD.');
         redirigirPrg('/certificacion/boleta');

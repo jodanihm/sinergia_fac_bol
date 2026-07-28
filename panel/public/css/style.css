@@ -408,22 +408,52 @@ body.con-sidebar > main {
     margin: var(--esp-2) 0 var(--esp-1);
 }
 /* Agrupacion ligera: una linea vertical y sangria, sin card ni fondo. El mismo
-   tratamiento vale para Ventas > Emision y para Configuracion > Produccion: es
-   el mismo componente y no se disena uno distinto del otro. */
+   tratamiento vale para Ventas > Emision y para los dos subgrupos de ambiente
+   de Configuracion empresa: es el mismo componente y no se disena uno distinto
+   del otro. */
 .sidebar__subgrupo {
     margin: var(--esp-1) 0 var(--esp-1);
     padding-left: var(--esp-2);
     border-left: 1px solid var(--color-borde-tenue);
 }
+
+/* SUBE de 0.64rem/600 a --txt-xs/700, el mismo tratamiento que un titulo de
+   seccion. Certificacion y Produccion son subgrupos HERMANOS y ninguno puede
+   pesar menos que el otro: cargar un CAF en el ambiente equivocado quema folios
+   reales ante el SII.
+   La subordinacion a "Configuracion empresa" no se pierde, la sostienen la
+   sangria y la linea vertical del contenedor -- la jerarquia se lee por varios
+   ejes a la vez, no solo por el tamano.
+   Afecta tambien a "Emision" bajo Ventas, que es el otro subgrupo del menu.
+   Es deliberado: mismo componente, mismo tratamiento.
+   #5c5c5c sobre #f7f7f8 da 6.25:1, cumple AA. */
 .sidebar__subtitulo {
-    font-size: 0.64rem;
-    font-weight: 600;
+    font-size: var(--txt-xs);
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--color-texto-tenue);
+    color: var(--color-texto-medio);
     padding: 0 var(--esp-2);
-    margin: var(--esp-1) 0;
+    margin: var(--esp-2) 0 var(--esp-1);
 }
+
+/* AMBIENTE DE PRODUCCION. Dos senales y no mas: la linea vertical del bloque
+   completo y el color del encabezado. Los items NO se tinen -- cuatro enlaces
+   ambar seguidos serian ruido y pisarian el azul del item activo, que es
+   informacion distinta. Tampoco llevan badge: las ocho vistas ya traen el suyo
+   en el <h1>, y aqui serian cuatro repeticiones de lo mismo.
+   Certificacion se queda neutra a proposito: el contraste ENTRE los dos bloques
+   es lo que comunica; tenir ambos anularia el efecto.
+   --color-alerta (#b45309) sobre #f7f7f8 da 4.69:1 y cumple AA.
+   --color-alerta-borde (#ed6c02) da 2.91:1: NO sirve como texto, solo aqui,
+   como borde, donde no hay requisito de contraste.
+   El padding-left compensa el pixel extra del borde de 2px para que los items
+   de los dos subgrupos queden alineados a la misma sangria. */
+.sidebar__subgrupo--produccion {
+    padding-left: calc(var(--esp-2) - 1px);
+    border-left: 2px solid var(--color-alerta-borde);
+}
+.sidebar__subgrupo--produccion .sidebar__subtitulo { color: var(--color-alerta); }
 .sidebar__pie { margin-top: auto; padding-top: var(--esp-3); border-top: 1px solid var(--color-borde-tenue); }
 
 .nav-item {
