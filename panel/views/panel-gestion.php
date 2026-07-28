@@ -12,6 +12,22 @@
  * Ninguna cifra de esta vista es estimada. Lo que hoy no se puede calcular con
  * datos reales (clasificacion de documentos con problemas) NO muestra un
  * numero: muestra el badge "Proximamente" y explica por que.
+ *
+ * LAS TABLAS VAN ENVUELTAS EN .tabla-scroll. Sin el envoltorio, una tabla mas
+ * ancha que la pantalla empuja el ANCHO DE LA PAGINA COMPLETA y aparece scroll
+ * horizontal en todo el dashboard. Medido a 420px de viewport (405 utiles):
+ * "Facturacion por tipo" necesita 423px y "Clientes con mayor facturacion"
+ * 381px, y entre las dos dejaban 50px de scroll de pagina; a 375px eran 95px.
+ * Con el envoltorio, el desborde se queda DENTRO de la tabla y la pagina no se
+ * mueve.
+ *
+ * "Estado de los documentos" (262-307px) no desborda hoy en ningun ancho, pero
+ * lleva el mismo envoltorio: con mas codigos de estado o textos mas largos
+ * desbordaria igual, y dejarla como la unica tabla desnuda de la vista solo
+ * invita a olvidarla despues.
+ *
+ * El patron es el mismo <div class="tabla-scroll"> que ya usaban el detalle del
+ * grafico y otras 15 vistas -- se copia tal cual, sin variantes.
  */
 $titulo = 'Panel';
 require __DIR__ . '/partials/header.php';
@@ -136,35 +152,37 @@ $pintarDelta = static function (?array $d): string {
 
     <section aria-labelledby="titulo-por-tipo">
         <h2 id="titulo-por-tipo">Facturacion por tipo de documento</h2>
-        <table>
-            <caption>Documentos y montos del periodo, separados por tipo. Las notas
-            de credito se muestran aparte porque rebajan lo facturado.</caption>
-            <thead>
-                <tr>
-                    <th scope="col">Tipo</th>
-                    <th scope="col" class="num">Documentos</th>
-                    <th scope="col" class="num">Neto</th>
-                    <th scope="col" class="num">IVA</th>
-                    <th scope="col" class="num">Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($resumen['porTipo'] as $tipo => $d): ?>
-                    <tr<?= $tipo === 61 ? ' class="fila-resta"' : ''; ?>>
-                        <th scope="row">
-                            <?= htmlspecialchars(nombreTipoDte((int) $tipo)); ?>
-                            <?php if ($tipo === 61): ?>
-                                <span class="subpaso__aclaracion">&mdash; resta</span>
-                            <?php endif; ?>
-                        </th>
-                        <td class="num"><?= $fmtNum($d['documentos']); ?></td>
-                        <td class="num"><?= $fmtMonto($d['neto']); ?></td>
-                        <td class="num"><?= $fmtMonto($d['iva']); ?></td>
-                        <td class="num"><?= $fmtMonto($d['total']); ?></td>
+        <div class="tabla-scroll">
+            <table>
+                <caption>Documentos y montos del periodo, separados por tipo. Las notas
+                de credito se muestran aparte porque rebajan lo facturado.</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Tipo</th>
+                        <th scope="col" class="num">Documentos</th>
+                        <th scope="col" class="num">Neto</th>
+                        <th scope="col" class="num">IVA</th>
+                        <th scope="col" class="num">Total</th>
                     </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
+                </thead>
+                <tbody>
+                    <?php foreach ($resumen['porTipo'] as $tipo => $d): ?>
+                        <tr<?= $tipo === 61 ? ' class="fila-resta"' : ''; ?>>
+                            <th scope="row">
+                                <?= htmlspecialchars(nombreTipoDte((int) $tipo)); ?>
+                                <?php if ($tipo === 61): ?>
+                                    <span class="subpaso__aclaracion">&mdash; resta</span>
+                                <?php endif; ?>
+                            </th>
+                            <td class="num"><?= $fmtNum($d['documentos']); ?></td>
+                            <td class="num"><?= $fmtMonto($d['neto']); ?></td>
+                            <td class="num"><?= $fmtMonto($d['iva']); ?></td>
+                            <td class="num"><?= $fmtMonto($d['total']); ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
     </section>
 
     <section aria-labelledby="titulo-folios">
@@ -183,20 +201,22 @@ $pintarDelta = static function (?array $d): string {
             <?php if ($estados === []): ?>
                 <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
             <?php else: ?>
-                <table>
-                    <caption>Codigo de estado tal como lo devolvio el SII, sin interpretar.</caption>
-                    <thead>
-                        <tr><th scope="col">Estado</th><th scope="col" class="num">Documentos</th></tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($estados as $e): ?>
-                            <tr>
-                                <th scope="row"><code><?= htmlspecialchars($e['estado']); ?></code></th>
-                                <td class="num"><?= $fmtNum($e['documentos']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+                <div class="tabla-scroll">
+                    <table>
+                        <caption>Codigo de estado tal como lo devolvio el SII, sin interpretar.</caption>
+                        <thead>
+                            <tr><th scope="col">Estado</th><th scope="col" class="num">Documentos</th></tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($estados as $e): ?>
+                                <tr>
+                                    <th scope="row"><code><?= htmlspecialchars($e['estado']); ?></code></th>
+                                    <td class="num"><?= $fmtNum($e['documentos']); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
             <?php endif; ?>
             <p class="nota">El estado solo avanza cuando se consulta al SII desde el
             panel de emision: no hay un proceso automatico que lo actualice.</p>
@@ -221,37 +241,39 @@ $pintarDelta = static function (?array $d): string {
         <?php if ($topClientes === []): ?>
             <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
         <?php else: ?>
-            <table>
-                <caption>Top 5 receptores del periodo, agrupados por RUT normalizado
-                (un mismo RUT con y sin puntos cuenta como uno solo). El monto es el
-                total con IVA, restando las notas de credito &mdash; no es el mismo
-                calculo que el "Neto del periodo" de arriba, que va sobre el neto sin
-                IVA.</caption>
-                <thead>
-                    <tr>
-                        <th scope="col">Cliente</th>
-                        <th scope="col" class="num">Documentos</th>
-                        <th scope="col" class="num">Monto con IVA</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($topClientes as $c): ?>
+            <div class="tabla-scroll">
+                <table>
+                    <caption>Top 5 receptores del periodo, agrupados por RUT normalizado
+                    (un mismo RUT con y sin puntos cuenta como uno solo). El monto es el
+                    total con IVA, restando las notas de credito &mdash; no es el mismo
+                    calculo que el "Neto del periodo" de arriba, que va sobre el neto sin
+                    IVA.</caption>
+                    <thead>
                         <tr>
-                            <th scope="row">
-                                <?php if ($c['razonSocial'] !== null): ?>
-                                    <?= htmlspecialchars($c['razonSocial']); ?>
-                                    <span class="subpaso__aclaracion"><?= htmlspecialchars($c['rut']); ?></span>
-                                <?php else: ?>
-                                    <?= htmlspecialchars($c['rut']); ?>
-                                    <span class="subpaso__aclaracion">&mdash; no esta en tu maestro de clientes</span>
-                                <?php endif; ?>
-                            </th>
-                            <td class="num"><?= $fmtNum($c['documentos']); ?></td>
-                            <td class="num"><?= $fmtMonto($c['neto']); ?></td>
+                            <th scope="col">Cliente</th>
+                            <th scope="col" class="num">Documentos</th>
+                            <th scope="col" class="num">Monto con IVA</th>
                         </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($topClientes as $c): ?>
+                            <tr>
+                                <th scope="row">
+                                    <?php if ($c['razonSocial'] !== null): ?>
+                                        <?= htmlspecialchars($c['razonSocial']); ?>
+                                        <span class="subpaso__aclaracion"><?= htmlspecialchars($c['rut']); ?></span>
+                                    <?php else: ?>
+                                        <?= htmlspecialchars($c['rut']); ?>
+                                        <span class="subpaso__aclaracion">&mdash; no esta en tu maestro de clientes</span>
+                                    <?php endif; ?>
+                                </th>
+                                <td class="num"><?= $fmtNum($c['documentos']); ?></td>
+                                <td class="num"><?= $fmtMonto($c['neto']); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         <?php endif; ?>
     </section>
 
