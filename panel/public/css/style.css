@@ -95,6 +95,19 @@
     --color-nav-fondo:        #f7f9fd;
     --color-nav-hover:        #eceef6;
 
+    /* Fondo del dashboard. El mismo azulado del sidebar y del login, con token
+       propio por la misma razon: --color-nav-fondo es del menu y no debe
+       arrastrar al contenido si manana uno de los dos cambia.
+
+       MEDIDO: hasta ahora el dashboard NO declaraba fondo en NINGUN nivel --
+       .tarjeta, .dash-grid, main, body y html estaban todos en rgba(0,0,0,0) y
+       el fondo real era el canvas blanco del navegador. Los KPI, que si son
+       #fff, quedaban blancos sobre blanco y solo los separaba su borde.
+       #f7f9fd es un 5.38% mas oscuro que ese blanco: es lo que hace que una
+       superficie blanca elevada se lea como tal. Verificado que ningun texto
+       baja de AA con el cambio (el mas ajustado, #b45309, queda en 4.76:1). */
+    --color-dash-fondo:       #f7f9fd;
+
     /* Espaciado -- 7 pasos */
     --esp-1: 0.25rem;
     --esp-2: 0.5rem;
@@ -130,6 +143,18 @@
        Menos de la mitad de difuminado y casi la mitad de opacidad que la card
        del login, que es lo que pide una superficie lateral fija. */
     --sombra-borde: 1px 0 0 rgba(20, 40, 90, 0.08), 4px 0 16px rgba(20, 40, 90, 0.05);
+
+    /* Elevacion de las tarjetas del panel (KPI y tarjetas del dashboard).
+       NO es --sombra-md: esa se calculo para la card de 500px del login y su
+       difuminado de 34px equivale al 14.2% del ancho de un KPI de 240px, que es
+       el mas angosto que existe -- la sombra dominaria la tarjeta.
+       Aqui el rango real medido va de 240px (KPI a 1366) a 492px (tarjeta a
+       1366), y 16px de difuminado son el 6.7% del angosto y el 3.3% del ancho:
+       proporcionalmente menor en el grande, que es justo lo correcto.
+       Dos capas: la de 2px es el contacto, que define el borde y se comporta
+       igual a cualquier tamano; la de 16px es la elevacion, que es la que
+       escalaria mal si fuera grande. */
+    --sombra-tarjeta: 0 1px 2px rgba(20, 40, 90, 0.06), 0 6px 16px rgba(20, 40, 90, 0.07);
     --sombra-md: 0 12px 34px rgba(20, 40, 90, 0.09);
     --sombra-lg: 0 18px 45px rgba(20, 40, 90, 0.13);
 }
@@ -629,8 +654,16 @@ a.nav-item:hover { background: var(--color-nav-hover); }
     color: var(--color-texto-tenue);
     margin-right: var(--esp-1);
 }
+/* Alto de 40px. A 28px cumplia el minimo de 24x24 de WCAG 2.5.8 (AA) con 4px
+   de margen; a 40 el margen es mucho mayor y queda a 4px del 44x44 de 2.5.5
+   (AAA), que no se alcanza. No se gana ni se pierde ningun criterio: se gana
+   holgura y coherencia con los controles del login, que miden 45px. */
 .dash-periodo__opcion {
-    padding: var(--esp-1) var(--esp-3);
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    box-sizing: border-box;
+    padding: var(--esp-2) var(--esp-4);
     border: 1px solid var(--color-borde);
     border-radius: var(--radio-pill);
     text-decoration: none;
@@ -656,12 +689,31 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 }
 .dash-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
+/* SUPERFICIE ELEVADA. El KPI pasa de una caja con borde a una tarjeta que flota
+   sobre el fondo: se le quita el borde gris de 1px (la sombra ya define el
+   limite), sube de --radio-md a --radio-lg y gana --sombra-tarjeta.
+   El padding sube de 12/16px a --esp-5 (24px). Medido contra el KPI mas
+   angosto (240px a 1366): quedan 188px utiles y el valor mas largo posible
+   ($4.999.999.999) mide 182.8px, asi que no envuelve ni en el caso extremo.
+   La barra superior de 3px del color primario SE MANTIENE SIEMPRE: es la unica
+   senal de que un KPI es un KPI y no una tarjeta cualquiera, y kpi--rojo/--ambar
+   la usan para comunicar el nivel.
+   CAMBIO GLOBAL, no scopeado al dashboard: .kpi es el mismo componente en
+   carga-masiva-detalle y facturacion-masiva-form, con identica estructura.
+
+   EL BORDE DE 1px SE CONSERVA AQUI y solo se retira bajo .dash-page (mas
+   abajo). Motivo: la sombra sustituye al borde unicamente cuando hay un fondo
+   contra el que percibirla. En el dashboard el fondo es #f7f9fd y funciona; en
+   las otras dos vistas el fondo sigue siendo blanco y la sombra sobre blanco
+   es casi imperceptible -- sin borde, el KPI quedaria PEOR definido que en
+   HEAD. */
 .kpi {
     border: 1px solid var(--color-borde-suave);
     border-top: 3px solid var(--color-primario);
-    border-radius: var(--radio-md);
-    padding: var(--esp-3) var(--esp-4);
+    border-radius: var(--radio-lg);
+    padding: var(--esp-5);
     background: var(--color-superficie);
+    box-shadow: var(--sombra-tarjeta);
 }
 .kpi__etiqueta {
     margin: 0;
@@ -717,6 +769,41 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 .progreso-colapsado { margin: var(--esp-5) 0; }
 .progreso-colapsado > summary { cursor: pointer; font-weight: 600; padding: var(--esp-2) 0; }
 
+/* --------------------------------------------------------------------------
+   RAIZ DEL DASHBOARD. La pide panel-gestion.php via $bodyClase, el mismo
+   mecanismo con el que login.php pide .auth-page. Es la unica linea de PHP que
+   cambia en esta entrega.
+
+   El fondo va en el <main> y no en el <body>: el body es el contenedor flex que
+   comparte con el sidebar, y tenirlo ahi pintaria tambien la franja bajo el
+   menu cuando el contenido es mas corto que la pantalla.
+
+   EL MODIFICADOR DE TARJETA DEL DASHBOARD SE HACE POR SCOPE (.dash-page
+   .tarjeta) y no con una clase extra en el markup. Dos razones: no hay que
+   tocar ningun <article> de la vista, y la regla base .tarjeta -- que usan 33
+   vistas -- queda intacta, solo se le suma una mas especifica que vive dentro
+   del dashboard. Aqui la tarjeta deja el borde gris por la misma superficie
+   elevada del KPI.
+   -------------------------------------------------------------------------- */
+.dash-page > main {
+    background: var(--color-dash-fondo);
+}
+.dash-page .tarjeta {
+    border: none;
+    border-radius: var(--radio-lg);
+    background: var(--color-superficie);
+    box-shadow: var(--sombra-tarjeta);
+}
+/* Aqui SI se retira el borde del KPI: contra el fondo tenido la sombra alcanza
+   para definir el limite y el borde gris solo ensucia. Fuera del dashboard el
+   KPI conserva su borde (ver la regla base).
+   El border-top se re-declara porque el shorthand 'border' lo habria anulado:
+   la barra azul del KPI no se pierde en ningun contexto. */
+.dash-page .kpi {
+    border: none;
+    border-top: 3px solid var(--color-primario);
+}
+
 /* Folios por tipo. El nivel se comunica por color + palabra + icono. */
 .folios { display: flex; flex-direction: column; gap: var(--esp-3); padding: 0; margin: var(--esp-3) 0 var(--esp-5); list-style: none; }
 .folio { border: 1px solid var(--color-borde-suave); border-left-width: 4px; border-radius: var(--radio-md); padding: var(--esp-3) var(--esp-3); }
@@ -765,11 +852,21 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 
 .accesos { margin-top: var(--esp-6); border-top: 1px solid var(--color-borde-tenue); padding-top: var(--esp-4); }
 .accesos__lista { display: flex; flex-wrap: wrap; gap: var(--esp-2); padding: 0; margin: var(--esp-2) 0 0; list-style: none; }
+/* Mismo lenguaje que las tarjetas: superficie blanca elevada en vez de una caja
+   con borde gris. NO se toca .boton-principal ni se le parece: estos son
+   atajos de navegacion, no la accion principal de la pantalla, y por eso van en
+   blanco con texto azul y no en azul solido.
+   El alto sube a 40px, igual que las opciones de periodo. */
 .accesos__lista a {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    box-sizing: border-box;
     padding: var(--esp-2) var(--esp-4);
-    border: 1px solid var(--color-borde);
-    border-radius: var(--radio-sm);
+    border: none;
+    border-radius: var(--radio-md);
+    background: var(--color-superficie);
+    box-shadow: var(--sombra-tarjeta);
     text-decoration: none;
     color: var(--color-primario);
     font-weight: 600;

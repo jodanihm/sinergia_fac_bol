@@ -29,7 +29,11 @@
  * El patron es el mismo <div class="tabla-scroll"> que ya usaban el detalle del
  * grafico y otras 15 vistas -- se copia tal cual, sin variantes.
  */
-$titulo = 'Panel';
+$titulo    = 'Panel';
+// Raiz de la vista: partials/header.php la pone en el <body>. Es el mismo
+// mecanismo con el que login.php pide .auth-page, y la unica linea de markup
+// que cambia en esta entrega: el resto es CSS.
+$bodyClase = 'dash-page';
 require __DIR__ . '/partials/header.php';
 
 $periodo = $contexto['periodo'];
