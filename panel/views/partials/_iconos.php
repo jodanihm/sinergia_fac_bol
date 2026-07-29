@@ -104,6 +104,13 @@ const ICONOS = [
     // rayo de Feather es el gesto habitual para "atajo". Clave de dominio, como
     // el resto del mapa, y no el nombre del icono en Feather ('zap').
     'accesos-rapidos' => '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+    // Los dos KPI de plata. 'factura' e 'informe-folios' cubren los otros dos, que
+    // ya existian. Claves de dominio y no los nombres de Feather ('dollar-sign' y
+    // 'percent'): lo que importa aqui es que uno es un monto y el otro un impuesto.
+    'monto' => '<line x1="12" y1="1" x2="12" y2="23"/>'
+        . '<path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+    'impuesto' => '<line x1="19" y1="5" x2="5" y2="19"/>'
+        . '<circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
 ];
 
 /**

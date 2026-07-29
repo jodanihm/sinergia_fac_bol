@@ -695,9 +695,14 @@ a.nav-item:hover { background: var(--color-nav-hover); }
    El padding sube de 12/16px a --esp-5 (24px). Medido contra el KPI mas
    angosto (240px a 1366): quedan 188px utiles y el valor mas largo posible
    ($4.999.999.999) mide 182.8px, asi que no envuelve ni en el caso extremo.
-   La barra superior de 3px del color primario SE MANTIENE SIEMPRE: es la unica
-   senal de que un KPI es un KPI y no una tarjeta cualquiera, y kpi--rojo/--ambar
-   la usan para comunicar el nivel.
+   LA BARRA SUPERIOR DE 3px NO SE PIERDE EN NINGUN CONTEXTO: es la unica senal
+   de que un KPI es un KPI y no una tarjeta cualquiera. Su color por defecto es
+   el primario, y kpi--rojo/--ambar lo cambian para comunicar el nivel -- son
+   las dos ultimas reglas del bloque a proposito, para ganar por orden a esta.
+   Como la barra es el unico canal del nivel, los tres colores cumplen 3:1 sobre
+   el fondo de su vista; ver la nota de .kpi--ambar.
+   Ninguna regla mas abajo debe re-declarar 'border-top' entero sobre un .kpi:
+   el shorthand incluye el color y dejaria a los modificadores sin efecto.
    CAMBIO GLOBAL, no scopeado al dashboard: .kpi es el mismo componente en
    carga-masiva-detalle y facturacion-masiva-form, con identica estructura.
 
@@ -736,7 +741,20 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 .kpi__delta--igual,
 .kpi__delta--sin_base { color: var(--color-texto-tenue); font-weight: 400; }
 .kpi__formula { margin: var(--esp-1) 0 0; font-size: var(--txt-xs); color: var(--color-texto-tenue); }
-.kpi--ambar { border-top-color: var(--color-alerta-borde); }
+/* --color-alerta y NO --color-alerta-borde. Los dos son ambar, pero en el KPI
+   la barra es el UNICO canal del nivel: no hay palabra ni icono que lo digan.
+   Eso pone la barra bajo WCAG 1.4.11, que pide 3:1 a los objetos graficos
+   necesarios para entender el contenido. Medido sobre el fondo del dashboard
+   (#f7f9fd): #ed6c02 da 2,95:1 y se queda corto; #b45309 da 4,76:1.
+
+   UN ESTADO, UN COLOR. El ambar de .folio--ambar sigue el mismo token, asi que
+   el KPI de folios y las tarjetas de folio que hay debajo no muestran dos
+   ambares distintos para lo mismo.
+
+   El token --color-alerta-borde NO se toca: lo siguen usando .estacion--pendiente,
+   .subpaso--falta, .seccion-manual, el borde del subgrupo de Produccion del
+   sidebar y el badge de item bloqueado. */
+.kpi--ambar { border-top-color: var(--color-alerta); }
 .kpi--rojo { border-top-color: var(--color-error); }
 
 /* Estado vacio: el tenant esta habilitado pero nunca emitio. */
@@ -797,12 +815,84 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 /* Aqui SI se retira el borde del KPI: contra el fondo tenido la sombra alcanza
    para definir el limite y el borde gris solo ensucia. Fuera del dashboard el
    KPI conserva su borde (ver la regla base).
-   El border-top se re-declara porque el shorthand 'border' lo habria anulado:
-   la barra azul del KPI no se pierde en ningun contexto. */
+
+   SE ANULAN SOLO TRES LADOS, Y NO 'border: none'. La version anterior usaba el
+   shorthand, que se llevaba tambien el borde superior, y obligaba a
+   re-declararlo aqui con 'border-top: 3px solid var(--color-primario)'. Eso
+   hardcodeaba el color dentro de un selector de especificidad (0,2,0), que
+   ganaba a .kpi--rojo y .kpi--ambar (0,1,0): en el dashboard los dos
+   modificadores no pintaban NADA y el KPI de folios se veia azul aunque
+   estuviera en rojo. Medido con getComputedStyle: border-top-color #1a56db con
+   la clase kpi--rojo puesta.
+
+   Tocando solo right/bottom/left, el borde superior queda intacto tal como lo
+   declara .kpi, y los modificadores vuelven a ganar por orden en su propia
+   especificidad, sin re-declarar nada aqui. */
 .dash-page .kpi {
-    border: none;
-    border-top: 3px solid var(--color-primario);
+    border-right: none;
+    border-bottom: none;
+    border-left: none;
 }
+
+/* LA GRILLA DE KPI SE MIDE POR SU CONTENIDO, NO POR EL VIEWPORT.
+   .dash-grid a secas se queda en 4 columnas fijas: la comparten
+   carga-masiva-detalle, facturacion-masiva-form e informes-index, y sus
+   tarjetas no tienen este problema de ancho. Dentro de .dash-page esta clase es
+   HOY un unico uso, la seccion de indicadores, desde que la entrega F desarmo
+   la seccion de las dos tarjetas.
+
+   DE DONDE SALE EL 231. Es el ancho minimo de un KPI que no rompe nada:
+     padding horizontal                                   48px
+     el valor mas largo representable, $4.999.999.999    182,8px
+                                                        -------
+                                                         230,8 -> 231
+   La etiqueta mas larga con su icono, "Documentos emitidos" en 149,4 mas 18 de
+   icono y 8 de gap, pide 175,4 y entra en el mismo N con 7,4px de sobra.
+
+   POR QUE HACIA FALTA. Las 4 columnas fijas venian rotas de antes de esta
+   entrega, y no por el icono: con el valor extremo, a 1280 el KPI da 170,3px
+   utiles contra 182,8 que pide el monto -- se desbordaba en silencio, porque un
+   monto no tiene puntos de corte y no envuelve, se sale. Medido:
+     1366  191,8 utiles  cabe
+     1280  170,3         falta 12,5
+     1240  160,3         falta 22,5
+     1200  150,3         falta 32,5
+     1136  134,3         falta 48,5
+   El icono agrega encima el problema de la etiqueta, que con 4 columnas
+   envolveria en los mismos cuatro anchos.
+
+   EL 231 ES FUNCION DEL DATASET, no una constante. Supone el monto maximo
+   representable y la etiqueta actual mas larga. Un monto de cinco cifras mas
+   (99.999.999.999) sube N a 256; renombrar un KPI a algo mas largo que
+   "Documentos emitidos" tambien lo mueve, porque hoy manda por solo 7,4px.
+
+   EL min(231px, 100%) hoy no se activa -- el contenedor mas angosto medido es
+   311px -- pero va igual: es el guard que falto en una entrega anterior y costo
+   47px de scroll de pagina.
+
+   A 720 QUEDAN DOS COLUMNAS Y ES A PROPOSITO. El @media de 720 que fuerza una
+   sola pierde contra este selector por especificidad, (0,2,0) contra (0,1,0),
+   aunque este mas abajo en el archivo. Dos KPI de 322px caben de sobra, asi que
+   no se agrega ningun media query para revertirlo. */
+.dash-page .dash-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(231px, 100%), 1fr));
+}
+
+/* Mismo tratamiento que .dash-titulo__icono: en linea y no como item flex, para
+   que la etiqueta envuelva alrededor del icono en vez de mandarlo solo a una
+   linea, y alineado por baseline, que fue el valor con menos desvio contra la
+   banda de mayusculas al medirlo en la entrega D1.
+   Sobre la superficie del KPI, que dentro de .dash-page es blanca, el trazo da
+   5,10:1, muy por encima del 3:1 de WCAG 1.4.11 para objetos graficos. */
+.dash-page .kpi__icono {
+    display: inline-block;
+    vertical-align: baseline;
+    width: 18px;
+    height: 18px;
+    margin-right: var(--esp-2);
+    color: var(--color-texto-tenue);
+}
+
 
 /* --------------------------------------------------------------------------
    FILAS DE LA COMPOSICION. Clases propias bajo .dash-page. .dash-grid y
@@ -1023,9 +1113,23 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 .folio--ok { border-top-color: var(--color-exito); }
 .folio--ok .folio__nivel { color: var(--color-exito); }
 .folio--ok .folio__relleno { background: var(--color-exito); }
-.folio--ambar { border-top-color: var(--color-alerta-borde); background: var(--color-alerta-fondo); }
+/* EL ACENTO AMBAR USA --color-alerta, EL MISMO QUE .kpi--ambar. Antes usaba
+   --color-alerta-borde y el KPI el oscuro: dos tonos para el mismo estado en la
+   misma pantalla, a pocos centimetros uno del otro. Se lee como descuido por
+   bien justificado que este cada uno por separado. Un estado, un color.
+   La palabra "Bajo" (.folio__nivel) ya usaba --color-alerta, asi que el acento
+   ahora concuerda con su propio texto ademas de con el KPI.
+   EL RELLENO DE LA BARRA TAMBIEN. Era la ultima pieza con el token claro y la
+   unica de los tres rellenos bajo 3:1 contra su pista #ececf0: daba 2,64 contra
+   6,22 del rojo y 4,35 del verde, o sea que la barra ambar apenas se despegaba
+   del riel vacio. Con --color-alerta sube a 4,26. El criterio de que ambar y
+   rojo "se vean de reojo" pide MAS contraste, no menos, asi que el token oscuro
+   sirve mejor a ese objetivo ademas de unificar el estado.
+   Las cuatro piezas ambar de la tarjeta -- acento, palabra, icono y relleno --
+   quedan en el mismo #b45309. */
+.folio--ambar { border-top-color: var(--color-alerta); background: var(--color-alerta-fondo); }
 .folio--ambar .folio__nivel { color: var(--color-alerta); }
-.folio--ambar .folio__relleno { background: var(--color-alerta-borde); }
+.folio--ambar .folio__relleno { background: var(--color-alerta); }
 .folio--rojo { border-top-color: var(--color-error); background: var(--color-error-fondo); }
 .folio--rojo .folio__nivel { color: var(--color-error); }
 .folio--rojo .folio__relleno { background: var(--color-error); }

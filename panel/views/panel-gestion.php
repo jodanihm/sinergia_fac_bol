@@ -132,27 +132,27 @@ $pintarDelta = static function (?array $d): string {
 
     <section class="dash-grid" aria-label="Indicadores del periodo">
         <article class="kpi">
-            <h2 class="kpi__etiqueta">Documentos emitidos</h2>
+            <h2 class="kpi__etiqueta"><?= iconoSvg('factura', 18, 'kpi__icono'); ?>Documentos emitidos</h2>
             <p class="kpi__valor"><?= $fmtNum($resumen['documentos']); ?></p>
             <?= $pintarDelta($deltas['documentos']); ?>
         </article>
 
         <article class="kpi">
-            <h2 class="kpi__etiqueta">Neto del periodo</h2>
+            <h2 class="kpi__etiqueta"><?= iconoSvg('monto', 18, 'kpi__icono'); ?>Neto del periodo</h2>
             <p class="kpi__valor"><?= $fmtMonto($resumen['netoPeriodo']); ?></p>
             <?= $pintarDelta($deltas['neto']); ?>
             <p class="kpi__formula"><?= htmlspecialchars($resumen['formula']); ?></p>
         </article>
 
         <article class="kpi">
-            <h2 class="kpi__etiqueta">IVA debito</h2>
+            <h2 class="kpi__etiqueta"><?= iconoSvg('impuesto', 18, 'kpi__icono'); ?>IVA debito</h2>
             <p class="kpi__valor"><?= $fmtMonto($resumen['ivaDebito']); ?></p>
             <?= $pintarDelta($deltas['iva']); ?>
             <p class="kpi__formula">Mismo criterio que el neto</p>
         </article>
 
         <article class="kpi kpi--<?= htmlspecialchars($nivelFolios); ?>">
-            <h2 class="kpi__etiqueta">Folios disponibles</h2>
+            <h2 class="kpi__etiqueta"><?= iconoSvg('informe-folios', 18, 'kpi__icono'); ?>Folios disponibles</h2>
             <p class="kpi__valor"><?= $fmtNum($foliosTotales); ?></p>
             <p class="kpi__formula">Suma de todos los tipos. Detalle mas abajo.</p>
         </article>
