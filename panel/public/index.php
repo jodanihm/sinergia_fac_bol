@@ -4734,17 +4734,25 @@ function handleEmpresaPost(): void
 // ===========================================================================
 //  Handler: GET /empresa-produccion
 //
-//  Estacion 7 (PRODUCCION), NUEVA y todavia SIN enlazar desde el panel visible
-//  (ver PARTE D de la tarea que agrego esto): requiere que la etapa 2 de
-//  CERTIFICACION este completa (fila dte_emisor ambiente='certificacion'); si
-//  no, redirige a /empresa -- el flujo de produccion parte de una empresa que
-//  YA certifico, nunca desde cero. Si ya existe una fila de produccion, se
-//  muestra como "ya configurado" (no se permite reeditar aqui: los datos de
-//  produccion son la Resolucion REAL del SII, no se tocan por error). Si no
-//  existe, el formulario viene PRECARGADO con los datos de la fila de
-//  certificacion (razon_social/giro/acteco/dir_origen/cmna_origen) -- el
-//  rut_emisor NUNCA se pide de nuevo: es la MISMA empresa, se toma tal cual
-//  de la fila de certificacion, nunca del cliente.
+//  Estacion 7 (PRODUCCION). Si ya existe una fila de produccion se muestra como
+//  "ya configurado" (no se permite reeditar aqui: los datos de produccion son la
+//  Resolucion REAL del SII, no se tocan por error).
+//
+//  DOS ORIGENES POSIBLES PARA EL EMISOR, y de ahi salen los dos modos del
+//  formulario:
+//
+//   1. CON fila de certificacion (el camino de siempre, y el unico que existia).
+//      El formulario viene PRECARGADO con sus datos y el rut_emisor NO se pide:
+//      es la MISMA empresa. Nada de este caso cambia.
+//
+//   2. SIN fila de certificacion: una empresa que llega YA AUTORIZADA por el
+//      SII y nunca paso por el circuito de certificacion. Antes esto redirigia
+//      a /empresa y la obligaba a crear una fila de certificacion que no le
+//      corresponde -- ese era el hueco. Ahora la precarga viene VACIA y el
+//      rut_emisor SI se pide, porque no hay ningun otro lugar de donde sacarlo.
+//
+//  'rutEditable' le dice a la vista cual de los dos modos pintar. Con fila de
+//  certificacion es false y el markup queda exactamente como estaba.
 // ===========================================================================
 function handleEmpresaProduccionGet(): void
 {
@@ -4756,10 +4764,7 @@ function handleEmpresaProduccionGet(): void
         . "FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
     );
     $stmtCert->execute([':cuenta_id' => $cuentaId]);
-    $emisorCert = $stmtCert->fetch(PDO::FETCH_ASSOC);
-    if ($emisorCert === false) {
-        redirigir('/empresa');
-    }
+    $emisorCert = $stmtCert->fetch(PDO::FETCH_ASSOC) ?: null;
 
     $stmtProd = $pdo->prepare(
         'SELECT rut_emisor, razon_social, giro, acteco, dir_origen, cmna_origen, '
@@ -4775,21 +4780,52 @@ function handleEmpresaProduccionGet(): void
             'produccion'    => $emisorProd,
             'errores'       => [],
             'emisor'        => null,
+            'rutEditable'   => false,
         ]);
     }
+
+    $vacio = [
+        'rut_emisor'  => '',
+        'razon_social' => '',
+        'giro'        => '',
+        'acteco'      => '',
+        'dir_origen'  => '',
+        'cmna_origen' => '',
+    ];
 
     vista('empresa-produccion', [
         'yaConfigurado' => false,
         'produccion'    => null,
         'errores'       => [],
-        'emisor'        => $emisorCert + ['resolucion_fecha' => '', 'resolucion_numero' => ''],
+        'emisor'        => ($emisorCert ?? $vacio) + ['resolucion_fecha' => '', 'resolucion_numero' => ''],
+        'rutEditable'   => $emisorCert === null,
     ]);
 }
 
 // ===========================================================================
 //  Handler: POST /empresa-produccion
 //
-//  rut_emisor SIEMPRE el de la fila de certificacion (nunca del POST).
+//  DE DONDE SALE EL rut_emisor. El diseno original lo tomaba SIEMPRE de la fila
+//  de certificacion y nunca del POST, por dos razones que siguen vigentes:
+//
+//   1. INTEGRIDAD ENTRE AMBIENTES: es la MISMA empresa en los dos. Si el RUT
+//      viniera del formulario, un tenant podria certificar con un RUT y producir
+//      con otro, y todo lo que cruza ambientes por rut_emisor -- certificado,
+//      CAF, documentos emitidos -- quedaria partido en dos mundos.
+//   2. NO CONFIAR EN EL CLIENTE PARA LA IDENTIDAD: mismo patron que el resto del
+//      panel, donde cuenta_id sale de la sesion y ambiente lo fija el servidor.
+//
+//  LA RAZON 1 NO SE TOCA: si hay fila de certificacion, el RUT sigue saliendo de
+//  ahi y el formulario se ignora, exactamente como antes.
+//
+//  LA RAZON 2 SE RELAJA SOLO cuando NO hay fila de certificacion, porque
+//  entonces no existe ninguna otra fuente: una empresa ya autorizada por el SII
+//  no tiene por que haber pasado por el circuito. En ese caso el RUT se pide, y
+//  se compensa con lo mismo que ya hace handleEmpresaPost(): Rut::normalizar()
+//  mas Rut::valido() (formato y digito verificador, modulo 11), y la restriccion
+//  uk_emisor(rut_emisor, ambiente) como red -- un RUT ya tomado en produccion
+//  por otra cuenta revienta con 23000 y se traduce abajo.
+//
 //  resolucion_fecha/resolucion_numero son la Resolucion REAL de autorizacion
 //  del SII (NO se inventan: salen del correo/portal de autorizacion) -- por
 //  eso son obligatorios aqui, a diferencia de /empresa donde en certificacion
@@ -4807,10 +4843,7 @@ function handleEmpresaProduccionPost(): void
         . "FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' LIMIT 1"
     );
     $stmtCert->execute([':cuenta_id' => $cuentaId]);
-    $emisorCert = $stmtCert->fetch(PDO::FETCH_ASSOC);
-    if ($emisorCert === false) {
-        redirigir('/empresa');
-    }
+    $emisorCert = $stmtCert->fetch(PDO::FETCH_ASSOC) ?: null;
 
     $stmtProd = $pdo->prepare(
         "SELECT 1 FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' LIMIT 1"
@@ -4829,6 +4862,23 @@ function handleEmpresaProduccionPost(): void
     $resNumRaw = trim((string) ($_POST['resolucion_numero'] ?? ''));
 
     $errores = [];
+
+    // Con fila de certificacion el formulario NO manda el RUT y se ignora si lo
+    // mandara. Sin ella, se pide y se valida igual que en handleEmpresaPost():
+    // mismo metodo, mismo mensaje. $rutEcho es lo que se re-pinta si hay error;
+    // tambien como en handleEmpresaPost(), el usuario ve lo que TECLEO, no la
+    // version normalizada.
+    if ($emisorCert !== null) {
+        $rut     = (string) $emisorCert['rut_emisor'];
+        $rutEcho = $rut;
+    } else {
+        $rutEcho = trim((string) ($_POST['rut_emisor'] ?? ''));
+        $rut     = Rut::normalizar($rutEcho);
+        if (! Rut::valido($rut)) {
+            $errores['rut_emisor'] = 'RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).';
+        }
+    }
+
     if ($razon === '') {
         $errores['razon_social'] = 'La razon social es obligatoria.';
     }
@@ -4852,7 +4902,7 @@ function handleEmpresaProduccionPost(): void
     }
 
     $datosForm = [
-        'rut_emisor'        => $emisorCert['rut_emisor'],
+        'rut_emisor'        => $rutEcho,
         'razon_social'      => $razon,
         'giro'              => $giro,
         'acteco'            => $actecoRaw,
@@ -4868,6 +4918,7 @@ function handleEmpresaProduccionPost(): void
             'produccion'    => null,
             'errores'       => $errores,
             'emisor'        => $datosForm,
+            'rutEditable'   => $emisorCert === null,
         ]);
     }
 
@@ -4879,7 +4930,7 @@ function handleEmpresaProduccionPost(): void
             . "VALUES (:cuenta_id, :rut, 'produccion', :razon, :giro, :acteco, :dir, :cmna, :resfecha, :resnum)"
         )->execute([
             ':cuenta_id' => $cuentaId,
-            ':rut'       => $emisorCert['rut_emisor'],
+            ':rut'       => $rut,
             ':razon'     => $razon,
             ':giro'      => $giro,
             ':acteco'    => (int) $actecoRaw,
@@ -4899,6 +4950,7 @@ function handleEmpresaProduccionPost(): void
             'produccion'    => null,
             'errores'       => ['rut_emisor' => $mensaje],
             'emisor'        => $datosForm,
+            'rutEditable'   => $emisorCert === null,
         ]);
     }
 
@@ -9166,6 +9218,12 @@ function handlePanelGet(): void
     $stmt->execute([':cuenta_id' => $cuentaId]);
     $tieneEmisor = $stmt->fetchColumn() !== false;
 
+    // PUEDE EMITIR: el MISMO predicado que usan el guard de las rutas operativas
+    // (exigirProduccionCompleto) y el menu lateral. Una sola fuente de verdad
+    // para las tres pantallas; si divergen, vuelve el bug que ya arreglamos.
+    $emision     = estadoEmisionProduccion($pdo, $cuentaId);
+    $puedeEmitir = $emision['falta'] === null;
+
     // Estacion 3 (certificado): solo se consulta si la etapa 2 esta completa;
     // requiere el rut_emisor de la cuenta para buscar en dte_certificado.
     $tieneCertificado = false;
@@ -9181,6 +9239,16 @@ function handlePanelGet(): void
         );
         $stmtCert->execute([':rut' => $rutEmisor]);
         $tieneCertificado = $stmtCert->fetchColumn() !== false;
+    }
+
+    // FALLBACK DEL RUT. Hasta aqui $rutEmisor solo existe si hay fila de
+    // certificacion. Una empresa que llego YA AUTORIZADA por el SII no la tiene,
+    // y sin este fallback su rut quedaba en null: estadoProduccion() no se
+    // llamaba, el dashboard no entraba nunca en modo gestion y le mostraba un
+    // circuito de certificacion que no le corresponde. El emisor con el que
+    // emite de verdad es el de la fila de PRODUCCION, y de ahi sale.
+    if (! isset($rutEmisor) || $rutEmisor === false || $rutEmisor === null) {
+        $rutEmisor = $emision['rut'];
     }
 
     // Estacion 4 (CAF): solo se consulta si la etapa 3 esta completa; reusa
@@ -9226,19 +9294,20 @@ function handlePanelGet(): void
     // El estado de produccion se calcula en cuanto hay emisor, porque decide el
     // switch de dashboard. Los SUB-PASOS de la estacion 7, en cambio, solo se
     // muestran con la certificacion ya confirmada: ese criterio no cambia.
-    $produccionLista = false;
-    $estacion7       = ['titulo' => 'En produccion', 'estado' => 'inactiva'];
+    $estacion7 = ['titulo' => 'En produccion', 'estado' => 'inactiva'];
 
-    if ($tieneEmisor) {
-        $estadoProd      = estadoProduccion($pdo, $cuentaId, (string) $rutEmisor);
-        $produccionLista = $estadoProd['empresa'] && $estadoProd['certificado'] && $estadoProd['caf'];
+    // Antes esto colgaba de $tieneEmisor -- la fila de CERTIFICACION -- y por eso
+    // un tenant preautorizado no llegaba nunca aqui. Ahora basta con tener un rut
+    // de emisor, venga de donde venga.
+    if ($rutEmisor !== null) {
+        $estadoProd = estadoProduccion($pdo, $cuentaId, (string) $rutEmisor);
 
         if ($certConfirmada) {
             $estacion7 = [
                 'titulo'             => 'En produccion',
-                'estado'             => $produccionLista ? 'completado' : 'pendiente',
+                'estado'             => $puedeEmitir ? 'completado' : 'pendiente',
                 'subpasos'           => subpasosProduccion($estadoProd),
-                'obligatoriosListos' => $produccionLista,
+                'obligatoriosListos' => $puedeEmitir,
             ];
         }
     }
@@ -9254,7 +9323,10 @@ function handlePanelGet(): void
     ];
 
     // --- Dashboard de GESTION: solo con los 3 pasos de produccion completos ---
-    if ($produccionLista) {
+    //
+    // La condicion es la misma que deja emitir. Si el servidor deja emitir, la UI
+    // lo dice: nada de mostrar el stepper de certificacion a quien ya opera.
+    if ($puedeEmitir) {
         $periodo   = dashPeriodo((string) ($_GET['periodo'] ?? 'actual'));
         $rut       = (string) $rutEmisor;
         $historico = dashTotalHistorico($pdo, $rut);

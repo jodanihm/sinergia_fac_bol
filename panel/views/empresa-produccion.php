@@ -9,10 +9,21 @@
  *   - $yaConfigurado === true : ficha de solo lectura con los 8 datos guardados.
  *     El flujo actual NO permite editarlos desde aqui, asi que no se ofrece un
  *     boton de editar que no existe.
- *   - $yaConfigurado === false: formulario de 7 campos. El RUT NO es un input:
- *     se hereda de la fila de certificacion y el handler lo toma de ahi, no del
- *     POST. Se muestra como dato de lectura, no como input disabled, porque un
- *     disabled sugeriria que es un campo del formulario y no lo es.
+ *   - $yaConfigurado === false: formulario. $rutEditable decide si son 7 u 8
+ *     campos, y es lo unico que cambia entre los dos caminos de alta:
+ *
+ *       $rutEditable === false (hay fila de certificacion, el caso de siempre):
+ *         el RUT NO es un input. Se hereda de esa fila y el handler lo toma de
+ *         ahi, no del POST. Se muestra como dato de lectura, no como input
+ *         disabled, porque un disabled sugeriria que es un campo del formulario
+ *         y no lo es. Lo que este camino RENDERIZA no cambio: lo unico que se
+ *         movio es la sangria que emiten los <?php if ?> nuevos, que el
+ *         navegador colapsa.
+ *
+ *       $rutEditable === true (empresa ya autorizada por el SII, sin fila de
+ *         certificacion): el RUT SI es un input, porque no hay ninguna otra
+ *         fuente de donde sacarlo. El handler lo valida con Rut::normalizar()
+ *         mas Rut::valido(), igual que /empresa.
  *
  * DIFERENCIA NORMATIVA CON CERTIFICACION: aqui la fecha y el numero de
  * resolucion son los de la autorizacion REAL que entrego el SII, no los de la
@@ -115,8 +126,9 @@ $panelAmbiente = static function (): void { ?>
 <?php else: ?>
 
     <p class="dash-subtitulo">
-        Estos datos se usaran para emitir tus documentos tributarios reales. Vienen precargados
-        desde tu configuracion de certificacion; corrigelos si algo cambio para produccion.
+        Estos datos se usaran para emitir tus documentos tributarios reales.<?php if (! $rutEditable): ?> Vienen precargados
+        desde tu configuracion de certificacion; corrigelos si algo cambio para produccion.<?php endif; /* La linea en blanco de abajo NO sobra: PHP se come el salto que sigue a un cierre de etiqueta, y sin ella el caso CON certificacion perderia el salto que tenia aqui. */ ?>
+
         Los campos marcados con <span class="campo-obligatorio">*</span> son obligatorios.
     </p>
 
@@ -135,6 +147,23 @@ $panelAmbiente = static function (): void { ?>
                 <section class="tarjeta" aria-labelledby="titulo-emisor">
                     <h2 id="titulo-emisor">Datos del emisor</h2>
 
+<?php /* Las 3 etiquetas de ESTE condicional van pegadas al margen a proposito, no
+         por descuido: la sangria que las precede es texto y PHP la imprime. Con
+         ellas indentadas, el camino CON certificacion emitia 20 espacios de mas
+         antes del <dl> y otros 20 antes del <div class="form-grid">, o sea salia
+         distinto byte a byte de lo que salia antes de existir este condicional.
+         Al margen no emiten nada y ese camino queda intacto. No las re-indentes. */ ?>
+<?php if ($rutEditable): ?>
+                        <div class="<?= $claseCampo('rut_emisor', 'form-campo--corto'); ?>">
+                            <label for="rut_emisor">RUT emisor <?= $req; ?></label>
+                            <input type="text" name="rut_emisor" id="rut_emisor" value="<?= $val('rut_emisor'); ?>" placeholder="77724622-4" required>
+                            <?php if ($err('rut_emisor')): ?>
+                                <p class="error"><?= htmlspecialchars($err('rut_emisor')); ?></p>
+                            <?php else: ?>
+                                <small class="form-ayuda">El RUT de la empresa que el SII autorizo como emisor electronico, con guion y digito verificador (ej. 77724622-4).</small>
+                            <?php endif; ?>
+                        </div>
+<?php else: ?>
                     <dl class="ficha ficha--compacta">
                         <dt>RUT emisor</dt>
                         <dd><?= htmlspecialchars((string) ($emisor['rut_emisor'] ?? '')); ?></dd>
@@ -144,6 +173,7 @@ $panelAmbiente = static function (): void { ?>
                     <?php else: ?>
                         <small class="form-ayuda">Es el mismo RUT de tu configuracion de certificacion y no se cambia aqui.</small>
                     <?php endif; ?>
+<?php endif; ?>
 
                     <div class="form-grid">
                         <div class="<?= $claseCampo('razon_social', 'form-campo--ancho'); ?>">
