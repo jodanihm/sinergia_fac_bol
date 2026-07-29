@@ -322,41 +322,31 @@ function listarCafs(PDO $pdo, string $rutEmisor, string $ambiente = 'certificaci
 // ===========================================================================
 
 /**
- * Eje "estado del tenant" del menu. tenantEnProduccion=true habilita el flujo
- * operativo (Ventas). Para M2 la definicion es simple: el tenant confirmo su
- * certificacion (dte_emisor.certificacion_confirmada_at no null). Se afina en
- * M3, cuando de verdad haya emision de produccion que desbloquear. No persiste
- * ningun enum: se calcula dinamicamente, como el resto del estado del panel.
- */
-function tenantEnProduccion(PDO $pdo, int $cuentaId): bool
-{
-    $stmt = $pdo->prepare(
-        'SELECT 1 FROM dte_emisor '
-        . "WHERE cuenta_id = :cuenta_id AND ambiente = 'certificacion' "
-        . '  AND certificacion_confirmada_at IS NOT NULL '
-        . 'LIMIT 1'
-    );
-    $stmt->execute([':cuenta_id' => $cuentaId]);
-
-    return $stmt->fetchColumn() !== false;
-}
-
-/**
  * Resuelve el estado visual de un item del menu a partir de los dos ejes.
  * Precedencia: si el modulo NO esta construido gana "proximamente" (no tiene
- * sentido pedir "termina la certificacion" para algo que aun no existe).
+ * sentido pedir requisitos para algo que aun no existe).
+ *
+ * $puedeEmitir SALE DEL MISMO CRITERIO QUE EL SERVIDOR. Antes salia de una
+ * funcion tenantEnProduccion() que media otra cosa -- si el tenant habia
+ * confirmado su certificacion -- y el menu terminaba mintiendo en las dos
+ * direcciones: prometia Ventas a quien el guard rebotaba (certificado pero sin
+ * filas de produccion) y lo negaba a quien el guard dejaba pasar (preautorizado
+ * por el SII, que nunca paso por el circuito de certificacion). Aquella funcion
+ * se elimino: su nombre decia "produccion" y consultaba certificacion, y un
+ * predicado huerfano con nombre engañoso es como se reintroduce este bug.
+ * Hoy el unico origen de la verdad es estadoEmisionProduccion().
  *
  * @param array<string,mixed> $item
  *
- * @return 'habilitado'|'bloqueado_cert'|'proximamente'
+ * @return 'habilitado'|'sin_produccion'|'proximamente'
  */
-function navEstadoItem(array $item, bool $enProduccion): string
+function navEstadoItem(array $item, bool $puedeEmitir): string
 {
     if (empty($item['construido'])) {
         return 'proximamente';
     }
-    if (! empty($item['requiereProduccion']) && ! $enProduccion) {
-        return 'bloqueado_cert';
+    if (! empty($item['requiereProduccion']) && ! $puedeEmitir) {
+        return 'sin_produccion';
     }
     return 'habilitado';
 }
@@ -452,7 +442,7 @@ function definicionMenu(): array
                     // requiereProduccion=false a proposito, en los cuatro: estas
                     // son las rutas que LLEVAN a completar produccion, no
                     // funciones que dependan de estar ya en produccion.
-                    // Marcarlas 'bloqueado_cert' las volveria inalcanzables
+                    // Marcarlas 'sin_produccion' las volveria inalcanzables
                     // justo cuando hay que usarlas. El aviso de que aqui los
                     // folios son reales es visual (ver la variante en el CSS),
                     // no un bloqueo.
@@ -3282,6 +3272,13 @@ function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
  * unica autoridad para dejar pasar o no; esta funcion existe para PINTAR el
  * avance (estacion 7 del dashboard) sin duplicar el criterio.
  *
+ * OJO AL EDITAR: las 3 condiciones de "puede emitir" viven ahora en
+ * estadoEmisionProduccion(), que es lo que consultan el guard y el menu
+ * lateral. Esta funcion las REPITE a proposito, porque necesita reportar los 4
+ * pasos por separado (incluida la api_key, que no bloquea emitir) y recibe el
+ * rut por parametro en vez de derivarlo. Si cambia una condicion hay que
+ * cambiarla en los DOS sitios: no hay nada que lo detecte automaticamente.
+ *
  * Las consultas de certificado y CAF son las mismas que ya usaba
  * handleAdminTenantsGet() para su resumen de superadmin; se centralizan aqui
  * para que tenant y superadmin no puedan divergir.
@@ -3378,17 +3375,28 @@ function subpasosProduccion(array $estado): array
 }
 
 /**
- * Duplicado de exigirOnboardingCompleto() para el ambiente de PRODUCCION --
- * funcion NUEVA e independiente (exigirOnboardingCompleto() no se toca).
- * Exige, para ambiente='produccion': fila dte_emisor con resolucion_fecha/
- * resolucion_numero informados (NOT NULL en el schema, y resolucion_numero
- * > 0 -- ver validacion de handleEmpresaProduccionPost(), que exige entero
- * positivo), fila dte_certificado, y al menos una fila dte_caf. Encadena
- * igual que exigirOnboardingCompleto(): redirige a la estacion de PRODUCCION
- * que falte (nunca a las de certificacion). Devuelve el rut_emisor cuando
- * todo esta completo.
+ * LAS 3 CONDICIONES PARA EMITIR EN PRODUCCION, EN UN SOLO SITIO.
+ *
+ * Para ambiente='produccion': fila dte_emisor con resolucion_fecha/
+ * resolucion_numero informados (NOT NULL en el schema, y resolucion_numero > 0
+ * -- ver validacion de handleEmpresaProduccionPost(), que exige entero
+ * positivo), fila dte_certificado, y al menos una fila dte_caf.
+ *
+ * NO redirige ni corta la ejecucion: devuelve QUE falta. Es lo que permite que
+ * el guard del servidor (exigirProduccionCompleto) y el menu lateral usen el
+ * mismo criterio sin duplicarlo. Antes no existia este predicado y el menu
+ * resolvia por su cuenta con una condicion distinta; ahi nacio la divergencia.
+ *
+ * 'falta' nombra el PRIMER eslabon que falla, en el mismo orden en que
+ * exigirProduccionCompleto() encadena sus redirects. Cuando es null estan las
+ * tres y 'rut' trae el rut_emisor.
+ *
+ * El rut se deriva de la fila de PRODUCCION, no de la de certificacion: es el
+ * emisor con el que se va a emitir de verdad.
+ *
+ * @return array{rut: ?string, falta: ?string}  falta: 'empresa'|'certificado'|'caf'|null
  */
-function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
+function estadoEmisionProduccion(PDO $pdo, int $cuentaId): array
 {
     $stmt = $pdo->prepare(
         'SELECT rut_emisor FROM dte_emisor '
@@ -3398,7 +3406,7 @@ function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
     $stmt->execute([':cuenta_id' => $cuentaId]);
     $rutEmisor = $stmt->fetchColumn();
     if ($rutEmisor === false) {
-        redirigir('/empresa-produccion');
+        return ['rut' => null, 'falta' => 'empresa'];
     }
 
     $stmtCert = $pdo->prepare(
@@ -3406,7 +3414,7 @@ function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
     );
     $stmtCert->execute([':rut' => $rutEmisor]);
     if ($stmtCert->fetchColumn() === false) {
-        redirigir('/certificado-produccion');
+        return ['rut' => null, 'falta' => 'certificado'];
     }
 
     $stmtCaf = $pdo->prepare(
@@ -3414,10 +3422,38 @@ function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
     );
     $stmtCaf->execute([':rut' => $rutEmisor]);
     if ($stmtCaf->fetchColumn() === false) {
-        redirigir('/caf-produccion');
+        return ['rut' => null, 'falta' => 'caf'];
     }
 
-    return (string) $rutEmisor;
+    return ['rut' => (string) $rutEmisor, 'falta' => null];
+}
+
+/**
+ * Guard de las rutas operativas. Duplicado de exigirOnboardingCompleto() para
+ * el ambiente de PRODUCCION -- funcion NUEVA e independiente
+ * (exigirOnboardingCompleto() no se toca). Encadena igual que aquel: redirige a
+ * la estacion de PRODUCCION que falte (nunca a las de certificacion) y devuelve
+ * el rut_emisor cuando todo esta completo.
+ *
+ * CONTRATO SIN CAMBIOS: misma firma, mismo valor de retorno y el mismo redirect
+ * en el mismo caso que antes. Lo unico que cambio es de donde salen las tres
+ * comprobaciones -- ahora de estadoEmisionProduccion(), para que el menu pueda
+ * preguntar lo mismo sin duplicar la logica. Los 25 llamadores no se tocan.
+ */
+function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
+{
+    $estado = estadoEmisionProduccion($pdo, $cuentaId);
+
+    $rutaQueFalta = [
+        'empresa'     => '/empresa-produccion',
+        'certificado' => '/certificado-produccion',
+        'caf'         => '/caf-produccion',
+    ];
+    if ($estado['falta'] !== null) {
+        redirigir($rutaQueFalta[$estado['falta']]);
+    }
+
+    return (string) $estado['rut'];
 }
 
 /**

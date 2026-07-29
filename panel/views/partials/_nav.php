@@ -5,8 +5,13 @@
  * Deriva el estado de cada item de DOS ejes independientes (ver definicionMenu()
  * y navEstadoItem() en public/index.php):
  *   - construido / no_construido  -> "proximamente" (gana siempre; nunca culpa al tenant)
- *   - requiereProduccion + tenantEnProduccion() -> "bloqueado_cert"
+ *   - requiereProduccion + estadoEmisionProduccion() -> "sin_produccion"
  *   - resto -> "habilitado" (link)
+ *
+ * EL SEGUNDO EJE ES EL MISMO CRITERIO QUE EL SERVIDOR. Se pregunta por las 3
+ * filas de produccion, exactamente lo que exige exigirProduccionCompleto() en
+ * cada ruta operativa. Antes se preguntaba por certificacion_confirmada_at, que
+ * es otra cosa, y el menu contradecia al guard en los dos sentidos.
  *
  * El item activo se marca por $navActivo (clave, opcional, que la vista puede
  * pasar) o, si no viene, comparando el destino con la ruta actual.
@@ -18,9 +23,11 @@
    peticion, y una constante o funcion redeclarada es error fatal. */
 require_once __DIR__ . '/_iconos.php';
 
-$navPdo          = Db::conexion();
-$navEnProduccion = tenantEnProduccion($navPdo, Auth::cuentaId());
-$navRutaActual   = rtrim((string) (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/'), '/');
+$navPdo = Db::conexion();
+/* 'falta' === null significa que estan las 3 filas de produccion, o sea que el
+   guard del servidor dejaria pasar. Se descarta el rut: aqui no se usa. */
+$navPuedeEmitir = estadoEmisionProduccion($navPdo, Auth::cuentaId())['falta'] === null;
+$navRutaActual  = rtrim((string) (parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/'), '/');
 if ($navRutaActual === '') {
     $navRutaActual = '/';
 }
@@ -43,10 +50,10 @@ $navIcono = static function (?string $id): string {
  * Pinta un unico item segun su estado. Closure para no declarar funciones en un
  * partial (evita "cannot redeclare" si el archivo se incluye mas de una vez).
  */
-$navPintarItem = static function (array $item) use ($navEnProduccion, $navRutaActual, $navActivoClave, $navIcono): void {
+$navPintarItem = static function (array $item) use ($navPuedeEmitir, $navRutaActual, $navActivoClave, $navIcono): void {
     $label   = htmlspecialchars((string) $item['label']);
     $sub     = ! empty($item['sub']) ? ' nav-item--sub' : '';
-    $estado  = navEstadoItem($item, $navEnProduccion);
+    $estado  = navEstadoItem($item, $navPuedeEmitir);
     $icono   = $navIcono($item['icono'] ?? null);
 
     if ($estado === 'habilitado') {
@@ -58,10 +65,13 @@ $navPintarItem = static function (array $item) use ($navEnProduccion, $navRutaAc
         return;
     }
 
-    if ($estado === 'bloqueado_cert') {
+    /* La clase CSS conserva su nombre historico (--bloqueado) aunque el estado
+       se llame ahora sin_produccion: renombrarla cambiaria el HTML del sidebar
+       y costaria la verificacion byte a byte, sin ganancia funcional. */
+    if ($estado === 'sin_produccion') {
         echo '<span class="nav-item nav-item--bloqueado' . $sub . '" '
-            . 'title="Disponible cuando completes la certificacion en el SII">'
-            . $icono . $label . '<span class="nav-item__badge">En certificacion</span></span>';
+            . 'title="Disponible cuando cargues empresa, certificado y CAF de produccion">'
+            . $icono . $label . '<span class="nav-item__badge">Sin configurar</span></span>';
         return;
     }
 
