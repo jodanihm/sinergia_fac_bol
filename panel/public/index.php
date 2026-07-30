@@ -1835,13 +1835,37 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
     $receptorComuna      = $fila['comuna_receptor'];
     $receptorEmail       = $fila['email_receptor'];
 
+    // EL CORREO ES ACCESORIO Y NUNCA FRENA UNA FACTURA. Se valida el formato
+    // igual que en el ABM de clientes (handleClientePost()), pero un correo mal
+    // escrito NO agrega un error: se descarta y la fila sigue su curso. Emitir
+    // es una obligacion legal con folio comprometido; el correo es un dato de
+    // entrega. Es lo contrario del fail-fast que se aplica a folios y montos, y
+    // es deliberado.
+    if ($receptorEmail !== '' && ! filter_var($receptorEmail, FILTER_VALIDATE_EMAIL)) {
+        $receptorEmail = '';
+    }
+
     if ($resolucionCliente['estado'] === 'encontrado') {
         $cliente             = $resolucionCliente['cliente'];
         $receptorRazonSocial = $cliente['razon_social'];
         $receptorGiro        = (string) ($cliente['giro'] ?? '');
         $receptorDireccion   = (string) ($cliente['direccion'] ?? '');
         $receptorComuna      = (string) ($cliente['comuna'] ?? '');
-        $receptorEmail       = (string) ($cliente['email'] ?? '');
+
+        // EL MAESTRO GANA SOLO CUANDO TIENE VALOR -- y esto vale UNICAMENTE
+        // para el correo. Los otros cuatro campos de arriba conservan el
+        // maestro-manda incondicional, que ahi es la conducta correcta: son
+        // datos de identidad tributaria y el maestro es su fuente.
+        //
+        // El correo no. Antes esta linea era incondicional y pisaba con ''
+        // cualquier correo que trajera el Excel cuando el maestro no tenia
+        // ninguno. Como cliente.email solo se escribia al CREAR el cliente, un
+        // cliente nacido sin correo no podia recibirlo nunca mas por ningun
+        // camino: medido en produccion, 4 de 4 notas con receptor cayeron ahi.
+        $emailMaestro = trim((string) ($cliente['email'] ?? ''));
+        if ($emailMaestro !== '') {
+            $receptorEmail = $emailMaestro;
+        }
     } elseif ($resolucionCliente['estado'] === 'no_encontrado') {
         if ($receptorRazonSocial === '') {
             $errores[] = 'razon_social_receptor es obligatorio (cliente nuevo, no esta en tu maestro)';
@@ -2090,8 +2114,33 @@ function handleCargaMasivaPost(): void
                         $clienteIdPorRutNuevo[$rutNorm] = $existente['id'] ?? 0;
                     }
                 }
-            } elseif ($res['estado'] === 'encontrado' && $res['cliente']['activo'] === false) {
-                clienteRepo()->activar($cuentaId, (int) $res['cliente']['id']);
+            } elseif ($res['estado'] === 'encontrado') {
+                if ($res['cliente']['activo'] === false) {
+                    clienteRepo()->activar($cuentaId, (int) $res['cliente']['id']);
+                }
+
+                // RELLENO DEL CORREO QUE FALTABA. Un cliente que nacio sin
+                // correo no tenia forma de conseguirlo: crear() lo escribe una
+                // sola vez y el ABM exige que alguien lo teclee a mano. Si el
+                // Excel trae uno y el maestro esta vacio, se aprovecha aqui.
+                //
+                // Va dentro de la transaccion del lote, igual que el alta de
+                // clientes nuevos de arriba: si la carga se cae, no queda un
+                // maestro tocado por un lote que nunca existio.
+                //
+                // Este if es solo un filtro barato para no ir a la base al
+                // pedo. La garantia de NO SOBRESCRITURA no esta aca sino en el
+                // WHERE de rellenarEmailSiVacio(): $res['cliente'] es una foto
+                // tomada en la pasada de validacion, y entre esa foto y este
+                // UPDATE cabe otra request. Solo el motor puede resolverlo sin
+                // ventana.
+                if (trim((string) ($res['cliente']['email'] ?? '')) === '' && $d['receptor_email'] !== null) {
+                    clienteRepo()->rellenarEmailSiVacio(
+                        $cuentaId,
+                        (int) $res['cliente']['id'],
+                        (string) $d['receptor_email']
+                    );
+                }
             }
 
             crearNotaVentaValida($pdo, $cuentaId, $loteId, [

@@ -170,6 +170,42 @@ final class MySqlClienteRepository
     }
 
     /**
+     * Rellena el email de un cliente SOLO si hoy esta vacio o nulo. Devuelve
+     * true si escribio, false si no habia nada que hacer.
+     *
+     * POR QUE UN METODO PROPIO Y NO actualizar(): aquel reescribe las siete
+     * columnas editables de una, asi que usarlo para rellenar un solo campo
+     * obligaria a releer y reenviar el resto, y cualquier dato desactualizado en
+     * esa lectura pisaria al bueno. Aqui se toca una columna y nada mas.
+     *
+     * LA GUARDA DE NO-SOBRESCRITURA VIVE EN EL WHERE, no en un if de PHP. Un
+     * "leer, comprobar vacio, escribir" en dos viajes deja una ventana entre la
+     * lectura y la escritura: si otra request carga un correo en ese hueco, el
+     * UPDATE lo pisaria igual. Con la condicion dentro del propio UPDATE, el
+     * motor evalua y escribe en la misma operacion y un correo ya existente es
+     * intocable pase lo que pase. Es la parte innegociable de este cambio.
+     *
+     * Nota sobre rowCount(): con un valor identico al que ya estaba, MySQL
+     * informa 0 filas afectadas aunque la condicion calce. No importa aqui,
+     * porque el WHERE exige que estuviera vacio o nulo: si calzo, el valor
+     * nuevo es necesariamente distinto del anterior.
+     */
+    public function rellenarEmailSiVacio(int $cuentaId, int $id, string $email): bool
+    {
+        if ($email === '') {
+            return false;
+        }
+
+        $stmt = $this->pdo->prepare(
+            'UPDATE cliente SET email = :email '
+            . "WHERE id = :id AND cuenta_id = :cuenta_id AND (email IS NULL OR email = '')"
+        );
+        $stmt->execute([':email' => $email, ':id' => $id, ':cuenta_id' => $cuentaId]);
+
+        return $stmt->rowCount() === 1;
+    }
+
+    /**
      * Actualiza los datos editables de un cliente de la cuenta. Devuelve false
      * si el id no existe o no pertenece a la cuenta (nunca lanza "no encontrado"
      * distinguible). 'activo' NO se toca aqui (ver activar/desactivar).
