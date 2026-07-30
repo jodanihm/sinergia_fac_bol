@@ -9322,10 +9322,21 @@ function handlePanelGet(): void
 
     // POR QUE CAMINO VA ESTE TENANT. No hay columna ni bandera: lo dicen las
     // filas que existen, que es el unico dato que no puede quedar desincronizado
-    // con la realidad. Sin fila de produccion (cuenta nueva) el camino sigue
-    // siendo el de certificacion, igual que siempre.
+    // con la realidad.
     $rutProduccion    = rutEmisorProduccion($pdo, $cuentaId);
     $caminoProduccion = ! $tieneEmisor && $rutProduccion !== null;
+
+    // TODAVIA NO HAY NINGUNA FILA: no hay camino que inferir, porque el tenant
+    // no ha hecho nada de lo que inferirlo. En vez de suponerle uno -- que es lo
+    // que hacia el stepper de 7 estaciones, suponiendo certificacion -- se le
+    // ofrecen los dos y elige el.
+    //
+    // Sale por aca antes de calcular la cadena de certificacion entera: ninguna
+    // de esas consultas puede devolver otra cosa que false sin fila de emisor, y
+    // ninguna de esas estaciones se va a pintar.
+    if (! $tieneEmisor && $rutProduccion === null) {
+        vista('panel-camino');
+    }
 
     // Estacion 3 (certificado): solo se consulta si la etapa 2 esta completa;
     // requiere el rut_emisor de la cuenta para buscar en dte_certificado.
