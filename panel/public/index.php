@@ -1235,6 +1235,79 @@ function handleEmisionPost(int $tipoDte): void
         if (! empty($_POST['guardar_cliente'])) {
             guardarClienteDesdeReceptor($cuentaId, $documento['receptor']);
         }
+
+        // RELLENO DEL CORREO EN EL MAESTRO. NO depende del checkbox
+        // "guardar cliente" a proposito, y no es lo mismo que la linea de
+        // arriba: guardarClienteDesdeReceptor() CREA un cliente completo y solo
+        // si no existe todavia. Esto rellena un hueco en uno que YA existe.
+        //
+        // Sin esto seguia vivo por el camino unitario el mismo trinquete que la
+        // Entrega 1 cerro para la carga masiva: un cliente creado sin correo no
+        // podia recibirlo nunca mas, porque crear() lo escribe una sola vez y el
+        // ABM exige que alguien lo teclee a mano. Si el usuario escribio un
+        // correo al emitir, se aprovecha aunque no haya pedido guardar nada.
+        //
+        // La guarda de no-sobrescritura es la MISMA de la Entrega 1 y vive en el
+        // WHERE de rellenarEmailSiVacio(), no en un if de PHP.
+        rellenarCorreoMaestroDesdeReceptor($cuentaId, $documento['receptor']);
+
+        // ENCOLADO DEL CORREO (migracion 024). Va despues de todo lo demas del
+        // camino feliz y antes del redirect.
+        //
+        // POR QUE ESTE try/catch, Y POR QUE ENVUELVE EL BLOQUE ENTERO. Llegado
+        // aqui el documento YA se emitio: el folio se quemo y el SII lo tiene.
+        // encolarEnvioCorreo() trae su propia guarda, pero la RESOLUCION del
+        // destinatario queda fuera de ella -- correoReceptorDeMaestro() consulta
+        // la base con ERRMODE_EXCEPTION y puede lanzar. Sin este catch la
+        // excepcion escaparia, y el panel no tiene handler global: el usuario
+        // veria un "Fatal error" en vez de su confirmacion.
+        //
+        // Y EL PROBLEMA NO ES QUE SEA FEO. Un usuario que ve un error fatal
+        // despues de emitir vuelve a intentarlo, y los folios NO se liberan: se
+        // queman. El reintento emitiria una SEGUNDA factura ante el SII por la
+        // misma venta. Existen el idemKey y dte_idempotencia, que PODRIAN
+        // deduplicar ese reintento, pero eso no esta verificado y este codigo no
+        // se apoya en ello: la unica garantia solida es que el usuario nunca vea
+        // el error y por lo tanto no reintente.
+        //
+        // MISMO CRITERIO DE BLOQUE QUE EN facturarSubLote(): se envuelve el
+        // bloque, no cada llamada, para que cualquier linea que se agregue aqui
+        // en el futuro nazca cubierta.
+        //
+        // guardarClienteDesdeReceptor() y rellenarCorreoMaestroDesdeReceptor()
+        // NO se meten dentro: cada una ya trae su propio try/catch(Throwable).
+        // Son funciones autonomas y su seguridad no debe depender de quien las
+        // llame; ademas guardarClienteDesdeReceptor() ya era asi antes de este
+        // modulo, y romper esa simetria entre dos hermanas que hacen lo mismo
+        // solo confundiria. Este catch cubre lo que NO vive dentro de una
+        // funcion que se proteja sola: la resolucion del destinatario.
+        try {
+            // CASCADA DEL CAMINO UNITARIO: formulario > maestro. Lo tecleado se
+            // escribio recien y para ESTE documento, asi que gana sobre el
+            // maestro. Es la misma jerarquia por deliberacion que explica
+            // encolarEnvioCorreo().
+            $destinatario = trim((string) ($documento['receptor']['email'] ?? ''));
+            if ($destinatario === '') {
+                $destinatario = correoReceptorDeMaestro($cuentaId, (string) ($documento['receptor']['rut'] ?? ''));
+            }
+            encolarEnvioCorreo(
+                $pdo,
+                $cuentaId,
+                $rutEmisor,
+                (int) ($body['tipoDte'] ?? $tipoDte),
+                (int) ($body['folio'] ?? 0),
+                $destinatario !== '' ? $destinatario : null
+            );
+        } catch (Throwable $e) {
+            error_log(sprintf(
+                'encolar correo: fallo el encolado del documento tipo %d folio %s -- EL DOCUMENTO YA SE EMITIO '
+                . 'y la emision no se toca; el usuario recibe su confirmacion normal - %s',
+                (int) ($body['tipoDte'] ?? $tipoDte),
+                (string) ($body['folio'] ?? '?'),
+                $e->getMessage()
+            ));
+        }
+
         flashSet('exito', 'Documento emitido.', ['resultado' => [
             'tipoDte' => $body['tipoDte'] ?? $tipoDte,
             'folio'   => $body['folio'] ?? null,
@@ -2385,6 +2458,195 @@ function marcarNotaVentaFacturada(PDO $pdo, int $id, array $documentos): void
     }
 }
 
+// ===========================================================================
+//  ENCOLADO DE ENVIO DE DTE POR CORREO AL RECEPTOR (tabla dte_envio_correo,
+//  migracion 024). Esta entrega SOLO encola: no envia nada.
+//
+//  LA REGLA QUE MANDA SOBRE TODAS: ENCOLAR NUNCA PUEDE ROMPER UNA EMISION.
+//  Cuando se llama a esto, el folio YA se quemo y el SII YA tiene el documento:
+//  no hay marcha atras posible. Por eso todo va envuelto en try/catch(Throwable)
+//  y ni una excepcion escapa hacia el flujo de facturacion. Es lo contrario del
+//  fail-fast que el proyecto aplica -- bien -- a los folios y a los montos, y es
+//  deliberado: un correo es un dato de entrega, una factura es una obligacion
+//  legal ya contraida.
+//
+//  LA JERARQUIA DEL DESTINATARIO: LA PRECEDENCIA SIGUE CUAN DELIBERADO ES EL
+//  ORIGEN DEL DATO.
+//
+//      unitario:  formulario  >  maestro     (tecleado ahora para ESTE documento)
+//      masivo:    maestro     >  nota        (el maestro es el dato vivo)
+//
+//  Parece invertido entre los dos caminos y no lo es. Lo tecleado en el
+//  formulario se escribio recien y para este documento: es lo mas deliberado que
+//  hay, y por eso gana. Una nota de venta, en cambio, es una FOTO tomada al
+//  cargar el lote, y puede tener semanas: entre la carga y la facturacion
+//  alguien pudo corregir la direccion en el maestro. El maestro es el dato vivo
+//  y curado a mano por el tenant, asi que ahi gana el maestro.
+//
+//  Se descarto unificar como "el documento gana siempre": en el masivo eso
+//  dejaria ganar a una fila de Excel venida de otro sistema, que puede traer
+//  direcciones viejas para cientos de filas de una sola vez.
+//
+//  El respaldo de cada camino cubre el hueco del otro: si el maestro esta vacio
+//  se usa la nota, y si el formulario viene vacio se usa el maestro. Nunca se
+//  descarta un dato por preferir uno que no existe.
+//
+//  EL DESTINATARIO SE RESUELVE AL ENCOLAR Y SE GUARDA COMO FOTO. Nunca despues:
+//  resolverlo al enviar obligaria a cruzar dte_envio_correo (utf8mb4_unicode_ci)
+//  con dte_emitido (utf8mb4_0900_ai_ci) por columnas de texto, que son las dos
+//  familias de collation del esquema.
+// ===========================================================================
+
+/**
+ * Correo del receptor segun el maestro de clientes de la cuenta, o null.
+ *
+ * Devuelve null tanto si el cliente no existe como si existe sin correo: para
+ * la cascada los dos casos son "el maestro no aporta nada".
+ */
+/**
+ * Si el receptor trae correo y su ficha en el maestro NO lo tiene, se lo carga.
+ *
+ * ALCANCE ACOTADO A PROPOSITO: rellena un hueco, no crea ni edita nada mas. Es
+ * el complemento de guardarClienteDesdeReceptor(), que hace otra cosa (crear el
+ * cliente entero, y solo si no existe, y solo si el usuario marco el checkbox).
+ *
+ * NUNCA SOBRESCRIBE un correo que ya este cargado: esa garantia la da el WHERE
+ * de rellenarEmailSiVacio() y no este codigo. Ver la Entrega 1.
+ *
+ * No lanza: un fallo aqui no puede tocar una emision ya hecha.
+ */
+function rellenarCorreoMaestroDesdeReceptor(int $cuentaId, array $receptor): void
+{
+    try {
+        $email = trim((string) ($receptor['email'] ?? ''));
+        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return;
+        }
+        $rut = Rut::normalizar((string) ($receptor['rut'] ?? ''));
+        if (! Rut::valido($rut)) {
+            return;
+        }
+        $repo    = clienteRepo();
+        $cliente = $repo->buscarPorRut($cuentaId, $rut);
+        if ($cliente === null) {
+            return; // no existe: crearlo es asunto de guardarClienteDesdeReceptor()
+        }
+        $repo->rellenarEmailSiVacio($cuentaId, (int) $cliente['id'], $email);
+    } catch (Throwable $e) {
+        error_log('panel emision: no se pudo rellenar el correo del maestro - ' . $e->getMessage());
+    }
+}
+
+function correoReceptorDeMaestro(int $cuentaId, string $rutReceptor): ?string
+{
+    $rut = Rut::normalizar($rutReceptor);
+    if (! Rut::valido($rut)) {
+        return null;
+    }
+    $cliente = clienteRepo()->buscarPorRut($cuentaId, $rut);
+    $email   = trim((string) ($cliente['email'] ?? ''));
+
+    return $email !== '' ? $email : null;
+}
+
+/**
+ * Encola UN documento ya emitido para enviarselo por correo a su receptor.
+ *
+ * La usan los DOS caminos de emision (masivo y unitario); lo unico que cambia
+ * entre ellos es como resolvieron $destinatario antes de llamar (ver la
+ * jerarquia de arriba).
+ *
+ * NUNCA LANZA. Cualquier fallo se registra y se sigue.
+ *
+ * @param ?string $destinatario ya resuelto por el llamador; null si no hay
+ */
+function encolarEnvioCorreo(
+    PDO $pdo,
+    int $cuentaId,
+    string $rutEmisor,
+    int $tipoDte,
+    int $folio,
+    ?string $destinatario,
+): void {
+    try {
+        // EL id DE dte_emitido HAY QUE BUSCARLO: ninguna de las dos respuestas
+        // del motor lo trae (el 201 unitario devuelve folio/tipoDte/trackId/
+        // montos, y el del lote devuelve trackId mas {tipoDte,folio} por
+        // documento). Se resuelve por su UNIQUE uq_emitido.
+        //
+        // ambiente='produccion' fijo: el panel emite SOLO en produccion (todas
+        // estas rutas pasan por exigirProduccionCompleto y usan la key de
+        // servicio, que se filtra por ambiente='produccion').
+        $stmt = $pdo->prepare(
+            'SELECT id FROM dte_emitido '
+            . "WHERE rut_emisor = :rut AND ambiente = 'produccion' AND tipo_dte = :tipo AND folio = :folio "
+            . 'LIMIT 1'
+        );
+        $stmt->execute([':rut' => $rutEmisor, ':tipo' => $tipoDte, ':folio' => $folio]);
+        $dteEmitidoId = $stmt->fetchColumn();
+
+        // NO EXISTE LA FILA, Y ES UN CASO REAL: persistirEmitido() del motor es
+        // best-effort y se traga sus errores (ver SiiDirectoFacturador), asi que
+        // el panel puede recibir un 201 sin que el documento haya quedado
+        // guardado. Se registra y se sale: un INSERT a ciegas reventaria contra
+        // fk_envio_documento justo en el flujo que no puede romperse.
+        if ($dteEmitidoId === false) {
+            error_log(sprintf(
+                'encolar correo: no se encontro dte_emitido para %s tipo %d folio %d; no se encola',
+                $rutEmisor,
+                $tipoDte,
+                $folio
+            ));
+
+            return;
+        }
+
+        // Mismo criterio que la carga masiva: un correo mal escrito se descarta
+        // y se trata como si no viniera. No frena nada.
+        $destinatario = $destinatario !== null ? trim($destinatario) : null;
+        if ($destinatario === '' || ($destinatario !== null && ! filter_var($destinatario, FILTER_VALIDATE_EMAIL))) {
+            $destinatario = null;
+        }
+
+        // 'sin_destinatario' es un estado FINAL, no un error: el documento se
+        // emitio bien y no hay a quien mandarselo. La fila se crea igual para
+        // dejar constancia de que se evaluo y no quedo pendiente para siempre.
+        $estado = $destinatario === null ? 'sin_destinatario' : 'pendiente';
+
+        $pdo->prepare(
+            'INSERT INTO dte_envio_correo (dte_emitido_id, cuenta_id, destinatario, estado) '
+            . 'VALUES (:doc, :cuenta, :dest, :estado)'
+        )->execute([
+            ':doc'    => (int) $dteEmitidoId,
+            ':cuenta' => $cuentaId,
+            ':dest'   => $destinatario,
+            ':estado' => $estado,
+        ]);
+    } catch (PDOException $e) {
+        // 23000 sobre uk_envio_documento = el documento YA estaba encolado. Eso
+        // es EXITO, no fallo: la idempotencia vive en el UNIQUE del esquema y
+        // este catch es solo la forma de no gritar por ella. Se sale en silencio.
+        if ($e->getCode() === '23000') {
+            return;
+        }
+        error_log(sprintf(
+            'encolar correo: fallo el INSERT para %s tipo %d folio %d - %s',
+            $rutEmisor,
+            $tipoDte,
+            $folio,
+            $e->getMessage()
+        ));
+    } catch (Throwable $e) {
+        error_log(sprintf(
+            'encolar correo: fallo inesperado para %s tipo %d folio %d - %s',
+            $rutEmisor,
+            $tipoDte,
+            $folio,
+            $e->getMessage()
+        ));
+    }
+}
+
 /** Suma folios_restantes de los CAF activos de un tipo, en produccion. Reusa
  *  listarCafs() (ya existente, M1) en vez de inventar una consulta nueva. */
 function sumarFoliosDisponibles(PDO $pdo, string $rutEmisor, int $tipoDte): int
@@ -2480,7 +2742,13 @@ function armarDocumentosSubLote(array $notas): array
  * + un reproceso concurrente), esta llamada la descarta ANTES de armar el
  * payload -- nunca hay 2 llamadas al motor por la misma nota.
  */
-function facturarSubLote(PDO $pdo, string $keyServicio, array $notas): void
+/**
+ * $cuentaId y $rutEmisor los recibe -- en vez de rederivarlos -- porque el
+ * llamador ya los resolvio con exigirProduccionCompleto(). Los necesita el
+ * encolado del correo del final: cuenta_id se guarda en la fila de la cola y
+ * rut_emisor es parte del UNIQUE con el que se busca el documento emitido.
+ */
+function facturarSubLote(PDO $pdo, string $keyServicio, array $notas, int $cuentaId, string $rutEmisor): void
 {
     $ids           = array_map(static fn (array $n): int => (int) $n['id'], $notas);
     $idsReclamados = marcarNotasVentaEnProceso($pdo, $ids);
@@ -2528,6 +2796,70 @@ function facturarSubLote(PDO $pdo, string $keyServicio, array $notas): void
         }
         unset($dn);
         marcarNotaVentaFacturada($pdo, (int) $nota['id'], $docsNota);
+
+        // ENCOLADO DEL CORREO (migracion 024). Va DESPUES de marcar la nota
+        // facturada, que es donde termina el ciclo de vida del documento: si
+        // esto fallara, la nota ya quedo facturada y la emision no se entera.
+        //
+        // EL try/catch ENVUELVE TODO EL ENCOLADO, no solo el INSERT.
+        // encolarEnvioCorreo() ya trae su propia guarda, pero la RESOLUCION del
+        // destinatario queda fuera de ella: correoReceptorDeMaestro() consulta
+        // la base con ERRMODE_EXCEPTION y puede lanzar PDOException. Sin este
+        // catch, esa excepcion escaparia hacia el flujo de facturacion, que no
+        // tiene handler global, y el dano no seria solo "no se encolo": el
+        // foreach de notas se cortaria ahi, y las notas SIGUIENTES del sub-lote
+        // se quedarian en 'en_proceso' con sus documentos YA emitidos por el
+        // SII -- el estado que este mismo archivo advierte como "revisar
+        // manualmente" en marcarNotaVentaFacturada().
+        //
+        // VA DENTRO DEL foreach Y NO ALREDEDOR: si envolviera el bucle entero,
+        // un fallo en la nota N impediria marcar facturadas a las N+1. Por nota,
+        // cada una se marca y se encola con independencia de las demas.
+        //
+        // CASCADA DEL CAMINO MASIVO: maestro > nota. Se consulta el maestro
+        // PRIMERO, y la nota queda de respaldo.
+        //
+        // POR QUE EL MAESTRO NUNCA ES PEOR. Despues de la Entrega 1,
+        // nota_venta.receptor_email es SIEMPRE una foto del maestro: si el
+        // maestro tenia valor, la carga copio ESE valor a la nota; si estaba
+        // vacio, la nota tomo el del Excel y la Entrega 1 relleno el maestro con
+        // ese mismo valor. No existe ningun caso en que la nota traiga algo mas
+        // deliberado que el maestro de hoy.
+        //
+        // Y A VECES ES MEJOR: entre la carga del lote y la facturacion puede
+        // pasar tiempo. Si alguien corrige la direccion en el maestro en ese
+        // intervalo, leer el maestro hace que la correccion surta efecto en vez
+        // de perderse contra una foto vieja.
+        //
+        // EL RESPALDO NO SOBRA: cubre el maestro vaciado despues de la carga, y
+        // las notas cargadas ANTES de que existiera la regla de la Entrega 1.
+        try {
+            $destinatario = correoReceptorDeMaestro($cuentaId, (string) ($nota['receptor_rut'] ?? ''));
+            if ($destinatario === null) {
+                $destinatario = trim((string) ($nota['receptor_email'] ?? ''));
+            }
+
+            // UNA NOTA PUEDE GENERAR VARIOS DOCUMENTOS (factura mas nota de
+            // credito cuando anula una boleta, ver cantidadDocumentosPorNota):
+            // se encola CADA UNO, con su propio tipo y folio.
+            foreach ($docsNota as $doc) {
+                encolarEnvioCorreo(
+                    $pdo,
+                    $cuentaId,
+                    $rutEmisor,
+                    (int) ($doc['tipoDte'] ?? 0),
+                    (int) ($doc['folio'] ?? 0),
+                    $destinatario !== '' ? $destinatario : null
+                );
+            }
+        } catch (Throwable $e) {
+            error_log(sprintf(
+                'encolar correo: fallo el encolado de la nota %d (ya facturada, la emision no se toca) - %s',
+                (int) $nota['id'],
+                $e->getMessage()
+            ));
+        }
+
         $cursor += $n;
     }
 }
@@ -2648,7 +2980,7 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
     $subLote = obtenerNotasVentaPendientesPorIds($pdo, $cuentaId, $ids, FACTURACION_MASIVA_SUBLOTE);
 
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
-    facturarSubLote($pdo, $keyServicio, $subLote);
+    facturarSubLote($pdo, $keyServicio, $subLote, $cuentaId, $rutEmisor);
 
     $conteo = contarNotasVentaPorEstado($pdo, $cuentaId, $ids);
     responderJsonFacturacionMasiva(200, [
