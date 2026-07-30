@@ -33,40 +33,21 @@ declare(strict_types=1);
  *   el XML en su propia base y los generadores en proceso, asi que no necesita
  *   ni key ni HTTP contra si mismo.
  *
- * ESTE SCRIPT NO INCLUYE NINGUN FRONT CONTROLLER. Solo vendor/autoload.php. Los
- * generadores de PDF son autoloadables por composer (PSR-4 Plantiflex\
- * FacturacionCl\ -> src/) y registran ellos mismos el autoloader de LibreDTE.
+ * ESTE SCRIPT NO INCLUYE NINGUN FRONT CONTROLLER. Solo vendor/autoload.php.
  *
- * ALCANCE: envia UNA fila, la que se le pide por id. El runner que vacia la cola
- * y su cron son otra entrega; aqui no hay bucle ni reintentos automaticos.
+ * DONDE VIVE LA LOGICA: el armado del correo y el registro del resultado estan
+ * en Plantiflex\FacturacionCl\Correo\PreparadorEnvio, compartidos con
+ * scripts/enviar_correos_pendientes.php (el runner). Aqui solo queda el
+ * envoltorio CLI. Hay UN camino de envio, no dos.
+ *
+ * ALCANCE: envia UNA fila, la que se le pide por id. Sin bucle, sin reintentos
+ * y sin topes: eso es del runner.
  */
 
 require __DIR__ . '/../vendor/autoload.php';
 
 use Plantiflex\FacturacionCl\Correo\BrevoMailer;
-use Plantiflex\FacturacionCl\Pdf\BoletaPdfGenerator;
-use Plantiflex\FacturacionCl\Pdf\DtePdfGenerator;
-
-/**
- * COPIA DELIBERADA de TIPOS_PERMITIDOS_PDF de public/index.php (linea ~73).
- *
- * No se puede reusar la original: es una const de ESE archivo, que es el front
- * controller del motor, e incluirlo desde un CLI dispararia Auth, la sesion y el
- * router. Los generadores de PDF tampoco validan el tipo por su cuenta -- quien
- * filtra es pdfDte() alla y este script aca.
- *
- * SI SE AGREGA O QUITA UN TIPO, HAY QUE TOCAR LOS DOS SITIOS. El front
- * controller lleva el comentario espejo avisando de esta copia.
- */
-const TIPOS_CON_PDF = [33, 61, 56, 39];
-
-/** Etiqueta legible por tipo de DTE, para el asunto y el cuerpo del correo. */
-const NOMBRE_TIPO_DTE = [
-    33 => 'Factura electronica',
-    61 => 'Nota de credito electronica',
-    56 => 'Nota de debito electronica',
-    39 => 'Boleta electronica',
-];
+use Plantiflex\FacturacionCl\Correo\PreparadorEnvio;
 
 function fail(string $msg, int $code = 2): never
 {
@@ -131,133 +112,35 @@ $envioId = (int) $idCrudo;
 $pdo = conectarDb();
 
 // ---------------------------------------------------------------------------
-//  1. La fila y todo lo que hace falta, POR JOINS NUMERICOS
-//
-//  El esquema vive en DOS familias de collation: las tablas del motor son
-//  utf8mb4_0900_ai_ci y las creadas por las migraciones del panel son
-//  utf8mb4_unicode_ci. Cruzarlas por una columna de TEXTO (rut, por ejemplo)
-//  revienta con "Illegal mix of collations". Por eso todos los JOIN de aqui van
-//  por id numerico (BIGINT), que no tiene collation:
-//
-//      dte_envio_correo.dte_emitido_id -> dte_emitido.id       (tipo, folio, rut, xml)
-//      dte_envio_correo.cuenta_id      -> dte_emisor.cuenta_id (razon social)
-//      dte_envio_correo.cuenta_id      -> cuenta.id            (Reply-To)
-//
-//  dte_envio_correo ya guarda cuenta_id y destinatario como FOTO, tomada al
-//  encolar, justamente para no depender de esos cruces.
+//  Preparacion: consulta, guardas, PDF y armado del mensaje
 // ---------------------------------------------------------------------------
-$stmt = $pdo->prepare(
-    'SELECT q.id, q.estado, q.destinatario, q.intentos, q.cuenta_id, '
-    . '       e.tipo_dte, e.folio, e.rut_emisor, e.xml, '
-    . '       em.razon_social, '
-    . '       c.email AS cuenta_email '
-    . 'FROM dte_envio_correo q '
-    . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
-    . "LEFT JOIN dte_emisor em ON em.cuenta_id = q.cuenta_id AND em.ambiente = 'produccion' "
-    . 'LEFT JOIN cuenta c ON c.id = q.cuenta_id '
-    . 'WHERE q.id = :id LIMIT 1'
-);
-$stmt->execute([':id' => $envioId]);
-$fila = $stmt->fetch(PDO::FETCH_ASSOC);
+$envio = PreparadorEnvio::preparar($pdo, $envioId);
 
-if ($fila === false) {
-    fail("No existe la fila {$envioId} en dte_envio_correo.", 1);
+if ($envio['ok'] === false) {
+    // El canal importa: un "ya estaba enviada" es un no-op informativo y va a
+    // STDOUT; un "no tiene XML" es un error y va a STDERR con el prefijo ERROR:.
+    if ($envio['canal'] === 'stderr') {
+        fail($envio['motivo'], $envio['codigo']);
+    }
+    aviso($envio['motivo']);
+    exit($envio['codigo']);
 }
 
 // ---------------------------------------------------------------------------
-//  2. Guardas: nunca reenviar, nunca enviar a la nada
-// ---------------------------------------------------------------------------
-if ($fila['estado'] !== 'pendiente') {
-    aviso("Fila {$envioId}: estado '{$fila['estado']}', no 'pendiente'. NO se envia nada.");
-    exit(1);
-}
-$destinatario = trim((string) ($fila['destinatario'] ?? ''));
-if ($destinatario === '') {
-    aviso("Fila {$envioId}: sin destinatario. NO se envia nada.");
-    exit(1);
-}
-$tipoDte = (int) $fila['tipo_dte'];
-$folio   = (int) $fila['folio'];
-if (! in_array($tipoDte, TIPOS_CON_PDF, true)) {
-    aviso("Fila {$envioId}: tipo {$tipoDte} no tiene generador de PDF. NO se envia nada.");
-    exit(1);
-}
-
-// EL XML PUEDE FALTAR, Y ES POR DISENO: persistirEmitido() del motor es
-// best-effort y se traga sus errores, asi que hay filas de dte_emitido sin xml
-// (el propio MySqlDteEmitidoRepository::obtenerXml las trata como "sin XML").
-$xmlBytes = (string) ($fila['xml'] ?? '');
-if ($xmlBytes === '') {
-    fail("Fila {$envioId}: dte_emitido {$tipoDte}/{$folio} no tiene XML guardado; no hay nada que adjuntar.", 1);
-}
-
-// ---------------------------------------------------------------------------
-//  3. El PDF, generado en proceso desde ESOS MISMOS BYTES
-// ---------------------------------------------------------------------------
-try {
-    $pdfBytes = $tipoDte === 39
-        ? (new BoletaPdfGenerator())->generarDesdeEnvioXml($xmlBytes, $tipoDte, $folio)
-        : (new DtePdfGenerator())->generarDesdeEnvioXml($xmlBytes, false, $tipoDte, $folio);
-} catch (Throwable $e) {
-    fail("Fila {$envioId}: fallo la generacion del PDF - " . $e->getMessage(), 3);
-}
-
-// ---------------------------------------------------------------------------
-//  4. El correo
-// ---------------------------------------------------------------------------
-$etiquetaTipo = NOMBRE_TIPO_DTE[$tipoDte] ?? "Documento tributario tipo {$tipoDte}";
-$razonSocial  = trim((string) ($fila['razon_social'] ?? ''));
-$replyTo      = trim((string) ($fila['cuenta_email'] ?? ''));
-$rutEmisor    = (string) $fila['rut_emisor'];
-
-$asunto = sprintf('%s N %d - %s', $etiquetaTipo, $folio, $razonSocial !== '' ? $razonSocial : $rutEmisor);
-
-$cuerpo = sprintf(
-    "<p>Estimado(a),</p>\n"
-    . "<p>Adjuntamos su <strong>%s N&deg; %d</strong>, emitida por <strong>%s</strong> (RUT %s).</p>\n"
-    . "<p>Se adjuntan dos archivos:</p>\n"
-    . "<ul><li>El XML con firma electronica, valido ante el SII.</li>\n"
-    . "<li>Una representacion impresa en PDF.</li></ul>\n"
-    . "<p>Si necesita responder, puede hacerlo directamente a este correo.</p>\n",
-    htmlspecialchars($etiquetaTipo, ENT_QUOTES, 'UTF-8'),
-    $folio,
-    htmlspecialchars($razonSocial !== '' ? $razonSocial : $rutEmisor, ENT_QUOTES, 'UTF-8'),
-    htmlspecialchars($rutEmisor, ENT_QUOTES, 'UTF-8')
-);
-
-// Nombres que sirvan de verdad al abrir el correo: RUT_tipo_folio.
-$baseNombre = sprintf('%s_%d_%d', str_replace('.', '', $rutEmisor), $tipoDte, $folio);
-
-// EL XML VA EN BYTES CRUDOS, TAL COMO SALIO DE LA BASE.
-//
-// NADA de mb_convert_encoding, utf8_encode, htmlspecialchars ni normalizacion de
-// saltos de linea sobre $xmlBytes. Ese XML esta FIRMADO y va en ISO-8859-1:
-// cualquier transcodificacion, por inocente que parezca, cambia los bytes sobre
-// los que se calculo la firma y la invalida ante el SII. El receptor recibiria
-// un documento que no valida.
-//
-// El base64 lo hace BrevoMailer::enviar() sobre estos mismos bytes, en un solo
-// paso y sin tocarlos.
-$adjuntos = [
-    ['nombre' => $baseNombre . '.xml', 'contenido' => $xmlBytes],
-    ['nombre' => $baseNombre . '.pdf', 'contenido' => $pdfBytes],
-];
-
-// ---------------------------------------------------------------------------
-//  5. Dry-run: TODO menos la llamada a Brevo
+//  Dry-run: TODO menos la llamada a Brevo
 //
 //  Pensado para poder correrse contra produccion sin mandar nada: no construye
 //  el mailer (asi que no exige BREVO_API_KEY) y no toca la fila.
 // ---------------------------------------------------------------------------
 if ($dryRun) {
     aviso('--- DRY RUN: no se llama a Brevo y no se modifica la fila ---');
-    aviso(sprintf('fila            : %d (estado %s, intentos %d)', $envioId, $fila['estado'], (int) $fila['intentos']));
-    aviso(sprintf('documento       : tipo %d folio %d, emisor %s', $tipoDte, $folio, $rutEmisor));
-    aviso(sprintf('destinatario    : %s', $destinatario));
-    aviso(sprintf('remitente visible: %s', $razonSocial !== '' ? $razonSocial : '(sin razon social; se usaria CORREO_REMITENTE_NOMBRE)'));
-    aviso(sprintf('reply-to        : %s', $replyTo !== '' ? $replyTo : '(sin cuenta.email; el correo saldria sin Reply-To)'));
-    aviso(sprintf('asunto          : %s', $asunto));
-    foreach ($adjuntos as $a) {
+    aviso(sprintf('fila            : %d (estado %s, intentos %d)', $envioId, $envio['estado'], $envio['intentos']));
+    aviso(sprintf('documento       : tipo %d folio %d, emisor %s', $envio['tipoDte'], $envio['folio'], $envio['rutEmisor']));
+    aviso(sprintf('destinatario    : %s', $envio['destinatario']));
+    aviso(sprintf('remitente visible: %s', $envio['remitenteNombre'] ?? '(sin razon social; se usaria CORREO_REMITENTE_NOMBRE)'));
+    aviso(sprintf('reply-to        : %s', $envio['replyTo'] ?? '(sin cuenta.email; el correo saldria sin Reply-To)'));
+    aviso(sprintf('asunto          : %s', $envio['asunto']));
+    foreach ($envio['adjuntos'] as $a) {
         aviso(sprintf(
             'adjunto         : %-28s %8d bytes crudos  %8d en base64  md5=%s',
             $a['nombre'],
@@ -270,7 +153,7 @@ if ($dryRun) {
 }
 
 // ---------------------------------------------------------------------------
-//  6. Envio real
+//  Envio real
 // ---------------------------------------------------------------------------
 try {
     $mailer = BrevoMailer::desdeEntorno();
@@ -282,12 +165,12 @@ try {
 
 try {
     $res = $mailer->enviar(
-        destinatarioEmail: $destinatario,
-        asunto:            $asunto,
-        htmlCuerpo:        $cuerpo,
-        adjuntos:          $adjuntos,
-        replyToEmail:      $replyTo !== '' ? $replyTo : null,
-        remitenteNombre:   $razonSocial !== '' ? $razonSocial : null,
+        destinatarioEmail: $envio['destinatario'],
+        asunto:            $envio['asunto'],
+        htmlCuerpo:        $envio['cuerpo'],
+        adjuntos:          $envio['adjuntos'],
+        replyToEmail:      $envio['replyTo'],
+        remitenteNombre:   $envio['remitenteNombre'],
     );
     $ok      = $res['status'] >= 200 && $res['status'] < 300;
     $detalle = 'HTTP ' . $res['status'] . ' ' . substr($res['body'], 0, 400);
@@ -296,20 +179,11 @@ try {
     $detalle = $e->getMessage();
 }
 
-// ---------------------------------------------------------------------------
-//  7. La fila NUNCA queda 'pendiente' despues de un intento
-// ---------------------------------------------------------------------------
+PreparadorEnvio::registrarResultado($pdo, $envioId, $ok, $detalle);
+
 if ($ok) {
-    $pdo->prepare(
-        "UPDATE dte_envio_correo SET estado = 'enviado', enviado_at = NOW(), "
-        . 'intentos = intentos + 1, ultimo_error = NULL WHERE id = :id'
-    )->execute([':id' => $envioId]);
-    aviso("Fila {$envioId}: ENVIADO a {$destinatario} ({$detalle})");
+    aviso("Fila {$envioId}: ENVIADO a {$envio['destinatario']} ({$detalle})");
     exit(0);
 }
 
-$pdo->prepare(
-    "UPDATE dte_envio_correo SET estado = 'error', intentos = intentos + 1, "
-    . 'ultimo_error = :err WHERE id = :id'
-)->execute([':err' => substr($detalle, 0, 500), ':id' => $envioId]);
 fail("Fila {$envioId}: fallo el envio - {$detalle}", 3);

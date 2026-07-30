@@ -71,13 +71,15 @@ const TIPOS_PERMITIDOS = [33, 61, 56];       // factura, NC, ND
 // puede pedir su PDF una vez persistida. TIPOS_PERMITIDOS NO se toca: emitir/
 // listar/estado/anular siguen exclusivos de factura/NC/ND.
 //
-// OJO: ESTA LISTA ESTA DUPLICADA EN scripts/enviar_correo.php (constante
-// TIPOS_CON_PDF). Ese script corre por CLI y NO incluye este front controller
-// -- incluirlo dispararia Auth, sesion y el router --, asi que no puede leer
-// esta const. Los generadores de PDF (DtePdfGenerator/BoletaPdfGenerator) NO
-// validan el tipo por su cuenta: quien filtra es pdfDte() aqui, y el script
-// alla. Si se agrega o quita un tipo, hay que tocar LOS DOS SITIOS: no hay nada
-// que lo detecte automaticamente.
+// OJO: ESTA LISTA ESTA DUPLICADA EN src/Correo/PreparadorEnvio.php (constante
+// PreparadorEnvio::TIPOS_CON_PDF), que es de donde la leen los dos CLI de envio
+// de correo (enviar_correo.php y enviar_correos_pendientes.php). Esos scripts
+// corren por CLI y NO incluyen este front controller -- incluirlo dispararia
+// Auth, sesion y el router --, asi que no pueden leer esta const. Los
+// generadores de PDF (DtePdfGenerator/BoletaPdfGenerator) NO validan el tipo por
+// su cuenta: quien filtra es pdfDte() aqui, y PreparadorEnvio alla. Si se agrega
+// o quita un tipo, hay que tocar LOS DOS SITIOS: no hay nada que lo detecte
+// automaticamente.
 const TIPOS_PERMITIDOS_PDF = [33, 61, 56, 39];
 // Solo para el filtro ?tipoDte= del listado (GET /api/v1/dte): permite pedir
 // boleta en el historico. TIPOS_PERMITIDOS NO se toca.
