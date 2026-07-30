@@ -286,6 +286,10 @@ const MIGRACIONES = [
         'id' => '023', 'archivo' => '023_dte_folio_proximo_inicial_not_null.sql', 'nota' => 'ALTER (misma columna que la 022)',
         'huellas' => [['tipo' => 'nulabilidad', 'desc' => 'proximo_folio_inicial es NOT NULL', 'tabla' => 'dte_folio', 'columna' => 'proximo_folio_inicial', 'esperado_nulabilidad' => 'NO']],
     ],
+    [
+        'id' => '024', 'archivo' => '024_dte_envio_correo.sql', 'nota' => 'CREATE',
+        'huellas' => [['tipo' => 'tablas', 'desc' => 'tabla dte_envio_correo', 'tablas' => ['dte_envio_correo'], 'esperado' => 1]],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
