@@ -3279,6 +3279,13 @@ function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
  * rut por parametro en vez de derivarlo. Si cambia una condicion hay que
  * cambiarla en los DOS sitios: no hay nada que lo detecte automaticamente.
  *
+ * TERCER CONSUMIDOR (nuevo): estacionesProduccion() arma con esto el stepper de
+ * solo-produccion. Usa el detalle paso a paso que esta funcion reporta, pero
+ * NO decide con el si el tenant puede emitir: eso se lo pregunta a
+ * estadoEmisionProduccion() y lo recibe ya resuelto por parametro. Es decir, la
+ * repeticion de condiciones sigue viviendo en DOS sitios, no en tres -- y asi
+ * tiene que quedar.
+ *
  * Las consultas de certificado y CAF son las mismas que ya usaba
  * handleAdminTenantsGet() para su resumen de superadmin; se centralizan aqui
  * para que tenant y superadmin no puedan divergir.
@@ -3375,6 +3382,53 @@ function subpasosProduccion(array $estado): array
 }
 
 /**
+ * Stepper de SOLO PRODUCCION, para el tenant que llego ya autorizado por el SII
+ * y nunca paso por el circuito de certificacion.
+ *
+ * Mismo shape que el array de 7 estaciones de handlePanelGet(), asi que lo pinta
+ * partials/_estaciones.php TAL CUAL, sin tocarlo: 'titulo', 'estado' y 'enlace'
+ * opcional. Ese partial ya era agnostico del ambiente; lo unico que le faltaba
+ * era que alguien le pasara la otra definicion.
+ *
+ * SON 6 FILAS, no 7. Las estaciones 5 y 6 del circuito de certificacion (sets de
+ * prueba y certificacion aprobada) NO tienen equivalente aqui: son el tramite
+ * ante el SII, que este tenant ya trae hecho de antes de llegar. Y la 7 ("En
+ * produccion") deja de ser una estacion futura para convertirse en la ultima
+ * fila, "Listo para emitir": aqui produccion no es el destino lejano, es todo
+ * el camino.
+ *
+ * ENCADENADO IGUAL QUE EL SERVIDOR: cada fila queda 'inactiva' mientras la
+ * anterior no este, en el mismo orden en que exigirProduccionCompleto() encadena
+ * sus redirects. No se ofrece un enlace que el guard vaya a rebotar.
+ *
+ * DE DONDE SALE CADA COSA:
+ *   - el detalle paso a paso, de estadoProduccion() (por eso lo recibe armado);
+ *   - "puede emitir", de estadoEmisionProduccion(), YA RESUELTO por el
+ *     llamador. Esta funcion no vuelve a comprobar las 3 condiciones ni podria:
+ *     no tiene con que. Ver la nota de TERCER CONSUMIDOR en estadoProduccion().
+ *
+ * La fila de API keys va aunque no bloquee emitir -- el titulo dice "(opcional)"
+ * y queda 'inactiva' hasta que se pueda emitir, que es cuando su ruta deja de
+ * rebotar. _estaciones.php no tiene un estado "opcional" y no se le agrega uno
+ * por esto.
+ *
+ * @param array{empresa:bool, certificado:bool, caf:bool, apiKey:bool} $estado
+ *
+ * @return list<array<string,mixed>>
+ */
+function estacionesProduccion(array $estado, bool $puedeEmitir): array
+{
+    return [
+        ['titulo' => 'Registrado',                        'estado' => 'completado'],
+        ['titulo' => 'Datos de empresa (Resolucion SII)', 'estado' => $estado['empresa'] ? 'completado' : 'pendiente', 'enlace' => '/empresa-produccion'],
+        ['titulo' => 'Certificado digital de produccion', 'estado' => $estado['certificado'] ? 'completado' : ($estado['empresa'] ? 'pendiente' : 'inactiva'), 'enlace' => '/certificado-produccion'],
+        ['titulo' => 'CAF de produccion (folios reales)', 'estado' => $estado['caf'] ? 'completado' : ($estado['certificado'] ? 'pendiente' : 'inactiva'), 'enlace' => '/caf-produccion'],
+        ['titulo' => 'API key de produccion (opcional)',  'estado' => $estado['apiKey'] ? 'completado' : ($puedeEmitir ? 'pendiente' : 'inactiva'), 'enlace' => '/apikeys-produccion'],
+        ['titulo' => 'Listo para emitir',                 'estado' => $puedeEmitir ? 'completado' : 'inactiva'],
+    ];
+}
+
+/**
  * LAS 3 CONDICIONES PARA EMITIR EN PRODUCCION, EN UN SOLO SITIO.
  *
  * Para ambiente='produccion': fila dte_emisor con resolucion_fecha/
@@ -3426,6 +3480,31 @@ function estadoEmisionProduccion(PDO $pdo, int $cuentaId): array
     }
 
     return ['rut' => (string) $rutEmisor, 'falta' => null];
+}
+
+/**
+ * rut_emisor de la fila de PRODUCCION de una cuenta, o null si no hay fila.
+ *
+ * POR QUE EXISTE, teniendo estadoEmisionProduccion() al lado: aquella devuelve
+ * el rut SOLO cuando las 3 condiciones estan completas -- en sus tres salidas
+ * tempranas retorna 'rut' => null a proposito, porque su contrato es "puede
+ * emitir", no "que rut tiene". Un tenant que cargo la empresa de produccion y
+ * todavia no el certificado necesita que alguien le diga su rut para poder
+ * PINTAR ese avance, y no habia de donde sacarlo.
+ *
+ * NO duplica ninguna de las 3 condiciones: solo lee la fila. Si hace falta
+ * saber si esa fila sirve para emitir, eso lo sigue contestando
+ * estadoEmisionProduccion() y nadie mas.
+ */
+function rutEmisorProduccion(PDO $pdo, int $cuentaId): ?string
+{
+    $stmt = $pdo->prepare(
+        "SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :cuenta_id AND ambiente = 'produccion' LIMIT 1"
+    );
+    $stmt->execute([':cuenta_id' => $cuentaId]);
+    $rut = $stmt->fetchColumn();
+
+    return $rut === false ? null : (string) $rut;
 }
 
 /**
@@ -9198,14 +9277,31 @@ function informeExcelSalida(string $titulo, array $tabla, string $nombreArchivo)
 //
 //  Dos dashboards distintos detras de la misma ruta:
 //
-//    - Progreso (el de siempre, 7 estaciones): mientras el tenant NO tenga
-//      completos los 3 pasos obligatorios de produccion.
+//    - Progreso: mientras el tenant NO tenga completos los 3 pasos obligatorios
+//      de produccion.
 //    - Gestion (metricas reales): cuando los tiene.
 //
 //  El switch usa EXACTAMENTE la misma condicion que exigirProduccionCompleto()
 //  (empresa + certificado + CAF de produccion), via estadoProduccion(). No se
 //  inventa un tercer criterio de "esta en produccion". La api_key externa no
 //  participa: no bloquea emitir, asi que tampoco puede decidir esto.
+//
+//  Y DOS STEPPERS distintos dentro del dashboard de progreso, segun por que
+//  camino entro el tenant:
+//
+//    - CERTIFICACION (7 estaciones, el de siempre): el default. Lo ve todo el
+//      que tenga fila de certificacion, y tambien el que no tenga ninguna fila
+//      -- una cuenta recien creada sigue viendo lo mismo que veia antes.
+//    - PRODUCCION (6 filas, estacionesProduccion()): solo el que tiene fila de
+//      PRODUCCION y NO tiene de certificacion. Llego ya autorizado por el SII y
+//      el circuito de certificacion no le corresponde; hasta ahora se le pintaba
+//      igual y ese era el lazo que quedaba abierto.
+//
+//  SI APARECE LA FILA DE CERTIFICACION, GANA CERTIFICACION. Un tenant que
+//  empezo por produccion y despues decide certificarse pasa al stepper de 7:
+//  ese circuito es mas largo y ya lleva produccion embebida en su estacion 7,
+//  asi que no se pierde nada de lo cargado. El de produccion no tiene donde
+//  meter las estaciones 5 y 6.
 // ===========================================================================
 function handlePanelGet(): void
 {
@@ -9223,6 +9319,13 @@ function handlePanelGet(): void
     // para las tres pantallas; si divergen, vuelve el bug que ya arreglamos.
     $emision     = estadoEmisionProduccion($pdo, $cuentaId);
     $puedeEmitir = $emision['falta'] === null;
+
+    // POR QUE CAMINO VA ESTE TENANT. No hay columna ni bandera: lo dicen las
+    // filas que existen, que es el unico dato que no puede quedar desincronizado
+    // con la realidad. Sin fila de produccion (cuenta nueva) el camino sigue
+    // siendo el de certificacion, igual que siempre.
+    $rutProduccion    = rutEmisorProduccion($pdo, $cuentaId);
+    $caminoProduccion = ! $tieneEmisor && $rutProduccion !== null;
 
     // Estacion 3 (certificado): solo se consulta si la etapa 2 esta completa;
     // requiere el rut_emisor de la cuenta para buscar en dte_certificado.
@@ -9247,8 +9350,15 @@ function handlePanelGet(): void
     // llamaba, el dashboard no entraba nunca en modo gestion y le mostraba un
     // circuito de certificacion que no le corresponde. El emisor con el que
     // emite de verdad es el de la fila de PRODUCCION, y de ahi sale.
+    //
+    // El fallback sale de rutEmisorProduccion() y ya no de $emision['rut'].
+    // Para quien puede emitir son el mismo dato -- misma fila -- pero
+    // $emision['rut'] es null mientras falte algo, y justamente al que le falta
+    // algo es al que hay que pintarle su avance. Con la fuente anterior, un
+    // tenant con empresa de produccion cargada y sin certificado quedaba otra
+    // vez sin rut y sin nada que mostrar.
     if (! isset($rutEmisor) || $rutEmisor === false || $rutEmisor === null) {
-        $rutEmisor = $emision['rut'];
+        $rutEmisor = $rutProduccion;
     }
 
     // Estacion 4 (CAF): solo se consulta si la etapa 3 esta completa; reusa
@@ -9312,15 +9422,23 @@ function handlePanelGet(): void
         }
     }
 
-    $estaciones = [
-        ['titulo' => 'Registrado',                        'estado' => 'completado'],
-        ['titulo' => 'Datos de empresa cargados',         'estado' => $tieneEmisor ? 'completado' : 'pendiente', 'enlace' => '/empresa'],
-        ['titulo' => 'Certificado digital',               'estado' => $tieneCertificado ? 'completado' : ($tieneEmisor ? 'pendiente' : 'inactiva'), 'enlace' => '/certificado'],
-        ['titulo' => 'CAF de certificacion',              'estado' => $tieneCaf ? 'completado' : ($tieneCertificado ? 'pendiente' : 'inactiva'), 'enlace' => '/caf'],
-        ['titulo' => 'En certificacion (sets de prueba)', 'estado' => $estacion5Completa ? 'completado' : ($tieneCaf ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-elegir'],
-        ['titulo' => 'Certificacion aprobada',            'estado' => $certConfirmada ? 'completado' : ($estacion5Completa ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-aprobada'],
-        $estacion7,
-    ];
+    // El stepper de produccion se arma con $estadoProd, que solo existe si hubo
+    // rut. $caminoProduccion implica fila de produccion, e implica por lo tanto
+    // que el fallback de arriba dejo $rutEmisor no-null: cuando esta rama corre,
+    // $estadoProd esta definido.
+    if ($caminoProduccion) {
+        $estaciones = estacionesProduccion($estadoProd, $puedeEmitir);
+    } else {
+        $estaciones = [
+            ['titulo' => 'Registrado',                        'estado' => 'completado'],
+            ['titulo' => 'Datos de empresa cargados',         'estado' => $tieneEmisor ? 'completado' : 'pendiente', 'enlace' => '/empresa'],
+            ['titulo' => 'Certificado digital',               'estado' => $tieneCertificado ? 'completado' : ($tieneEmisor ? 'pendiente' : 'inactiva'), 'enlace' => '/certificado'],
+            ['titulo' => 'CAF de certificacion',              'estado' => $tieneCaf ? 'completado' : ($tieneCertificado ? 'pendiente' : 'inactiva'), 'enlace' => '/caf'],
+            ['titulo' => 'En certificacion (sets de prueba)', 'estado' => $estacion5Completa ? 'completado' : ($tieneCaf ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-elegir'],
+            ['titulo' => 'Certificacion aprobada',            'estado' => $certConfirmada ? 'completado' : ($estacion5Completa ? 'pendiente' : 'inactiva'), 'enlace' => '/certificacion-aprobada'],
+            $estacion7,
+        ];
+    }
 
     // --- Dashboard de GESTION: solo con los 3 pasos de produccion completos ---
     //
@@ -9384,5 +9502,19 @@ function handlePanelGet(): void
 
     // "Credenciales de API" no es una estacion numerada del ciclo de 7: es una
     // seccion aparte que solo aparece cuando el onboarding base esta completo.
-    vista('panel', ['estaciones' => $estaciones, 'mostrarApiKeys' => $tieneCaf]);
+    //
+    // DESACOPLADA DEL CAF DE CERTIFICACION. Antes la condicion era $tieneCaf a
+    // secas, o sea un hecho del circuito de certificacion decidiendo una seccion
+    // que nada tiene que ver con el ambiente. En el camino de produccion esa
+    // pregunta no significa nada -- $tieneCaf es false siempre, porque no hay
+    // fila de certificacion de la que colgar -- asi que la tarjeta quedaba
+    // apagada por accidente y no por criterio.
+    //
+    // Ahora cada camino responde lo suyo: en certificacion sigue siendo
+    // exactamente $tieneCaf, el criterio de siempre; en produccion la tarjeta
+    // sobra, porque la fila 5 del stepper YA es el acceso a las API keys de
+    // produccion, y dos accesos a lo mismo en la misma pantalla solo confunden.
+    $mostrarApiKeys = $caminoProduccion ? false : $tieneCaf;
+
+    vista('panel', ['estaciones' => $estaciones, 'mostrarApiKeys' => $mostrarApiKeys]);
 }
