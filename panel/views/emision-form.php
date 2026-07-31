@@ -59,6 +59,19 @@ foreach ($productos as $p) {
 }
 $esNota = in_array($tipoDte, [61, 56], true);
 
+// FACTURA EXENTA (34): TODAS las lineas son exentas, sin excepcion. Un 34 con
+// una sola linea afecta haria que el builder emitiera MntNeto, TasaIVA e IVA
+// dentro de un documento que no puede tenerlos, el SII lo rechazaria y el folio
+// quedaria quemado igual (se asigna antes de enviar).
+//
+// Aqui la casilla se marca y se deshabilita: se sigue VIENDO, para que quede
+// claro por que no hay IVA, pero no se puede desmarcar. Una casilla deshabilitada
+// NO viaja en el POST, asi que quien garantiza el valor es armarDocumentoEmision(),
+// que lo fuerza para el tipo 34; y el motor lo vuelve a validar por su cuenta.
+// Tres capas, porque al cliente no se le cree y al usuario no se le hace perder
+// un folio por un descuido.
+$esExenta = $tipoDte === 34;
+
 // "Emitir factura electronica" / "Emitir nota de credito" / "Emitir nota de
 // debito". strtolower y no mb_strtolower: los titulos de metaTipoEmision() son
 // ASCII sin tildes y mbstring no esta garantizada en la imagen.
@@ -264,7 +277,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                             <td class="col-cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" aria-label="Cantidad"<?= $errStyle("detalles[{$i}].cantidad"); ?>></td>
                             <td class="col-precio"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][precioUnitario]" value="<?= htmlspecialchars((string) ($d['precioUnitario'] ?? '')); ?>" class="det-precio" aria-label="Precio unitario"<?= $errStyle("detalles[{$i}].precioUnitario"); ?>></td>
                             <td class="col-unidad"><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" aria-label="Unidad"></td>
-                            <td class="col-exento"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" aria-label="Exento de IVA" <?= ! empty($d['exento']) ? 'checked' : ''; ?>></td>
+                            <td class="col-exento"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" aria-label="Exento de IVA" <?= $esExenta || ! empty($d['exento']) ? 'checked' : ''; ?><?= $esExenta ? ' disabled' : ''; ?>></td>
                             <td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
                         </tr>
                     <?php endforeach; ?>
@@ -288,6 +301,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 <script>
 (function () {
     var PRODUCTOS = <?= json_encode($mapaProductos, JSON_UNESCAPED_UNICODE); ?>;
+    var ES_EXENTA = <?= $esExenta ? 'true' : 'false'; ?>;
     var tbody = document.querySelector('#tabla-detalle tbody');
     var idx = <?= count($detalles); ?>;
 
@@ -300,7 +314,9 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         var exento = fila.querySelector('.det-exento');
         if (precio && p.precio !== null && precio.value === '') { precio.value = p.precio; }
         if (unidad && unidad.value === '') { unidad.value = p.unidad || ''; }
-        if (exento) { exento.checked = p.exento === 1; }
+        // En una factura exenta el maestro NO manda: un producto afecto no puede
+        // desmarcar la casilla, porque en un 34 no existe la linea afecta.
+        if (exento && !ES_EXENTA) { exento.checked = p.exento === 1; }
     }
 
     // Debe producir el MISMO DOM que la fila que renderiza el PHP de arriba
@@ -311,7 +327,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             '<td class="col-cantidad"><input type="text" inputmode="decimal" name="detalles[' + n + '][cantidad]" aria-label="Cantidad"></td>' +
             '<td class="col-precio"><input type="text" inputmode="decimal" name="detalles[' + n + '][precioUnitario]" class="det-precio" aria-label="Precio unitario"></td>' +
             '<td class="col-unidad"><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" aria-label="Unidad"></td>' +
-            '<td class="col-exento"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento" aria-label="Exento de IVA"></td>' +
+            '<td class="col-exento"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento" aria-label="Exento de IVA"' + (ES_EXENTA ? ' checked disabled' : '') + '></td>' +
             '<td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>';
     }
 

@@ -374,6 +374,10 @@ function definicionMenu(): array
                     'label' => 'Emision',
                     'items' => [
                         ['clave' => 'ventas.factura', 'label' => 'Factura electronica', 'destino' => '/ventas/factura', 'icono' => 'factura', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        // Mismo icono 'factura' que la afecta, y no es un icono
+                        // prestado: una exenta ES una factura, solo que sin IVA.
+                        // Lo que las distingue es la etiqueta, no el dibujo.
+                        ['clave' => 'ventas.factura-exenta', 'label' => 'Factura exenta', 'destino' => '/ventas/factura-exenta', 'icono' => 'factura', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                         ['clave' => 'ventas.nc', 'label' => 'Nota de credito', 'destino' => '/ventas/nota-credito', 'icono' => 'nota-credito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                         ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'icono' => 'nota-debito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
@@ -930,6 +934,7 @@ function metaTipoEmision(int $tipoDte): array
 {
     return match ($tipoDte) {
         33 => ['Factura electronica', '/ventas/factura', 'ventas.factura'],
+        34 => ['Factura exenta', '/ventas/factura-exenta', 'ventas.factura-exenta'],
         61 => ['Nota de credito', '/ventas/nota-credito', 'ventas.nc'],
         56 => ['Nota de debito', '/ventas/nota-debito', 'ventas.nd'],
         default => ['Documento', '/ventas/factura', 'ventas.factura'],
@@ -986,7 +991,12 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
             'nombre'         => $nombre,
             'cantidad'       => is_numeric($cantR) ? (float) $cantR : $cantR,
             'precioUnitario' => is_numeric($precR) ? (float) $precR : $precR,
-            'exento'         => ! empty($d['exento']),
+            // FACTURA EXENTA (34): todas las lineas son exentas por definicion,
+            // no por lo que venga en el POST. La casilla de la vista va marcada y
+            // DESHABILITADA, y una casilla deshabilitada no viaja en el POST, asi
+            // que sin este forzado el documento saldria con todo afecto.
+            // El motor lo valida ademas por su cuenta (validarDocumentoDte).
+            'exento'         => $tipoDte === 34 ? true : ! empty($d['exento']),
         ];
         $unidad = trim((string) ($d['unidad'] ?? ''));
         if ($unidad !== '') {
@@ -1493,7 +1503,11 @@ function handleDocumentosListadoGet(): void
 
 function handleDocumentoDetalleGet(int $tipoDte, int $folio): void
 {
-    if (! in_array($tipoDte, [33, 61, 56, 39], true) || $folio <= 0) {
+    // El 34 va aqui porque sin el, el detalle de una factura exenta redirige al
+    // listado y el documento queda invisible: no es un mapa de nombres, es una
+    // guarda de acceso. Los mapas de nombres (que solo cambian la etiqueta y ya
+    // tienen fallback "Tipo N") son otra entrega.
+    if (! in_array($tipoDte, [33, 34, 61, 56, 39], true) || $folio <= 0) {
         redirigir('/ventas/panel-emision');
     }
 
@@ -4838,6 +4852,20 @@ if ($metodo === 'GET' && $ruta === '/ventas/factura') {
 if ($metodo === 'POST' && $ruta === '/ventas/factura') {
     Auth::requerirSesion();
     handleEmisionPost(33);
+}
+
+// Factura exenta (34). Mismo par GET/POST y los MISMOS handlers que los otros
+// tres tipos: handleEmisionGet/handleEmisionPost ya son genericos en $tipoDte.
+// Lo unico propio del 34 vive donde corresponde -- el forzado de lineas exentas
+// en armarDocumentoEmision() y la validacion en el motor --, no en una ruta
+// especial.
+if ($metodo === 'GET' && $ruta === '/ventas/factura-exenta') {
+    Auth::requerirSesion();
+    handleEmisionGet(34);
+}
+if ($metodo === 'POST' && $ruta === '/ventas/factura-exenta') {
+    Auth::requerirSesion();
+    handleEmisionPost(34);
 }
 
 if ($metodo === 'GET' && $ruta === '/ventas/nota-credito') {

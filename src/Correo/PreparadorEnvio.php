@@ -52,11 +52,12 @@ final class PreparadorEnvio
      * SI SE AGREGA O QUITA UN TIPO, HAY QUE TOCAR LOS DOS SITIOS. El front
      * controller lleva el comentario espejo avisando de esta copia.
      */
-    public const TIPOS_CON_PDF = [33, 61, 56, 39];
+    public const TIPOS_CON_PDF = [33, 34, 61, 56, 39];
 
     /** Etiqueta legible por tipo de DTE, para el asunto y el cuerpo del correo. */
     public const NOMBRE_TIPO_DTE = [
         33 => 'Factura electronica',
+        34 => 'Factura exenta electronica',
         61 => 'Nota de credito electronica',
         56 => 'Nota de debito electronica',
         39 => 'Boleta electronica',

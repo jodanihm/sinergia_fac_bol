@@ -66,7 +66,7 @@ date_default_timezone_set('America/Santiago');
 
 // --- Config resuelta en el servidor (no la elige el cliente) ---
 const FACT_RUT_SENDER = '13520634-2';        // firmante del certificado
-const TIPOS_PERMITIDOS = [33, 61, 56];       // factura, NC, ND
+const TIPOS_PERMITIDOS = [33, 34, 61, 56];   // factura, factura exenta, NC, ND
 // Solo para GET .../pdf: boleta (39) se emite por CLI, no por este API, pero SI
 // puede pedir su PDF una vez persistida. TIPOS_PERMITIDOS NO se toca: emitir/
 // listar/estado/anular siguen exclusivos de factura/NC/ND.
@@ -80,13 +80,24 @@ const TIPOS_PERMITIDOS = [33, 61, 56];       // factura, NC, ND
 // su cuenta: quien filtra es pdfDte() aqui, y PreparadorEnvio alla. Si se agrega
 // o quita un tipo, hay que tocar LOS DOS SITIOS: no hay nada que lo detecte
 // automaticamente.
-const TIPOS_PERMITIDOS_PDF = [33, 61, 56, 39];
+const TIPOS_PERMITIDOS_PDF = [33, 34, 61, 56, 39];
 // Solo para el filtro ?tipoDte= del listado (GET /api/v1/dte): permite pedir
 // boleta en el historico. TIPOS_PERMITIDOS NO se toca.
-const TIPOS_PERMITIDOS_LISTADO = [33, 61, 56, 39];
+const TIPOS_PERMITIDOS_LISTADO = [33, 34, 61, 56, 39];
 // Solo para anularDte(): boleta (39) puede ser el ORIGEN referenciado por una NC
 // (no se "anula a si misma"). TIPOS_PERMITIDOS NO se toca (emitirDte sigue
 // exclusivo de 33/61/56).
+//
+// EL 34 NO ESTA AQUI A PROPOSITO, y no es un olvido de la entrega que abrio el
+// tipo 34. La NC 61 SI es el instrumento correcto para anular una factura exenta
+// -- no existe un tipo de NC exenta --, pero hoy la NC saldria mal formada:
+// SiiDirectoFacturador::anular() fija SIEMPRE 'MntNeto' e 'IVA' en los totales
+// explicitos (src/Providers/SiiDirectoFacturador.php:414-417), y para un 34
+// ambos valen 0. Como resolverTotales() corta en seco cuando recibe totales
+// explicitos (src/Sii/DteXmlBuilder.php:148), la proteccion por datos que evita
+// ese problema al emitir NO aplica al anular: la NC saldria con MntNeto=0 e
+// IVA=0 sobre un documento que no puede llevarlos. Abrir el 34 aqui exige antes
+// arreglar esos totales, y eso es una entrega propia.
 const TIPOS_PERMITIDOS_ANULAR = [33, 61, 56, 39];
 const NS_SII = 'http://www.sii.cl/SiiDte';
 // TTL de un claim de idempotencia SIN folio (emision en curso / servidor caido):
@@ -517,7 +528,7 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
 
     $tipoDte = $body['tipoDte'] ?? null;
     if (! is_int($tipoDte) || ! in_array($tipoDte, TIPOS_PERMITIDOS, true)) {
-        invalido("{$p}tipoDte debe ser uno de 33, 61, 56", "{$p}tipoDte");
+        invalido("{$p}tipoDte debe ser uno de 33, 34, 61, 56", "{$p}tipoDte");
     }
 
     $r = $body['receptor'] ?? null;
@@ -557,6 +568,27 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
             && (! is_numeric($d['descuentoPorcentaje']) || (float) $d['descuentoPorcentaje'] < 0 || (float) $d['descuentoPorcentaje'] > 100)
         ) {
             invalido("{$p}detalles[{$i}].descuentoPorcentaje debe ser numerico entre 0 y 100", "{$p}detalles[{$i}].descuentoPorcentaje");
+        }
+        // --- UN TIPO 34 NO PUEDE LLEVAR NI UNA LINEA AFECTA ---
+        //
+        // POR QUE ESTA VALIDACION EXISTE, Y POR QUE AQUI: resolverTotales() del
+        // builder decide POR DATOS, no por tipo -- emite MntNeto, TasaIVA e IVA
+        // en cuanto hay un solo peso afecto (src/Sii/DteXmlBuilder.php:171-205).
+        // Eso es correcto para un 33 con items exentos, pero en un 34 produciria
+        // un documento con IVA dentro de una factura que por definicion no lo
+        // tiene: el SII lo rechaza Y EL FOLIO QUEDA QUEMADO IGUAL, porque se
+        // asigna antes de enviar.
+        //
+        // Se valida ANTES de asignar folio y antes de tocar el SII, que es el
+        // contrato de esta funcion. El formulario del panel ademas fuerza todas
+        // las lineas como exentas, pero eso es comodidad para el usuario: la
+        // regla vive AQUI porque al cliente no se le cree nunca.
+        if ($tipoDte === 34 && empty($d['exento'])) {
+            invalido(
+                "{$p}detalles[{$i}]: una factura exenta (tipo 34) no puede tener lineas afectas; "
+                . 'marca exento=true en todas',
+                "{$p}detalles[{$i}].exento",
+            );
         }
     }
 
@@ -1111,7 +1143,7 @@ function listarDte(array $tenant): never
     if (isset($_GET['tipoDte']) && $_GET['tipoDte'] !== '') {
         $tipoDte = (int) $_GET['tipoDte'];
         if (! in_array($tipoDte, TIPOS_PERMITIDOS_LISTADO, true)) {
-            invalido('tipoDte debe ser 33, 61, 56 o 39', 'tipoDte');
+            invalido('tipoDte debe ser 33, 34, 61, 56 o 39', 'tipoDte');
         }
     }
 
@@ -1208,7 +1240,7 @@ function listarDte(array $tenant): never
 function consultarEstadoDte(array $tenant, int $tipoDte, int $folio): never
 {
     if (! in_array($tipoDte, TIPOS_PERMITIDOS, true)) {
-        invalido('tipoDte debe ser uno de 33, 61, 56', 'tipoDte');
+        invalido('tipoDte debe ser uno de 33, 34, 61, 56', 'tipoDte');
     }
     if ($folio <= 0) {
         invalido('folio debe ser > 0', 'folio');
@@ -1263,7 +1295,7 @@ function consultarEstadoDte(array $tenant, int $tipoDte, int $folio): never
 function consultarEstadoSiiDte(array $tenant, int $tipoDte, int $folio): never
 {
     if (! in_array($tipoDte, TIPOS_PERMITIDOS, true)) {
-        invalido('tipoDte debe ser uno de 33, 61, 56', 'tipoDte');
+        invalido('tipoDte debe ser uno de 33, 34, 61, 56', 'tipoDte');
     }
     if ($folio <= 0) {
         invalido('folio debe ser > 0', 'folio');
@@ -1346,7 +1378,7 @@ function consultarEstadoSiiDte(array $tenant, int $tipoDte, int $folio): never
 function pdfDte(array $tenant, int $tipoDte, int $folio): never
 {
     if (! in_array($tipoDte, TIPOS_PERMITIDOS_PDF, true)) {
-        invalido('tipoDte debe ser uno de 33, 61, 56, 39', 'tipoDte');
+        invalido('tipoDte debe ser uno de 33, 34, 61, 56, 39', 'tipoDte');
     }
     if ($folio <= 0) {
         invalido('folio debe ser > 0', 'folio');
@@ -1393,7 +1425,7 @@ function pdfDte(array $tenant, int $tipoDte, int $folio): never
 function xmlDte(array $tenant, int $tipoDte, int $folio): never
 {
     if (! in_array($tipoDte, TIPOS_PERMITIDOS_PDF, true)) {
-        invalido('tipoDte debe ser uno de 33, 61, 56, 39', 'tipoDte');
+        invalido('tipoDte debe ser uno de 33, 34, 61, 56, 39', 'tipoDte');
     }
     if ($folio <= 0) {
         invalido('folio debe ser > 0', 'folio');
