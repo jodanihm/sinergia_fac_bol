@@ -2420,11 +2420,11 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
     ];
 }
 
-function crearLoteCarga(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreArchivo, int $totalFilas, int $filasValidas, int $filasError): int
+function crearLoteCarga(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreArchivo, int $totalFilas, int $filasValidas, int $filasError, int $tipoDte = 33): int
 {
     $stmt = $pdo->prepare(
-        'INSERT INTO lote_carga (cuenta_id, usuario_id, nombre_archivo, total_filas, filas_validas, filas_error) '
-        . 'VALUES (:cuenta_id, :usuario_id, :nombre, :total, :validas, :errores)'
+        'INSERT INTO lote_carga (cuenta_id, usuario_id, nombre_archivo, total_filas, filas_validas, filas_error, tipo_dte) '
+        . 'VALUES (:cuenta_id, :usuario_id, :nombre, :total, :validas, :errores, :tipo)'
     );
     $stmt->execute([
         ':cuenta_id' => $cuentaId,
@@ -2433,6 +2433,7 @@ function crearLoteCarga(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreA
         ':total'     => $totalFilas,
         ':validas'   => $filasValidas,
         ':errores'   => $filasError,
+        ':tipo'      => $tipoDte,
     ]);
 
     return (int) $pdo->lastInsertId();
@@ -2482,9 +2483,9 @@ function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d): v
         'INSERT INTO nota_venta '
         . '(cuenta_id, lote_carga_id, identificador_externo, receptor_rut, receptor_razon_social, '
         . ' receptor_giro, receptor_direccion, receptor_comuna, receptor_email, fecha_nota, detalle, '
-        . " monto_estimado, boleta_ref_tipo, boleta_ref_folio, boleta_ref_fecha, estado) VALUES "
+        . " monto_estimado, tipo_dte, boleta_ref_tipo, boleta_ref_folio, boleta_ref_fecha, estado) VALUES "
         . '(:cuenta_id, :lote_id, :externo, :rut, :razon, :giro, :dir, :comuna, :email, :fecha, '
-        . " :detalle, :monto, :bref_tipo, :bref_folio, :bref_fecha, 'pendiente')"
+        . " :detalle, :monto, :tipo, :bref_tipo, :bref_folio, :bref_fecha, 'pendiente')"
     );
     $stmt->execute([
         ':cuenta_id'  => $cuentaId,
@@ -2499,6 +2500,10 @@ function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d): v
         ':fecha'      => $d['fecha_nota'],
         ':detalle'    => json_encode($d['detalle'], JSON_UNESCAPED_UNICODE),
         ':monto'      => $d['monto_estimado'],
+        // Denormalizado a proposito (migracion 025): el sub-lote se arma con un
+        // conjunto libre de ids y puede mezclar archivos, asi que cada nota tiene
+        // que bastarse a si misma para saber que emitir.
+        ':tipo'       => (int) ($d['tipo_dte'] ?? 33),
         ':bref_tipo'  => $d['boleta_ref_tipo'],
         ':bref_folio' => $d['boleta_ref_folio'],
         ':bref_fecha' => $d['boleta_ref_fecha'],
@@ -2573,12 +2578,97 @@ function handleCargaMasivaPost(): void
         $items[] = validarFilaCargaMasiva($fila, $pdo, $cuentaId, $externosVistos);
     }
 
+    // EL TIPO DEL ARCHIVO, del check de la pantalla. Marcado = todo el archivo
+    // sale como factura exenta (34); sin marcar = como siempre (33).
+    //
+    // NO ES UNA COLUMNA DEL EXCEL a proposito: la plantilla YA tiene una columna
+    // 'exento' POR LINEA, y una columna de tipo POR FILA seria un segundo
+    // concepto solapado con el primero, capaz de contradecirlo (tipo 34 con
+    // exento=NO en la misma fila). Un check por archivo no puede contradecir
+    // nada: o el archivo entero es exento, o no lo es.
+    $esExento = ! empty($_POST['tipo_exento']);
+    $tipoDte  = $esExento ? 34 : 33;
+
+    // --- LAS DOS VALIDACIONES DE ARCHIVO COMPLETO ------------------------------
+    //
+    // Rechazan ANTES de abrir la transaccion, o sea antes de crear el lote y
+    // antes de crear ninguna nota. No queda nada a medias: no se llega a escribir
+    // una sola fila.
+    //
+    // Se evaluan sobre las filas VALIDAS unicamente. Las filas con error ya
+    // fueron rechazadas por validarFilaCargaMasiva() y ni siquiera tienen
+    // 'datos': mirarlas aqui reventaria, y ademas no van a emitir nada.
+    if ($esExento) {
+        // 1. TODAS las lineas de TODAS las filas tienen que ser exentas.
+        //
+        //    MISMA REGLA QUE PROTEGE AL 34 UNITARIO en el motor
+        //    (validarDocumentoDte, public/index.php): un 34 con una sola linea
+        //    afecta hace que el builder emita MntNeto, TasaIVA e IVA dentro de un
+        //    documento que no puede tenerlos -- resolverTotales() decide POR
+        //    DATOS, no por tipo. El SII lo rechaza Y EL FOLIO QUEDA QUEMADO
+        //    IGUAL. Aqui se atrapa en la carga para que ni siquiera llegue a
+        //    existir la nota; el motor lo vuelve a validar por su cuenta, porque
+        //    al cliente no se le cree nunca.
+        $filasConAfecta = [];
+        foreach ($items as $i => $item) {
+            if ($item['status'] !== 'ok') {
+                continue;
+            }
+            foreach ($item['datos']['detalle'] as $linea) {
+                if (empty($linea['exento'])) {
+                    $filasConAfecta[] = $i + 2; // +1 por el encabezado, +1 base 1
+                    break;
+                }
+            }
+        }
+        if ($filasConAfecta !== []) {
+            $errorForm(sprintf(
+                'Marcaste el archivo como de facturas exentas, pero %s tiene lineas afectas (columna "exento" '
+                . 'distinta de SI): fila%s %s. Una factura exenta no puede llevar ninguna linea afecta. '
+                . 'No se cargo ninguna nota.',
+                count($filasConAfecta) === 1 ? 'una fila' : count($filasConAfecta) . ' filas',
+                count($filasConAfecta) === 1 ? '' : 's',
+                implode(', ', array_slice($filasConAfecta, 0, 20)) . (count($filasConAfecta) > 20 ? ', ...' : '')
+            ));
+        }
+
+        // 2. NINGUNA fila puede traer boleta_ref_folio.
+        //
+        //    POR QUE, Y ES TEMPORAL: una fila con boleta_ref_folio genera DOS
+        //    documentos, la factura mas una nota de credito tipo 61 que anula la
+        //    boleta. Esa NC hoy sale mal formada cuando el documento de al lado
+        //    es un 34: SiiDirectoFacturador::anular() y el camino de totales
+        //    explicitos fijan SIEMPRE 'MntNeto' e 'IVA', y para un 34 ambos valen
+        //    cero; como resolverTotales() corta en seco al recibir totales
+        //    explicitos (src/Sii/DteXmlBuilder.php), la proteccion por datos que
+        //    funciona al emitir NO aplica ahi.
+        //
+        //    ESTA RESTRICCION SE LEVANTA cuando se arreglen esos totales. Es lo
+        //    unico que hay que tocar aqui: borrar este bloque.
+        $filasConBoleta = [];
+        foreach ($items as $i => $item) {
+            if ($item['status'] === 'ok' && ! empty($item['datos']['boleta_ref_folio'])) {
+                $filasConBoleta[] = $i + 2;
+            }
+        }
+        if ($filasConBoleta !== []) {
+            $errorForm(sprintf(
+                'Marcaste el archivo como de facturas exentas, pero %s trae folio de boleta a anular: fila%s %s. '
+                . 'Todavia no se puede anular una boleta con una factura exenta. Sube esas filas en un archivo '
+                . 'aparte, sin marcar. No se cargo ninguna nota.',
+                count($filasConBoleta) === 1 ? 'una fila' : count($filasConBoleta) . ' filas',
+                count($filasConBoleta) === 1 ? '' : 's',
+                implode(', ', array_slice($filasConBoleta, 0, 20)) . (count($filasConBoleta) > 20 ? ', ...' : '')
+            ));
+        }
+    }
+
     $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
     $totalErrores = count($items) - $totalValidas;
 
     $pdo->beginTransaction();
     try {
-        $loteId = crearLoteCarga($pdo, $cuentaId, $usuarioId, $archivo['name'], count($items), $totalValidas, $totalErrores);
+        $loteId = crearLoteCarga($pdo, $cuentaId, $usuarioId, $archivo['name'], count($items), $totalValidas, $totalErrores, $tipoDte);
 
         // RUT nuevo -> id de cliente ya creado EN ESTA MISMA carga (evita
         // crear el mismo cliente 2 veces si aparece en varias filas).
@@ -2653,6 +2743,7 @@ function handleCargaMasivaPost(): void
                 'fecha_nota'            => $d['fecha_nota'],
                 'detalle'               => $d['detalle'],
                 'monto_estimado'        => $d['monto_estimado'],
+                'tipo_dte'              => $tipoDte,
                 'boleta_ref_tipo'       => $d['boleta_ref_tipo'],
                 'boleta_ref_folio'      => $d['boleta_ref_folio'],
                 'boleta_ref_fecha'      => $d['boleta_ref_fecha'],
@@ -2698,9 +2789,14 @@ function listarNotasVentaPendientes(PDO $pdo, int $cuentaId, ?string $rutFiltro)
         $where           .= ' AND receptor_rut LIKE :rut';
         $params[':rut']   = '%' . $rutFiltro . '%';
     }
+    // tipo_dte SE TRAE PORQUE LA LISTA TIENE QUE MOSTRARLO. Esta consulta no
+    // filtra por lote_carga_id: lista pendientes de TODA la cuenta, de cualquier
+    // archivo. O sea que aqui conviven notas afectas y exentas, y el usuario
+    // puede marcarlas juntas -- mezclar esta permitido por construccion. Sin la
+    // columna a la vista, nadie puede saber que esta a punto de emitir.
     $stmt = $pdo->prepare(
         'SELECT id, identificador_externo, receptor_rut, receptor_razon_social, fecha_nota, monto_estimado, '
-        . "boleta_ref_folio FROM nota_venta WHERE {$where} ORDER BY fecha_nota ASC, id ASC LIMIT 500"
+        . "tipo_dte, boleta_ref_folio FROM nota_venta WHERE {$where} ORDER BY fecha_nota ASC, id ASC LIMIT 500"
     );
     $stmt->execute($params);
 
@@ -3101,12 +3197,38 @@ function emitirLoteEnMotor(string $keyServicio, array $documentos): array
     return ['status' => $resp->getStatusCode(), 'body' => is_array($body) ? $body : []];
 }
 
-/** Cuantos documentos produce esta nota: 1 (solo factura) o 2 (NC + factura,
- *  si reemplaza una boleta) -- para repartir la respuesta del motor en el
- *  MISMO orden en que se armaron. */
+/**
+ * Los tipos de DTE que produce esta nota, EN EL MISMO ORDEN en que
+ * armarDocumentosSubLote() los arma: la factura primero, y la NC despues si
+ * reemplaza una boleta.
+ *
+ * DEVUELVE LA LISTA Y NO UN NUMERO, y ese fue el punto del cambio: antes habia
+ * dos reglas paralelas leyendo lo mismo por su cuenta -- esta funcion contaba
+ * documentos para repartir la respuesta del motor, y la guarda de folios
+ * repetia el mismo criterio con su propio count() + array_filter(). Dos reglas
+ * que pueden divergir. Ahora las dos leen de aqui.
+ *
+ * El tipo sale de la NOTA, no de su lote: el sub-lote puede mezclar notas de
+ * archivos distintos (ver listarNotasVentaPendientes).
+ *
+ * @return list<int>
+ */
+function tiposDocumentosPorNota(array $nota): array
+{
+    $tipos = [(int) ($nota['tipo_dte'] ?? 33)];
+    if (! empty($nota['boleta_ref_folio'])) {
+        $tipos[] = 61; // NC que anula la boleta reemplazada
+    }
+
+    return $tipos;
+}
+
+/** Cuantos documentos produce esta nota. Se mantiene como envoltorio de
+ *  tiposDocumentosPorNota() para que el conteo NUNCA pueda discrepar de la lista
+ *  de tipos: hay una sola fuente y esto solo la mide. */
 function cantidadDocumentosPorNota(array $nota): int
 {
-    return empty($nota['boleta_ref_folio']) ? 1 : 2;
+    return count(tiposDocumentosPorNota($nota));
 }
 
 /** Arma los documentos del sub-lote para POST /api/v1/dte/lote, en el mismo
@@ -3128,8 +3250,13 @@ function armarDocumentosSubLote(array $notas): array
             $receptor['email'] = $nota['receptor_email'];
         }
 
+        // EL TIPO SALE DE LA NOTA (migracion 025), no de un 33 escrito a mano.
+        // tiposDocumentosPorNota() es la unica fuente y su PRIMER elemento es
+        // siempre el de la factura, por contrato con el orden de este bucle.
+        $tipos = tiposDocumentosPorNota($nota);
+
         $documentos[] = [
-            'tipoDte'         => 33,
+            'tipoDte'         => $tipos[0],
             'receptor'        => $receptor,
             'detalles'        => $detalle,
             'montosSonBrutos' => false,
@@ -3314,6 +3441,9 @@ function handleFacturacionMasivaGet(): void
         'pendientes'         => listarNotasVentaPendientes($pdo, $cuentaId, $rutFiltro !== '' ? $rutFiltro : null),
         'rutFiltro'          => $rutFiltro,
         'foliosFactura'      => sumarFoliosDisponibles($pdo, $rutEmisor, 33),
+        // Tercera cubeta: la guarda de folios ya la cuenta, asi que la pantalla
+        // tiene que mostrarla o el usuario no sabe contra que se estrello el 409.
+        'foliosExenta'       => sumarFoliosDisponibles($pdo, $rutEmisor, 34),
         'foliosNc'           => sumarFoliosDisponibles($pdo, $rutEmisor, 61),
         'resultado'          => $resultado,
         'flash'              => flashTomar(),
@@ -3389,17 +3519,41 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
     // al motor (mismo criterio fail-fast que la emision unitaria de M3). Se
     // revalida en CADA pasada (no solo la primera) porque la disponibilidad
     // de folios puede cambiar entre sub-lotes.
-    $necesitaFactura   = count($pendientesDelConjunto);
-    $necesitaNc        = count(array_filter($pendientesDelConjunto, static fn (array $n): bool => ! empty($n['boleta_ref_folio'])));
-    $disponibleFactura = sumarFoliosDisponibles($pdo, $rutEmisor, 33);
-    $disponibleNc      = sumarFoliosDisponibles($pdo, $rutEmisor, 61);
-    if ($necesitaFactura > $disponibleFactura || $necesitaNc > $disponibleNc) {
+    //
+    // TRES CUBETAS, y se cuentan LEYENDO tiposDocumentosPorNota() en vez de
+    // repetir su criterio aqui: antes este bloque deducia por su cuenta cuantas
+    // facturas y cuantas NC hacian falta, con un count() y un array_filter()
+    // propios, mientras el reparto de la respuesta del motor usaba la otra
+    // funcion. Dos reglas paralelas sobre el mismo hecho. Ahora hay una.
+    $necesita = [33 => 0, 34 => 0, 61 => 0];
+    foreach ($pendientesDelConjunto as $nota) {
+        foreach (tiposDocumentosPorNota($nota) as $t) {
+            $necesita[$t] = ($necesita[$t] ?? 0) + 1;
+        }
+    }
+    $disponible = [
+        33 => sumarFoliosDisponibles($pdo, $rutEmisor, 33),
+        34 => sumarFoliosDisponibles($pdo, $rutEmisor, 34),
+        61 => sumarFoliosDisponibles($pdo, $rutEmisor, 61),
+    ];
+    $falta = false;
+    foreach ($necesita as $t => $n) {
+        if ($n > ($disponible[$t] ?? 0)) {
+            $falta = true;
+        }
+    }
+    if ($falta) {
+        // Se informan las TRES cubetas siempre, incluso las que alcanzaban, que
+        // es como venia comportandose este mensaje con las dos originales.
         responderJsonFacturacionMasiva(409, ['status' => 'error', 'mensaje' => sprintf(
-            'Folios insuficientes: faltan %d factura(s) (disponibles %d) y %d nota(s) de credito (disponibles %d). No se toco ninguna nota.',
-            $necesitaFactura,
-            $disponibleFactura,
-            $necesitaNc,
-            $disponibleNc
+            'Folios insuficientes: faltan %d factura(s) (disponibles %d), %d factura(s) exenta(s) '
+            . '(disponibles %d) y %d nota(s) de credito (disponibles %d). No se toco ninguna nota.',
+            $necesita[33],
+            $disponible[33],
+            $necesita[34],
+            $disponible[34],
+            $necesita[61],
+            $disponible[61]
         )]);
     }
 

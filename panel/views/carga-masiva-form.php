@@ -132,6 +132,43 @@ $badgeRequisito = [
                     </div>
                 </div>
 
+                <?php
+                /* EL TIPO VA AQUI Y NO EN UNA COLUMNA DEL EXCEL. La plantilla ya
+                   tiene una columna "exento" POR LINEA; una columna de tipo POR
+                   FILA seria un segundo concepto solapado con el primero y capaz
+                   de contradecirlo. Un check por archivo no puede contradecir
+                   nada: o el archivo entero es exento, o no lo es.
+
+                   .form-check + .form-ayuda es el par que el panel ya usa para
+                   una casilla con su explicacion (ver producto-form.php, la
+                   casilla "Exento de IVA"). Cero CSS nuevo.
+
+                   EL ENVOLTORIO .form-compacto ES NECESARIO, no decorativo: la
+                   hoja tiene un `input { display: block; width: 100% }` global, y
+                   sin este contexto la casilla sale estirada a todo el ancho (362
+                   x 13 px medidos) en vez de ser una casilla. El reset vive en
+                   `.form-compacto input[type="checkbox"]`, y producto-form.php lo
+                   consigue porque su <form> entero lleva esa clase. Aqui NO se le
+                   pone al <form>, que tiene un input de archivo y otra anatomia:
+                   se abre el contexto solo alrededor de este campo.
+                   .form-compacto no tiene regla propia -- solo prefija
+                   descendientes --, asi que como envoltorio no aporta layout. */
+                ?>
+                <div class="form-compacto">
+                    <div class="form-campo form-campo--ancho">
+                        <label class="form-check" for="tipo_exento">
+                            <input type="checkbox" name="tipo_exento" id="tipo_exento" value="1"
+                                   aria-describedby="ayuda-exento">
+                            Este archivo es de facturas exentas (tipo 34)
+                        </label>
+                        <small class="form-ayuda" id="ayuda-exento">
+                            Marcado, TODAS las notas de este archivo se emiten como factura exenta y todas sus
+                            lineas tienen que venir con "exento" = SI. Sin marcar, salen como factura afecta,
+                            igual que siempre. Por ahora un archivo exento no puede traer folio de boleta a anular.
+                        </small>
+                    </div>
+                </div>
+
                 <div class="acciones-grupo">
                     <button class="boton-principal" type="submit">Cargar archivo</button>
                 </div>

@@ -290,6 +290,17 @@ const MIGRACIONES = [
         'id' => '024', 'archivo' => '024_dte_envio_correo.sql', 'nota' => 'CREATE',
         'huellas' => [['tipo' => 'tablas', 'desc' => 'tabla dte_envio_correo', 'tablas' => ['dte_envio_correo'], 'esperado' => 1]],
     ],
+    [
+        // DOS huellas y no una: la migracion toca DOS tablas, y con una sola
+        // huella un ALTER a medias (por ejemplo, corte entre los dos PREPARE) se
+        // reportaria como APLICADA. Separadas, ese caso sale como PARCIAL, que es
+        // lo que de verdad paso.
+        'id' => '025', 'archivo' => '025_nota_venta_tipo_dte.sql', 'nota' => 'ALTER (2 tablas)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'nota_venta.tipo_dte', 'tabla' => 'nota_venta', 'columnas' => ['tipo_dte'], 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'lote_carga.tipo_dte', 'tabla' => 'lote_carga', 'columnas' => ['tipo_dte'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

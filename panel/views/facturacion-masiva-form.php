@@ -159,13 +159,18 @@ foreach ($resultado as $n) {
                 <span class="validacion__dato"><?= $fmtMonto($foliosFactura); ?></span>
             </li>
             <li class="validacion__item">
+                <span>Factura exenta (34)</span>
+                <span class="validacion__dato"><?= $fmtMonto($foliosExenta); ?></span>
+            </li>
+            <li class="validacion__item">
                 <span>Nota de credito (61)</span>
                 <span class="validacion__dato"><?= $fmtMonto($foliosNc); ?></span>
             </li>
         </ul>
         <p class="nota">
-            Cada nota consume un folio de factura. Las que anulan una boleta consumen ademas uno
-            de nota de credito. Si no alcanzan, la emision se detiene antes de tocar ninguna nota.
+            Cada nota consume un folio del tipo que le corresponde: afecta o exenta. Las que anulan una
+            boleta consumen ademas uno de nota de credito. Si no alcanzan, la emision se detiene antes
+            de tocar ninguna nota.
         </p>
     </article>
 
@@ -234,7 +239,16 @@ foreach ($resultado as $n) {
                     </thead>
                     <tbody>
                         <?php foreach ($pendientes as $n): ?>
-                            <?php $anulaBoleta = ! empty($n['boleta_ref_folio']); ?>
+                            <?php
+                            $anulaBoleta = ! empty($n['boleta_ref_folio']);
+                            // EL TIPO SE MUESTRA PORQUE ESTA LISTA MEZCLA. No filtra
+                            // por archivo: trae pendientes de toda la cuenta, asi que
+                            // aqui conviven notas afectas y exentas y el usuario puede
+                            // marcarlas juntas. Sin verlo, no puede saber que va a
+                            // emitir. Va en la columna "Documentos", que es justamente
+                            // la que responde "que se va a producir con esta nota".
+                            $esExenta = (int) ($n['tipo_dte'] ?? 33) === 34;
+                            ?>
                             <tr>
                                 <td class="col-check">
                                     <input type="checkbox" class="nota-checkbox" name="notas[]"
@@ -251,7 +265,9 @@ foreach ($resultado as $n) {
                                 <td><?= htmlspecialchars((string) $n['fecha_nota']); ?></td>
                                 <td class="tabla-datos__num"><?= $fmtMonto($n['monto_estimado']); ?></td>
                                 <td>
-                                    <?php if ($anulaBoleta): ?>
+                                    <?php if ($esExenta): ?>
+                                        <span class="badge badge--etiqueta">Factura exenta</span>
+                                    <?php elseif ($anulaBoleta): ?>
                                         <span class="badge badge--etiqueta">Factura + nota de credito</span>
                                         <span class="tabla-datos__secundario">Anula boleta <?= (int) $n['boleta_ref_folio']; ?></span>
                                     <?php else: ?>
