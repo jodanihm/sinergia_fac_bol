@@ -1597,6 +1597,36 @@ function handleDocumentoXmlGet(int $tipoDte, int $folio): void
 const CORREO_ESTADOS = ['pendiente', 'enviado', 'error', 'sin_destinatario'];
 
 /**
+ * Tope de CORREOS DISTINTOS que resuelve de una pasada la rebusca masiva de
+ * destinatarios.
+ *
+ * EL TOPE VA SOBRE SENTENCIAS, NO SOBRE FILAS LEIDAS, y no es un detalle de
+ * gusto. Medido sobre 10.000 filas de un mismo tenant en la base desechable:
+ *
+ *     un UPDATE por fila, sin transaccion ... 267.055 ms  (10.000 sentencias)
+ *     agrupado por correo, sin transaccion ..   8.929 ms  (   200 sentencias)
+ *     un UPDATE por fila, en transaccion ....   4.824 ms  (10.000 sentencias)
+ *     agrupado por correo, en transaccion ...   1.056 ms  (   200 sentencias)
+ *
+ * El costo lo manda el numero de sentencias, no el de filas tocadas: la ida y
+ * vuelta a la base es de 0,18 ms, asi que los ~30 ms por sentencia del caso sin
+ * transaccion son el fsync de cada commit (innodb_flush_log_at_trx_commit=1).
+ * De ahi las dos decisiones: se agrupan los ids por correo resuelto, y se
+ * commitea una sola vez.
+ *
+ * El peor caso del agrupado es que TODOS los receptores sean distintos, y ahi
+ * vuelve a haber una sentencia por fila: medido, 0,45 ms cada una, o sea ~1,1 s
+ * con este tope.
+ *
+ * Y HAY UNA SEGUNDA RAZON PARA TOPEAR SENTENCIAS Y NO FILAS: si se topearan las
+ * filas leidas, las primeras N sin correo en el maestro se volverian a leer en
+ * cada click y las de mas atras no se alcanzarian NUNCA. Una fila que no
+ * resuelve no gasta sentencia, asi que el presupuesto se gasta solo en filas que
+ * si se van a mover, y cada click avanza.
+ */
+const CORREO_REBUSCA_MAX_CORREOS = 2000;
+
+/**
  * Listado de la cola de correos de la cuenta en sesion.
  *
  * AISLAMIENTO POR TENANT: todas las consultas llevan q.cuenta_id = :c, con el
@@ -1716,6 +1746,244 @@ function handleCorreoReintentarPost(int $envioId): void
         flashSet('error', "No se pudo reintentar el envio {$envioId}.");
     }
 
+    redirigirPrg('/ventas/correos');
+}
+
+/**
+ * Devuelve a la cola TODAS las filas en error de la cuenta.
+ *
+ * Es UNA sola sentencia con valores constantes, asi que no hay nada que agrupar
+ * ni trocear: el caso caro es el de la rebusca de destinatarios, donde cada fila
+ * lleva un valor distinto (ver CORREO_REBUSCA_MAX_CORREOS).
+ *
+ * Apunta a la CUENTA ENTERA, no a la pagina visible ni al filtro activo. Por eso
+ * el boton lleva el numero en la etiqueta: es la unica forma de que diga de
+ * verdad cuanto va a mover.
+ *
+ * AISLAMIENTO POR TENANT: cuenta_id va en el WHERE y sale de Auth::cuentaId(),
+ * o sea de la SESION, nunca de la peticion. En una sentencia que toca muchas
+ * filas de una vez esto no es una formalidad: no hay ningun dato del formulario
+ * que pueda ensanchar el alcance del UPDATE.
+ */
+function handleCorreosReintentarFallidosPost(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $stmt = $pdo->prepare(
+        "UPDATE dte_envio_correo SET estado = 'pendiente', intentos = 0 "
+        . "WHERE cuenta_id = :c AND estado = 'error'"
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    $n = $stmt->rowCount();
+
+    if ($n === 0) {
+        flashSet('error', 'No habia envios con error para reintentar.');
+    } else {
+        flashSet('exito', sprintf(
+            '%d envio%s %s a la cola. El envio se hace de a poco: hay un tope diario, '
+            . 'asi que pueden repartirse en varios dias.',
+            $n,
+            $n === 1 ? '' : 's',
+            $n === 1 ? 'devuelto' : 'devueltos'
+        ));
+    }
+
+    redirigirPrg('/ventas/correos');
+}
+
+/**
+ * Busca en el maestro de clientes el correo del receptor de cada fila, y deja
+ * en 'pendiente' las que encuentran uno.
+ *
+ * MISMO PRECEDENTE QUE resolverRazonSocialReceptores(): los RUT se normalizan EN
+ * LECTURA y el cruce con el maestro se hace EN PHP, sobre un mapa. NUNCA un JOIN
+ * entre dte_emitido y cliente: viven en las dos familias de collation del
+ * esquema (utf8mb4_0900_ai_ci la del motor, utf8mb4_unicode_ci la del panel) y
+ * unirlas por una columna de texto revienta con "Illegal mix of collations".
+ *
+ * Normalizar es obligatorio y no cosmetico: armarDocumentoEmision() de M3 solo
+ * hace trim() antes de mandar el RUT al motor, asi que dte_emitido.receptor_rut
+ * puede traer puntos mientras cliente.rut_cliente siempre esta canonico.
+ *
+ * NO TOCA intentos, a diferencia del reintento: 'sin_destinatario' solo lo
+ * escribe encolarEnvioCorreo() al encolar, y el runner nunca selecciona ese
+ * estado, asi que esas filas tienen intentos = 0 desde siempre. No hay nada que
+ * resetear.
+ *
+ * La usan los DOS botones -- el de una fila y el masivo -- para que no puedan
+ * divergir: lo unico que cambia entre ellos es cuantas filas se le pasan.
+ *
+ * @param list<array<string,mixed>> $filas cada una con 'id' (de la cola) y 'receptor_rut'
+ *
+ * @return array{resueltas:int, sinCorreo:int, pospuestas:int, correos:array<int,string>}
+ */
+function reresolverDestinatarios(PDO $pdo, int $cuentaId, array $filas): array
+{
+    $ruts = [];
+    foreach ($filas as $f) {
+        $ruts[] = Rut::normalizar((string) $f['receptor_rut']);
+    }
+    $porRut = clienteRepo()->buscarPorRuts($cuentaId, $ruts);
+
+    // SE AGRUPAN LOS IDS POR CORREO RESUELTO. Muchas filas comparten receptor,
+    // asi que esto convierte N sentencias en una por correo distinto: 10.000
+    // filas de 200 receptores son 200 UPDATE, no 10.000.
+    $porCorreo = [];
+    $correos   = [];
+    foreach ($filas as $f) {
+        $email = trim((string) ($porRut[Rut::normalizar((string) $f['receptor_rut'])]['email'] ?? ''));
+        // Misma validacion de formato que encolarEnvioCorreo(): un correo mal
+        // escrito en el maestro se trata como si no estuviera. Dejarlo pasar solo
+        // cambiaria 'sin_destinatario' por un 'error' seguro en el proximo envio.
+        if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            continue;
+        }
+        $porCorreo[$email][]     = (int) $f['id'];
+        $correos[(int) $f['id']] = $email;
+    }
+
+    // El tope se aplica sobre los correos distintos, que es lo que cuesta. Lo
+    // que queda afuera se informa; no se recorta en silencio.
+    $pospuestas = 0;
+    if (count($porCorreo) > CORREO_REBUSCA_MAX_CORREOS) {
+        foreach (array_slice($porCorreo, CORREO_REBUSCA_MAX_CORREOS, null, true) as $ids) {
+            $pospuestas += count($ids);
+        }
+        $porCorreo = array_slice($porCorreo, 0, CORREO_REBUSCA_MAX_CORREOS, true);
+    }
+
+    // UNA transaccion para todo: es lo que baja el costo 8x, porque el fsync del
+    // commit se paga una vez y no una por sentencia.
+    $resueltas = 0;
+    $pdo->beginTransaction();
+    try {
+        foreach ($porCorreo as $email => $ids) {
+            // Se trocea la lista de ids: son numericos y de la propia cola, asi
+            // que el IN no toca el problema de collations, pero una lista sin
+            // limite armaria una sentencia de tamaño arbitrario.
+            foreach (array_chunk($ids, 1000) as $trozo) {
+                $marcadores = implode(',', array_fill(0, count($trozo), '?'));
+                $stmt = $pdo->prepare(
+                    "UPDATE dte_envio_correo SET destinatario = ?, estado = 'pendiente' "
+                    . "WHERE cuenta_id = ? AND estado = 'sin_destinatario' AND id IN ({$marcadores})"
+                );
+                $stmt->execute([$email, $cuentaId, ...$trozo]);
+                $resueltas += $stmt->rowCount();
+            }
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+
+        throw $e;
+    }
+
+    return [
+        'resueltas'  => $resueltas,
+        'sinCorreo'  => count($filas) - count($correos),
+        'pospuestas' => $pospuestas,
+        'correos'    => $correos,
+    ];
+}
+
+/**
+ * Busca el correo del receptor de UNA fila sin destinatario.
+ *
+ * El estado va en el WHERE junto al id y al cuenta_id: si la fila no existe, es
+ * de otra cuenta, o ya dejo de estar en 'sin_destinatario', la consulta no
+ * devuelve nada y el mensaje es el mismo para los tres casos.
+ */
+function handleCorreoBuscarDestinatarioPost(int $envioId): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $stmt = $pdo->prepare(
+        'SELECT q.id, e.receptor_rut FROM dte_envio_correo q '
+        . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+        . "WHERE q.id = :id AND q.cuenta_id = :c AND q.estado = 'sin_destinatario' LIMIT 1"
+    );
+    $stmt->execute([':id' => $envioId, ':c' => $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($fila === false) {
+        flashSet('error', "No se pudo buscar el correo del envio {$envioId}.");
+        redirigirPrg('/ventas/correos');
+    }
+
+    $r     = reresolverDestinatarios($pdo, $cuentaId, [$fila]);
+    $email = $r['correos'][$envioId] ?? null;
+
+    if ($email !== null && $r['resueltas'] === 1) {
+        flashSet('exito', sprintf(
+            'Envio %d: se encontro %s en el maestro de clientes. Queda en cola y sale en los proximos minutos.',
+            $envioId,
+            $email
+        ));
+    } elseif ($email !== null) {
+        // Se encontro el correo pero el UPDATE no toco nada: la fila dejo de
+        // estar en 'sin_destinatario' entre la lectura y la escritura.
+        flashSet('error', "Envio {$envioId}: cambio de estado mientras se buscaba el correo. Vuelve a mirarlo.");
+    } else {
+        flashSet('error', sprintf(
+            'Envio %d: el receptor %s no tiene correo en el maestro de clientes. Sigue sin destinatario.',
+            $envioId,
+            (string) $fila['receptor_rut']
+        ));
+    }
+
+    redirigirPrg('/ventas/correos');
+}
+
+/**
+ * Busca el correo de TODAS las filas sin destinatario de la cuenta.
+ *
+ * Se leen todas, sin LIMIT: leerlas es barato (medido, 33 ms para 10.000 filas,
+ * mas 9 ms de la unica consulta al maestro) y el tope de trabajo se aplica
+ * despues, sobre los correos distintos. Ver CORREO_REBUSCA_MAX_CORREOS.
+ */
+function handleCorreosBuscarDestinatariosPost(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $stmt = $pdo->prepare(
+        'SELECT q.id, e.receptor_rut FROM dte_envio_correo q '
+        . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+        . "WHERE q.cuenta_id = :c AND q.estado = 'sin_destinatario' ORDER BY q.id"
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    $filas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if ($filas === []) {
+        flashSet('error', 'No hay envios sin destinatario que revisar.');
+        redirigirPrg('/ventas/correos');
+    }
+
+    $r = reresolverDestinatarios($pdo, $cuentaId, $filas);
+
+    $mensaje = sprintf(
+        'Se revisaron %d envios sin destinatario: %d quedaron en cola con el correo del maestro '
+        . 'y %d siguen sin correo.',
+        count($filas),
+        $r['resueltas'],
+        $r['sinCorreo']
+    );
+    if ($r['pospuestas'] > 0) {
+        $mensaje .= sprintf(
+            ' Quedan %d sin revisar por el tope de esta pasada; vuelve a pulsar el boton para seguir.',
+            $r['pospuestas']
+        );
+    }
+    if ($r['resueltas'] > 0) {
+        $mensaje .= ' El envio se hace de a poco: hay un tope diario, asi que pueden repartirse en varios dias.';
+    }
+
+    flashSet($r['resueltas'] > 0 ? 'exito' : 'error', $mensaje);
     redirigirPrg('/ventas/correos');
 }
 
@@ -4633,6 +4901,24 @@ if ($metodo === 'GET' && $ruta === '/ventas/correos') {
 if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/reintentar$#', $ruta, $mCorreo)) {
     Auth::requerirSesion();
     handleCorreoReintentarPost((int) $mCorreo[1]);
+}
+
+// Las dos acciones masivas van por ruta LITERAL, sin id: apuntan a la cuenta
+// entera y no hay nada que pasarles. Las literales no chocan con las de arriba
+// porque aquellas exigen (\d+) en ese tramo.
+if ($metodo === 'POST' && $ruta === '/ventas/correos/reintentar-fallidos') {
+    Auth::requerirSesion();
+    handleCorreosReintentarFallidosPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/ventas/correos/buscar-destinatarios') {
+    Auth::requerirSesion();
+    handleCorreosBuscarDestinatariosPost();
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/buscar-destinatario$#', $ruta, $mBuscar)) {
+    Auth::requerirSesion();
+    handleCorreoBuscarDestinatarioPost((int) $mBuscar[1]);
 }
 
 if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)$#', $ruta, $mDoc)) {

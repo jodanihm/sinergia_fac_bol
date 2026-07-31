@@ -110,6 +110,42 @@ $qs = $estado !== '' ? '&estado=' . urlencode($estado) : '';
     <?php endforeach; ?>
 </div>
 
+<?php
+// ACCIONES MASIVAS. Cada boton aparece SOLO si su contador es mayor que cero:
+// "Reintentar los 0 que fallaron" no es un boton, es ruido.
+//
+// LLEVAN EL NUMERO EN LA ETIQUETA porque apuntan a TODA la cuenta, no a la
+// pagina visible ni al filtro activo. Sin el numero, el boton no diria cuanto va
+// a mover, y estos dos mueven muchas filas de una vez.
+//
+// Los contadores salen de $conteos, que ya viene calculado sobre la cuenta
+// entera y SIN el filtro aplicado -- justo lo que estos botones necesitan.
+//
+// .acciones-grupo es la clase que el panel ya usa para esto ("Fila de acciones:
+// la principal primero, las secundarias al lado", 30+ vistas). Cero CSS nuevo, y
+// nada de clases prestadas de otro componente.
+?>
+<?php if ($conteos['error'] > 0 || $conteos['sin_destinatario'] > 0): ?>
+    <div class="acciones-grupo">
+        <?php if ($conteos['error'] > 0): ?>
+            <form method="post" action="/ventas/correos/reintentar-fallidos">
+                <?= csrfInput(); ?>
+                <button type="submit" class="boton-principal">
+                    Reintentar <?= $conteos['error'] === 1 ? 'el que fallo' : 'los ' . (int) $conteos['error'] . ' que fallaron'; ?>
+                </button>
+            </form>
+        <?php endif; ?>
+        <?php if ($conteos['sin_destinatario'] > 0): ?>
+            <form method="post" action="/ventas/correos/buscar-destinatarios">
+                <?= csrfInput(); ?>
+                <button type="submit" class="boton-secundario">
+                    Buscar correo para <?= $conteos['sin_destinatario'] === 1 ? 'el que no tiene' : 'los ' . (int) $conteos['sin_destinatario'] . ' sin destinatario'; ?>
+                </button>
+            </form>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
 <form method="get" action="/ventas/correos" class="filtros">
     <label class="filtros__campo">Estado
         <select name="estado" class="filtros__input filtros__input--medio">
@@ -184,17 +220,26 @@ $qs = $estado !== '' ? '&estado=' . urlencode($estado) : '';
                         <td><?= htmlspecialchars($fmt($it['ultimo_error'])); ?></td>
                         <td class="tabla-datos__acciones">
                             <?php
-                            // REINTENTAR SOLO EN 'error'. En los otros tres no
-                            // haria nada util: 'pendiente' ya esta en cola,
-                            // 'enviado' seria un reenvio (fuera de alcance), y
-                            // 'sin_destinatario' no tiene direccion a la que ir
-                            // -- el destinatario es una foto del encolado y este
-                            // boton no la vuelve a resolver.
+                            // UNA ACCION POR ESTADO, y solo donde hace algo:
+                            //
+                            //   'error'            -> Reintentar. Vuelve a la cola.
+                            //   'sin_destinatario' -> Buscar correo. Va al maestro
+                            //                         de clientes a ver si el
+                            //                         receptor tiene uno ahora.
+                            //
+                            // En los otros dos no hay nada que ofrecer:
+                            // 'pendiente' ya esta en cola y 'enviado' seria un
+                            // reenvio, que esta fuera de alcance.
                             ?>
                             <?php if ($it['estado'] === 'error'): ?>
                                 <form method="post" action="/ventas/correos/<?= (int) $it['id']; ?>/reintentar">
                                     <?= csrfInput(); ?>
                                     <button type="submit" class="boton-secundario">Reintentar</button>
+                                </form>
+                            <?php elseif ($it['estado'] === 'sin_destinatario'): ?>
+                                <form method="post" action="/ventas/correos/<?= (int) $it['id']; ?>/buscar-destinatario">
+                                    <?= csrfInput(); ?>
+                                    <button type="submit" class="boton-secundario">Buscar correo</button>
                                 </form>
                             <?php else: ?>
                                 &mdash;
