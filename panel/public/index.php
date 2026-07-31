@@ -381,6 +381,10 @@ function definicionMenu(): array
                 ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'icono' => 'carga-masiva', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'icono' => 'facturacion-masiva', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'icono' => 'panel-emision', 'construido' => true, 'requiereProduccion' => true],
+                // requiereProduccion=true por dos razones independientes: sin
+                // poder emitir la cola esta vacia por definicion, y su handler
+                // usa exigirProduccionCompleto() igual que sus vecinos.
+                ['clave' => 'ventas.correos', 'label' => 'Envio de correos', 'destino' => '/ventas/correos', 'icono' => 'envio-correo', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
         [
@@ -1573,6 +1577,146 @@ function handleDocumentoPdfGet(int $tipoDte, int $folio): void
 function handleDocumentoXmlGet(int $tipoDte, int $folio): void
 {
     proxyDocumentoBinario($tipoDte, $folio, 'xml');
+}
+
+// ===========================================================================
+//  COLA DE ENVIO DE CORREOS AL RECEPTOR (tabla dte_envio_correo, migracion 024)
+//
+//  Ver, y poder desatascar. Nada mas. NO hay boton de "enviar ahora": el
+//  enviador corre en el contenedor del MOTOR y el panel es otro contenedor, asi
+//  que no puede ejecutarlo. Con el cron cada 5 minutos, reintentar ya significa
+//  que sale en los proximos minutos.
+//
+//  A DIFERENCIA DE /ventas/panel-emision, ESTA LISTA CONSULTA LA BASE DIRECTO.
+//  Aquella le pide los documentos al motor por HTTP porque dte_emitido es suya;
+//  la cola, en cambio, vive en la base del panel, asi que pagina con
+//  LIMIT/OFFSET en SQL y no delega en nadie.
+// ===========================================================================
+
+/** Los cuatro estados de dte_envio_correo. Fuente unica para el filtro y la vista. */
+const CORREO_ESTADOS = ['pendiente', 'enviado', 'error', 'sin_destinatario'];
+
+/**
+ * Listado de la cola de correos de la cuenta en sesion.
+ *
+ * AISLAMIENTO POR TENANT: todas las consultas llevan q.cuenta_id = :c, con el
+ * cuenta_id de Auth::cuentaId() -- de la SESION, nunca de la peticion. Es el
+ * mismo patron del resto del panel.
+ *
+ * El JOIN a dte_emitido va por id NUMERICO (q.dte_emitido_id = e.id). Es lo que
+ * permite traer tipo, folio y rut del receptor sin cruzar las dos familias de
+ * collation del esquema: dte_emitido es utf8mb4_0900_ai_ci y dte_envio_correo
+ * es utf8mb4_unicode_ci, y unirlas por una columna de TEXTO daria "Illegal mix
+ * of collations". Por eso esta lista NO resuelve la razon social del receptor:
+ * eso vive en el maestro de clientes, de la otra familia, y exigiria el rodeo de
+ * resolverRazonSocialReceptores(). El destinatario -- que es el dato que importa
+ * para diagnosticar un correo -- ya esta en la propia cola.
+ */
+function handleCorreosListadoGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId); // mismo guard que sus vecinos de Ventas
+
+    $porPagina = 25;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+
+    // Filtro por estado, validado contra la lista cerrada: cualquier otra cosa
+    // se ignora y se muestra todo. No se interpola nunca en el SQL.
+    $estado = trim((string) ($_GET['estado'] ?? ''));
+    if (! in_array($estado, CORREO_ESTADOS, true)) {
+        $estado = '';
+    }
+
+    // CONTEOS: siempre sobre TODA la cuenta, sin aplicar el filtro. Es lo que
+    // permite contestar "fallo algo?" de un vistazo aunque estes filtrando.
+    $conteos = array_fill_keys(CORREO_ESTADOS, 0);
+    $stmt    = $pdo->prepare(
+        'SELECT estado, COUNT(*) AS n FROM dte_envio_correo WHERE cuenta_id = :c GROUP BY estado'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $f) {
+        $conteos[(string) $f['estado']] = (int) $f['n'];
+    }
+    $totalCuenta = array_sum($conteos);
+
+    // El JOIN se repite en el conteo y en el listado para que no puedan
+    // divergir. No puede descartar filas: fk_envio_documento es ON DELETE
+    // CASCADE, asi que toda fila de la cola tiene su dte_emitido.
+    $where  = 'WHERE q.cuenta_id = :c' . ($estado !== '' ? ' AND q.estado = :estado' : '');
+    $params = [':c' => $cuentaId] + ($estado !== '' ? [':estado' => $estado] : []);
+
+    $stmt = $pdo->prepare(
+        'SELECT COUNT(*) FROM dte_envio_correo q JOIN dte_emitido e ON e.id = q.dte_emitido_id ' . $where
+    );
+    $stmt->execute($params);
+    $total = (int) $stmt->fetchColumn();
+
+    $stmt = $pdo->prepare(
+        'SELECT q.id, q.destinatario, q.estado, q.intentos, q.ultimo_error, q.enviado_at, q.created_at, '
+        . '       e.tipo_dte, e.folio, e.receptor_rut '
+        . 'FROM dte_envio_correo q JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+        . $where . ' ORDER BY q.created_at DESC, q.id DESC LIMIT :lim OFFSET :off'
+    );
+    foreach ($params as $k => $v) {
+        $stmt->bindValue($k, $v);
+    }
+    // LIMIT/OFFSET van con PARAM_INT explicito: como string, MySQL los rechaza.
+    $stmt->bindValue(':lim', $porPagina, PDO::PARAM_INT);
+    $stmt->bindValue(':off', ($pagina - 1) * $porPagina, PDO::PARAM_INT);
+    $stmt->execute();
+
+    vista('correos-listado', [
+        'items'        => $stmt->fetchAll(PDO::FETCH_ASSOC),
+        'conteos'      => $conteos,
+        'totalCuenta'  => $totalCuenta,
+        'total'        => $total,
+        'pagina'       => $pagina,
+        'totalPaginas' => max(1, (int) ceil($total / $porPagina)),
+        'estado'       => $estado,
+        'flash'        => flashTomar(),
+        'navActivo'    => 'ventas.correos',
+    ]);
+}
+
+/**
+ * Devuelve una fila a la cola para que el runner la vuelva a tomar.
+ *
+ * POR QUE TAMBIEN RESETEA intentos, y no solo el estado: el runner toma las
+ * filas en 'pendiente' y las 'error' que sigan bajo el tope de 3 intentos. Una
+ * fila que agoto sus intentos y solo cambiara de estado volveria a quedar
+ * trabada en cuanto fallara una vez mas. Reintentar es empezar de cero.
+ *
+ * ultimo_error NO se borra a proposito: es el ultimo diagnostico conocido y
+ * sigue siendo util mientras la fila espera. El proximo intento lo reescribe si
+ * vuelve a fallar, o lo deja en NULL si sale bien (ver
+ * PreparadorEnvio::registrarResultado).
+ *
+ * AISLAMIENTO POR TENANT: el cuenta_id va en el WHERE junto al id, no en un if
+ * previo. Un id de otra cuenta afecta CERO filas y no hay forma de que un tenant
+ * toque la cola de otro cambiando un numero en el formulario.
+ */
+function handleCorreoReintentarPost(int $envioId): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $stmt = $pdo->prepare(
+        "UPDATE dte_envio_correo SET estado = 'pendiente', intentos = 0 "
+        . 'WHERE id = :id AND cuenta_id = :c'
+    );
+    $stmt->execute([':id' => $envioId, ':c' => $cuentaId]);
+
+    if ($stmt->rowCount() === 1) {
+        flashSet('exito', "Envio {$envioId} devuelto a la cola. Sale en los proximos minutos.");
+    } else {
+        // Mismo mensaje para "no existe" y "es de otra cuenta": no se le confirma
+        // a nadie que un id ajeno exista.
+        flashSet('error', "No se pudo reintentar el envio {$envioId}.");
+    }
+
+    redirigirPrg('/ventas/correos');
 }
 
 function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
@@ -4479,6 +4623,16 @@ if ($metodo === 'GET' && preg_match('#^/informes/([a-z-]+)$#', $ruta, $mInf)) {
 if ($metodo === 'GET' && $ruta === '/ventas/panel-emision') {
     Auth::requerirSesion();
     handleDocumentosListadoGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/correos') {
+    Auth::requerirSesion();
+    handleCorreosListadoGet();
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/reintentar$#', $ruta, $mCorreo)) {
+    Auth::requerirSesion();
+    handleCorreoReintentarPost((int) $mCorreo[1]);
 }
 
 if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)$#', $ruta, $mDoc)) {

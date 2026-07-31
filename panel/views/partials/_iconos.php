@@ -53,6 +53,12 @@ const ICONOS = [
         . '<polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
     'panel-emision' => '<rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>'
         . '<rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>',
+    // Sobre cerrado. Clave de dominio, como el resto: nombra la COLA de envio de
+    // documentos al receptor (tabla dte_envio_correo), no la forma del dibujo.
+    // Entrada nueva y no reuso de otra: ninguna de las 27 que ya habia significa
+    // "correo", y prestar un icono que quiere decir otra cosa confunde el menu.
+    'envio-correo' => '<rect x="2" y="4" width="20" height="16" rx="2"/>'
+        . '<polyline points="22 6 12 13 2 6"/>',
 
     // -- Maestros --
     'clientes' => '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>'
