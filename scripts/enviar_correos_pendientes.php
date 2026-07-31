@@ -255,7 +255,40 @@ $stmtTot->bindValue(':tope', $topeIntentos, PDO::PARAM_INT);
 $stmtTot->execute();
 $pendientesTotales = (int) $stmtTot->fetchColumn();
 
+// ---------------------------------------------------------------------------
+//  NO HAY NADA QUE HACER: SILENCIO TOTAL.
+//
+//  POR QUE. Este script lo llama el cron cada 5 minutos, o sea 288 veces al
+//  dia, y la cola esta vacia casi siempre. Medido tras una noche: 172 lineas,
+//  el 100% diciendo "cola vacia". Un fallo real queda enterrado entre ellas, y
+//  un log que nadie puede leer no sirve de nada. Este archivo pasa a ser de
+//  EVENTOS: si no hubo evento, no hay linea.
+//
+//  NO SE PIERDE LA SENAL DE VIDA DEL CRON. Cada ejecucion queda registrada por
+//  el propio cron en el journal, con su linea CMD completa
+//  (journalctl -u cron). El journal es el latido; esto es la bitacora.
+//
+//  EL SILENCIO EXIGE LAS TRES CONDICIONES, y las tres importan:
+//    - cero candidatas: si hubo aunque sea una, se registra lo que paso con
+//      ella, aunque termine omitida;
+//    - NO --dry-run: ese lo corre una persona a mano, y un silencio la haria
+//      pensar que el script se rompio. Con --dry-run SIEMPRE se imprime;
+//    - sin errores: cualquier fallo pasa antes por fail(), que escribe a STDERR
+//      y sale con su codigo, asi que nunca llega hasta aca callado. Un
+//      "no se pudo conectar a la base" se ve igual que siempre.
+//
+//  El presupuesto agotado tampoco se calla: no pasa por esta rama, porque para
+//  agotarse tuvo que haber candidatas.
+//
+//  Sin flag para esto a proposito: el silencio es la conducta por defecto y el
+//  cron es el unico llamador no interactivo.
+// ---------------------------------------------------------------------------
 if ($candidatas === []) {
+    if (! $dryRun) {
+        soltarCandado($pdo);
+        exit(0);
+    }
+
     linea(sprintf(
         'RESUMEN enviados=0 fallidos=0 omitidos=0 pendientes_restantes=0 '
         . '(cola vacia; tope=%d intentos_max=%d presupuesto=%d usado_hoy=%d)',
