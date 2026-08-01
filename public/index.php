@@ -610,9 +610,33 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
     // existir este campo se entendera que tiene valor 2 (Credito)". O sea que no
     // mandarlo es declarar credito en silencio.
     //
-    // AQUI SIGUE SIENDO OPCIONAL, y a proposito: la carga masiva todavia no lo
-    // manda (es la entrega 2) y exigirlo ahora romperia ese camino. Quien obliga
-    // a elegir es el formulario del panel.
+    // AQUI SIGUE SIENDO OPCIONAL, y a proposito. Quien obliga a elegir son los
+    // dos caminos del panel: el formulario de emision y la carga masiva.
+    //
+    // DEUDA CONOCIDA, CON SU CONDICION DE SALIDA. Endurecer esto para exigir
+    // formaPago rompe HOY dos cosas medidas:
+    //
+    //   1. LAS NOTAS DE VENTA YA CARGADAS. La columna nota_venta.forma_pago
+    //      nacio NULL en la migracion 026, asi que TODA nota anterior a la carga
+    //      con forma de pago la tiene en NULL -- por construccion, el 100% del
+    //      inventario previo. Si el motor las rechazara, quedarian pendientes
+    //      para siempre: la nota ya existe y ninguna pantalla permite editarle
+    //      la forma de pago.
+    //
+    //   2. LAS INTEGRACIONES EXTERNAS. api_key.tipo es enum('externa','servicio')
+    //      CON DEFAULT 'externa': el motor esta diseñado para tener consumidores
+    //      de terceros, y el panel tiene dos pantallas (/apikeys,
+    //      /apikeys-produccion) para entregarles credenciales. Una integracion
+    //      que hoy emite sin el campo dejaria de funcionar sin aviso.
+    //
+    // SE PODRA EXIGIR CUANDO: (a) no queden notas pendientes con forma_pago NULL
+    // en produccion -- SELECT estado, COUNT(*), SUM(forma_pago IS NULL) FROM
+    // nota_venta GROUP BY estado --, y (b) se confirme que ninguna api_key
+    // 'externa' activa emite sin formaPago.
+    //
+    // PENDIENTE APARTE, no cubierto por esto: LoteDteEmisor (src/Sii/LoteDteEmisor.php)
+    // construye DocumentoTributario directo, sin pasar por esta funcion, y es el
+    // camino de las emisiones de certificacion. Esas tambien emiten sin FmaPago.
     $formaPago = $body['formaPago'] ?? null;
     if ($formaPago !== null && (! is_int($formaPago) || ! in_array($formaPago, [1, 2, 3], true))) {
         invalido(

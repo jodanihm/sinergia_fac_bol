@@ -52,6 +52,11 @@ $requisitos = [
     'cantidad'              => ['obligatorio', 'Numero mayor que 0.'],
     'precio_unitario'       => ['obligatorio', 'Numero mayor o igual a 0, sin IVA.'],
     'exento'                => ['opcional',    'SI, NO, o dejar vacio.'],
+    // SIN ESTAS DOS ENTRADAS la tabla las pintaba "Opcional" por el fallback de
+    // abajo, y esta pantalla le habria dicho al usuario justo lo contrario de lo
+    // que hace el validador, que rechaza el archivo entero si faltan.
+    'forma_pago'            => ['obligatorio', 'CONTADO, CREDITO o SIN COSTO. No puede quedar vacia: un documento que no informa forma de pago el SII lo toma como credito.'],
+    'fecha_vencimiento'     => ['condicional', 'Obligatoria cuando forma_pago es CREDITO; vacia con CONTADO o SIN COSTO. Formatos: ' . FechaExcel::FORMATOS . '.'],
     'folio_boleta_a_anular' => ['opcional',    'Numero entero mayor que 0. Solo si esta nota reemplaza una boleta ya emitida.'],
     'fecha_boleta_a_anular' => ['condicional', 'Obligatoria cuando viene folio_boleta_a_anular.'],
 ];

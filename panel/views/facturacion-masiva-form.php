@@ -234,6 +234,7 @@ foreach ($resultado as $n) {
                             <th scope="col">Receptor</th>
                             <th scope="col">Fecha nota</th>
                             <th scope="col" class="tabla-datos__num">Monto estimado</th>
+                            <th scope="col">Forma de pago</th>
                             <th scope="col">Documentos</th>
                         </tr>
                     </thead>
@@ -264,6 +265,35 @@ foreach ($resultado as $n) {
                                 </td>
                                 <td><?= htmlspecialchars((string) $n['fecha_nota']); ?></td>
                                 <td class="tabla-datos__num"><?= $fmtMonto($n['monto_estimado']); ?></td>
+                                <td>
+                                    <?php
+                                    // UNA NOTA VIEJA NO DEJA LA CELDA VACIA. Una celda
+                                    // en blanco se lee como un defecto de render y no
+                                    // comunica nada; "No informada" dice la verdad y
+                                    // ademas insinua la consecuencia, que es la que
+                                    // importa: sin FmaPago el SII toma el documento como
+                                    // CREDITO. Por eso va en ambar y no en gris -- no es
+                                    // un dato ausente, es un dato que el SII va a
+                                    // rellenar por su cuenta.
+                                    //
+                                    // Son las notas cargadas ANTES de que la plantilla
+                                    // pidiera la columna. Se siguen pudiendo facturar; lo
+                                    // que no se puede es no distinguirlas.
+                                    $fp = $n['forma_pago'] !== null ? (int) $n['forma_pago'] : null;
+                                    [$claseFp, $textoFp] = match ($fp) {
+                                        1       => ['badge--ok', 'Contado'],
+                                        2       => ['badge--proceso', 'Credito'],
+                                        3       => ['badge--neutro', 'Sin costo'],
+                                        default => ['badge--advertencia', 'No informada'],
+                                    };
+                                    ?>
+                                    <span class="badge <?= $claseFp; ?>"><?= $textoFp; ?></span>
+                                    <?php if ($fp === 2 && ! empty($n['fecha_vencimiento'])): ?>
+                                        <span class="tabla-datos__secundario">Vence <?= htmlspecialchars((string) $n['fecha_vencimiento']); ?></span>
+                                    <?php elseif ($fp === null): ?>
+                                        <span class="tabla-datos__secundario">El SII la tomara como credito</span>
+                                    <?php endif; ?>
+                                </td>
                                 <td>
                                     <?php if ($esExenta): ?>
                                         <span class="badge badge--etiqueta">Factura exenta</span>

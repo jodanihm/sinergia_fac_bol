@@ -2069,7 +2069,48 @@ const NOTA_VENTA_ENCABEZADOS = [
     'identificador_externo', 'rut_receptor', 'razon_social_receptor', 'giro_receptor',
     'direccion_receptor', 'comuna_receptor', 'email_receptor', 'fecha_nota',
     'producto_servicio', 'cantidad', 'precio_unitario', 'exento',
+    // Las dos columnas de pago van JUNTO A 'exento' y no al final del archivo:
+    // son condiciones del documento, igual que la exencion, y quien llena el
+    // Excel las lee seguidas en vez de tener que saltar por encima de las
+    // columnas de anulacion de boleta, que casi siempre van vacias.
+    'forma_pago', 'fecha_vencimiento',
     'folio_boleta_a_anular', 'fecha_boleta_a_anular',
+];
+
+/**
+ * Los 14 encabezados ANTERIORES a la carga de forma de pago. Se conservan SOLO
+ * para reconocer un archivo hecho con la plantilla vieja y decirlo con esas
+ * palabras, en vez de soltar el mensaje generico de "los encabezados no
+ * coinciden", que no le dice a nadie que lo que tiene que hacer es bajar la
+ * plantilla otra vez.
+ *
+ * NO habilita un formato dual: el archivo viejo se RECHAZA igual. Aceptarlo
+ * dejaria esas notas emitiendo sin FmaPago, o sea declarando credito en
+ * silencio, que es exactamente lo que esta carga vino a evitar.
+ */
+const NOTA_VENTA_ENCABEZADOS_V1 = [
+    'identificador_externo', 'rut_receptor', 'razon_social_receptor', 'giro_receptor',
+    'direccion_receptor', 'comuna_receptor', 'email_receptor', 'fecha_nota',
+    'producto_servicio', 'cantidad', 'precio_unitario', 'exento',
+    'folio_boleta_a_anular', 'fecha_boleta_a_anular',
+];
+
+/**
+ * Valores aceptados en la columna forma_pago, en el mismo estilo legible del
+ * SI/NO de 'exento': lo que se escribe en la celda es una palabra, no el numero
+ * crudo del SII. La traduccion a 1/2/3 (IdDoc/FmaPago) ocurre aqui y no en la
+ * cabeza de quien llena el Excel.
+ *
+ * CREDITO va con y sin tilde porque quien escribe en español pone la tilde, y
+ * rechazar "CRÉDITO" seria un rechazo por ortografia. La comparacion usa
+ * mb_strtoupper (no strtoupper, que no es multibyte y dejaria la e con tilde
+ * intacta al pasar a mayusculas).
+ */
+const NOTA_VENTA_FORMAS_PAGO = [
+    'CONTADO'   => 1,
+    'CREDITO'   => 2,
+    'CRÉDITO'   => 2,
+    'SIN COSTO' => 3,
 ];
 
 /** Limite de sanidad: sin fuente oficial de un tope menor (ver PASO 1 de M4,
@@ -2122,8 +2163,11 @@ function handlePlantillaExcelGet(): void
     $hoja->setTitle('Notas de venta');
     $hoja->fromArray(NOTA_VENTA_ENCABEZADOS, null, 'A1');
 
+    // TRES columnas de fecha desde que existe el vencimiento. Las letras se
+    // corrieron al insertar forma_pago/fecha_vencimiento antes de las de boleta:
+    //   H fecha_nota  ·  N fecha_vencimiento  ·  P fecha_boleta_a_anular
     $ultima = NOTA_VENTA_PLANTILLA_FILAS_FORMATEADAS + 1;
-    foreach (['H', 'N'] as $col) {
+    foreach (['H', 'N', 'P'] as $col) {
         $hoja->getStyle("{$col}2:{$col}{$ultima}")
             ->getNumberFormat()
             ->setFormatCode('yyyy-mm-dd');
@@ -2137,11 +2181,23 @@ function handlePlantillaExcelGet(): void
         . '. Lo mas seguro es escribir la fecha y dejar que Excel la reconozca'
         . ' (queda alineada a la derecha).';
     $hoja->getComment('H1')->getText()->createText($ayuda);
-    $hoja->getComment('N1')->getText()->createText($ayuda . ' Dejar vacia si la nota no anula una boleta.');
+    $hoja->getComment('P1')->getText()->createText($ayuda . ' Dejar vacia si la nota no anula una boleta.');
 
-    $hoja->getStyle('A1:N1')->getFont()->setBold(true);
+    // Las dos columnas nuevas explican SUS valores y su regla en el propio
+    // encabezado, que es donde mira quien esta llenando el archivo.
+    $hoja->getComment('M1')->getText()->createText(
+        'Obligatorio en todas las filas. Valores: CONTADO, CREDITO o SIN COSTO.'
+        . ' No se puede dejar vacia: si el documento no informa forma de pago,'
+        . ' el SII lo toma como CREDITO.'
+    );
+    $hoja->getComment('N1')->getText()->createText(
+        'Obligatoria SOLO si forma_pago es CREDITO, y en ese caso no se puede omitir.'
+        . ' Dejar vacia con CONTADO o SIN COSTO. ' . $ayuda
+    );
+
+    $hoja->getStyle('A1:P1')->getFont()->setBold(true);
     $hoja->freezePane('A2');
-    foreach (range('A', 'N') as $col) {
+    foreach (range('A', 'P') as $col) {
         $hoja->getColumnDimension($col)->setAutoSize(true);
     }
 
@@ -2233,6 +2289,17 @@ function leerFilasExcelCargaMasiva(string $rutaArchivo): array
 
     $encabezados = array_map(static fn ($v): string => trim((string) $v), array_shift($filasCrudas));
     if ($encabezados !== NOTA_VENTA_ENCABEZADOS) {
+        // La plantilla ANTERIOR se reconoce y se nombra. Un archivo hecho con
+        // ella no tiene nada malformado: simplemente le faltan las dos columnas
+        // de pago, y el usuario necesita saber ESO y no "los encabezados no
+        // coinciden", que no dice que hacer.
+        if ($encabezados === NOTA_VENTA_ENCABEZADOS_V1) {
+            throw new RuntimeException(
+                'Este archivo usa la plantilla anterior, sin las columnas "forma_pago" y "fecha_vencimiento". '
+                . 'Descarga la plantilla nueva y vuelve a cargar los datos: la forma de pago ahora es obligatoria '
+                . 'en cada fila, porque un documento que no la informa el SII lo toma como credito.'
+            );
+        }
         throw new RuntimeException(
             'Los encabezados del archivo no coinciden con la plantilla. Descarga la plantilla y no cambies el orden ni los nombres de columna.'
         );
@@ -2327,6 +2394,24 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
         $errores[] = 'exento debe ser SI, NO o quedar vacio';
     }
     $exento = $exentoRaw === 'SI';
+
+    // FORMA DE PAGO Y VENCIMIENTO: AQUI SOLO SE PARSEAN, NO SE RECHAZAN.
+    //
+    // Y es a proposito. Todo lo demas de esta funcion marca la FILA como
+    // erronea y deja que el archivo se cargue con esa fila apartada. Estas dos
+    // columnas, en cambio, rechazan el ARCHIVO COMPLETO -- mismo criterio que
+    // las dos validaciones de facturas exentas --, y esa decision necesita ver
+    // todas las filas juntas, asi que vive en handleCargaMasivaPost(). Si aqui
+    // se agregara a $errores, la fila quedaria apartada y el archivo entraria
+    // igual, que es justo lo contrario de lo pedido.
+    //
+    // Se conserva el valor CRUDO ademas del parseado para que el mensaje de
+    // rechazo pueda decir que escribio el usuario.
+    $formaPagoRaw = trim($fila['forma_pago']);
+    $formaPago    = NOTA_VENTA_FORMAS_PAGO[mb_strtoupper($formaPagoRaw, 'UTF-8')] ?? null;
+
+    $vencimientoRaw = trim($fila['fecha_vencimiento']);
+    $vencimiento    = $vencimientoRaw !== '' ? FechaExcel::normalizar($vencimientoRaw) : null;
 
     $folioBoletaRaw = $fila['folio_boleta_a_anular'];
     $fechaBoletaRaw = $fila['fecha_boleta_a_anular'];
@@ -2435,6 +2520,10 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
                 'precioUnitario' => (float) $precioRaw,
                 'exento'         => $exento,
             ]],
+            'forma_pago'            => $formaPago,
+            'forma_pago_raw'        => $formaPagoRaw,
+            'fecha_vencimiento'     => $vencimiento,
+            'fecha_vencimiento_raw' => $vencimientoRaw,
             'monto_estimado'        => (int) round($exento ? $montoNeto : $montoNeto * 1.19),
             'boleta_ref_tipo'       => $folioBoleta !== null ? 39 : null,
             'boleta_ref_folio'      => $folioBoleta,
@@ -2507,9 +2596,10 @@ function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d): v
         'INSERT INTO nota_venta '
         . '(cuenta_id, lote_carga_id, identificador_externo, receptor_rut, receptor_razon_social, '
         . ' receptor_giro, receptor_direccion, receptor_comuna, receptor_email, fecha_nota, detalle, '
-        . " monto_estimado, tipo_dte, boleta_ref_tipo, boleta_ref_folio, boleta_ref_fecha, estado) VALUES "
+        . " monto_estimado, tipo_dte, forma_pago, fecha_vencimiento, "
+        . " boleta_ref_tipo, boleta_ref_folio, boleta_ref_fecha, estado) VALUES "
         . '(:cuenta_id, :lote_id, :externo, :rut, :razon, :giro, :dir, :comuna, :email, :fecha, '
-        . " :detalle, :monto, :tipo, :bref_tipo, :bref_folio, :bref_fecha, 'pendiente')"
+        . " :detalle, :monto, :tipo, :fpago, :fvenc, :bref_tipo, :bref_folio, :bref_fecha, 'pendiente')"
     );
     $stmt->execute([
         ':cuenta_id'  => $cuentaId,
@@ -2528,6 +2618,13 @@ function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d): v
         // conjunto libre de ids y puede mezclar archivos, asi que cada nota tiene
         // que bastarse a si misma para saber que emitir.
         ':tipo'       => (int) ($d['tipo_dte'] ?? 33),
+        // NULL cuando no viene, y NO 2: aunque el SII lea el silencio como
+        // credito, guardar un 2 que nadie eligio borraria la diferencia entre
+        // "el usuario eligio credito" y "no se pregunto". Con esta entrega ya no
+        // deberia llegar null por la carga masiva, pero el default se conserva
+        // para no romper a ningun llamador que todavia no lo pase.
+        ':fpago'      => $d['forma_pago'] ?? null,
+        ':fvenc'      => $d['fecha_vencimiento'] ?? null,
         ':bref_tipo'  => $d['boleta_ref_tipo'],
         ':bref_folio' => $d['boleta_ref_folio'],
         ':bref_fecha' => $d['boleta_ref_fecha'],
@@ -2687,6 +2784,97 @@ function handleCargaMasivaPost(): void
         }
     }
 
+    // --- LAS CUATRO VALIDACIONES DE PAGO, TAMBIEN DE ARCHIVO COMPLETO ---------
+    //
+    // Mismo criterio y mismo momento que las dos de exentas: rechazan ANTES de
+    // abrir la transaccion, asi que no llega a existir ni el lote ni una sola
+    // nota. Y sobre las filas VALIDAS unicamente: las que ya fallaron por otra
+    // cosa no tienen 'datos'.
+    //
+    // POR QUE NO HAY VALOR POR DEFECTO. Formato DTE v2.5, pag. 14, campo 13: si
+    // el documento no informa forma de pago, "se entendera que tiene valor 2
+    // (Credito)". O sea que una celda vacia no es "sin dato": es credito elegido
+    // en silencio por el SII. Poner un default aqui seria decidir por el usuario
+    // exactamente lo que esta entrega vino a dejar de hacer.
+    // VACIA y NO RECONOCIDA se cuentan aparte a proposito: "TRANSFERENCIA" no es
+    // una celda que falta, es una que dice algo que no existe, y decirle al
+    // usuario que "falta" cuando el escribio una palabra lo manda a buscar el
+    // error donde no esta.
+    $sinFormaPago = $formaPagoDesconocida = [];
+    $conCreditoSinFecha = $conFechaSinCredito = $conFechaInvalida = [];
+    foreach ($items as $i => $item) {
+        if ($item['status'] !== 'ok') {
+            continue;
+        }
+        $filaExcel = $i + 2; // +1 por el encabezado, +1 porque el usuario cuenta desde 1
+        $d         = $item['datos'];
+
+        if ($d['forma_pago'] === null) {
+            if ($d['forma_pago_raw'] === '') {
+                $sinFormaPago[] = (string) $filaExcel;
+            } else {
+                $formaPagoDesconocida[] = $filaExcel . " (\"{$d['forma_pago_raw']}\")";
+            }
+            continue; // sin forma de pago valida, las otras tres reglas no se pueden evaluar
+        }
+        if ($d['fecha_vencimiento_raw'] !== '' && $d['fecha_vencimiento'] === null) {
+            $conFechaInvalida[] = $filaExcel . " (\"{$d['fecha_vencimiento_raw']}\")";
+            continue;
+        }
+        if ($d['forma_pago'] === 2 && $d['fecha_vencimiento'] === null) {
+            $conCreditoSinFecha[] = $filaExcel;
+        }
+        if ($d['forma_pago'] !== 2 && $d['fecha_vencimiento'] !== null) {
+            $conFechaSinCredito[] = $filaExcel;
+        }
+    }
+
+    $listar = static function (array $filas): string {
+        return implode(', ', array_slice($filas, 0, 20)) . (count($filas) > 20 ? ', ...' : '');
+    };
+    if ($sinFormaPago !== []) {
+        $errorForm(sprintf(
+            'Falta la forma de pago en %d fila(s): %s. Es obligatoria en todas, y los valores aceptados son '
+            . 'CONTADO, CREDITO o SIN COSTO. No se puede dejar vacia: un documento que no informa forma de pago '
+            . 'el SII lo toma como credito. No se cargo ninguna nota.',
+            count($sinFormaPago),
+            $listar($sinFormaPago)
+        ));
+    }
+    if ($formaPagoDesconocida !== []) {
+        $errorForm(sprintf(
+            'La forma de pago no se reconoce en %d fila(s): %s. Los unicos valores aceptados son CONTADO, '
+            . 'CREDITO o SIN COSTO. No se cargo ninguna nota.',
+            count($formaPagoDesconocida),
+            $listar($formaPagoDesconocida)
+        ));
+    }
+    if ($conFechaInvalida !== []) {
+        $errorForm(sprintf(
+            'La fecha de vencimiento no es una fecha valida en %d fila(s): %s. Formatos aceptados: %s. '
+            . 'No se cargo ninguna nota.',
+            count($conFechaInvalida),
+            $listar($conFechaInvalida),
+            FechaExcel::FORMATOS
+        ));
+    }
+    if ($conCreditoSinFecha !== []) {
+        $errorForm(sprintf(
+            'Falta la fecha de vencimiento en %d fila(s) con forma de pago CREDITO: %s. Con credito es '
+            . 'obligatoria: una factura a credito sin vencimiento no sirve para cobrar. No se cargo ninguna nota.',
+            count($conCreditoSinFecha),
+            $listar($conCreditoSinFecha)
+        ));
+    }
+    if ($conFechaSinCredito !== []) {
+        $errorForm(sprintf(
+            'Hay fecha de vencimiento en %d fila(s) cuya forma de pago no es CREDITO: %s. El vencimiento solo '
+            . 'aplica a credito; con CONTADO o SIN COSTO la columna va vacia. No se cargo ninguna nota.',
+            count($conFechaSinCredito),
+            $listar($conFechaSinCredito)
+        ));
+    }
+
     $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
     $totalErrores = count($items) - $totalValidas;
 
@@ -2768,6 +2956,8 @@ function handleCargaMasivaPost(): void
                 'detalle'               => $d['detalle'],
                 'monto_estimado'        => $d['monto_estimado'],
                 'tipo_dte'              => $tipoDte,
+                'forma_pago'            => $d['forma_pago'],
+                'fecha_vencimiento'     => $d['fecha_vencimiento'],
                 'boleta_ref_tipo'       => $d['boleta_ref_tipo'],
                 'boleta_ref_folio'      => $d['boleta_ref_folio'],
                 'boleta_ref_fecha'      => $d['boleta_ref_fecha'],
@@ -2818,9 +3008,15 @@ function listarNotasVentaPendientes(PDO $pdo, int $cuentaId, ?string $rutFiltro)
     // archivo. O sea que aqui conviven notas afectas y exentas, y el usuario
     // puede marcarlas juntas -- mezclar esta permitido por construccion. Sin la
     // columna a la vista, nadie puede saber que esta a punto de emitir.
+    // forma_pago y fecha_vencimiento se traen por el MISMO motivo que tipo_dte:
+    // esta lista mezcla notas de cualquier archivo, y quien selecciona un
+    // conjunto tiene que poder ver que va a emitir. Ademas aqui conviven notas
+    // NUEVAS (con forma de pago elegida) y VIEJAS (forma_pago NULL, cargadas
+    // antes de que la columna se pidiera), y esas dos no son lo mismo.
     $stmt = $pdo->prepare(
         'SELECT id, identificador_externo, receptor_rut, receptor_razon_social, fecha_nota, monto_estimado, '
-        . "tipo_dte, boleta_ref_folio FROM nota_venta WHERE {$where} ORDER BY fecha_nota ASC, id ASC LIMIT 500"
+        . 'tipo_dte, forma_pago, fecha_vencimiento, '
+        . "boleta_ref_folio FROM nota_venta WHERE {$where} ORDER BY fecha_nota ASC, id ASC LIMIT 500"
     );
     $stmt->execute($params);
 
@@ -3279,12 +3475,26 @@ function armarDocumentosSubLote(array $notas): array
         // siempre el de la factura, por contrato con el orden de este bucle.
         $tipos = tiposDocumentosPorNota($nota);
 
-        $documentos[] = [
+        $documento = [
             'tipoDte'         => $tipos[0],
             'receptor'        => $receptor,
             'detalles'        => $detalle,
             'montosSonBrutos' => false,
         ];
+
+        // FORMA DE PAGO Y VENCIMIENTO, si la nota los trae. Las notas cargadas
+        // ANTES de esta entrega tienen forma_pago en NULL y siguen emitiendo sin
+        // el campo, exactamente como hasta ahora: por eso las claves se agregan
+        // solo cuando hay valor, en vez de mandarlas en null. El motor las acepta
+        // opcionales justamente para no dejar esas notas intrafacturables.
+        if ($nota['forma_pago'] !== null) {
+            $documento['formaPago'] = (int) $nota['forma_pago'];
+            if ($nota['fecha_vencimiento'] !== null) {
+                $documento['fechaVencimiento'] = (string) $nota['fecha_vencimiento'];
+            }
+        }
+
+        $documentos[] = $documento;
 
         if (! empty($nota['boleta_ref_folio'])) {
             $documentos[] = [
