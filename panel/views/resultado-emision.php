@@ -28,9 +28,12 @@
 $titulo = 'Documento emitido';
 require __DIR__ . '/partials/header.php';
 
-$nombres    = [33 => 'Factura electronica', 61 => 'Nota de credito', 56 => 'Nota de debito'];
-$tipoDte    = (int) ($resultado['tipoDte'] ?? 0);
-$tipoNombre = $nombres[$tipoDte] ?? ('Documento tipo ' . $tipoDte);
+$tipoDte = (int) ($resultado['tipoDte'] ?? 0);
+// CAMBIO DE TEXTO A PROPOSITO: el mapa que habia aqui decia "Factura
+// electronica" para el 33 pero "Nota de credito" a secas para el 61 -- era
+// incoherente consigo mismo -- y ademas no tenia la boleta, que caia al
+// fallback. Ahora dice el nombre corto, igual que el resto de la interfaz.
+$tipoNombre = \Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe($tipoDte);
 
 $rutaNueva = match ($tipoDte) {
     61 => '/ventas/nota-credito',

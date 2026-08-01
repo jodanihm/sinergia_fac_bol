@@ -31,8 +31,10 @@
 $titulo = 'Documento ' . $tipoDte . '/' . $folio;
 require __DIR__ . '/partials/header.php';
 
-$nombresTipo = [33 => 'Factura', 61 => 'Nota de credito', 56 => 'Nota de debito', 39 => 'Boleta'];
-$tipoNombre  = $nombresTipo[$tipoDte] ?? ('Documento tipo ' . $tipoDte);
+// El nombre sale de TipoDte::nombreDe(), que trae el fallback adentro. Antes
+// habia aqui un mapa propio, uno de los seis que existian con nombres y
+// fallbacks distintos entre si.
+$tipoNombre = \Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe($tipoDte);
 
 $fmt = static function ($v): string {
     return $v === null || $v === '' ? '-' : htmlspecialchars((string) $v);
@@ -135,7 +137,7 @@ $rutaBase = '/ventas/panel-emision/' . $tipoDte . '/' . $folio;
                     <?php if (! empty($documento['folioRef'])): ?>
                         <dt>Referencia</dt>
                         <dd>
-                            <?= htmlspecialchars($nombresTipo[(int) $documento['tipoDteRef']] ?? ('Tipo ' . (int) $documento['tipoDteRef'])); ?>
+                            <?= htmlspecialchars(\Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe((int) $documento['tipoDteRef'])); ?>
                             N&deg; <?= (int) $documento['folioRef']; ?>
                         </dd>
                     <?php endif; ?>

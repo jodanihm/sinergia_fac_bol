@@ -40,7 +40,6 @@ $badgeEstado = static function (?string $estado): array {
     };
 };
 
-$nombresTipo = [33 => 'Factura', 61 => 'Nota de credito', 56 => 'Nota de debito', 39 => 'Boleta'];
 
 $fmt = static fn ($v): string => ($v === null || $v === '') ? '-' : (string) $v;
 
@@ -205,7 +204,7 @@ $qs = $estado !== '' ? '&estado=' . urlencode($estado) : '';
                     <tr>
                         <td><?= htmlspecialchars((string) $it['created_at']); ?></td>
                         <td>
-                            <span class="badge badge--etiqueta"><?= htmlspecialchars($nombresTipo[$tipoDte] ?? ('Tipo ' . $tipoDte)); ?></span>
+                            <span class="badge badge--etiqueta"><?= htmlspecialchars(\Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe($tipoDte)); ?></span>
                             <span class="tabla-datos__secundario">N <?= (int) $it['folio']; ?></span>
                         </td>
                         <td><?= htmlspecialchars((string) $it['receptor_rut']); ?></td>

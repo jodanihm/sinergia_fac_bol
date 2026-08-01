@@ -20,6 +20,7 @@ use Plantiflex\FacturacionCl\Dto\Credenciales;
 use Plantiflex\FacturacionCl\Dto\Libro;
 use Plantiflex\FacturacionCl\Dto\LineaLibro;
 use Plantiflex\FacturacionCl\Enums\Ambiente;
+use Plantiflex\FacturacionCl\Enums\TipoDte;
 use Plantiflex\FacturacionCl\Enums\TipoEnvioLibro;
 use Plantiflex\FacturacionCl\Enums\TipoLibro;
 use Plantiflex\FacturacionCl\Enums\TipoOperacionLibro;
@@ -181,17 +182,25 @@ function kekMaestra(): string
 }
 
 /**
- * Los 4 tipos DTE estandar que se muestran en la pantalla de CAF (/caf) como
- * checklist de "que le falta cargar" al cliente. Un CAF de un tipo fuera de
- * este mapa igual se lista (con nombre generico), solo no aparece en el
- * checklist de los 4 estandar.
+ * Los tipos DTE que el sistema maneja, para las pantallas que necesitan
+ * RECORRER la lista y no solo consultarla: el checklist de la pantalla de CAF
+ * (/caf y /caf-produccion) y el dashboard.
+ *
+ * Es un envoltorio de TipoDte::catalogo(), que a su vez sale de
+ * TipoDte::MANEJADOS. NO es TipoDte::cases(): el enum modela el catalogo del
+ * SII e incluye guia de despacho (52) y boleta exenta (41), que este sistema no
+ * emite -- ofrecerlos en el selector de CAF seria peor que el problema que se
+ * vino a arreglar. Ver el comentario de MANEJADOS.
+ *
+ * Un CAF de un tipo fuera de esta lista igual se lista (con nombre generico),
+ * solo no aparece en el checklist.
+ *
+ * @return array<int,string>
  */
-const NOMBRES_TIPO_DTE = [
-    33 => 'Factura',
-    61 => 'Nota de credito',
-    56 => 'Nota de debito',
-    39 => 'Boleta',
-];
+function catalogoTiposDte(): array
+{
+    return TipoDte::catalogo();
+}
 
 // ---------------------------------------------------------------------------
 //  Constantes del dashboard de gestion (sus funciones viven al final del
@@ -272,11 +281,17 @@ const INFORMES = [
     ],
 ];
 
-/** "Nombre (N)" usando NOMBRES_TIPO_DTE, o "Documento tipo N (N)" si el tipo no esta mapeado. */
+/**
+ * "Nombre (N)", o "Documento tipo N (N)" si el enum no conoce el tipo.
+ *
+ * SU FORMA EXTERNA NO CAMBIA: sus 14 consumidores siguen recibiendo lo mismo.
+ * Lo que cambio es de donde sale el nombre -- ahora de TipoDte::nombreDe(), que
+ * es la unica fuente --, y por eso todos ellos heredan los tipos nuevos sin
+ * tocar una linea.
+ */
 function nombreTipoDte(int $tipo): string
 {
-    $nombre = NOMBRES_TIPO_DTE[$tipo] ?? "Documento tipo {$tipo}";
-    return "{$nombre} ({$tipo})";
+    return TipoDte::nombreDe($tipo) . " ({$tipo})";
 }
 
 /** Primer valor de texto de un tag XML plano (sin namespace), igual que scripts/cargar_caf.php. */
@@ -4801,7 +4816,7 @@ function agruparEmitidosPorEnvio(array $emitidos): array
         }
         $resumen = [];
         foreach ($conteos as $tipo => $n) {
-            $resumen[] = sprintf('%dx %s', $n, NOMBRES_TIPO_DTE[$tipo] ?? "tipo {$tipo}");
+            $resumen[] = sprintf('%dx %s', $n, TipoDte::nombreDe((int) $tipo));
         }
 
         $envios[] = [
@@ -9615,7 +9630,7 @@ function dashResumen(array $porTipo): array
 
     // Normaliza: los 4 tipos conocidos siempre presentes, en cero si no hubo.
     $normalizado = [];
-    foreach (array_keys(NOMBRES_TIPO_DTE) as $tipo) {
+    foreach (TipoDte::MANEJADOS as $tipo) {
         $normalizado[$tipo] = $porTipo[$tipo] ?? $vacio;
     }
     // Un tipo inesperado (no mapeado) igual se conserva: no se pierde plata.

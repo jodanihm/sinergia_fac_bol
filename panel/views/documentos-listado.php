@@ -30,9 +30,9 @@ require __DIR__ . '/partials/header.php';
 
 // Mismo mapa que documento-detalle.php, con los MISMOS valores: el nombre de un
 // documento no puede cambiar entre el listado y su ficha.
-// PENDIENTE: este mapa y el de $badgeEstado estan duplicados en las dos vistas.
-// Extraerlos a un partial compartido queda para cuando se toquen ambas juntas.
-$nombresTipo = [33 => 'Factura', 61 => 'Nota de credito', 56 => 'Nota de debito', 39 => 'Boleta'];
+// PENDIENTE: $badgeEstado sigue duplicado en las dos vistas. Extraerlo a un
+// partial compartido queda para cuando se toquen ambas juntas. El mapa de
+// nombres de tipo que estaba aqui ya NO: ahora sale de TipoDte::nombreDe().
 
 /**
  * Badge del estado. Identico al de documento-detalle.php. El estado NO tiene
@@ -103,7 +103,13 @@ $hayFolio       = isset($filtros['folio']);
     <label class="filtros__campo">Tipo
         <select name="tipoDte" class="filtros__input filtros__input--medio">
             <option value="">Todos</option>
-            <?php foreach ($nombresTipo as $t => $n): ?>
+            <?php /* QUINTO CATALOGO, que no estaba en el inventario: este filtro
+                     tambien RECORRE la lista en vez de consultarla, asi que va
+                     por catalogoTiposDte() y no por TipoDte::cases(). Ademas
+                     calza exactamente con lo que el motor acepta en su filtro
+                     ?tipoDte= (TIPOS_PERMITIDOS_LISTADO = 33, 34, 61, 56, 39):
+                     ofrecer aqui una guia de despacho daria un 422 del motor. */ ?>
+            <?php foreach (catalogoTiposDte() as $t => $n): ?>
                 <option value="<?= $t; ?>" <?= (string) ($filtros['tipoDte'] ?? '') === (string) $t ? 'selected' : ''; ?>><?= htmlspecialchars($n); ?></option>
             <?php endforeach; ?>
         </select>
@@ -172,7 +178,7 @@ $hayFolio       = isset($filtros['folio']);
                         $razon = $it['receptorRazonSocial'] ?? null;
                     ?>
                     <tr>
-                        <td><span class="badge badge--etiqueta"><?= htmlspecialchars($nombresTipo[$tipoDte] ?? ('Tipo ' . $tipoDte)); ?></span></td>
+                        <td><span class="badge badge--etiqueta"><?= htmlspecialchars(\Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe($tipoDte)); ?></span></td>
                         <td class="tabla-datos__num"><?= $folio; ?></td>
                         <td><?= htmlspecialchars((string) $it['fechaEmision']); ?></td>
                         <td>

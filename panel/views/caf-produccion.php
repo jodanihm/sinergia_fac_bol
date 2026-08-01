@@ -76,7 +76,7 @@ foreach ($cafs as $c) {
         <section class="tarjeta" aria-labelledby="titulo-tipos">
             <h2 id="titulo-tipos">Tipos de documento</h2>
             <ul class="validacion">
-                <?php foreach (NOMBRES_TIPO_DTE as $tipo => $nombre): ?>
+                <?php foreach (catalogoTiposDte() as $tipo => $nombre): ?>
                     <?php $cargado = isset($tiposConCaf[$tipo]); ?>
                     <li class="validacion__item">
                         <span><?= htmlspecialchars($nombre); ?> (<?= (int) $tipo; ?>)</span>

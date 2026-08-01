@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Plantiflex\FacturacionCl\Correo;
 
 use PDO;
+use Plantiflex\FacturacionCl\Enums\TipoDte;
 use Plantiflex\FacturacionCl\Pdf\BoletaPdfGenerator;
 use Plantiflex\FacturacionCl\Pdf\DtePdfGenerator;
 use Throwable;
@@ -54,14 +55,11 @@ final class PreparadorEnvio
      */
     public const TIPOS_CON_PDF = [33, 34, 61, 56, 39];
 
-    /** Etiqueta legible por tipo de DTE, para el asunto y el cuerpo del correo. */
-    public const NOMBRE_TIPO_DTE = [
-        33 => 'Factura electronica',
-        34 => 'Factura exenta electronica',
-        61 => 'Nota de credito electronica',
-        56 => 'Nota de debito electronica',
-        39 => 'Boleta electronica',
-    ];
+    // El mapa de nombres que vivia aqui se elimino: ahora sale de
+    // TipoDte::nombreDe($tipo, largo: true), que es la unica fuente del
+    // proyecto. Este es el UNICO sitio que usa el nombre LARGO (con
+    // "electronica"), porque el asunto de un correo es lo unico que ve un
+    // tercero fuera del panel; en la interfaz manda el nombre corto.
 
     /**
      * Prepara el correo de una fila, o explica por que no se puede enviar.
@@ -147,7 +145,7 @@ final class PreparadorEnvio
         }
 
         // --- El correo -------------------------------------------------------
-        $etiquetaTipo = self::NOMBRE_TIPO_DTE[$tipoDte] ?? "Documento tributario tipo {$tipoDte}";
+        $etiquetaTipo = TipoDte::nombreDe($tipoDte, largo: true);
         $razonSocial  = trim((string) ($fila['razon_social'] ?? ''));
         $replyTo      = trim((string) ($fila['cuenta_email'] ?? ''));
         $rutEmisor    = (string) $fila['rut_emisor'];
