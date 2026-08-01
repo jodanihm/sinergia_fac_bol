@@ -93,6 +93,11 @@ final class PreparadorEnvio
         $stmt = $pdo->prepare(
             'SELECT q.id, q.estado, q.destinatario, q.intentos, q.cuenta_id, '
             . '       e.tipo_dte, e.folio, e.rut_emisor, e.xml, '
+            // forma_pago y fecha_vencimiento (migracion 026): el cuerpo del
+            // correo agrega una linea con el vencimiento cuando la factura es a
+            // credito. Los documentos emitidos ANTES de esa migracion tienen las
+            // dos en NULL y no llevan la linea.
+            . '       e.forma_pago, e.fecha_vencimiento, '
             . '       em.razon_social, '
             . '       c.email AS cuenta_email '
             . 'FROM dte_envio_correo q '
@@ -153,9 +158,61 @@ final class PreparadorEnvio
 
         $asunto = sprintf('%s N %d - %s', $etiquetaTipo, $folio, $nombreVisible);
 
+        // LINEA DE VENCIMIENTO. Aparece SOLO con credito (forma_pago = 2) Y con
+        // fecha. En cualquier otro caso el cuerpo queda exactamente como antes,
+        // sin una linea de mas.
+        //
+        // NO SE INVENTA NADA PARA LOS DOCUMENTOS VIEJOS. Los emitidos antes de la
+        // migracion 026 tienen forma_pago en NULL, y aunque el SII lea ese
+        // silencio como credito (Formato DTE v2.5, pag. 14), aqui no se asume:
+        // sin dato, sin linea. Escribirle a un receptor "vence el X" a partir de
+        // una suposicion seria peor que no decirle nada.
+        //
+        // Tampoco va linea para contado ni para sin costo: no le dicen nada
+        // accionable a quien recibe la factura.
+        //
+        // El vencimiento NO va en el PDF, y es deliberado: el Manual de Muestras
+        // Impresas v4.0 no lo exige (no menciona el campo en ninguna de sus 51
+        // paginas) y dibujarlo obligaria a parchear LibreDTE bajo oracle/, con
+        // una certificacion de muestras impresas en revision. El correo es codigo
+        // propio y resuelve la necesidad real sin esa deuda.
+        //
+        // FORMATO DE FECHA: dd-mm-aaaa, y es EL UNICO SITIO DEL PROYECTO QUE SE
+        // APARTA DEL ISO A PROPOSITO.
+        //
+        // El panel muestra AAAA-MM-DD, medido: sus tablas pintan la fecha cruda
+        // de la base (documentos-listado, facturacion-masiva-form "Vence
+        // 2026-09-30") y el unico formateador deliberado de una vista,
+        // $fmtFechaHora de carga-masiva-form, produce 'Y-m-d H:i'. Los dos
+        // 'd-m-Y' que existen en el panel no son convencion de interfaz: uno es
+        // el formato que EXIGE un formulario del SII (formatearFechaAvanceSii) y
+        // el otro es el pie del informe PDF.
+        //
+        // AQUI NO ES INCONSISTENCIA, ES DIFERENCIA DE AUDIENCIA. El panel lo lee
+        // el operador; este correo lo lee un TERCERO que recibe una factura, y en
+        // Chile una fecha para una persona se escribe dd-mm-aaaa. El AAAA-MM-DD
+        // se queda en el panel y en el XML, que es donde corresponde.
+        $lineaVencimiento = '';
+        $formaPago        = $fila['forma_pago'] !== null ? (int) $fila['forma_pago'] : null;
+        $vencimiento      = trim((string) ($fila['fecha_vencimiento'] ?? ''));
+        if ($formaPago === 2 && $vencimiento !== '') {
+            $lineaVencimiento = sprintf(
+                "<p>Esta factura es a <strong>credito</strong> y vence el <strong>%s</strong>.</p>\n",
+                htmlspecialchars(
+                    (new \DateTimeImmutable($vencimiento))->format('d-m-Y'),
+                    ENT_QUOTES,
+                    'UTF-8'
+                )
+            );
+        }
+
+        // El correo se manda SOLO como HTML: BrevoMailer arma el payload con
+        // 'htmlContent' y no envia parte de texto plano, asi que la linea va en un
+        // unico lugar.
         $cuerpo = sprintf(
             "<p>Estimado(a),</p>\n"
             . "<p>Adjuntamos su <strong>%s N&deg; %d</strong>, emitida por <strong>%s</strong> (RUT %s).</p>\n"
+            . '%s'
             . "<p>Se adjuntan dos archivos:</p>\n"
             . "<ul><li>El XML con firma electronica, valido ante el SII.</li>\n"
             . "<li>Una representacion impresa en PDF.</li></ul>\n"
@@ -163,7 +220,8 @@ final class PreparadorEnvio
             htmlspecialchars($etiquetaTipo, ENT_QUOTES, 'UTF-8'),
             $folio,
             htmlspecialchars($nombreVisible, ENT_QUOTES, 'UTF-8'),
-            htmlspecialchars($rutEmisor, ENT_QUOTES, 'UTF-8')
+            htmlspecialchars($rutEmisor, ENT_QUOTES, 'UTF-8'),
+            $lineaVencimiento
         );
 
         // Nombres que sirvan de verdad al abrir el correo: RUT_tipo_folio.
