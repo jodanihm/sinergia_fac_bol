@@ -301,6 +301,17 @@ const MIGRACIONES = [
             ['tipo' => 'columnas', 'desc' => 'lote_carga.tipo_dte', 'tabla' => 'lote_carga', 'columnas' => ['tipo_dte'], 'esperado' => 1],
         ],
     ],
+    [
+        // Una huella POR TABLA, mismo criterio que la 025: la migracion toca dos
+        // tablas con dos ALTER independientes, y con una sola huella un corte
+        // entre ambos se reportaria como APLICADA. Cada huella pide las DOS
+        // columnas de su tabla, asi que tambien detecta un ALTER truncado.
+        'id' => '026', 'archivo' => '026_forma_pago_vencimiento.sql', 'nota' => 'ALTER (2 tablas)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'dte_emitido.forma_pago + fecha_vencimiento', 'tabla' => 'dte_emitido', 'columnas' => ['forma_pago', 'fecha_vencimiento'], 'esperado' => 2],
+            ['tipo' => 'columnas', 'desc' => 'nota_venta.forma_pago + fecha_vencimiento', 'tabla' => 'nota_venta', 'columnas' => ['forma_pago', 'fecha_vencimiento'], 'esperado' => 2],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

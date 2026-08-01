@@ -602,6 +602,53 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         invalido("{$p}descuentoGlobalPct debe ser numerico entre 0 (exclusivo) y 100", "{$p}descuentoGlobalPct");
     }
 
+    // --- FORMA DE PAGO Y VENCIMIENTO (IdDoc/FmaPago, IdDoc/FchVenc) ---
+    //
+    // OMITIR FmaPago NO ES NEUTRO. Formato DTE v2.5, pag. 4 (cambio del
+    // 31/05/2017) y pag. 14 (campo 13): factura, factura exenta y liquidacion
+    // factura "deben informar obligatoriamente" el campo, y "en caso de no
+    // existir este campo se entendera que tiene valor 2 (Credito)". O sea que no
+    // mandarlo es declarar credito en silencio.
+    //
+    // AQUI SIGUE SIENDO OPCIONAL, y a proposito: la carga masiva todavia no lo
+    // manda (es la entrega 2) y exigirlo ahora romperia ese camino. Quien obliga
+    // a elegir es el formulario del panel.
+    $formaPago = $body['formaPago'] ?? null;
+    if ($formaPago !== null && (! is_int($formaPago) || ! in_array($formaPago, [1, 2, 3], true))) {
+        invalido(
+            "{$p}formaPago debe ser 1 (contado), 2 (credito) o 3 (sin costo)",
+            "{$p}formaPago",
+        );
+    }
+
+    $fechaVencimiento = $body['fechaVencimiento'] ?? null;
+    if ($fechaVencimiento !== null) {
+        if (! is_string($fechaVencimiento) || ! validaFecha($fechaVencimiento)) {
+            invalido("{$p}fechaVencimiento debe ser una fecha AAAA-MM-DD valida", "{$p}fechaVencimiento");
+        }
+        // Con contado o sin costo no hay nada que vencer. El Formato DTE no
+        // autoriza esa combinacion en ninguna parte, asi que se rechaza en vez de
+        // emitir un documento cuyo significado nadie puede defender.
+        if ($formaPago !== 2) {
+            invalido(
+                "{$p}fechaVencimiento solo aplica con formaPago = 2 (credito)",
+                "{$p}fechaVencimiento",
+            );
+        }
+    }
+    // CREDITO SIN VENCIMIENTO SE RECHAZA, y esto es MAS ESTRICTO QUE EL SII: el
+    // Formato DTE declara FchVenc como CONDICIONAL (codigo 2, pag. 16) pero NO
+    // enuncia en ninguna parte cual es la condicion. La regla es de negocio: una
+    // factura a credito sin fecha de vencimiento no sirve para cobrar, que es
+    // justamente para lo que se captura el dato. Se valida aqui, y no solo en el
+    // formulario, porque al cliente no se le cree nunca.
+    if ($formaPago === 2 && $fechaVencimiento === null) {
+        invalido(
+            "{$p}fechaVencimiento es obligatoria cuando formaPago = 2 (credito)",
+            "{$p}fechaVencimiento",
+        );
+    }
+
     $montosSonBrutos = (bool) ($body['montosSonBrutos'] ?? false);
     $referencias     = is_array($body['referencias'] ?? null) ? $body['referencias'] : [];
 
@@ -665,6 +712,8 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         'montosSonBrutos'    => $montosSonBrutos,
         'referencias'        => $referencias,
         'descuentoGlobalPct' => $descuentoGlobalPct !== null ? (float) $descuentoGlobalPct : null,
+        'formaPago'          => $formaPago !== null ? (int) $formaPago : null,
+        'fechaVencimiento'   => $fechaVencimiento,
     ];
 }
 
@@ -707,6 +756,8 @@ function emitirDte(array $tenant): never
         montosSonBrutos: $v['montosSonBrutos'],
         referencias:     $v['referencias'],
         descuentoGlobalPct: $v['descuentoGlobalPct'],
+        formaPago:       $v['formaPago'],
+        fechaVencimiento: $v['fechaVencimiento'] !== null ? new DateTimeImmutable($v['fechaVencimiento']) : null,
     );
 
     // --- Ambiente y emisor: SOLO del tenant autenticado ---
@@ -934,6 +985,10 @@ function emitirDteLote(array $tenant): never
                 fechaEmision:    $fechaEmision,
                 referencias:     $referencias,
                 descuentoGlobalPct: $v['descuentoGlobalPct'],
+                // El lote los transporta igual que el unitario, aunque hasta la
+                // entrega 2 la carga masiva no los manda y llegan en null.
+                formaPago:       $v['formaPago'],
+                fechaVencimiento: $v['fechaVencimiento'] !== null ? new DateTimeImmutable($v['fechaVencimiento']) : null,
             );
             $emitidos[] = ['tipoDte' => $v['tipoDte'], 'folio' => $folio];
         }

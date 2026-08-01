@@ -248,6 +248,14 @@ final class SiiDirectoFacturador implements FacturadorInterface
                 receptorRut:  $doc->receptor->rut,
                 folioRef:     isset($ref['folio']) ? (int) $ref['folio'] : null,
                 tipoDteRef:   isset($ref['tipoDocumento']) ? (int) $ref['tipoDocumento'] : null,
+                // Migracion 026. Salen del DOCUMENTO y no del XML: son lo que se
+                // pidio emitir, y el XML es su consecuencia. Si el documento no
+                // los trae quedan NULL, que significa "no se informo" -- y NO 2,
+                // aunque el SII interprete asi el silencio: guardar un 2 que
+                // nadie eligio borraria la diferencia entre elegir credito y no
+                // haber preguntado.
+                formaPago:        $doc->formaPago,
+                fechaVencimiento: $doc->fechaVencimiento?->format('Y-m-d'),
             );
         } catch (Throwable $e) {
             error_log('dte_emitido registrar fallo (folio ' . $folio . '): ' . $e->getMessage());
@@ -787,6 +795,10 @@ final class SiiDirectoFacturador implements FacturadorInterface
                     receptorRut:  $doc->receptor->rut,
                     folioRef:     $folioRef,
                     tipoDteRef:   $tipoDteRef,
+                    // Igual que en el unitario. Hasta la entrega 2 la carga
+                    // masiva no los manda, asi que aqui llegan NULL.
+                    formaPago:        $doc->formaPago,
+                    fechaVencimiento: $doc->fechaVencimiento?->format('Y-m-d'),
                 );
             } catch (Throwable $e) {
                 error_log('dte_emitido registrar fallo (lote, folio ' . $folio . '): ' . $e->getMessage());

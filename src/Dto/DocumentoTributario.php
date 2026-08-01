@@ -52,6 +52,24 @@ final readonly class DocumentoTributario
         // IndServicio para boletas (1=servicios periodicos, 2=servicios periodicos domiciliarios,
         // 3=venta y servicios). Default 3 si null.
         public ?int $indServicio = null,
+        /**
+         * Forma de pago (IdDoc/FmaPago): 1 contado, 2 credito, 3 sin costo.
+         *
+         * null NO ES NEUTRO. El Formato DTE v2.5 (pag. 4, cambio del 31/05/2017,
+         * y pag. 14, campo 13) dice que factura, factura exenta y liquidacion
+         * factura "deben informar obligatoriamente" este campo, y que "en caso de
+         * no existir este campo se entendera que tiene valor 2 (Credito)". O sea
+         * que omitirlo es declarar credito en silencio. Se deja nullable solo
+         * porque los documentos que NO son factura (boleta, NC, ND) no lo llevan
+         * y porque el DTO tiene que poder representar lo que el sistema emitio
+         * antes de esta entrega.
+         */
+        public ?int $formaPago = null,
+        /**
+         * Fecha de vencimiento del pago (IdDoc/FchVenc). Solo tiene sentido con
+         * formaPago = 2 (credito).
+         */
+        public ?DateTimeImmutable $fechaVencimiento = null,
     ) {
         if ($this->detalles === []) {
             throw new DocumentoInvalidoException('DocumentoTributario: detalles no puede ser vacio');
@@ -71,6 +89,21 @@ final readonly class DocumentoTributario
                 'DocumentoTributario: descuentoGlobalPct debe estar entre 0 (exclusivo) y 100'
             );
         }
+        // Enumeracion cerrada del XSD del SII (DTE_v10.xsd:194-215): 1 contado,
+        // 2 credito, 3 sin costo. Cualquier otro valor lo rechaza el esquema.
+        if ($this->formaPago !== null && ! in_array($this->formaPago, [1, 2, 3], true)) {
+            throw new DocumentoInvalidoException(
+                'DocumentoTributario: formaPago debe ser 1 (contado), 2 (credito) o 3 (sin costo)'
+            );
+        }
+        // La fecha de vencimiento solo se sostiene si hay credito. Con contado o
+        // sin costo el documento no tiene nada que vencer, y el Formato DTE no
+        // autoriza esa combinacion en ninguna parte.
+        if ($this->fechaVencimiento !== null && $this->formaPago !== 2) {
+            throw new DocumentoInvalidoException(
+                'DocumentoTributario: fechaVencimiento solo aplica con formaPago = 2 (credito)'
+            );
+        }
     }
 
     /**
@@ -88,6 +121,8 @@ final readonly class DocumentoTributario
             'referencias'     => $this->referencias,
             'observaciones'   => $this->observaciones,
             'totales'         => $this->totales,
+            'formaPago'       => $this->formaPago,
+            'fechaVencimiento' => $this->fechaVencimiento?->format('Y-m-d'),
         ], static fn ($v) => $v !== null && $v !== '');
     }
 }

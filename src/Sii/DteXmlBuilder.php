@@ -83,6 +83,30 @@ final class DteXmlBuilder
         } elseif ($doc->montosSonBrutos) {
             $idDoc->appendChild($this->el($dom, 'MntBruto', '1'));
         }
+
+        // FORMA DE PAGO Y VENCIMIENTO. El ORDEN IMPORTA: el XSD del SII
+        // (docs/18_Schema_XML_DTE/DTE_v10.xsd) declara IdDoc como una SECUENCIA,
+        // asi que los elementos tienen posicion fija. FmaPago va inmediatamente
+        // despues de MntBruto, y FchVenc mucho mas atras, despues de los
+        // TermPago* -- que este builder no emite, asi que quedan contiguos.
+        //
+        // SOLO PARA NO-BOLETA: la boleta tiene su propio esquema, con otra
+        // secuencia en IdDoc, y ademas se emite por un camino distinto
+        // (BoletaFacturador) que nunca fija estos campos. Emitirlos ahi seria
+        // meterlos en un orden que no esta verificado contra ese esquema.
+        //
+        // NO INFORMAR FmaPago NO ES NEUTRO: el Formato DTE v2.5 (pag. 14, campo
+        // 13) dice que si el campo no viene "se entendera que tiene valor 2
+        // (Credito)". Los documentos emitidos antes de esta entrega quedaron
+        // declarados como credito ante el SII sin que nadie lo eligiera.
+        if (! $doc->tipoDte->esBoleta()) {
+            if ($doc->formaPago !== null) {
+                $idDoc->appendChild($this->el($dom, 'FmaPago', (string) $doc->formaPago));
+            }
+            if ($doc->fechaVencimiento !== null) {
+                $idDoc->appendChild($this->el($dom, 'FchVenc', $doc->fechaVencimiento->format('Y-m-d')));
+            }
+        }
         $enc->appendChild($idDoc);
 
         // Emisor (nombres de campos distintos entre boleta y factura).

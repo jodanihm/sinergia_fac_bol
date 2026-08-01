@@ -1016,6 +1016,30 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
         'montosSonBrutos' => ! empty($post['montosSonBrutos']),
     ];
 
+    // FORMA DE PAGO Y VENCIMIENTO (migracion 026). Solo para FACTURA y FACTURA
+    // EXENTA: son los dos tipos para los que el Formato DTE exige informar
+    // FmaPago (pag. 4, cambio del 31/05/2017). NC y ND no lo llevan, y el
+    // formulario tampoco se los ofrece.
+    //
+    // NO HAY DEFAULT NI AQUI NI EN LA VISTA. Omitir el campo no es no-elegir: el
+    // SII lo interpreta como 2 (credito), asi que un default silencioso seria
+    // decidir por el usuario. Si no viene, no se manda -- y el motor lo rechaza
+    // solo cuando falta la fecha con credito, no por faltar la forma de pago,
+    // porque la carga masiva todavia no la manda (entrega 2).
+    if (in_array($tipoDte, [33, 34], true)) {
+        $fp = trim((string) ($post['formaPago'] ?? ''));
+        if ($fp !== '' && ctype_digit($fp)) {
+            $doc['formaPago'] = (int) $fp;
+        }
+        $fv = trim((string) ($post['fechaVencimiento'] ?? ''));
+        // Se manda SOLO con credito. Con contado o sin costo, una fecha que el
+        // usuario haya tecleado antes de cambiar de opcion se descarta aqui, para
+        // no mandarle al motor una combinacion que el mismo rechaza.
+        if ($fv !== '' && ($doc['formaPago'] ?? null) === 2) {
+            $doc['fechaVencimiento'] = $fv;
+        }
+    }
+
     $dg = trim((string) ($post['descuentoGlobalPct'] ?? ''));
     if ($dg !== '' && is_numeric($dg)) {
         $doc['descuentoGlobalPct'] = (float) $dg;

@@ -35,18 +35,24 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
         string $receptorRut,
         ?int $folioRef,
         ?int $tipoDteRef,
+        // Migracion 026. Van con default null y AL FINAL de la firma para que los
+        // llamadores que no los pasan sigan compilando: la boleta y cualquier
+        // camino que todavia no capture forma de pago.
+        ?int $formaPago = null,
+        ?string $fechaVencimiento = null,
     ): void {
         $stmt = $this->pdo->prepare(
             'INSERT INTO dte_emitido '
             . '(rut_emisor, ambiente, tipo_dte, folio, track_id, estado, xml, fecha_emision, '
-            . ' neto, iva, total, receptor_rut, folio_ref, tipo_dte_ref) '
+            . ' neto, iva, total, receptor_rut, folio_ref, tipo_dte_ref, forma_pago, fecha_vencimiento) '
             . 'VALUES (:rut, :amb, :tipo, :folio, :track, :estado, :xml, :fecha, '
-            . ' :neto, :iva, :total, :rrut, :fref, :tref) '
+            . ' :neto, :iva, :total, :rrut, :fref, :tref, :fpago, :fvenc) '
             . 'ON DUPLICATE KEY UPDATE '
             . ' track_id = VALUES(track_id), estado = VALUES(estado), xml = VALUES(xml), '
             . ' fecha_emision = VALUES(fecha_emision), neto = VALUES(neto), iva = VALUES(iva), '
             . ' total = VALUES(total), receptor_rut = VALUES(receptor_rut), '
-            . ' folio_ref = VALUES(folio_ref), tipo_dte_ref = VALUES(tipo_dte_ref)'
+            . ' folio_ref = VALUES(folio_ref), tipo_dte_ref = VALUES(tipo_dte_ref), '
+            . ' forma_pago = VALUES(forma_pago), fecha_vencimiento = VALUES(fecha_vencimiento)'
         );
         $stmt->execute([
             ':rut'    => $rutEmisor,
@@ -63,6 +69,8 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
             ':rrut'   => $receptorRut,
             ':fref'   => $folioRef,
             ':tref'   => $tipoDteRef,
+            ':fpago'  => $formaPago,
+            ':fvenc'  => $fechaVencimiento,
         ]);
     }
 

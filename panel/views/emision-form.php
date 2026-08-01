@@ -72,6 +72,11 @@ $esNota = in_array($tipoDte, [61, 56], true);
 // un folio por un descuido.
 $esExenta = $tipoDte === 34;
 
+// Forma de pago y vencimiento solo aplican a factura y factura exenta: son los
+// dos tipos para los que el Formato DTE exige informar FmaPago (pag. 4, cambio
+// del 31/05/2017). NC y ND no lo llevan.
+$esFactura = in_array($tipoDte, [33, 34], true);
+
 // "Emitir factura electronica" / "Emitir nota de credito" / "Emitir nota de
 // debito". strtolower y no mb_strtolower: los titulos de metaTipoEmision() son
 // ASCII sin tildes y mbstring no esta garantizada en la imagen.
@@ -169,6 +174,50 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             <section class="tarjeta" aria-labelledby="titulo-condiciones">
                 <h2 id="titulo-condiciones">Condiciones del documento</h2>
                 <div class="form-grid form-grid--1">
+                    <?php if ($esFactura): ?>
+                        <?php
+                        /* FORMA DE PAGO. SIN VALOR POR DEFECTO, y no es un descuido:
+                           el Formato DTE v2.5 (pag. 14, campo 13) dice que si el
+                           campo no viene "se entendera que tiene valor 2 (Credito)".
+                           O sea que "no elegir" NO es neutro: es elegir credito en
+                           silencio, que es exactamente lo que el sistema viene
+                           haciendo con todos los documentos emitidos hasta hoy.
+                           Por eso la primera opcion esta vacia y deshabilitada:
+                           obliga a decidir, y el required lo hace cumplir.
+
+                           El <select> ya se estila solo dentro de .form-compacto,
+                           que este formulario lleva en su <form>. Cero CSS nuevo. */
+                        ?>
+                        <div class="form-campo form-campo--corto">
+                            <label for="forma-pago">Forma de pago</label>
+                            <select name="formaPago" id="forma-pago" required<?= $errStyle('formaPago'); ?>>
+                                <option value="" disabled <?= ($form['formaPago'] ?? '') === '' ? 'selected' : ''; ?>>Elige una</option>
+                                <?php foreach ([1 => 'Contado', 2 => 'Credito', 3 => 'Sin costo (entrega gratuita)'] as $v => $glosa): ?>
+                                    <option value="<?= $v; ?>" <?= (string) ($form['formaPago'] ?? '') === (string) $v ? 'selected' : ''; ?>><?= $glosa; ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="form-ayuda">
+                                Obligatorio. Si no se informa, el SII asume Credito.
+                            </small>
+                        </div>
+                        <?php
+                        /* VENCIMIENTO. Obligatorio SOLO con credito, y esa
+                           obligacion es NUESTRA, no del SII: el Formato DTE lo
+                           declara condicional (codigo 2, pag. 16) pero no enuncia
+                           la condicion. La razon es de negocio: una factura a
+                           credito sin vencimiento no sirve para cobrar, que es
+                           justo para lo que se captura el dato.
+
+                           El required lo pone y lo saca el JS de abajo segun la
+                           opcion elegida; el motor lo valida igual por su cuenta. */
+                        ?>
+                        <div class="form-campo form-campo--corto" id="campo-vencimiento" hidden>
+                            <label for="fecha-vencimiento">Fecha de vencimiento</label>
+                            <input type="date" name="fechaVencimiento" id="fecha-vencimiento"
+                                   value="<?= htmlspecialchars((string) ($form['fechaVencimiento'] ?? '')); ?>"<?= $errStyle('fechaVencimiento'); ?>>
+                            <small class="form-ayuda">Obligatoria cuando la forma de pago es Credito.</small>
+                        </div>
+                    <?php endif; ?>
                     <div class="form-campo">
                         <label class="form-check" for="montos-brutos">
                             <input type="checkbox" name="montosSonBrutos" id="montos-brutos" value="1" <?= ! empty($form['montosSonBrutos']) ? 'checked' : ''; ?>>
@@ -374,5 +423,34 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     });
 })();
 </script>
+
+<?php if ($esFactura): ?>
+<script>
+// VENCIMIENTO ATADO A LA FORMA DE PAGO. Solo se muestra y solo se exige con
+// credito (valor 2). Con contado o sin costo el campo se oculta Y SE VACIA: si
+// quedara con una fecha tecleada antes de cambiar de opcion, el navegador la
+// enviaria igual y el motor rechazaria la combinacion.
+//
+// Esto es comodidad, no la garantia: armarDocumentoEmision() descarta la fecha
+// si la forma de pago no es 2, y el motor rechaza tanto "credito sin fecha" como
+// "fecha sin credito". Tres capas, y la que manda es la del motor.
+(function () {
+    var sel   = document.getElementById('forma-pago');
+    var campo = document.getElementById('campo-vencimiento');
+    var fecha = document.getElementById('fecha-vencimiento');
+    if (!sel || !campo || !fecha) { return; }
+
+    function sincronizar() {
+        var esCredito = sel.value === '2';
+        campo.hidden = !esCredito;
+        fecha.required = esCredito;
+        if (!esCredito) { fecha.value = ''; }
+    }
+
+    sel.addEventListener('change', sincronizar);
+    sincronizar(); // al cargar, y tambien al re-renderizar tras un 422
+})();
+</script>
+<?php endif; ?>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>
