@@ -2072,12 +2072,17 @@ function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
 //  Contexto (ver PASO 0/1 de M4): un cliente con sistema de reservas cobra
 //  via Mercado Pago, emite boleta al momento y a fin de mes hay que anularla
 //  (NC) y reemplazarla por factura -- unos 200-300 documentos/mes. El motor
-//  (POST /api/v1/dte/lote) NO tiene idempotencia propia y es todo-o-nada por
-//  sobre (confirmado leyendo su codigo): la idempotencia de negocio vive
-//  ENTERAMENTE aqui, en nota_venta (UNIQUE(cuenta_id, identificador_externo)
-//  contra recarga del Excel + columna estado contra reintento de
-//  facturacion). Sin infraestructura de colas: sincrono con set_time_limit()
-//  + polling sobre el mismo estado persistido (sin nada que inventar).
+//  (POST /api/v1/dte/lote) es todo-o-nada por sobre: si el envio falla, falla
+//  entero. La idempotencia de NEGOCIO vive aqui, en nota_venta
+//  (UNIQUE(cuenta_id, identificador_externo) contra recarga del Excel + columna
+//  estado contra reintento de facturacion). Sin infraestructura de colas:
+//  sincrono con set_time_limit() + polling sobre el mismo estado persistido.
+//
+//  ACTUALIZADO: el motor SI tiene idempotencia en el lote desde que
+//  Idempotency-Key se volvio obligatoria ahi. Cubre un hueco que nota_venta no
+//  podia cubrir sola: el corte de red DESPUES de que el SII acepto el envio,
+//  donde el panel marca las notas en error sin saber que los documentos ya se
+//  emitieron. Ver la derivacion de la clave en facturarSubLote().
 // ===========================================================================
 
 const NOTA_VENTA_ENCABEZADOS = [
@@ -3421,10 +3426,18 @@ function sumarFoliosDisponibles(PDO $pdo, string $rutEmisor, int $tipoDte): int
 /** POST /api/v1/dte/lote del motor (facturacion masiva, M4). Mismo patron que
  *  emitirEnMotor()/listarDocumentosEnMotor(): reusa clienteMotor(), NO lanza
  *  en 4xx/5xx (http_errors=false, vive en clienteMotor()). */
-function emitirLoteEnMotor(string $keyServicio, array $documentos): array
+function emitirLoteEnMotor(string $keyServicio, array $documentos, string $claveIdempotencia): array
 {
+    // Idempotency-Key es OBLIGATORIA en el lote del motor (a diferencia del
+    // unitario, donde sigue siendo opcional): sin ella responde 422. La clave la
+    // deriva el llamador del contenido del sub-lote, no se genera aqui, porque
+    // tiene que ser la MISMA en un reintento.
     $resp = clienteMotor()->post('api/v1/dte/lote', [
-        'headers' => ['X-Api-Key' => $keyServicio, 'Content-Type' => 'application/json'],
+        'headers' => [
+            'X-Api-Key'       => $keyServicio,
+            'Content-Type'    => 'application/json',
+            'Idempotency-Key' => $claveIdempotencia,
+        ],
         'json'    => ['documentos' => $documentos],
     ]);
     $body = json_decode((string) $resp->getBody(), true);
@@ -3571,8 +3584,34 @@ function facturarSubLote(PDO $pdo, string $keyServicio, array $notas, int $cuent
         static fn (array $n): bool => in_array((int) $n['id'], $idsReclamados, true)
     ));
 
+    // CLAVE DE IDEMPOTENCIA DEL SUB-LOTE, ahora obligatoria en el motor.
+    //
+    // SE DERIVA DE LOS IDS DE NOTA RECLAMADOS, ordenados: son exactamente los
+    // documentos que este envio va a emitir. Es la unica derivacion que cumple
+    // las dos condiciones que sirven:
+    //
+    //   - ESTABLE entre reintentos: el mismo sub-lote de las mismas notas
+    //     produce la misma clave. Una clave aleatoria por peticion no serviria
+    //     de nada -- el reintento no encontraria el claim anterior y volveria a
+    //     emitir todo.
+    //   - DISTINTA entre sub-lotes: dos sub-lotes de la misma corrida tienen
+    //     conjuntos de ids disjuntos (marcarNotasVentaEnProceso() los reclama en
+    //     exclusiva), asi que no colisionan.
+    //
+    // Se ordenan antes de unir porque marcarNotasVentaEnProceso() no promete un
+    // orden, y dos reintentos con el mismo conjunto en distinto orden tienen que
+    // dar la MISMA clave.
+    //
+    // No hace falta meter cuenta_id ni rut_emisor: la PK de dte_idempotencia es
+    // (rut_emisor, ambiente, clave) y el motor toma el rut del tenant
+    // autenticado, asi que dos cuentas no pueden pisarse aunque los ids
+    // coincidan.
+    $idsOrdenados = $idsReclamados;
+    sort($idsOrdenados, SORT_NUMERIC);
+    $claveIdem = 'sublote-' . hash('sha256', implode(',', $idsOrdenados));
+
     try {
-        $res = emitirLoteEnMotor($keyServicio, armarDocumentosSubLote($notas));
+        $res = emitirLoteEnMotor($keyServicio, armarDocumentosSubLote($notas), $claveIdem);
     } catch (Throwable $e) {
         error_log('facturacion masiva: fallo de conexion con el motor - ' . $e->getMessage());
         marcarNotasVentaError($pdo, $idsReclamados, 'No se pudo contactar el motor de emision.');

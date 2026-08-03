@@ -87,10 +87,20 @@ final class MySqlIdempotenciaRepository
     }
 
     /**
-     * Reactiva un claim MUERTO: sin folio y mas viejo que el TTL (servidor caido a
-     * mitad). Lo borra (rowCount de DELETE es fiable, a diferencia del de UPDATE que
+     * Reactiva un claim MUERTO: SIN COMPLETAR y mas viejo que el TTL (servidor caido
+     * a mitad). Lo borra (rowCount de DELETE es fiable, a diferencia del de UPDATE que
      * cuenta filas cambiadas) y lo vuelve a reclamar con created_at fresco. Atomico:
      * solo un proceso gana el DELETE; el resto recibe false -> 409. true si reactivo.
+     *
+     * LA COLUMNA TESTIGO ES http_status, NO folio. Las cuatro columnas de resultado
+     * (tipo_dte, folio, http_status, respuesta_json) se llenan en el UNICO UPDATE de
+     * completar(), asi que cualquiera de ellas sirve de marca de "terminado" -- pero
+     * folio MIENTE para un lote, que emite N documentos y no tiene UN folio.
+     *
+     * SI ESTE WHERE SIGUIERA MIRANDO folio, un lote completado (folio NULL por
+     * definicion) seria tratado como claim muerto y BORRADO al pasar el TTL: su
+     * replay dejaria de funcionar en silencio a los 300 segundos, y un reintento
+     * legitimo del cliente volveria a emitir el lote entero.
      */
     public function reactivarSiMuerto(
         string $rutEmisor,
@@ -100,7 +110,7 @@ final class MySqlIdempotenciaRepository
     ): bool {
         $del = $this->pdo->prepare(
             'DELETE FROM dte_idempotencia '
-            . 'WHERE rut_emisor = :rut AND ambiente = :amb AND clave = :clave AND folio IS NULL '
+            . 'WHERE rut_emisor = :rut AND ambiente = :amb AND clave = :clave AND http_status IS NULL '
             . '  AND TIMESTAMPDIFF(SECOND, created_at, NOW()) >= :ttl'
         );
         // :ttl se liga como ENTERO explicitamente. execute([...]) liga todo como
@@ -119,13 +129,25 @@ final class MySqlIdempotenciaRepository
         return $this->reclamar($rutEmisor, $ambiente, $clave);
     }
 
-    /** Guarda el resultado de una emision exitosa para reintentos con la misma clave. */
+    /**
+     * Guarda el resultado de una emision exitosa para reintentos con la misma clave.
+     *
+     * tipoDte y folio son NULLABLES porque un LOTE no tiene un tipo ni un folio: emite
+     * N documentos, de tipos que pueden ser distintos, cada uno con su propio folio.
+     * Guardar uno de ellos seria mentir, y guardar el primero haria que idx_folio
+     * apuntara a un documento que no representa la solicitud. Para el lote los dos
+     * quedan en NULL y lo que manda es http_status + respuesta_json, que es donde
+     * viven el trackId y la lista completa de {tipoDte, folio}.
+     *
+     * El unitario los sigue pasando, y por eso idx_folio (ambiente, tipo_dte, folio)
+     * conserva su utilidad para ese caso.
+     */
     public function completar(
         string $rutEmisor,
         Ambiente $ambiente,
         string $clave,
-        int $tipoDte,
-        int $folio,
+        ?int $tipoDte,
+        ?int $folio,
         string $respuestaJson,
         int $httpStatus,
     ): void {

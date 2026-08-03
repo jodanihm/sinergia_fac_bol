@@ -99,6 +99,20 @@ const TIPOS_PERMITIDOS_LISTADO = [33, 34, 61, 56, 39];
 // IVA=0 sobre un documento que no puede llevarlos. Abrir el 34 aqui exige antes
 // arreglar esos totales, y eso es una entrega propia.
 const TIPOS_PERMITIDOS_ANULAR = [33, 61, 56, 39];
+/**
+ * Tope de documentos por POST /api/v1/dte/lote.
+ *
+ * NO ES UN NUMERO ELEGIDO: es el limite del propio esquema del SII. En
+ * docs/18_Schema_XML_DTE/EnvioDTE_v10.xsd:92, el elemento DTE dentro de SetDTE
+ * se declara <xs:element ref="SiiDte:DTE" maxOccurs="2000">. Un envio con 2001
+ * documentos no valida contra el esquema.
+ *
+ * El mismo archivo trae un SEGUNDO limite que hoy no puede violarse pero
+ * conviene tener anotado: <xs:element name="SubTotDTE" maxOccurs="20"> (linea
+ * 69), o sea hasta 20 TIPOS distintos por envio. El sistema maneja 5.
+ */
+const LOTE_MAX_DOCUMENTOS = 2000;
+
 const NS_SII = 'http://www.sii.cl/SiiDte';
 // TTL de un claim de idempotencia SIN folio (emision en curso / servidor caido):
 // pasado este tiempo se considera muerto y se permite reintentar.
@@ -798,12 +812,17 @@ function emitirDte(array $tenant): never
     if ($idem !== null && ! $idem->reclamar($tenant['rut_emisor'], $ambiente, $clave)) {
         // La clave ya existe para este emisor en este ambiente.
         $previo = $idem->obtener($tenant['rut_emisor'], $ambiente, $clave);
-        if ($previo !== null && $previo['folio'] !== null) {
+        // LA MARCA DE TERMINADO ES http_status, NO folio. Las cuatro columnas de
+        // resultado se llenan en el unico UPDATE de completar(), asi que son
+        // equivalentes para el unitario -- pero folio es NULL en un lote, que no
+        // tiene UN folio. Con http_status la misma regla sirve para los dos
+        // endpoints y no hay dos criterios que puedan divergir.
+        if ($previo !== null && $previo['httpStatus'] !== null) {
             // Camino REPETIDO: devolver el resultado guardado SIN tocar el SII ni consumir folio.
             header('Idempotent-Replay: true');
-            responder($previo['httpStatus'] ?? 201, json_decode((string) $previo['respuestaJson'], true));
+            responder($previo['httpStatus'], json_decode((string) $previo['respuestaJson'], true));
         }
-        // Sin folio: emision en curso, o claim muerto (servidor caido a mitad).
+        // Sin completar: emision en curso, o claim muerto (servidor caido a mitad).
         if (! $idem->reactivarSiMuerto($tenant['rut_emisor'], $ambiente, $clave, IDEMPOTENCIA_TTL_SEGUNDOS)) {
             responder(409, ['error' => 'solicitud en proceso']);
         }
@@ -898,8 +917,83 @@ function emitirDteLote(array $tenant): never
         invalido('documentos debe tener al menos 1 item', 'documentos');
     }
 
-    // --- Validar TODO el lote ANTES de asignar folios o tocar el SII ---
     $totalDocs = count($documentos);
+
+    // --- TOPE DEL LOTE: el limite REAL del esquema del SII ---
+    //
+    // 2000 no es un numero elegido: es el maxOccurs del elemento DTE dentro de
+    // SetDTE en docs/18_Schema_XML_DTE/EnvioDTE_v10.xsd:92
+    // (<xs:element ref="SiiDte:DTE" maxOccurs="2000">). Un envio con 2001
+    // documentos no valida contra el esquema y el SII lo rechaza entero.
+    //
+    // VA AQUI, Y NO MAS ABAJO, POR UNA RAZON CONCRETA: la asignacion de folios
+    // ocurre ~67 lineas mas adelante (asignarSiguienteFolio, dentro del try), y
+    // un folio asignado NO SE DEVUELVE. Rechazar despues de empezar a asignar
+    // quemaria hasta 2000 folios de una serie autorizada por el SII para no
+    // emitir nada. Aqui el count() ya estaba calculado y todavia no se toco nada.
+    if ($totalDocs > LOTE_MAX_DOCUMENTOS) {
+        invalido(
+            sprintf(
+                'documentos tiene %d items y el maximo es %d: el esquema del SII (EnvioDTE_v10.xsd) '
+                . 'permite hasta %d DTE por envio. Divide el lote.',
+                $totalDocs,
+                LOTE_MAX_DOCUMENTOS,
+                LOTE_MAX_DOCUMENTOS
+            ),
+            'documentos'
+        );
+    }
+
+    // --- IDEMPOTENCIA: OBLIGATORIA EN EL LOTE ---
+    //
+    // A diferencia del unitario, donde el header es opcional por
+    // retrocompatibilidad. Aqui se exige por lo que cuesta el error: un lote sin
+    // clave que se corta por timeout de red despues de que el SII acepto el
+    // envio deja al cliente sin saber que paso, y su reintento emite TODO otra
+    // vez -- hasta 2000 documentos duplicados ante el SII, con sus folios
+    // quemados. No hay forma de deshacer eso.
+    //
+    // EL RECLAMO VA ANTES DE VALIDAR, antes del certificado y antes del primer
+    // folio: es el primer efecto de la peticion.
+    //
+    // POR QUE EL TOPE VA ANTES DEL RECLAMO, que es el unico punto donde el orden
+    // se aparta de "lo antes posible": un lote rechazado por el tope no emite
+    // nada, y si hubiera reclamado la clave, el cliente no podria reintentar con
+    // el payload corregido bajo la MISMA clave hasta que expire el TTL de 300 s
+    // -- recibiria 409 "solicitud en proceso" por un lote que nunca existio. El
+    // tope es un count() sin efectos, asi que ponerlo antes no cuesta nada.
+    $clave = trim((string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''));
+    if ($clave === '') {
+        invalido(
+            'Idempotency-Key es obligatoria en POST /api/v1/dte/lote. Sin ella, un reintento tras '
+            . 'un corte de red volveria a emitir todo el lote y a quemar sus folios ante el SII. '
+            . 'Usa una clave DERIVADA del contenido del lote, estable entre reintentos, no aleatoria '
+            . 'por peticion.',
+            'Idempotency-Key'
+        );
+    }
+
+    // $ambiente SE CALCULA AQUI y no en su sitio anterior (~40 lineas mas abajo):
+    // reclamar() lo necesita, y es un calculo puro sobre la fila del tenant ya
+    // autenticado -- no consulta nada ni tiene efectos.
+    $pdo      = pdo();
+    $ambiente = ambienteDesdeTenant($tenant);
+
+    $idem = new MySqlIdempotenciaRepository($pdo);
+    if (! $idem->reclamar($tenant['rut_emisor'], $ambiente, $clave)) {
+        $previo = $idem->obtener($tenant['rut_emisor'], $ambiente, $clave);
+        // http_status como testigo, igual que el unitario: un lote completado
+        // tiene tipo_dte y folio en NULL porque emitio N documentos.
+        if ($previo !== null && $previo['httpStatus'] !== null) {
+            header('Idempotent-Replay: true');
+            responder($previo['httpStatus'], json_decode((string) $previo['respuestaJson'], true));
+        }
+        if (! $idem->reactivarSiMuerto($tenant['rut_emisor'], $ambiente, $clave, IDEMPOTENCIA_TTL_SEGUNDOS)) {
+            responder(409, ['error' => 'solicitud en proceso']);
+        }
+    }
+
+    // --- Validar TODO el lote ANTES de asignar folios o tocar el SII ---
     $validados = [];
     foreach (array_values($documentos) as $i => $d) {
         if (! is_array($d)) {
@@ -936,10 +1030,9 @@ function emitirDteLote(array $tenant): never
         $validados[] = $v;
     }
 
-    // --- Emisor, ambiente y sender: SOLO del tenant autenticado ---
-    $pdo      = pdo();
-    $ambiente = ambienteDesdeTenant($tenant);
-
+    // --- Sender: SOLO del tenant autenticado ---
+    // $pdo y $ambiente ya se resolvieron mas arriba, antes del reclamo de
+    // idempotencia, que los necesita.
     $cred = new Credenciales(
         rutEmisor: $tenant['rut_emisor'],
         apiToken:  'no-usado-por-sii-directo',
@@ -1026,10 +1119,27 @@ function emitirDteLote(array $tenant): never
         responder(502, ['error' => 'fallo la emision del lote', 'detalle' => $e->getMessage()]);
     }
 
-    responder(201, [
+    $payload = [
         'trackId'    => $res['trackId'],
         'documentos' => $emitidos,
-    ]);
+    ];
+
+    // Se guarda el resultado para que un reintento con la misma clave lo replique
+    // sin volver a emitir. tipoDte y folio van en NULL a proposito: el lote emitio
+    // N documentos y guardar uno de ellos seria mentir. Lo que identifica el
+    // resultado es http_status + respuesta_json, que ya trae el trackId y la lista
+    // completa de {tipoDte, folio}.
+    $idem->completar(
+        $tenant['rut_emisor'],
+        $ambiente,
+        $clave,
+        null,
+        null,
+        json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        201,
+    );
+
+    responder(201, $payload);
 }
 
 // ===========================================================================
