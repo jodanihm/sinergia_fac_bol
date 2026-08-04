@@ -7,6 +7,7 @@ namespace Plantiflex\Integration\Facturacion;
 use PDO;
 use Plantiflex\FacturacionCl\Contracts\DteEmitidoRepositoryInterface;
 use Plantiflex\FacturacionCl\Enums\Ambiente;
+use Plantiflex\FacturacionCl\Sii\EstadoContable;
 
 /**
  * Implementacion MySQL de {@see DteEmitidoRepositoryInterface} (tabla dte_emitido).
@@ -282,10 +283,21 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
         ?string $estado = null,
     ): array {
         [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $folio, $receptorRut, $estado);
+
+        // LOS RECHAZADOS NO SUMAN. Un envio rechazado se corrige y se reemite,
+        // asi que los mismos montos quedan dos veces en la tabla: medido en
+        // produccion, 68 rechazados y 68 buenos por las MISMAS ventas.
+        //
+        // VA SOLO AQUI Y NO EN filtroPeriodo(), aunque el WHERE se comparta con
+        // listarPorPeriodo() y contarPorPeriodo(). Esas dos son EL LISTADO, y el
+        // listado tiene que seguir mostrando los rechazados: es donde se van a
+        // ver. Meter la exclusion en el filtro comun los haria desaparecer de la
+        // pantalla, que es lo contrario de lo que se busca.
         $stmt = $this->pdo->prepare(
             'SELECT tipo_dte, COUNT(*) AS n, COALESCE(SUM(neto),0) AS neto, '
             . 'COALESCE(SUM(iva),0) AS iva, COALESCE(SUM(total),0) AS total '
-            . 'FROM dte_emitido WHERE ' . $where . ' GROUP BY tipo_dte'
+            . 'FROM dte_emitido WHERE ' . $where . EstadoContable::sqlExcluirRechazados()
+            . ' GROUP BY tipo_dte'
         );
         $stmt->execute($params);
 

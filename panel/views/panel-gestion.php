@@ -289,17 +289,38 @@ $pintarDelta = static function (?array $d): string {
     </section>
     </div>
 
-    <section class="tarjeta tarjeta--proximamente" aria-labelledby="titulo-problemas">
+    <?php
+    // DOCUMENTOS CON PROBLEMAS. Esta tarjeta decia "Proximamente" y explicaba
+    // que no clasificabamos los codigos del SII porque era una regla tributaria
+    // sin definir. Ya esta definida y verificada (EstadoContable), asi que
+    // ahora muestra el numero.
+    //
+    // Y ES LA CONTRAPARTIDA OBLIGATORIA DE HABER EXCLUIDO ESOS DOCUMENTOS DE LOS
+    // KPI. Sacarlos del total sin enseñarlos en ninguna parte seria recrear el
+    // punto ciego en otra forma: el cliente veria bajar su facturacion sin
+    // ninguna explicacion a la vista. Lo que aparece aqui es EXACTAMENTE lo que
+    // se resto -- misma consulta, misma funcion de resumen, filtro invertido.
+    $hayRechazados = $rechazados !== null && (int) $rechazados['documentos'] > 0;
+    ?>
+    <section class="tarjeta<?= $hayRechazados ? '' : ' tarjeta--proximamente'; ?>" aria-labelledby="titulo-problemas">
         <h2 class="dash-titulo" id="titulo-problemas">
             <?= iconoSvg('alerta', 18, 'dash-titulo__icono'); ?>Documentos con problemas
-            <span class="nav-item__badge badge--proximo">Proximamente</span>
         </h2>
-        <p>Todavia no clasificamos los codigos del SII en aceptado, rechazado o
-        pendiente. Decidir que codigo significa "rechazado" es una regla
-        tributaria, y preferimos no mostrarte un numero antes de tenerla
-        definida y verificada.</p>
-        <p class="nota">Mientras tanto, la distribucion de estados de la izquierda
-        muestra los codigos crudos, que si son un dato verificable.</p>
+        <?php if (! $hayRechazados): ?>
+            <p>Ningun documento de este periodo fue rechazado por el SII.</p>
+            <p class="nota">Si el SII rechaza un envio, aqui vas a ver cuantos
+            documentos son y por cuanto monto, y no se suman a tu facturacion.</p>
+        <?php else: ?>
+            <p>El SII rechazo <strong><?= $fmtNum($rechazados['documentos']); ?></strong>
+            documento<?= (int) $rechazados['documentos'] === 1 ? '' : 's'; ?> de este periodo,
+            por <strong><?= $fmtMonto($rechazados['netoPeriodo']); ?></strong> netos
+            (<?= $fmtMonto($rechazados['ivaDebito']); ?> de IVA).</p>
+            <p class="nota">Esos documentos <strong>no</strong> estan sumados en las
+            cifras de arriba: un envio rechazado se corrige y se reemite, asi que
+            contarlos duplicaria las mismas ventas. Sus folios ya se consumieron y
+            los documentos siguen visibles en el
+            <a href="/ventas/panel-emision">Panel de emision</a>.</p>
+        <?php endif; ?>
     </section>
 
 <?php endif; ?>

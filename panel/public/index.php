@@ -33,6 +33,7 @@ use Plantiflex\FacturacionCl\Providers\SiiDirectoFacturador;
 use Plantiflex\FacturacionCl\Sii\BoletaSetPruebasBuilder;
 use Plantiflex\FacturacionCl\Sii\CertificacionEstadoResolver;
 use Plantiflex\FacturacionCl\Sii\EnvioDteParser;
+use Plantiflex\FacturacionCl\Sii\EstadoContable;
 use Plantiflex\FacturacionCl\Sii\EnvioRecibosBuilder;
 use Plantiflex\FacturacionCl\Sii\LibroComprasPayloadBuilder;
 use Plantiflex\FacturacionCl\Sii\LibroService;
@@ -9560,10 +9561,25 @@ function dashPeriodo(string $cual): array
 /**
  * Q1. Agregado por tipo de documento en un rango de fechas.
  *
+ * LOS RECHAZADOS NO SUMAN (EstadoContable). Un envio rechazado se corrige y se
+ * reemite, asi que los mismos montos quedan dos veces en la tabla: medido en
+ * produccion, un cliente con 68 rechazados y 68 buenos por LAS MISMAS ventas
+ * veia el doble exacto de lo que habia vendido.
+ *
+ * @param bool $soloRechazados invierte el filtro y devuelve SOLO lo excluido.
+ *        Existe para que el monto rechazado se calcule con ESTA MISMA consulta
+ *        y no con una copia: asi lo que se resta del total y lo que se muestra
+ *        como restado no pueden diferir ni por un peso.
+ *
  * @return array<int,array{documentos:int, neto:int, iva:int, total:int}> indexado por tipo_dte
  */
-function dashMetricasPorTipo(PDO $pdo, string $rutEmisor, string $desde, string $hasta): array
-{
+function dashMetricasPorTipo(
+    PDO $pdo,
+    string $rutEmisor,
+    string $desde,
+    string $hasta,
+    bool $soloRechazados = false
+): array {
     $stmt = $pdo->prepare(
         'SELECT tipo_dte, '
         . '       COUNT(*)   AS documentos, '
@@ -9573,6 +9589,9 @@ function dashMetricasPorTipo(PDO $pdo, string $rutEmisor, string $desde, string 
         . 'FROM dte_emitido '
         . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
         . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        . ($soloRechazados
+            ? EstadoContable::sqlSoloRechazados()
+            : EstadoContable::sqlExcluirRechazados())
         . 'GROUP BY tipo_dte ORDER BY tipo_dte'
     );
     $stmt->execute([':rut' => $rutEmisor, ':desde' => $desde, ':hasta' => $hasta]);
@@ -9725,6 +9744,9 @@ function dashVentasPorDia(PDO $pdo, string $rutEmisor, string $desde, string $ha
         . 'FROM dte_emitido '
         . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
         . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        // Los rechazados no suman: si no se excluyeran, el grafico mostraria un
+        // pico el dia del rechazo y otro igual el dia de la reemision.
+        . EstadoContable::sqlExcluirRechazados()
         . 'GROUP BY fecha_emision ORDER BY fecha_emision'
     );
     $stmt->execute([
@@ -9829,6 +9851,9 @@ function dashTopClientes(PDO $pdo, int $cuentaId, string $rutEmisor, string $des
         . 'FROM dte_emitido '
         . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
         . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        // Los rechazados no suman: sin esto un cliente al que se le rechazo y
+        // reemitio un lote apareceria arriba del ranking por el doble.
+        . EstadoContable::sqlExcluirRechazados()
         . 'GROUP BY rut_normalizado ORDER BY neto DESC LIMIT 5'
     );
     $stmt->execute([
@@ -9865,6 +9890,17 @@ function dashTopClientes(PDO $pdo, int $cuentaId, string $rutEmisor, string $des
  * Decide el estado vacio del dashboard. Sin filtro de fecha a proposito: hay
  * que distinguir "nunca emitiste nada" (mensaje de bienvenida) de "no emitiste
  * este mes pero tienes historial" (KPIs en cero con comparacion real).
+ *
+ * ESTA ES LA UNICA CONSULTA DEL DASHBOARD QUE **NO** EXCLUYE LOS RECHAZADOS, Y
+ * ES DELIBERADO. No suma ventas: responde "¿emitiste alguna vez?", y emitir es
+ * emitir -- el folio de un documento rechazado se quemo igual.
+ *
+ * Y filtrarla tendria una consecuencia concreta y mala: si devuelve 0, el
+ * handler reemplaza el dashboard ENTERO por la pantalla de bienvenida. Un
+ * cliente cuyos unicos documentos fueron rechazados veria "Aun no has emitido
+ * documentos" y perderia de vista la tarjeta que le explica por que -- se
+ * recrearia el mismo punto ciego que esta entrega viene a cerrar, y encima
+ * justo con el cliente que mas lo necesita.
  */
 function dashTotalHistorico(PDO $pdo, string $rutEmisor): int
 {
@@ -9953,6 +9989,11 @@ function informeDetalleDocumentos(
         . 'FROM dte_emitido '
         . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
         . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        // Los rechazados no aparecen. Este informe NO es el listado -- lleva
+        // una fila de totales al pie, y esa fila tiene que cuadrar con el
+        // dashboard. Para ver los rechazados esta el Panel de emision, que si
+        // los muestra, y la tarjeta de documentos con problemas.
+        . EstadoContable::sqlExcluirRechazados()
         . 'ORDER BY fecha_emision ASC, tipo_dte ASC, folio ASC'
     );
     $stmt->execute([':rut' => $rutEmisor, ':desde' => $desde, ':hasta' => $hasta]);
@@ -10019,6 +10060,10 @@ function informeClientes(
         . 'FROM dte_emitido '
         . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
         . '  AND fecha_emision BETWEEN :desde AND :hasta '
+        // Mismo criterio que dashTopClientes(), del que este informe es la
+        // version sin LIMIT: si uno filtrara y el otro no, el informe
+        // contradiria a la tarjeta que dice resumir.
+        . EstadoContable::sqlExcluirRechazados()
         . 'GROUP BY rut_normalizado ORDER BY neto DESC'
     );
     $stmt->execute([
@@ -10716,6 +10761,7 @@ function handlePanelGet(): void
                 'serie'       => [],
                 'estados'     => [],
                 'topClientes' => [],
+                'rechazados'  => null,
             ]);
         }
 
@@ -10746,6 +10792,15 @@ function handlePanelGet(): void
             ),
             'estados'     => dashDistribucionEstado($pdo, $rut, $periodo['desde'], $periodo['hasta']),
             'topClientes' => dashTopClientes($pdo, $cuentaId, $rut, $periodo['desde'], $periodo['hasta']),
+            // LA CONTRAPARTIDA DE EXCLUIR: lo que se saco del total, con su
+            // monto. Se calcula con la MISMA consulta y la MISMA funcion de
+            // resumen que los KPI, solo que con el filtro invertido, asi que por
+            // construccion es exactamente la diferencia entre el total de antes
+            // y el de ahora. Si se calculara aparte podrian no cuadrar, y un
+            // descuadre aqui seria peor que no mostrar nada.
+            'rechazados'  => dashResumen(
+                dashMetricasPorTipo($pdo, $rut, $periodo['desde'], $periodo['hasta'], true)
+            ),
         ]);
     }
 
