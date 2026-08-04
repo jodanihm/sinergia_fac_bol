@@ -45,6 +45,7 @@ use Plantiflex\FacturacionCl\Sii\SetBasicoPayloadBuilder;
 use Plantiflex\FacturacionCl\Sii\SetPruebasParser;
 use Plantiflex\FacturacionCl\Sii\SimulacionSetBuilder;
 use Plantiflex\FacturacionCl\Sii\SiiAutenticador;
+use Plantiflex\FacturacionCl\Sii\RegistroVeredictoSii;
 use Plantiflex\FacturacionCl\Sii\SiiConsultor;
 use Plantiflex\FacturacionCl\Sii\SiiUploader;
 use Plantiflex\FacturacionCl\Sii\XmlSigner;
@@ -2065,7 +2066,41 @@ function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
     }
 
     if ($res['status'] === 200) {
-        flashSet('exito', 'Estado actualizado: ' . (string) ($res['body']['estado'] ?? '-') . '.');
+        // EL VEREDICTO MANDA EL COLOR DEL FLASH. Antes esto era siempre 'exito',
+        // asi que el panel decia en verde "Estado actualizado: RCT." despues de
+        // un RECHAZO. Es la misma enfermedad que costo las 68 facturas exentas,
+        // en version manual: la respuesta llegaba y se mostraba como si fuera
+        // una buena noticia. La clasificacion es la misma que usa el runner
+        // (RegistroVeredictoSii), para que el boton y el cron nunca discrepen.
+        //
+        // Y se informa CUANTOS documentos quedaron actualizados: el veredicto es
+        // del sobre entero, y ver "20 documentos" es lo que hace visible que la
+        // consulta no resolvio solo el que se estaba mirando.
+        $estadoSii = (string) ($res['body']['estado'] ?? '-');
+        $docs      = (int) ($res['body']['documentos'] ?? 0);
+        $detalle   = trim((string) ($res['body']['glosa'] ?? ''));
+
+        if ($estadoSii === 'sin_trackid') {
+            // CASO APARTE, y no por prolijidad: 'sin_trackid' no es un veredicto
+            // del SII sino la respuesta del motor cuando el documento no tiene
+            // track que consultar. No se actualizo ninguna fila, asi que decir
+            // "se actualizaron 0 documentos" seria confundir dos cosas
+            // distintas -- "el SII no dijo nada bueno" y "no habia a quien
+            // preguntarle". Va en rojo igual: un documento emitido sin track es
+            // un problema, no una consulta normal.
+            flashSet('error', 'Este documento no tiene Track ID: no hay envio que consultar en el SII.');
+        } else {
+            $mensaje = sprintf(
+                'Estado actualizado: %s%s. %s',
+                $estadoSii,
+                $detalle !== '' ? ' (' . $detalle . ')' : '',
+                $docs === 1
+                    ? 'Se actualizo 1 documento de este envio.'
+                    : sprintf('Se actualizaron %d documentos de este envio.', $docs)
+            );
+
+            flashSet(RegistroVeredictoSii::esRechazo($estadoSii) ? 'error' : 'exito', $mensaje);
+        }
     } else {
         error_log('panel documentos: estado-sii respondio ' . $res['status'] . ' - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
         flashSet('error', (string) ($res['body']['error'] ?? 'No se pudo consultar el estado en el SII.'));

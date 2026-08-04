@@ -312,6 +312,14 @@ const MIGRACIONES = [
             ['tipo' => 'columnas', 'desc' => 'nota_venta.forma_pago + fecha_vencimiento', 'tabla' => 'nota_venta', 'columnas' => ['forma_pago', 'fecha_vencimiento'], 'esperado' => 2],
         ],
     ],
+    [
+        // Una sola tabla y una sola columna, asi que basta una huella: no hay
+        // ALTER parcial posible que esta no detecte.
+        'id' => '027', 'archivo' => '027_dte_emitido_glosa_sii.sql', 'nota' => 'ALTER (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'dte_emitido.glosa_sii', 'tabla' => 'dte_emitido', 'columnas' => ['glosa_sii'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

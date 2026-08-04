@@ -215,7 +215,12 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
     ): array {
         [$where, $params] = $this->filtroPeriodo($rutEmisor, $ambiente, $desde, $hasta, $tipoDte, $folio, $receptorRut, $estado);
         $stmt = $this->pdo->prepare(
-            'SELECT folio, tipo_dte, fecha_emision, receptor_rut, neto, iva, total, estado, track_id, folio_ref, tipo_dte_ref '
+            // glosa_sii (migracion 027) viaja junto al estado a proposito: el
+            // codigo del SII son tres letras y la glosa es el texto que las
+            // explica. Mostrar "RCT" sin "Rechazado por Error en Caratula"
+            // obliga a alguien a ir a buscar que significa, que es exactamente
+            // lo que no paso con las 68 facturas exentas.
+            'SELECT folio, tipo_dte, fecha_emision, receptor_rut, neto, iva, total, estado, glosa_sii, track_id, folio_ref, tipo_dte_ref '
             . 'FROM dte_emitido WHERE ' . $where
             . ' ORDER BY fecha_emision DESC, id DESC LIMIT :limit OFFSET :offset'
         );
@@ -235,6 +240,7 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
             'iva'          => (int) $r['iva'],
             'total'        => (int) $r['total'],
             'estado'       => $r['estado'],
+            'glosaSii'     => $r['glosa_sii'],
             'trackId'      => $r['track_id'],
             'folioRef'     => $r['folio_ref'] !== null ? (int) $r['folio_ref'] : null,
             'tipoDteRef'   => $r['tipo_dte_ref'] !== null ? (int) $r['tipo_dte_ref'] : null,

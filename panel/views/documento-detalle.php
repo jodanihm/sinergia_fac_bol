@@ -169,6 +169,17 @@ $rutaBase = '/ventas/panel-emision/' . $tipoDte . '/' . $folio;
             <section class="tarjeta" aria-labelledby="titulo-estado">
                 <h2 id="titulo-estado">Estado en el SII</h2>
                 <p><span class="badge <?= $claseBadge; ?>"><?= htmlspecialchars($textoBadge); ?></span></p>
+                <?php
+                // LA GLOSA DEL SII (migracion 027). Va aqui, pegada al badge,
+                // porque es lo que traduce el codigo: el estado dice "RCT" y la
+                // glosa dice "Rechazado por Error en Caratula". Solo se muestra
+                // si existe -- un documento nunca consultado no tiene glosa, y
+                // una fila vacia sugeriria que se consulto y no dijo nada.
+                $glosaSii = trim((string) ($documento['glosaSii'] ?? ''));
+                ?>
+                <?php if ($glosaSii !== ''): ?>
+                    <p class="nota"><strong>Respuesta del SII:</strong> <?= htmlspecialchars($glosaSii); ?></p>
+                <?php endif; ?>
                 <dl class="ficha ficha--compacta">
                     <dt>Track ID</dt>
                     <dd><?= $fmt($documento['trackId'] ?? null); ?></dd>

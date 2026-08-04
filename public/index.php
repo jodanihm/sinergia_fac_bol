@@ -51,6 +51,7 @@ use Plantiflex\FacturacionCl\Sii\BoletaAutenticador;
 use Plantiflex\FacturacionCl\Sii\BoletaConsultor;
 use Plantiflex\FacturacionCl\Sii\LibroService;
 use Plantiflex\FacturacionCl\Sii\RcvConsultor;
+use Plantiflex\FacturacionCl\Sii\RegistroVeredictoSii;
 use Plantiflex\FacturacionCl\Sii\SiiAutenticador;
 use Plantiflex\FacturacionCl\Sii\SiiConsultor;
 use Plantiflex\FacturacionCl\Sii\XmlSigner;
@@ -1699,18 +1700,42 @@ function consultarEstadoSiiDte(array $tenant, int $tipoDte, int $folio): never
         responder(502, ['error' => 'fallo la consulta al SII', 'detalle' => $e->getMessage()]);
     }
 
-    $estadoNuevo = $res['estado'];
+    // NORMALIZAR ANTES DE GUARDAR. Antes esto era `$estadoNuevo = $res['estado']`
+    // directo al UPDATE: si el SII respondia sin <ESTADO>, primerTexto()
+    // devolvia '' y ese '' sobreescribia el 'enviado' del documento, dejandolo
+    // como "Sin estado" en el panel. Ver RegistroVeredictoSii::normalizar().
+    $estadoNuevo = RegistroVeredictoSii::normalizar($res['estado']);
     $glosaNueva  = $res['glosa'] !== '' ? $res['glosa'] : null;
 
-    $pdo->prepare('UPDATE dte_emitido SET estado = :estado WHERE id = :id')
-        ->execute([':estado' => $estadoNuevo, ':id' => $row['id']]);
+    // FAN-OUT: el veredicto es del SOBRE, asi que se escribe en TODAS las filas
+    // que comparten el track_id, no solo en la que se pidio.
+    //
+    // Antes este UPDATE era `WHERE id = :id`, una fila. Consultar un documento
+    // de un sobre de 20 dejaba los otros 19 en 'enviado' aunque la respuesta del
+    // SII ya los cubria. En el incidente de las 68 facturas exentas, apretar el
+    // boton en una habria dejado 67 sin tocar.
+    //
+    // El camino de certificacion del panel ya lo hacia asi desde antes
+    // (handleCertificacionActualizarPost); esto lo lleva a produccion, con la
+    // logica en RegistroVeredictoSii para que los dos no vuelvan a separarse.
+    $documentosDelSobre = RegistroVeredictoSii::persistir(
+        $pdo,
+        $rutEmisor,
+        $ambiente->value,
+        (string) $trackId,
+        $estadoNuevo,
+        $glosaNueva,
+    );
 
     responder(200, [
-        'tipoDte' => $tipoDte,
-        'folio'   => $folio,
-        'trackId' => (string) $trackId,
-        'estado'  => $estadoNuevo,
-        'glosa'   => $glosaNueva,
+        'tipoDte'    => $tipoDte,
+        'folio'      => $folio,
+        'trackId'    => (string) $trackId,
+        'estado'     => $estadoNuevo,
+        'glosa'      => $glosaNueva,
+        // Cuantos documentos del sobre quedaron actualizados con este veredicto.
+        // Es la senal visible de que el fan-out ocurrio; el panel la muestra.
+        'documentos' => $documentosDelSobre,
     ]);
 }
 
