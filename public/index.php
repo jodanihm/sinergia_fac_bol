@@ -49,6 +49,7 @@ use Plantiflex\Integration\Facturacion\MySqlIdempotenciaRepository;
 use Plantiflex\Integration\Facturacion\MySqlLibroRepository;
 use Plantiflex\FacturacionCl\Sii\BoletaAutenticador;
 use Plantiflex\FacturacionCl\Sii\BoletaConsultor;
+use Plantiflex\FacturacionCl\Sii\ImpuestoAdicional;
 use Plantiflex\FacturacionCl\Sii\LibroService;
 use Plantiflex\FacturacionCl\Sii\RcvConsultor;
 use Plantiflex\FacturacionCl\Sii\RegistroVeredictoSii;
@@ -614,6 +615,59 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         ) {
             invalido("{$p}detalles[{$i}].descuentoPorcentaje debe ser numerico entre 0 y 100", "{$p}detalles[{$i}].descuentoPorcentaje");
         }
+        // --- IMPUESTO ADICIONAL POR LINEA (CodImpAdic / ImptoReten) ---
+        //
+        // Van SIEMPRE los dos o ninguno: con el codigo solo no se puede calcular
+        // el MontoImp y con la tasa sola no se sabe de que impuesto es. El DTO
+        // repite la guarda, pero aqui se responde 422 con el campo exacto en vez
+        // de una excepcion.
+        //
+        // EL CODIGO SE VALIDA CONTRA LA ENUMERACION DEL SII, no contra una lista
+        // recortada por nosotros: ImpuestoAdicional::CODIGOS es ImpAdicDTEType
+        // completo (ver su docblock). Un codigo fuera de la enumeracion tiene que
+        // salir por aqui, con 422 y SIN CONSUMIR FOLIO -- si llegara al XML, el
+        // SII rechazaria el sobre y el folio ya estaria quemado.
+        //
+        // La TASA no se valida contra ninguna tabla a proposito: las tasas las
+        // cambia la ley y el motor no las conoce. Solo se comprueba el rango que
+        // impone el XSD (TasaImp restringe PctType con maxInclusive="100.00").
+        $codImp  = $d['codigoImpuestoAdicional'] ?? null;
+        $tasaImp = $d['tasaImpuestoAdicional'] ?? null;
+        if (($codImp !== null) !== ($tasaImp !== null)) {
+            invalido(
+                "{$p}detalles[{$i}]: codigoImpuestoAdicional y tasaImpuestoAdicional deben ir juntos",
+                "{$p}detalles[{$i}].codigoImpuestoAdicional",
+            );
+        }
+        if ($codImp !== null) {
+            if (! is_string($codImp) && ! is_int($codImp)) {
+                invalido(
+                    "{$p}detalles[{$i}].codigoImpuestoAdicional debe ser un codigo del SII",
+                    "{$p}detalles[{$i}].codigoImpuestoAdicional",
+                );
+            }
+            $codImp = trim((string) $codImp);
+            if (! ImpuestoAdicional::existe($codImp)) {
+                invalido(
+                    "{$p}detalles[{$i}].codigoImpuestoAdicional '{$codImp}' no es un codigo de impuesto "
+                    . 'adicional del SII. Validos: ' . ImpuestoAdicional::listado(),
+                    "{$p}detalles[{$i}].codigoImpuestoAdicional",
+                );
+            }
+            if (! is_numeric($tasaImp) || (float) $tasaImp <= 0 || (float) $tasaImp > 100) {
+                invalido(
+                    "{$p}detalles[{$i}].tasaImpuestoAdicional debe ser numerico > 0 y <= 100",
+                    "{$p}detalles[{$i}].tasaImpuestoAdicional",
+                );
+            }
+            if (! empty($d['exento'])) {
+                invalido(
+                    "{$p}detalles[{$i}]: una linea exenta no puede llevar impuesto adicional",
+                    "{$p}detalles[{$i}].codigoImpuestoAdicional",
+                );
+            }
+        }
+
         // --- UN TIPO 34 NO PUEDE LLEVAR NI UNA LINEA AFECTA ---
         //
         // POR QUE ESTA VALIDACION EXISTE, Y POR QUE AQUI: resolverTotales() del
@@ -821,6 +875,8 @@ function emitirDte(array $tenant): never
                 (float) $d['precioUnitario'],
                 exento: (bool) ($d['exento'] ?? false),
                 descuentoPorcentaje: (float) ($d['descuentoPorcentaje'] ?? 0),
+                codigoImpuestoAdicional: isset($d['codigoImpuestoAdicional']) ? trim((string) $d['codigoImpuestoAdicional']) : null,
+                tasaImpuestoAdicional:     isset($d['tasaImpuestoAdicional']) ? (float) $d['tasaImpuestoAdicional'] : null,
             ),
             $v['detalles'],
         ),
@@ -1206,6 +1262,8 @@ function emitirDteLote(array $tenant): never
                         (float) $d['precioUnitario'],
                         exento: (bool) ($d['exento'] ?? false),
                         descuentoPorcentaje: (float) ($d['descuentoPorcentaje'] ?? 0),
+                        codigoImpuestoAdicional: isset($d['codigoImpuestoAdicional']) ? trim((string) $d['codigoImpuestoAdicional']) : null,
+                tasaImpuestoAdicional:     isset($d['tasaImpuestoAdicional']) ? (float) $d['tasaImpuestoAdicional'] : null,
                     ),
                     $v['detalles'],
                 ),

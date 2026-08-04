@@ -320,6 +320,15 @@ const MIGRACIONES = [
             ['tipo' => 'columnas', 'desc' => 'dte_emitido.glosa_sii', 'tabla' => 'dte_emitido', 'columnas' => ['glosa_sii'], 'esperado' => 1],
         ],
     ],
+    [
+        // UNA huella con las DOS columnas: van en un solo ALTER bajo una sola
+        // guarda, asi que no existe el corte a medias que obligaba a la 025 y
+        // la 026 a llevar una huella por tabla.
+        'id' => '028', 'archivo' => '028_dte_emitido_exento_impuesto_adicional.sql', 'nota' => 'ALTER (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'dte_emitido.exento + impuesto_adicional', 'tabla' => 'dte_emitido', 'columnas' => ['exento', 'impuesto_adicional'], 'esperado' => 2],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

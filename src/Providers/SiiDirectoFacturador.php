@@ -256,6 +256,13 @@ final class SiiDirectoFacturador implements FacturadorInterface
                 // haber preguntado.
                 formaPago:        $doc->formaPago,
                 fechaVencimiento: $doc->fechaVencimiento?->format('Y-m-d'),
+                // Migracion 028. Estos SI salen del XML y no del documento: son
+                // el resultado del calculo del builder (agrupacion por codigo,
+                // redondeos), no lo que se pidio. Guardar lo pedido y no lo
+                // emitido dejaria la base contando algo distinto del DTE que el
+                // SII tiene.
+                exento:            $m['exento'],
+                impuestoAdicional: $m['impuestoAdicional'],
             );
         } catch (Throwable $e) {
             error_log('dte_emitido registrar fallo (folio ' . $folio . '): ' . $e->getMessage());
@@ -263,9 +270,17 @@ final class SiiDirectoFacturador implements FacturadorInterface
     }
 
     /**
-     * Extrae MntNeto/IVA/MntTotal y FchEmis del EnvioDTE ya serializado.
+     * Extrae MntNeto/MntExe/IVA/MntTotal, el impuesto adicional y FchEmis del
+     * EnvioDTE ya serializado.
      *
-     * @return array{neto:int, iva:int, total:int, fecha:string}
+     * MntExe E IMPUESTO ADICIONAL SE LEEN DESDE LA MIGRACION 028, y hay una
+     * razon aritmetica para que vayan juntos: hasta ahora el exento se podia
+     * reconstruir como total - neto - iva, asi que no tener columna era
+     * incomodo pero no destructivo. Con un tercer sumando esa resta deja de
+     * despejar nada -- una ecuacion, dos incognitas -- y el exento de cualquier
+     * documento que ademas lleve ILA quedaria perdido para siempre.
+     *
+     * @return array{neto:int, exento:int, iva:int, impuestoAdicional:int, total:int, fecha:string}
      */
     private function extraerMontos(string $envioXml): array
     {
@@ -280,11 +295,39 @@ final class SiiDirectoFacturador implements FacturadorInterface
         };
 
         return [
-            'neto'  => (int) ($leer('MntNeto') ?? '0'),
-            'iva'   => (int) ($leer('IVA') ?? '0'),
-            'total' => (int) ($leer('MntTotal') ?? '0'),
-            'fecha' => $leer('FchEmis') ?? date('Y-m-d'),
+            'neto'              => (int) ($leer('MntNeto') ?? '0'),
+            'exento'            => (int) ($leer('MntExe') ?? '0'),
+            'iva'               => (int) ($leer('IVA') ?? '0'),
+            'impuestoAdicional' => $this->sumarImpuestoAdicional($dom),
+            'total'             => (int) ($leer('MntTotal') ?? '0'),
+            'fecha'             => $leer('FchEmis') ?? date('Y-m-d'),
         ];
+    }
+
+    /**
+     * Suma los MontoImp de TODOS los bloques ImptoReten del ambito dado.
+     *
+     * Se guarda la SUMA y no cada bloque: la columna responde "cuanto de este
+     * total no es ni neto, ni IVA, ni exento", que es lo que necesitan los
+     * informes. El desglose por codigo sigue completo en el XML, que es la
+     * fuente de verdad del documento.
+     *
+     * @param DOMDocument|DOMElement $ambito
+     */
+    private function sumarImpuestoAdicional(object $ambito): int
+    {
+        $suma = 0;
+        foreach ($ambito->getElementsByTagNameNS(self::NS_SII, 'ImptoReten') as $bloque) {
+            if (! $bloque instanceof DOMElement) {
+                continue;
+            }
+            $monto = $bloque->getElementsByTagNameNS(self::NS_SII, 'MontoImp')->item(0);
+            if ($monto !== null) {
+                $suma += (int) trim($monto->textContent);
+            }
+        }
+
+        return $suma;
     }
 
     /**
@@ -756,10 +799,15 @@ final class SiiDirectoFacturador implements FacturadorInterface
                 return $n !== null ? trim($n->textContent) : null;
             };
             $montosPorId[$documento->getAttribute('ID')] = [
-                'neto'  => (int) ($leer('MntNeto') ?? '0'),
-                'iva'   => (int) ($leer('IVA') ?? '0'),
-                'total' => (int) ($leer('MntTotal') ?? '0'),
-                'fecha' => $leer('FchEmis') ?? date('Y-m-d'),
+                'neto'              => (int) ($leer('MntNeto') ?? '0'),
+                'exento'            => (int) ($leer('MntExe') ?? '0'),
+                'iva'               => (int) ($leer('IVA') ?? '0'),
+                // El ambito es ESTE Documento, no el sobre: un lote lleva N
+                // documentos y sumar sobre el sobre entero le daria a cada uno
+                // el impuesto de todos.
+                'impuestoAdicional' => $this->sumarImpuestoAdicional($documento),
+                'total'             => (int) ($leer('MntTotal') ?? '0'),
+                'fecha'             => $leer('FchEmis') ?? date('Y-m-d'),
             ];
         }
 
@@ -768,7 +816,7 @@ final class SiiDirectoFacturador implements FacturadorInterface
             $folio = $m['folio'];
             try {
                 $id = sprintf('F%dT%d', $folio, $doc->tipoDte->value);
-                $mt = $montosPorId[$id] ?? ['neto' => 0, 'iva' => 0, 'total' => 0, 'fecha' => date('Y-m-d')];
+                $mt = $montosPorId[$id] ?? ['neto' => 0, 'exento' => 0, 'iva' => 0, 'impuestoAdicional' => 0, 'total' => 0, 'fecha' => date('Y-m-d')];
 
                 $folioRef   = null;
                 $tipoDteRef = null;
@@ -799,6 +847,10 @@ final class SiiDirectoFacturador implements FacturadorInterface
                     // masiva no los manda, asi que aqui llegan NULL.
                     formaPago:        $doc->formaPago,
                     fechaVencimiento: $doc->fechaVencimiento?->format('Y-m-d'),
+                    // Migracion 028, leidos del Documento de ESTE folio dentro
+                    // del sobre (ver el comentario de $montosPorId).
+                    exento:            $mt['exento'],
+                    impuestoAdicional: $mt['impuestoAdicional'],
                 );
             } catch (Throwable $e) {
                 error_log('dte_emitido registrar fallo (lote, folio ' . $folio . '): ' . $e->getMessage());

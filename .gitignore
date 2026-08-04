@@ -106,7 +106,13 @@ desktop.ini
 # config local del editor/herramienta (mismo trato que .vscode/ y .idea/)
 /.claude/
 # documentacion oficial del SII (33M, 1131 PNG); no son originales del proyecto
-/docs/
+/docs/*
+# ... salvo los XSD oficiales del SII: son el contrato con el que validamos,
+# pesan 131 KB de los 33 MB, y sin ellos el test que ata ImpuestoAdicional al
+# esquema no puede correr fuera de esta maquina.
+!/docs/18_Schema_XML_DTE/
+/docs/18_Schema_XML_DTE/*
+!/docs/18_Schema_XML_DTE/*.xsd
 # scripts de la migracion de seguridad y de prueba (no del producto)
 /paso*.sh
 /probar_certificado.sh

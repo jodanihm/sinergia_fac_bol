@@ -41,16 +41,25 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
         // camino que todavia no capture forma de pago.
         ?int $formaPago = null,
         ?string $fechaVencimiento = null,
+        // Migracion 028. Mismo criterio que la 026: al final y con default, para
+        // que los llamadores que todavia no los pasan sigan compilando. El
+        // default es 0 y no null porque son montos, no opciones: "no hubo
+        // impuesto adicional" es cero, no "no se informo".
+        int $exento = 0,
+        int $impuestoAdicional = 0,
     ): void {
         $stmt = $this->pdo->prepare(
             'INSERT INTO dte_emitido '
             . '(rut_emisor, ambiente, tipo_dte, folio, track_id, estado, xml, fecha_emision, '
-            . ' neto, iva, total, receptor_rut, folio_ref, tipo_dte_ref, forma_pago, fecha_vencimiento) '
+            . ' neto, exento, iva, impuesto_adicional, total, receptor_rut, folio_ref, tipo_dte_ref, '
+            . ' forma_pago, fecha_vencimiento) '
             . 'VALUES (:rut, :amb, :tipo, :folio, :track, :estado, :xml, :fecha, '
-            . ' :neto, :iva, :total, :rrut, :fref, :tref, :fpago, :fvenc) '
+            . ' :neto, :exento, :iva, :impadic, :total, :rrut, :fref, :tref, :fpago, :fvenc) '
             . 'ON DUPLICATE KEY UPDATE '
             . ' track_id = VALUES(track_id), estado = VALUES(estado), xml = VALUES(xml), '
-            . ' fecha_emision = VALUES(fecha_emision), neto = VALUES(neto), iva = VALUES(iva), '
+            . ' fecha_emision = VALUES(fecha_emision), neto = VALUES(neto), '
+            . ' exento = VALUES(exento), iva = VALUES(iva), '
+            . ' impuesto_adicional = VALUES(impuesto_adicional), '
             . ' total = VALUES(total), receptor_rut = VALUES(receptor_rut), '
             . ' folio_ref = VALUES(folio_ref), tipo_dte_ref = VALUES(tipo_dte_ref), '
             . ' forma_pago = VALUES(forma_pago), fecha_vencimiento = VALUES(fecha_vencimiento)'
@@ -65,7 +74,9 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
             ':xml'    => $xml,
             ':fecha'  => $fechaEmision,
             ':neto'   => $neto,
+            ':exento' => $exento,
             ':iva'    => $iva,
+            ':impadic' => $impuestoAdicional,
             ':total'  => $total,
             ':rrut'   => $receptorRut,
             ':fref'   => $folioRef,

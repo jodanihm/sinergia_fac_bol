@@ -10,6 +10,7 @@ use DOMElement;
 use Plantiflex\FacturacionCl\Dto\DatosEmisor;
 use Plantiflex\FacturacionCl\Dto\Detalle;
 use Plantiflex\FacturacionCl\Dto\DocumentoTributario;
+use Plantiflex\FacturacionCl\Exceptions\DocumentoInvalidoException;
 
 /**
  * Construye el XML de un DTE INDIVIDUAL (sin firmar) segun el esquema SII.
@@ -167,15 +168,42 @@ final class DteXmlBuilder
     {
         $totales = $this->resolverTotales($doc);
         $tot = $dom->createElementNS(self::NS_SII, 'Totales');
-        // Orden segun esquema SII. La boleta NO lleva TasaIVA en Totales.
+
+        // ORDEN SEGUN EL XSD, QUE ES UNA SECUENCIA CON POSICIONES FIJAS.
+        // Totales de DTE_v10.xsd:1106 (DTE > Documento > Encabezado), que NO es
+        // el mismo que el de Liquidacion (:2823) ni el de Exportaciones (:4481):
+        // esos declaran otra secuencia y otro tipo para TasaImp.
+        //
+        // Los 18 hijos, en orden: MntNeto, MntExe, MntBase, MntMargenCom,
+        // TasaIVA, IVA, IVAProp, IVATerc, ImptoReten*, IVANoRet, CredEC,
+        // GrntDep, Comisiones, MntTotal, MontoNF, MontoPeriodo, SaldoAnterior,
+        // VlrPagar. De esos, MntTotal es el UNICO obligatorio.
+        //
+        // ImptoReten va en la posicion 9: DESPUES de IVA y ANTES de MntTotal.
+        // La boleta NO lleva TasaIVA.
         $claves = $doc->tipoDte->esBoleta()
-            ? ['MntNeto', 'MntExe', 'IVA', 'MntTotal']
-            : ['MntNeto', 'MntExe', 'TasaIVA', 'IVA', 'MntTotal'];
+            ? ['MntNeto', 'MntExe', 'IVA']
+            : ['MntNeto', 'MntExe', 'TasaIVA', 'IVA'];
         foreach ($claves as $clave) {
             if (isset($totales[$clave])) {
                 $tot->appendChild($this->el($dom, $clave, (string) $totales[$clave]));
             }
         }
+
+        // Un bloque ImptoReten por CODIGO, no por linea: el XSD admite hasta 20
+        // repeticiones (maxOccurs="20") y el Formato DTE habla de "20
+        // repeticiones de pares codigo - valor" (campo 115). Cada bloque lleva
+        // su propia secuencia interna: TipoImp, TasaImp?, MontoImp.
+        foreach ($totales['ImptoReten'] ?? [] as $imp) {
+            $b = $dom->createElementNS(self::NS_SII, 'ImptoReten');
+            $b->appendChild($this->el($dom, 'TipoImp', $imp['TipoImp']));
+            $b->appendChild($this->el($dom, 'TasaImp', $this->num($imp['TasaImp'])));
+            $b->appendChild($this->el($dom, 'MontoImp', (string) $imp['MontoImp']));
+            $tot->appendChild($b);
+        }
+
+        $tot->appendChild($this->el($dom, 'MntTotal', (string) $totales['MntTotal']));
+
         return $tot;
     }
 
@@ -186,13 +214,38 @@ final class DteXmlBuilder
     {
         // Si vienen totales explicitos (ej: NC que replica el original), confiar
         // en ellos y solo proyectar las claves conocidas en el orden correcto.
+        //
+        // LA LISTA BLANCA ERA UNA TRAMPA. Antes esto proyectaba cinco claves y
+        // punto: cualquier otra cosa que trajera $doc->totales se descartaba EN
+        // SILENCIO. Con la llegada de ImptoReten eso significaba emitir una nota
+        // de credito que anula una factura con ILA... sin el ILA, y con un
+        // MntTotal copiado que ya no cuadraria con sus propios componentes. El
+        // SII lo rechazaria y el motivo no estaria en ninguna parte del codigo.
+        //
+        // Ahora la lista sigue siendo cerrada -- proyectar a ciegas dejaria
+        // pasar claves inventadas al XML -- pero lo que no reconoce REVIENTA en
+        // vez de desaparecer. Agregar un total nuevo obliga a pasar por aqui.
         if ($doc->totales !== null && $doc->totales !== []) {
+            $conocidas = ['MntNeto', 'MntExe', 'TasaIVA', 'IVA', 'MntTotal', 'ImptoReten'];
+            $desconocidas = array_diff(array_keys($doc->totales), $conocidas);
+            if ($desconocidas !== []) {
+                throw new DocumentoInvalidoException(
+                    'Totales explicitos con claves que este builder no sabe emitir: '
+                    . implode(', ', $desconocidas)
+                    . '. Agregarlas a buildTotales() en su posicion del XSD antes de usarlas.'
+                );
+            }
+
             $out = [];
             foreach (['MntNeto', 'MntExe', 'TasaIVA', 'IVA', 'MntTotal'] as $clave) {
                 if (isset($doc->totales[$clave])) {
                     $out[$clave] = (int) $doc->totales[$clave];
                 }
             }
+            if (isset($doc->totales['ImptoReten']) && is_array($doc->totales['ImptoReten'])) {
+                $out['ImptoReten'] = $doc->totales['ImptoReten'];
+            }
+
             return $out;
         }
 
@@ -248,8 +301,63 @@ final class DteXmlBuilder
             $totales['MntExe'] = $exento;
         }
 
+        // --- IMPUESTOS ADICIONALES ---
+        //
+        // Se agrupa por CODIGO y se suma la BASE de las lineas que lo llevan,
+        // porque asi lo define el Formato DTE para MontoImp (campo 117, pag.
+        // 31): "Tasa * (Suma de lineas de detalle con codigo de Impuesto
+        // adicional o retencion)". No es la tasa sobre el neto del documento.
+        //
+        // La base de cada linea es su montoItem NETO. Si los montos vienen
+        // brutos, hay que quitarles el IVA antes de aplicar la tasa: en otro
+        // caso el impuesto adicional se calcularia sobre una base que ya
+        // incluye IVA, y el resultado no cuadraria con lo que el SII recalcula.
+        //
+        // EL DESCUENTO GLOBAL NO SE PRORRATEA sobre estas bases, y se dice
+        // aqui en vez de dejarlo implicito: el descuento global se aplica al
+        // MntNeto agregado y no hay forma no ambigua de repartirlo entre las
+        // lineas de cada codigo. Un documento con descuento global Y impuesto
+        // adicional informaria un MontoImp calculado sobre la base sin
+        // descontar. No se bloquea porque no sabemos que espera el SII ahi, y
+        // no se inventa un prorrateo que ninguna fuente respalda.
+        $basePorCodigo = [];
+        $tasaPorCodigo = [];
+        foreach ($doc->detalles as $d) {
+            if ($d->codigoImpuestoAdicional === null) {
+                continue;
+            }
+            $cod  = $d->codigoImpuestoAdicional;
+            $base = $this->montoItem($d);
+            if ($doc->montosSonBrutos) {
+                $base = (int) round($base / (1 + self::TASA_IVA / 100));
+            }
+            $basePorCodigo[$cod] = ($basePorCodigo[$cod] ?? 0) + $base;
+            $tasaPorCodigo[$cod] = $d->tasaImpuestoAdicional;
+        }
+
+        $totalImpuestos = 0;
+        if ($basePorCodigo !== []) {
+            $bloques = [];
+            foreach ($basePorCodigo as $cod => $base) {
+                $monto = (int) round($base * $tasaPorCodigo[$cod] / 100);
+                $bloques[] = [
+                    'TipoImp'  => (string) $cod,
+                    'TasaImp'  => $tasaPorCodigo[$cod],
+                    'MontoImp' => $monto,
+                ];
+                $totalImpuestos += $monto;
+            }
+            $totales['ImptoReten'] = $bloques;
+        }
+
+        // MntTotal = neto + IVA + exento + IMPUESTOS ADICIONALES. El Formato DTE
+        // (campo 124, pag. 31) lo define como "Monto neto + Monto no afecto o
+        // exento + IVA + Impuestos Adicionales + ...". Los sumandos que faltan
+        // (impuestos especificos, margen de comercializacion, garantia de
+        // envases, credito constructoras) corresponden a campos que este builder
+        // no emite: cuando se emitan, se suman aqui.
         $afectoConIva = isset($totales['MntNeto']) ? $totales['MntNeto'] + $totales['IVA'] : 0;
-        $totales['MntTotal'] = $afectoConIva + $exento;
+        $totales['MntTotal'] = $afectoConIva + $exento + $totalImpuestos;
 
         return $totales;
     }
@@ -281,6 +389,13 @@ final class DteXmlBuilder
         if (! $esBoleta && $d->descuentoPorcentaje > 0) {
             $det->appendChild($this->el($dom, 'DescuentoPct', $this->num($d->descuentoPorcentaje)));
             $det->appendChild($this->el($dom, 'DescuentoMonto', (string) $this->descuentoMonto($d)));
+        }
+        // CodImpAdic va INMEDIATAMENTE ANTES de MontoItem: es su posicion en la
+        // secuencia de Detalle del XSD (DTE_v10.xsd:1649, justo antes de
+        // MontoItem en :1653). Admite hasta 2 codigos por linea; aqui se emite
+        // uno solo porque el DTO transporta uno.
+        if ($d->codigoImpuestoAdicional !== null) {
+            $det->appendChild($this->el($dom, 'CodImpAdic', $d->codigoImpuestoAdicional));
         }
         // MontoItem = monto de la linea YA con descuento aplicado.
         $det->appendChild($this->el($dom, 'MontoItem', (string) $this->montoItem($d)));
