@@ -57,6 +57,8 @@ use Plantiflex\FacturacionCl\Sii\XmlSigner;
 use Plantiflex\FacturacionCl\Dto\Certificado;
 use Plantiflex\FacturacionCl\Exceptions\RcvConsultaException;
 use Plantiflex\FacturacionCl\Exceptions\ConexionException;
+use Plantiflex\FacturacionCl\Correo\EncoladorCorreo;
+use Plantiflex\Integration\Facturacion\MySqlClienteRepository;
 
 // --- Timezone: el SII espera FchEmis/TmstFirma en hora de Chile. Sin esto PHP
 // usa UTC y las emisiones nocturnas (despues de ~20:00 CL) salen con fecha del
@@ -383,7 +385,13 @@ function certOperador(PDO $pdo, string $rutEmpresaConDv): Certificado
  * cuenta_id/rut_emisor/ambiente salen de la fila de api_key, NUNCA del
  * cliente ni de una env var global.
  *
- * @return array{cuenta_id:int, rut_emisor:string, ambiente:string}
+ * tipo distingue al PANEL ('servicio', claves que el panel se genera solo,
+ * cifradas e invisibles al usuario) de un SISTEMA EXTERNO ('externa', las que el
+ * tenant crea en /apikeys para integrar su ERP). NINGUNA ruta se habilita ni se
+ * restringe por tipo: lo unico que decide es si el motor encola el correo al
+ * receptor (ver emitirDte).
+ *
+ * @return array{cuenta_id:int, rut_emisor:string, ambiente:string, tipo:string}
  */
 function resolverTenant(PDO $pdo): array
 {
@@ -399,7 +407,10 @@ function resolverTenant(PDO $pdo): array
     [$prefijo, $secreto] = $partes;
 
     $stmt = $pdo->prepare(
-        'SELECT id, cuenta_id, key_hash, rut_emisor_scope, ambiente, estado '
+        // tipo se selecciona para que el llamador pueda distinguir al PANEL
+        // ('servicio') de un sistema EXTERNO ('externa'). Lo usa el encolado del
+        // correo; ninguna ruta se habilita ni se restringe por tipo.
+        'SELECT id, cuenta_id, key_hash, rut_emisor_scope, ambiente, estado, tipo '
         . 'FROM api_key WHERE prefijo = :prefijo LIMIT 1'
     );
     $stmt->execute([':prefijo' => $prefijo]);
@@ -425,6 +436,7 @@ function resolverTenant(PDO $pdo): array
         'cuenta_id'  => (int) $row['cuenta_id'],
         'rut_emisor' => (string) $row['rut_emisor_scope'],
         'ambiente'   => (string) $row['ambiente'],
+        'tipo'       => (string) $row['tipo'],
     ];
 }
 
@@ -553,6 +565,24 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         if (! isset($r[$campo]) || ! is_string($r[$campo]) || trim($r[$campo]) === '') {
             invalido("{$p}receptor.{$campo} es obligatorio", "{$p}receptor.{$campo}");
         }
+    }
+
+    // --- receptor.email: OPCIONAL, y un correo malo NUNCA frena la emision ---
+    //
+    // Se valida el formato y, si no pasa, SE DESCARTA en silencio y el documento
+    // se emite igual. Mismo criterio que ya rige en la carga masiva y en
+    // encolarEnvioCorreo(): "un correo mal escrito se descarta y se trata como si
+    // no viniera. No frena nada." Rechazar la emision por una direccion mal
+    // tecleada seria desproporcionado -- el documento tributario es valido, lo
+    // unico que se pierde es el aviso por correo.
+    //
+    // NO VIAJA AL DTO NI AL XML. Este email existe para encolar el correo al
+    // receptor, no para emitir CorreoRecep: empezar a emitir ese elemento es una
+    // entrega propia, que hay que probar contra el SII de certificacion. El
+    // builder ya quedo con el ORDEN correcto para cuando llegue ese momento.
+    $emailReceptor = trim((string) ($r['email'] ?? ''));
+    if ($emailReceptor === '' || ! filter_var($emailReceptor, FILTER_VALIDATE_EMAIL)) {
+        $emailReceptor = null;
     }
     if (! rutDvValido($r['rut'])) {
         invalido("{$p}receptor.rut tiene DV invalido", "{$p}receptor.rut");
@@ -752,6 +782,8 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         'descuentoGlobalPct' => $descuentoGlobalPct !== null ? (float) $descuentoGlobalPct : null,
         'formaPago'          => $formaPago !== null ? (int) $formaPago : null,
         'fechaVencimiento'   => $fechaVencimiento,
+        // Ya normalizado: string valido o null. Solo se usa para encolar el correo.
+        'emailReceptor'      => $emailReceptor,
     ];
 }
 
@@ -871,7 +903,86 @@ function emitirDte(array $tenant): never
         );
     }
 
+    // --- ENCOLADO DEL CORREO AL RECEPTOR ---
+    //
+    // Va DESPUES de completar la idempotencia y JUSTO ANTES de responder: el
+    // documento ya se emitio, el SII lo acepto y el folio ya se quemo.
+    //
+    // SOLO CUANDO LA CLAVE ES 'externa', Y ESTA CONDICION NO ES OPCIONAL.
+    //
+    // El PANEL emite a traves de este mismo endpoint, con una clave de tipo
+    // 'servicio'. Sin la condicion, un documento del panel se encolaria DOS
+    // VECES: aqui primero, y despues en el propio panel. La fila no se
+    // duplicaria -- lo impide uk_envio_documento -- pero GANARIA LA PRIMERA, y
+    // las cascadas de destinatario son OPUESTAS:
+    //
+    //     motor          : email del payload  >  maestro
+    //     masiva del panel: maestro           >  nota_venta.receptor_email
+    //
+    // Y esa inversion del panel es DELIBERADA y esta documentada en
+    // facturarSubLote(): el maestro va primero porque entre la carga del Excel y
+    // la facturacion puede pasar tiempo, y si alguien corrigio el correo en el
+    // maestro, leerlo hace que la correccion surta efecto en vez de perderse
+    // contra la foto vieja de la nota. Medido: con maestro=MAESTRO@test.cl y
+    // nota=NOTA@test.cl, sin esta condicion el correo salia a NOTA@test.cl --
+    // exactamente la correccion que la cascada del panel existe para respetar.
+    //
+    // Con la condicion, cada documento lo encola quien tiene el contexto para
+    // resolver su destinatario: los del panel, el panel (que ve el maestro Y la
+    // nota); los de un sistema externo, el motor (que es el unico que los ve).
+    if ($tenant['tipo'] === 'externa') {
+        // ENCOLAR NUNCA PUEDE ROMPER UNA EMISION: EncoladorCorreo atrapa
+        // Throwable y no relanza nunca, asi que este 201 sale pase lo que pase
+        // con la cola.
+        //
+        // CASCADA DEL CAMINO API: email del payload PRIMERO, maestro de sinergia
+        // como respaldo. Misma forma que el camino unitario del panel y por la
+        // misma razon -- el dato que el llamador mando explicitamente para ESTE
+        // documento es mas deliberado que una ficha guardada. El respaldo
+        // importa porque un ERP externo puede no mandar correo y el receptor si
+        // estar en el maestro (por ejemplo, si antes se le emitio por el panel).
+        // Si no hay ninguno de los dos, la fila queda 'sin_destinatario', que es
+        // un estado FINAL y no un error.
+        EncoladorCorreo::encolarUno(
+            $pdo,
+            $tenant['cuenta_id'],
+            $tenant['rut_emisor'],
+            $ambiente->value,
+            $res->tipoDte->value,
+            (int) $res->folio,
+            $v['emailReceptor'] ?? correoReceptorEnMaestro($pdo, $tenant['cuenta_id'], $r['rut']),
+        );
+    }
+
     responder(201, $payload);
+}
+
+/**
+ * Correo del receptor en el maestro de clientes de la cuenta, o null.
+ *
+ * Es el RESPALDO de la cascada del camino API. Reusa MySqlClienteRepository, el
+ * mismo repositorio con el que el panel resuelve esto (correoReceptorDeMaestro),
+ * para no tener dos consultas que puedan divergir.
+ *
+ * El RUT se normaliza en lectura: dte_emitido guarda lo que llego del cliente y
+ * cliente.rut_cliente esta canonico. Aqui no hay clase Rut (vive en el panel),
+ * asi que se normaliza igual que ella: mayusculas, sin puntos ni espacios.
+ *
+ * NUNCA LANZA: es parte del camino de encolado, que no puede romper una emision.
+ */
+function correoReceptorEnMaestro(PDO $pdo, int $cuentaId, string $rutReceptor): ?string
+{
+    try {
+        $rut     = strtoupper(str_replace(['.', ' '], '', trim($rutReceptor)));
+        $cliente = (new MySqlClienteRepository($pdo))->buscarPorRut($cuentaId, $rut);
+        $email   = trim((string) ($cliente['email'] ?? ''));
+
+        return $email !== '' ? $email : null;
+    } catch (Throwable $e) {
+        error_log('encolar correo: fallo la consulta al maestro de clientes - ' . $e->getMessage());
+
+        return null;
+    }
 }
 
 // ===========================================================================
@@ -1138,6 +1249,48 @@ function emitirDteLote(array $tenant): never
         json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         201,
     );
+
+    // --- ENCOLADO DEL CORREO, EN UNA SOLA PASADA ---
+    //
+    // SOLO CUANDO LA CLAVE ES 'externa', por la misma razon que en el unitario:
+    // el panel emite a traves del motor con una clave 'servicio' y encola el
+    // mismo documento por su cuenta despues. Sin esta condicion se encolaria dos
+    // veces; uk_envio_documento evitaria la fila duplicada, pero GANARIA LA
+    // PRIMERA -- la del motor -- y las cascadas son OPUESTAS. La explicacion
+    // completa y la medicion estan junto al encolado de emitirDte().
+    //
+    // HOY este brazo no encola NUNCA: el unico llamador de /dte/lote es la
+    // facturacion masiva del panel, que usa clave 'servicio'. Se deja igual y no
+    // condicionado mas arriba porque el endpoint es publico y un ERP externo
+    // puede empezar a usarlo sin avisar; el dia que pase, encola sin tocar nada.
+    if ($tenant['tipo'] === 'externa') {
+        // Un lote de 300 documentos son 300 filas. encolarVarios() las inserta
+        // con 1 SELECT + 1 INSERT multi-valor en transaccion, en vez de 2
+        // sentencias por documento: medido, 43 ms contra 7.877 ms del bucle. Y
+        // esto corre DESPUES de que el SII acepto, dentro de la misma peticion.
+        //
+        // Misma cascada que el unitario: email del payload primero, maestro
+        // despues. $validados conserva el ORDEN del array recibido, igual que
+        // $emitidos, asi que el indice casa documento con documento.
+        $paraEncolar = [];
+        foreach ($emitidos as $i => $em) {
+            $vDoc = $validados[$i] ?? null;
+            $paraEncolar[] = [
+                'tipoDte'      => (int) $em['tipoDte'],
+                'folio'        => (int) $em['folio'],
+                'destinatario' => $vDoc === null
+                    ? null
+                    : ($vDoc['emailReceptor'] ?? correoReceptorEnMaestro($pdo, $tenant['cuenta_id'], $vDoc['receptor']['rut'])),
+            ];
+        }
+        EncoladorCorreo::encolarVarios(
+            $pdo,
+            $tenant['cuenta_id'],
+            $tenant['rut_emisor'],
+            $ambiente->value,
+            $paraEncolar,
+        );
+    }
 
     responder(201, $payload);
 }

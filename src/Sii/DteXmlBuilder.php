@@ -133,11 +133,28 @@ final class DteXmlBuilder
         if (! $doc->tipoDte->esBoleta()) {
             $this->elOpcional($dom, $re, 'GiroRecep', $doc->receptor->giro);
         }
-        $this->elOpcional($dom, $re, 'DirRecep', $doc->receptor->direccion);
-        $this->elOpcional($dom, $re, 'CmnaRecep', $doc->receptor->comuna);
+        // CorreoRecep VA AQUI, ANTES DE DirRecep. El XSD del SII declara Receptor
+        // como una SECUENCIA, o sea con posiciones fijas
+        // (docs/18_Schema_XML_DTE/DTE_v10.xsd:543-670):
+        //
+        //   RUTRecep, CdgIntRecep?, RznSocRecep, Extranjero?, GiroRecep?,
+        //   Contacto?, CorreoRecep?, DirRecep?, CmnaRecep?, CiudadRecep?, ...
+        //
+        // Hasta ahora este builder lo emitia DESPUES de DirRecep/CmnaRecep, que es
+        // invalido. Nunca se noto porque el email JAMAS llega: los tres sitios que
+        // construyen el Receptor en public/index.php omiten el parametro, asi que
+        // elOpcional() no agrega el nodo y los 84 documentos emitidos no lo llevan.
+        // Era una mina esperando al primero que pasara un correo.
+        //
+        // Medido con DOMDocument::schemaValidate() contra EnvioDTE_v10.xsd: con el
+        // orden viejo y un email, el validador respondia "Element CorreoRecep: This
+        // element is not expected. Expected is one of (CiudadRecep, DirPostal,
+        // CmnaPostal, CiudadPostal)".
         if (! $doc->tipoDte->esBoleta()) {
             $this->elOpcional($dom, $re, 'CorreoRecep', $doc->receptor->email);
         }
+        $this->elOpcional($dom, $re, 'DirRecep', $doc->receptor->direccion);
+        $this->elOpcional($dom, $re, 'CmnaRecep', $doc->receptor->comuna);
         $enc->appendChild($re);
 
         // Totales
