@@ -94,7 +94,15 @@ final class DtePdfGenerator
                 'NroResol' => $caratula['NroResol'] ?? '0',
             ];
 
-        $pdf = new \sasco\LibreDTE\Sii\PDF\Dte();
+        // FORK PROPIO en vez de sasco\LibreDTE\Sii\PDF\Dte. Misma clase copiada
+        // literal, con un solo cambio: dibuja los impuestos adicionales, que la
+        // original descarta al normalizar los totales a cinco claves. El porque
+        // del fork -- y por que no un parche en oracle/, que no esta en git --
+        // esta en el docblock de DtePdfDocumento.
+        //
+        // Va DESPUES de registrarLibreDte(): la clase extiende
+        // sasco\LibreDTE\PDF, que solo existe una vez registrado ese autoloader.
+        $pdf = new DtePdfDocumento();
         $pdf->setResolucion($resolucion);
         if ($cedible) {
             $pdf->setCedible(true);
