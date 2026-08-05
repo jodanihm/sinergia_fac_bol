@@ -16,6 +16,13 @@ declare(strict_types=1);
  *   resolverRutSender()); la constante FACT_RUT_SENDER ya no se usa para
  *   construir Credenciales, queda solo por si algo externo la referencia.
  * - Servicio SOLO interno (red Docker web_default), nunca expuesto a internet.
+ *
+ * GET /api/v1/identidad devuelve a que emisor apunta la api_key recibida
+ * (prefijo, rutEmisor, razonSocial, ambiente, tipo). Existe porque un ERP que
+ * guarda claves de varias empresas no tenia forma de confirmar cual quedo
+ * configurada ANTES de emitir: con la clave equivocada facturaba bajo otro RUT
+ * sin ningun aviso. Es la UNICA ruta del motor que no depende de
+ * CRYPTO_MASTER_KEY ni de los certificados TLS (ver identidad()).
  */
 
 require __DIR__ . '/../vendor/autoload.php';
@@ -393,7 +400,13 @@ function certOperador(PDO $pdo, string $rutEmpresaConDv): Certificado
  * restringe por tipo: lo unico que decide es si el motor encola el correo al
  * receptor (ver emitirDte).
  *
- * @return array{cuenta_id:int, rut_emisor:string, ambiente:string, tipo:string}
+ * prefijo es la mitad PUBLICA de la api_key -- la que ya viaja en el header y la
+ * que se usa para el lookup --, no el secreto. Se devuelve porque api_key no
+ * tiene ninguna columna de nombre ni etiqueta, asi que es el unico identificador
+ * legible que un llamador puede casar con la clave que guardo. Lo usa
+ * GET /api/v1/identidad.
+ *
+ * @return array{cuenta_id:int, rut_emisor:string, ambiente:string, tipo:string, prefijo:string}
  */
 function resolverTenant(PDO $pdo): array
 {
@@ -439,6 +452,8 @@ function resolverTenant(PDO $pdo): array
         'rut_emisor' => (string) $row['rut_emisor_scope'],
         'ambiente'   => (string) $row['ambiente'],
         'tipo'       => (string) $row['tipo'],
+        // Ya venia parseado del header; no hay consulta ni trabajo extra.
+        'prefijo'    => $prefijo,
     ];
 }
 
@@ -507,6 +522,10 @@ if ($metodo === 'GET' && preg_match('#^/api/v1/libro/([A-Za-z0-9]+)/estado-sii$#
 
 if ($metodo === 'GET' && preg_match('#^/api/v1/boleta/(\d+)/estado$#', $ruta, $mb)) {
     consultarEstadoBoleta($tenant, (int) $mb[1]);
+}
+
+if ($metodo === 'GET' && $ruta === '/api/v1/identidad') {
+    identidad($tenant);
 }
 
 if ($metodo === 'GET' && $ruta === '/api/v1/dte') {
@@ -1529,6 +1548,65 @@ function consultarEstadoBoleta(array $tenant, int $folio): never
         'rechazados'     => $res['rechazados'],
         'reparos'        => $res['reparos'],
         'errores'        => $res['errores'],
+    ]);
+}
+
+// ===========================================================================
+//  Handler: GET /api/v1/identidad
+//
+//  A QUE EMISOR APUNTA ESTA CLAVE. De solo lectura: no toca el SII, no consume
+//  folio, no escribe nada.
+//
+//  POR QUE EXISTE. Un ERP que integra varias empresas guarda una api_key por
+//  cada una y no tenia ninguna forma de confirmar cual quedo configurada antes
+//  de emitir. Con la clave equivocada facturaba bajo otro RUT y el sistema no
+//  se quejaba: el rut_emisor sale de la propia clave, asi que para el motor era
+//  una peticion perfectamente valida. GET /api/v1/dte tampoco servia para
+//  desambiguar -- devuelve totales y documentos del periodo, pero no dice de
+//  quien son.
+//
+//  ESTA ES LA UNICA RUTA DEL MOTOR QUE NO DEPENDE DE CRYPTO_MASTER_KEY, y es
+//  deliberado: ver el comentario de la consulta.
+// ===========================================================================
+function identidad(array $tenant): never
+{
+    // CONSULTA DIRECTA, NO MySqlEmisorRepository, Y EL MOTIVO IMPORTA.
+    //
+    // obtenerDatosEmisor() haria exactamente este SELECT y no usa cifrado para
+    // nada, pero el CONSTRUCTOR del repositorio exige un CertificadoCrypto
+    // (integration/plantiflex/MySqlEmisorRepository.php), o sea CRYPTO_MASTER_KEY.
+    // Instanciarlo aqui ataria esta ruta a la llave maestra sin necesitarla: si
+    // esa llave faltara o estuviera mal configurada, un endpoint que solo lee
+    // una razon social responderia 500.
+    //
+    // Es la unica ruta del motor que hoy no depende de la llave maestra ni de
+    // los certificados TLS, y se quiere que siga siendolo: es justamente la que
+    // alguien va a llamar para diagnosticar cuando algo mas no funciona.
+    //
+    // El filtro va por (rut_emisor, ambiente) apoyandose en el UNIQUE uk_emisor,
+    // que hace imposible que devuelva mas de una fila. El LIMIT 1 queda igual,
+    // por si ese indice cambiara alguna vez.
+    $stmt = pdo()->prepare(
+        'SELECT razon_social FROM dte_emisor '
+        . 'WHERE rut_emisor = :rut AND ambiente = :amb LIMIT 1'
+    );
+    $stmt->execute([':rut' => $tenant['rut_emisor'], ':amb' => $tenant['ambiente']]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // SIN FILA DE EMISOR -> 200 CON razonSocial EN null, NO 404.
+    //
+    // No hay clave foranea entre api_key.rut_emisor_scope y dte_emisor, asi que
+    // una clave puede apuntar a un RUT todavia sin ficha. Esa clave ES VALIDA y
+    // sirve para emitir; un 404 le diria al llamador justo lo contrario y le
+    // haria descartar una credencial buena. Devolver el RUT -- que es el dato
+    // que se vino a buscar -- con la razon social en null dice la verdad
+    // completa: "la clave apunta aqui, y de este RUT todavia no hay ficha".
+    responder(200, [
+        'prefijo'     => $tenant['prefijo'],
+        'rutEmisor'   => $tenant['rut_emisor'],
+        'razonSocial' => $row === false ? null : (string) $row['razon_social'],
+        'ambiente'    => $tenant['ambiente'],
+        'tipo'        => $tenant['tipo'],
     ]);
 }
 
