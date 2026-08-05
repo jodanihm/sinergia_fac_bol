@@ -73,16 +73,31 @@ $pixelVacio = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAA
                una certificacion ni una promesa de cifrado: el panel corre hoy
                sobre HTTP en LAN y no se puede respaldar "plataforma segura". */
         ?>
-        <p class="auth-header__nota">
-            <svg class="auth-icono" width="20" height="20" viewBox="0 0 24 24"
-                 aria-hidden="true" focusable="false">
-                <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"
-                      fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
-                <path d="m9 12 2 2 4-4" fill="none" stroke="currentColor"
-                      stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-            Acceso privado
-        </p>
+        <div class="auth-header__acciones">
+            <p class="auth-header__nota">
+                <svg class="auth-icono" width="20" height="20" viewBox="0 0 24 24"
+                     aria-hidden="true" focusable="false">
+                    <path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5l-8-3z"
+                          fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                    <path d="m9 12 2 2 4-4" fill="none" stroke="currentColor"
+                          stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                Acceso privado
+            </p>
+            <?php
+                /* SECUNDARIO Y NO PRINCIPAL: en esta pantalla la accion primaria
+                   es "Entrar", y un boton solido aqui competiria con ella. El
+                   outline usa --color-primario igual, asi que va en la paleta
+                   sin agregar ni un color nuevo.
+
+                   ABRE EN PESTANA NUEVA porque planes.html es una pagina suelta
+                   SIN navegacion de vuelta -- sus unicos enlaces son anclas
+                   #contacto. En la misma pestana, quien la abre desde el login
+                   queda sin forma de volver salvo el boton del navegador. */
+            ?>
+            <a class="boton-secundario auth-header__planes" href="/planes.html"
+               target="_blank" rel="noopener">Ver planes</a>
+        </div>
     </header>
 
     <div class="auth-main">

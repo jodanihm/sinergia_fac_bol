@@ -1179,6 +1179,20 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 }
 .accesos__lista a:hover { background: var(--color-primario-suave); border-color: var(--color-primario); }
 
+/* "Ver planes". SOLO POSICION: el color, el borde y el hover salen tal cual de
+   .boton-secundario, que ya usa --color-primario. No se define ni un token de
+   color nuevo aqui a proposito -- un azul propio de este boton seria un cuarto
+   azul en la hoja y se separaria del resto en cuanto alguien ajuste la paleta.
+   El alto se iguala al de los atajos de arriba (2.5rem) para que la fila no
+   quede despareja. */
+.accesos__planes {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    box-sizing: border-box;
+    margin-top: var(--esp-3);
+}
+
 /* ==========================================================================
    Responsivo
    ========================================================================== */
@@ -2239,6 +2253,27 @@ body.auth-page > main {
     font-size: var(--txt-sm);
 }
 .auth-icono { width: 1.05rem; height: 1.05rem; flex: none; color: var(--color-primario); }
+
+/* La nota "Acceso privado" y el boton "Ver planes" comparten el lado derecho de
+   la cabecera. Van envueltos porque .auth-header es un flex con
+   justify-content:space-between: sueltos, serian tres hijos y el logo, la nota y
+   el boton quedarian repartidos a lo ancho en vez de logo-izquierda /
+   resto-derecha. Envueltos siguen siendo dos hijos y la cabecera no cambia.
+   En movil el wrap los apila, que es lo que ya hacia la cabecera sola. */
+.auth-header__acciones {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--esp-4);
+    flex-wrap: wrap;
+}
+/* Solo alto, para que quede a la misma altura optica que la nota de al lado.
+   Color y borde son los de .boton-secundario. */
+.auth-header__planes {
+    display: inline-flex;
+    align-items: center;
+    min-height: 2.5rem;
+    box-sizing: border-box;
+}
 
 /* --- Cuerpo: dos columnas en escritorio --------------------------------- */
 .auth-main {

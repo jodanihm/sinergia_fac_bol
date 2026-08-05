@@ -333,6 +333,19 @@ $pintarDelta = static function (?array $d): string {
         <li><a href="/ventas/panel-emision">Panel de emision</a></li>
         <li><a href="/maestros/clientes">Clientes</a></li>
     </ul>
+    <?php
+        /* VA AQUI Y NO EN .dash-header. Esa cabecera es un flex de DOS hijos con
+           justify-content:space-between (el titulo y el selector de periodo);
+           meterle un tercero recolocaria el selector, que es navegacion en uso.
+           Esta seccion es la ultima de la vista y es literalmente "lo que
+           puedes hacer": un enlace a los planes cabe sin mover nada de arriba.
+
+           Mismo .boton-secundario que en el login, para que el mismo boton no se
+           vea de dos formas segun la pantalla. Y misma pestana nueva, por el
+           mismo motivo: planes.html no tiene vuelta. */
+    ?>
+    <a class="boton-secundario accesos__planes" href="/planes.html"
+       target="_blank" rel="noopener">Ver planes</a>
 </section>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>
