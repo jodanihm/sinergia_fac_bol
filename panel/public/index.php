@@ -5672,6 +5672,16 @@ if ($metodo === 'POST' && $ruta === '/empresa/importar-datos-sii') {
     handleEmpresaImportarDatosSiiPost();
 }
 
+if ($metodo === 'GET' && $ruta === '/empresa/consultar-sii') {
+    Auth::requerirSesion();
+    handleEmpresaConsultarSiiGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/empresa/consultar-sii') {
+    Auth::requerirSesion();
+    handleEmpresaConsultarSiiPost();
+}
+
 if ($metodo === 'GET' && $ruta === '/certificado') {
     Auth::requerirSesion();
     handleCertificadoGet();
@@ -6119,8 +6129,14 @@ function handleEmpresaGet(): void
             'acteco'            => (string) ($_GET['acteco'] ?? ''),
             'dir_origen'        => (string) ($_GET['dir_origen'] ?? ''),
             'cmna_origen'       => (string) ($_GET['cmna_origen'] ?? ''),
-            'resolucion_fecha'  => '',
-            'resolucion_numero' => '',
+            // Estos DOS antes eran '' fijos, con el comentario "el archivo del
+            // SII no los trae". Sigue siendo cierto para el archivo, pero la
+            // CONSULTA por RUT si los devuelve, y son justamente los que un
+            // digito mal tecleado convirtio en 68 documentos rechazados. Se
+            // aceptan si vienen y se quedan vacios si no, asi que el camino del
+            // archivo se comporta exactamente igual que antes.
+            'resolucion_fecha'  => (string) ($_GET['resolucion_fecha'] ?? ''),
+            'resolucion_numero' => (string) ($_GET['resolucion_numero'] ?? ''),
         ];
     }
 
@@ -6181,6 +6197,149 @@ function handleEmpresaImportarDatosSiiPost(): void
     }
 
     vista('empresa-importar-datos-sii', ['error' => null, 'datos' => $datos]);
+}
+
+// ===========================================================================
+//  Handler: GET /empresa/consultar-sii
+//
+//  Hermana de /empresa/importar-datos-sii y con el MISMO flujo de tres pasos:
+//  se pide un dato, se PREVISUALIZA lo que devuelve, y el usuario decide con
+//  "Usar estos datos". No guarda nada.
+//
+//  LO QUE APORTA SOBRE EL ARCHIVO: el numero y la fecha de Resolucion. El
+//  archivo pe_construccion_dte no los trae -- esta escrito en el docblock de
+//  handleEmpresaImportarDatosSiiPost() -- y son exactamente los dos que van a la
+//  Caratula de cada envio. Un digito mal tecleado ahi dejo 68 documentos
+//  rechazados por "RCT - Error en Caratula" sin que nadie se enterara.
+//
+//  LO QUE NO APORTA: direccion ni comuna. La consulta no las devuelve y esta
+//  pantalla no las inventa; se siguen tecleando en /empresa.
+// ===========================================================================
+function handleEmpresaConsultarSiiGet(): void
+{
+    vista('empresa-consultar-sii', ['error' => null, 'motivo' => null, 'datos' => null, 'rut' => '']);
+}
+
+// ===========================================================================
+//  Handler: POST /empresa/consultar-sii
+//
+//  UNA SOLA CONSULTA POR PULSACION. Cada una le cuesta creditos al proveedor,
+//  asi que el resultado se pinta en la respuesta de ESTE post y no se vuelve a
+//  pedir para repintar. Si el usuario quiere otro RUT, vuelve a apretar.
+//
+//  LOS TRES MODOS DE FALLO SE DISTINGUEN, porque la accion que le toca al
+//  usuario es distinta en cada uno: sin credencial no puede hacer nada (es del
+//  administrador), sin respuesta puede reintentar, e ilegible no se arregla
+//  reintentando. El motivo viaja desde el motor en la clave 'motivo'.
+//
+//  Y EN LOS TRES SE PUEDE SEGUIR A MANO: la vista siempre ofrece el enlace a
+//  /empresa. Un autocompletado caido no puede impedir dar de alta una empresa.
+// ===========================================================================
+function handleEmpresaConsultarSiiPost(): void
+{
+    $rutCrudo = trim((string) ($_POST['rut_emisor'] ?? ''));
+    $rut      = Rut::normalizar($rutCrudo);
+
+    // El RUT se valida AQUI antes de gastar una consulta: un DV mal tecleado no
+    // tiene por que costar un credito.
+    if (! Rut::valido($rut)) {
+        vista('empresa-consultar-sii', [
+            'error'  => 'RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).',
+            'motivo' => 'rut_invalido',
+            'datos'  => null,
+            'rut'    => $rutCrudo,
+        ]);
+    }
+
+    try {
+        $res = consultarContribuyenteEnMotor($rut);
+    } catch (Throwable $e) {
+        error_log('empresa consultar-sii: fallo de conexion con el motor - ' . $e->getMessage());
+        vista('empresa-consultar-sii', [
+            'error'  => 'No se pudo contactar el motor de emision. Puedes completar los datos a mano.',
+            'motivo' => 'sin_respuesta',
+            'datos'  => null,
+            'rut'    => $rutCrudo,
+        ]);
+    }
+
+    if ($res['status'] !== 200) {
+        $motivo = (string) ($res['body']['motivo'] ?? 'sin_respuesta');
+        error_log('empresa consultar-sii: motor respondio ' . $res['status'] . ' motivo=' . $motivo);
+        vista('empresa-consultar-sii', [
+            'error'  => mensajeConsultaSii($motivo),
+            'motivo' => $motivo,
+            'datos'  => null,
+            'rut'    => $rutCrudo,
+        ]);
+    }
+
+    vista('empresa-consultar-sii', [
+        'error'  => null,
+        'motivo' => null,
+        'datos'  => $res['body'],
+        'rut'    => $rut,
+    ]);
+}
+
+/**
+ * GET /api/v1/contribuyente/{rut} del motor.
+ *
+ * NO usa obtenerKeyServicio(): esa funcion CREA la api_key de servicio si no
+ * existe, con ambiente 'produccion' y scope al RUT que reciba, y aqui el RUT es
+ * uno que el usuario esta tecleando y todavia no guardo. La ruta del motor es
+ * interna y se autentica con la misma clave interna del RCV, que no depende de
+ * ningun tenant. Ver el bloque del router en public/index.php.
+ *
+ * @return array{status:int, body:array<string,mixed>}
+ */
+function consultarContribuyenteEnMotor(string $rutNormalizado): array
+{
+    $resp = clienteMotor()->get('api/v1/contribuyente/' . rawurlencode($rutNormalizado), [
+        'headers' => ['X-Rcv-Key' => rcvKeyInterna()],
+    ]);
+    $body = json_decode((string) $resp->getBody(), true);
+
+    return ['status' => $resp->getStatusCode(), 'body' => is_array($body) ? $body : []];
+}
+
+/**
+ * Clave interna con la que el panel llama a las rutas internas del motor.
+ *
+ * Sale del MISMO archivo que lee el motor (/app/.rcv_internal_key), que los dos
+ * contenedores ven por el bind mount del codigo. No se cachea ni se loguea.
+ */
+function rcvKeyInterna(): string
+{
+    $ruta = __DIR__ . '/../../.rcv_internal_key';
+    if (! is_file($ruta) || ! is_readable($ruta)) {
+        throw new RuntimeException('falta .rcv_internal_key en el servidor');
+    }
+    $secreto = trim((string) file_get_contents($ruta));
+    if ($secreto === '') {
+        throw new RuntimeException('.rcv_internal_key esta vacio');
+    }
+
+    return $secreto;
+}
+
+/**
+ * Mensaje para el usuario segun el motivo del fallo.
+ *
+ * Los tres dicen cosas distintas porque la accion que le toca es distinta, y
+ * los tres terminan igual: puede completar a mano. Ese cierre no es relleno --
+ * es la garantia de que el alta nunca queda bloqueada por esta consulta.
+ */
+function mensajeConsultaSii(string $motivo): string
+{
+    return match ($motivo) {
+        'sin_token' => 'La consulta automatica no esta configurada en el servidor. '
+            . 'Avisa al administrador; mientras tanto puedes completar los datos a mano.',
+        'respuesta_ilegible' => 'El servicio de consulta respondio algo que no pudimos interpretar. '
+            . 'Avisa al administrador; mientras tanto puedes completar los datos a mano.',
+        default => 'El servicio de consulta no respondio. Puedes intentarlo de nuevo en un momento '
+            . 'o completar los datos a mano.',
+    };
 }
 
 // ===========================================================================

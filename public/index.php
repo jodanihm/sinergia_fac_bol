@@ -46,6 +46,8 @@ use Plantiflex\FacturacionCl\Exceptions\EnvioRechazadoException;
 use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
 use Plantiflex\FacturacionCl\Pdf\BoletaPdfGenerator;
 use Plantiflex\FacturacionCl\Pdf\DtePdfGenerator;
+use Plantiflex\FacturacionCl\Exceptions\ConsultaContribuyenteException;
+use Plantiflex\FacturacionCl\Providers\ApiGatewayContribuyente;
 use Plantiflex\FacturacionCl\Providers\BoletaFacturador;
 use Plantiflex\FacturacionCl\Providers\SiiDirectoFacturador;
 use Plantiflex\Integration\Facturacion\CertificadoCrypto;
@@ -462,6 +464,40 @@ function resolverTenant(PDO $pdo): array
 //  su PROPIA clave (X-Rcv-Key vs /app/.rcv_internal_key). NO reusa FACT_API_KEY.
 //  Solo afecta paths nuevos; cualquier otra ruta cae al flujo existente intacto.
 // ===========================================================================
+// ===========================================================================
+//  CONSULTA DE CONTRIBUYENTE (interno): intercepta /api/v1/contribuyente/*
+//  ANTES del middleware X-Api-Key, con la MISMA clave interna del bloque RCV.
+//
+//  POR QUE NO VA DETRAS DE resolverTenant(), QUE ES LO NORMAL AQUI. Porque esta
+//  consulta se usa AL DAR DE ALTA UNA EMPRESA, y en ese momento el tenant
+//  todavia no tiene api_key de servicio: obtenerKeyServicio() del panel la
+//  CREA si no existe (panel/public/index.php), y la crearia con ambiente
+//  'produccion' y rut_emisor_scope apuntando al RUT que el usuario esta
+//  TECLEANDO -- sin guardar y sin validar. Una clave de produccion scopeada a un
+//  RUT provisional es un efecto secundario que esta pantalla no tiene por que
+//  producir.
+//
+//  Y ADEMAS NO HACE FALTA: lo que devuelve es dato PUBLICO del SII sobre un RUT
+//  cualquiera, no datos del tenant. No hay nada que escopar por cuenta.
+//
+//  Se reusa .rcv_internal_key en vez de inventar una segunda clave interna: las
+//  dos protegen lo mismo -- rutas internas del motor que el panel llama desde la
+//  red Docker -- y una segunda credencial seria una mas que rotar y documentar
+//  sin ganar aislamiento real.
+// ===========================================================================
+$rutaCon = rtrim(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/', '/');
+if (str_starts_with($rutaCon, '/api/v1/contribuyente/')) {
+    $conKey = $_SERVER['HTTP_X_RCV_KEY'] ?? '';
+    if (! is_string($conKey) || ! hash_equals(rcvSecreto(), $conKey)) {
+        responder(401, ['error' => 'no autorizado']);
+    }
+    $metodoCon = $_SERVER['REQUEST_METHOD'] ?? 'GET';
+    if ($metodoCon === 'GET' && preg_match('#^/api/v1/contribuyente/([0-9Kk.\-]+)$#', $rutaCon, $mcon)) {
+        consultarContribuyente($mcon[1]);
+    }
+    responder(404, ['error' => 'ruta no encontrada', 'metodo' => $metodoCon, 'ruta' => $rutaCon]);
+}
+
 $rutaRcv = rtrim(parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/', '/');
 if (str_starts_with($rutaRcv, '/api/v1/rcv/')) {
     $rcvKey = $_SERVER['HTTP_X_RCV_KEY'] ?? '';
@@ -1548,6 +1584,88 @@ function consultarEstadoBoleta(array $tenant, int $folio): never
         'rechazados'     => $res['rechazados'],
         'reparos'        => $res['reparos'],
         'errores'        => $res['errores'],
+    ]);
+}
+
+// ===========================================================================
+//  Handler: GET /api/v1/contribuyente/{rut}
+//
+//  QUE DATOS TIENE EL SII DE ESTE RUT COMO EMISOR DE DTE. De solo lectura: no
+//  toca la base, no consume folio, no escribe nada.
+//
+//  POR QUE EXISTE. Al dar de alta una empresa hay que teclear su numero y fecha
+//  de resolucion, y esos dos datos van a la Caratula de CADA envio (NroResol y
+//  FchResol). Un digito mal tecleado ahi produce "RCT - Rechazado por Error en
+//  Caratula" y se cae el envio completo: medido en produccion, 68 documentos
+//  rechazados de una vez, sin que nadie se enterara hasta el dia siguiente.
+//
+//  POR QUE VIVE EN EL MOTOR Y NO EN EL PANEL. El motor ya es el unico que habla
+//  con el SII y el unico con salida a internet probada -- los runners de correo
+//  corren en su contenedor y llaman a api.brevo.com. El panel llega aqui por
+//  clienteMotor(), el mismo camino con el que emite.
+//
+//  NO RECIBE $tenant: es una ruta INTERNA que se resuelve antes del middleware
+//  de api_key. El porque esta junto a su bloque en el router.
+//
+//  CADA CONSULTA CUESTA CREDITOS al proveedor, asi que este endpoint no cachea
+//  ni reintenta: una peticion entra, una consulta sale. Evitar la repetida es
+//  del llamador.
+//
+//  LOS TRES MODOS DE FALLO VIAJAN DIFERENCIADOS en la clave 'motivo', porque la
+//  pantalla tiene que decir cosas distintas: sin token es cosa del
+//  administrador, sin respuesta invita a reintentar, e ilegible no se reintenta
+//  a ciegas. Ver ConsultaContribuyenteException.
+// ===========================================================================
+function consultarContribuyente(string $rutCrudo): never
+{
+    $rut = strtoupper(str_replace(['.', ' '], '', trim($rutCrudo)));
+    if (! rutDvValido($rut)) {
+        invalido('rut invalido (formato NNNNNNNN-DV, digito verificador incorrecto)', 'rut');
+    }
+
+    try {
+        $datos = ApiGatewayContribuyente::desdeEntorno()->consultar($rut);
+    } catch (ConsultaContribuyenteException $e) {
+        // 502 y no 500: el fallo es de un tercero, no nuestro. El motivo va en
+        // el cuerpo para que la pantalla elija el mensaje.
+        error_log('consulta contribuyente: ' . $e->motivo . ' - ' . $e->getMessage());
+        responder(502, [
+            'error'  => 'no se pudo consultar el contribuyente',
+            'motivo' => $e->motivo,
+        ]);
+    } catch (Throwable $e) {
+        error_log('consulta contribuyente: fallo inesperado - ' . $e->getMessage());
+        responder(500, ['error' => 'fallo la consulta del contribuyente', 'detalle' => $e->getMessage()]);
+    }
+
+    // NO AUTORIZADO ES UN 200, NO UN ERROR. El proveedor respondio, la consulta
+    // funciono, y la respuesta -- "este RUT no esta habilitado como emisor
+    // electronico" -- es justamente lo que el usuario necesita saber antes de
+    // intentar emitir. Convertirla en error la escondería detras de un mensaje
+    // de fallo tecnico.
+    responder(200, [
+        'rut'               => $datos->rut,
+        'autorizado'        => $datos->autorizado,
+        'razonSocial'       => $datos->razonSocial,
+        'resolucionNumero'  => $datos->resolucionNumero,
+        'resolucionFecha'   => $datos->resolucionFecha,
+        'direccionRegional' => $datos->direccionRegional,
+        'software'          => $datos->software,
+        // Se devuelven aunque la pantalla de esta entrega solo los muestre:
+        // vienen en la misma respuesta, no cuestan una consulta extra, y
+        // habilitan validar que el emisor tenga autorizado el tipo que va a
+        // emitir -- algo que hoy no se comprueba en ninguna parte.
+        'documentos'        => array_map(
+            static fn ($d): array => [
+                'codigo'        => $d->codigo,
+                'descripcion'   => $d->descripcion,
+                'autorizado'    => $d->fechaAutorizacion,
+                'desautorizado' => $d->fechaDesautorizacion,
+                'vigente'       => $d->vigente(),
+            ],
+            $datos->documentos,
+        ),
+        'codigosVigentes'   => $datos->codigosVigentes(),
     ]);
 }
 

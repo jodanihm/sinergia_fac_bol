@@ -45,6 +45,10 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         <h1>Datos de la empresa <span class="badge badge--etiqueta">Certificacion</span></h1>
     </div>
     <div class="acciones-grupo acciones-grupo--header">
+        <?php /* Primero la consulta por RUT: es la unica que trae el numero y la
+                 fecha de Resolucion, que son los dos campos que nadie puede
+                 verificar de memoria. El archivo del SII no los trae. */ ?>
+        <a class="boton-secundario" href="/empresa/consultar-sii">Consultar al SII por RUT</a>
         <a class="boton-secundario" href="/empresa/importar-datos-sii">Importar datos del SII</a>
         <a class="boton-secundario" href="/panel">Volver al panel</a>
     </div>
