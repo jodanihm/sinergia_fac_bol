@@ -547,6 +547,68 @@ function validarCliente(array $post): array
 }
 
 /**
+ * Los campos que un cliente necesita para poder ser FACTURADO, y que sin embargo
+ * no son obligatorios para GUARDARLO.
+ *
+ * LA DISTINCION NO ES UN DESCUIDO, ES DELIBERADA Y HAY QUE MANTENERLA. El
+ * esquema los declara nullables ("Nullable aqui; el motor lo exige al emitir"),
+ * y ya existen clientes en produccion con estos campos en NULL. Exigirlos al
+ * guardar romperia la EDICION de todos ellos: nadie podria corregirle el
+ * telefono a un cliente antiguo sin antes averiguarle el giro.
+ *
+ * Pero sin ellos el documento NO SE PUEDE EMITIR. La matriz de obligatoriedad
+ * del Formato DTE v2.5 les da codigo 1 -- "dato obligatorio, debe estar siempre"
+ * -- en factura (33) y en factura exenta (34): GiroRecep campo 57, DirRecep
+ * campo 60, CmnaRecep campo 61.
+ *
+ * De ahi la conducta: se guarda igual, y se avisa.
+ *
+ * @var list<string>
+ */
+const CLIENTE_CAMPOS_PARA_FACTURAR = ['giro', 'direccion', 'comuna'];
+
+/**
+ * Cuales de los campos necesarios para facturar le faltan a un cliente.
+ *
+ * Sirve para las tres pantallas -- el aviso del ABM, la marca del listado y su
+ * filtro -- para que las tres digan lo mismo. Un cliente "incompleto" tiene que
+ * ser el mismo conjunto en todas.
+ *
+ * @param array<string,mixed> $cliente fila del repositorio o datos de validarCliente()
+ * @return list<string> nombres de los campos vacios, en el orden de la constante
+ */
+function clienteCamposFaltantes(array $cliente): array
+{
+    $faltan = [];
+    foreach (CLIENTE_CAMPOS_PARA_FACTURAR as $campo) {
+        if (trim((string) ($cliente[$campo] ?? '')) === '') {
+            $faltan[] = $campo;
+        }
+    }
+
+    return $faltan;
+}
+
+/**
+ * Mensaje de exito del ABM, con el aviso pegado cuando el cliente quedo sin los
+ * datos que hacen falta para facturarlo. NO es un error: el cliente SE GUARDO.
+ */
+function mensajeClienteGuardado(string $base, array $datos): string
+{
+    $faltan = clienteCamposFaltantes($datos);
+    if ($faltan === []) {
+        return $base;
+    }
+
+    return sprintf(
+        '%s Ojo: le falta %s, y sin %s no vas a poder emitirle documentos. Puedes completarlo cuando quieras.',
+        $base,
+        implode(', ', $faltan),
+        count($faltan) === 1 ? 'ese dato' : 'esos datos',
+    );
+}
+
+/**
  * Resuelve un cliente por su RUT dentro de la cuenta, distinguiendo 3 estados de
  * forma inequivoca. Base reutilizable para M3 (emision unitaria): "el usuario
  * escribe un RUT en el formulario de factura; si el cliente existe se
@@ -600,17 +662,24 @@ function handleClientesListar(): void
     $busqueda         = $q !== '' ? $q : null;
     $incluirInactivos = ($_GET['inactivos'] ?? '') === '1';
     $soloActivos      = ! $incluirInactivos;
+    $soloIncompletos  = ($_GET['incompletos'] ?? '') === '1';
 
     $porPagina = 25;
     $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
-    $total     = $repo->contar($cuentaId, $busqueda, $soloActivos);
+    $total     = $repo->contar($cuentaId, $busqueda, $soloActivos, $soloIncompletos);
     $offset    = ($pagina - 1) * $porPagina;
-    $clientes  = $repo->listar($cuentaId, $busqueda, $soloActivos, $porPagina, $offset);
+    $clientes  = $repo->listar($cuentaId, $busqueda, $soloActivos, $porPagina, $offset, $soloIncompletos);
 
     vista('clientes-listado', [
         'clientes'         => $clientes,
         'q'                => $q,
         'incluirInactivos' => $incluirInactivos,
+        'soloIncompletos'  => $soloIncompletos,
+        // El conteo va SIN los filtros de busqueda a proposito: el aviso tiene
+        // que decir cuantos clientes de la cuenta estan incompletos, no cuantos
+        // de los que se estan mirando ahora. Si dependiera de la busqueda,
+        // filtrar por un nombre haria "desaparecer" el problema.
+        'totalIncompletos' => $repo->contarIncompletos($cuentaId),
         'pagina'           => $pagina,
         'totalPaginas'     => max(1, (int) ceil($total / $porPagina)),
         'total'            => $total,
@@ -643,7 +712,10 @@ function handleClienteNuevoPost(): void
     if ($errores === []) {
         try {
             $repo->crear($cuentaId, $datos);
-            flashSet('exito', 'Cliente creado.');
+            // Se guarda igual y se avisa: bloquear romperia la edicion de los
+            // clientes que ya existen con estos campos en NULL. Ver
+            // CLIENTE_CAMPOS_PARA_FACTURAR.
+            flashSet('exito', mensajeClienteGuardado('Cliente creado.', $datos));
             redirigirPrg('/maestros/clientes');
         } catch (ClienteDuplicadoException $e) {
             // Borde de carrera: otro request creo el mismo RUT entre el chequeo
@@ -696,7 +768,7 @@ function handleClienteEditarPost(int $id): void
     if ($errores === []) {
         try {
             $repo->actualizar($cuentaId, $id, $datos);
-            flashSet('exito', 'Cliente actualizado.');
+            flashSet('exito', mensajeClienteGuardado('Cliente actualizado.', $datos));
             redirigirPrg('/maestros/clientes');
         } catch (ClienteDuplicadoException $e) {
             $errores['rut_cliente'] = 'Ya existe otro cliente con ese RUT en tu empresa.';
@@ -2538,6 +2610,45 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
         if ($emailMaestro !== '') {
             $receptorEmail = $emailMaestro;
         }
+
+        // EL MAESTRO PUEDE ESTAR INCOMPLETO, Y ANTES ESO PASABA EN SILENCIO.
+        //
+        // cliente.giro, .direccion y .comuna son NULLABLES (ver el comentario
+        // del propio esquema: "Nullable aqui; el motor lo exige al emitir"), y
+        // validarCliente() del ABM no los exige. O sea que un cliente que ya
+        // esta en el maestro puede no tenerlos. Hasta aqui esta rama copiaba el
+        // vacio y la fila seguia su curso como si estuviera bien.
+        //
+        // LO QUE COSTABA: la nota quedaba 'pendiente' y el fallo aparecia recien
+        // al emitir. Y el lote del motor es TODO-O-NADA por sobre -- valida
+        // todo antes de asignar folios y devuelve 422 al primer documento malo
+        // --, asi que facturarSubLote() marca en error EL SUB-LOTE COMPLETO:
+        // hasta 20 notas caidas por un solo cliente al que le falta el giro. El
+        // mensaje ademas decia "documentos[7].receptor.giro" y no de quien era.
+        //
+        // POR QUE ES ERROR Y NO ADVERTENCIA: sin esos tres campos el documento
+        // NO SE PUEDE EMITIR. La matriz de obligatoriedad del Formato DTE v2.5
+        // les da codigo 1 -- "dato obligatorio, debe estar siempre" -- tanto en
+        // factura (33) como en factura exenta (34): GiroRecep campo 57,
+        // DirRecep campo 60, CmnaRecep campo 61. No es un criterio nuestro.
+        //
+        // Se nombran el RUT y los campos que faltan porque el usuario tiene que
+        // poder ir a arreglarlo: el numero de fila solo no le dice a que cliente
+        // del maestro entrar.
+        $faltantes = [];
+        foreach (['giro' => $receptorGiro, 'direccion' => $receptorDireccion, 'comuna' => $receptorComuna] as $campo => $valor) {
+            if (trim($valor) === '') {
+                $faltantes[] = $campo;
+            }
+        }
+        if ($faltantes !== []) {
+            $errores[] = sprintf(
+                'el cliente %s esta en tu maestro pero le falta %s; completalo en Maestros > Clientes antes de cargar (sin %s el SII no acepta la factura)',
+                $resolucionCliente['rut'],
+                implode(', ', $faltantes),
+                count($faltantes) === 1 ? 'ese dato' : 'esos datos',
+            );
+        }
     } elseif ($resolucionCliente['estado'] === 'no_encontrado') {
         if ($receptorRazonSocial === '') {
             $errores[] = 'razon_social_receptor es obligatorio (cliente nuevo, no esta en tu maestro)';
@@ -3426,6 +3537,60 @@ function cantidadDocumentosPorNota(array $nota): int
     return count(tiposDocumentosPorNota($nota));
 }
 
+/**
+ * Traduce el error de un sub-lote rechazado, cambiando el INDICE del documento
+ * por el RUT y la razon social de la nota que ocupa esa posicion.
+ *
+ * POR QUE HACE FALTA. El motor valida todo el lote antes de asignar folios y
+ * responde 422 con el campo exacto, pero numerado por su propia posicion:
+ * "documentos[7].receptor.giro es obligatorio". Ese 7 es el indice DENTRO DEL
+ * SOBRE, no el numero de fila del Excel ni el id de la nota, asi que al usuario
+ * no le sirve para nada: le dice que algo esta mal en un sub-lote de hasta 20
+ * notas, sin decirle cual.
+ *
+ * COMO SE RESUELVE EL INDICE. armarDocumentosSubLote() recorre $notas EN ORDEN y
+ * emite tiposDocumentosPorNota() documentos por cada una -- normalmente uno, dos
+ * cuando la nota ademas anula una boleta con NC. Aqui se reconstruye ese mismo
+ * recorrido para saber a que nota pertenece el indice N. Se usa la MISMA funcion
+ * que arma el sub-lote (cantidadDocumentosPorNota) y no un conteo propio: si
+ * manana una nota emitiera tres documentos, las dos cuentas cambian juntas.
+ *
+ * SI NO SE PUEDE TRADUCIR, SE DEVUELVE EL MENSAJE TAL CUAL. Un error del motor
+ * que no venga indexado -- o un indice fuera de rango, que solo pasaria si las
+ * dos funciones se desincronizaran -- no debe perderse ni convertirse en una
+ * excepcion: vale mas el mensaje crudo que ningun mensaje.
+ *
+ * @param list<array<string,mixed>> $notas el MISMO arreglo, en el MISMO orden,
+ *        que se le paso a armarDocumentosSubLote()
+ */
+function mensajeRechazoSubLote(string $error, array $notas): string
+{
+    if (! preg_match('/documentos\[(\d+)\]/', $error, $m)) {
+        return $error;
+    }
+
+    $indice = (int) $m[1];
+    $cursor = 0;
+    foreach ($notas as $nota) {
+        $cursor += cantidadDocumentosPorNota($nota);
+        if ($indice < $cursor) {
+            $rut   = trim((string) ($nota['receptor_rut'] ?? ''));
+            $razon = trim((string) ($nota['receptor_razon_social'] ?? ''));
+            $quien = $rut !== '' && $razon !== '' ? "{$rut} ({$razon})" : ($rut !== '' ? $rut : $razon);
+            if ($quien === '') {
+                return $error;
+            }
+
+            // Se conserva el mensaje del motor completo y se le antepone de
+            // quien es: el detalle del campo que falta sigue siendo suyo y es
+            // lo que dice QUE arreglar.
+            return sprintf('Cliente %s: %s', $quien, $error);
+        }
+    }
+
+    return $error;
+}
+
 /** Arma los documentos del sub-lote para POST /api/v1/dte/lote, en el mismo
  *  orden de $notas (factura primero, NC despues si aplica). La NC anula la
  *  boleta original: mismo detalle/montos que la factura de reemplazo. */
@@ -3568,7 +3733,11 @@ function facturarSubLote(PDO $pdo, string $keyServicio, array $notas, int $cuent
 
     if ($res['status'] !== 201) {
         error_log('facturacion masiva: sub-lote fallo (' . $res['status'] . ') - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
-        marcarNotasVentaError($pdo, $idsReclamados, (string) ($res['body']['error'] ?? 'El motor rechazo el sub-lote.'));
+        marcarNotasVentaError(
+            $pdo,
+            $idsReclamados,
+            mensajeRechazoSubLote((string) ($res['body']['error'] ?? 'El motor rechazo el sub-lote.'), $notas),
+        );
 
         return;
     }

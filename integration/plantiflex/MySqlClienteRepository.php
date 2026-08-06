@@ -37,12 +37,33 @@ final class MySqlClienteRepository
     }
 
     /**
+     * Condicion SQL de "a este cliente le falta algo para poder facturarlo".
+     *
+     * Vive aqui y no en el panel para que el FILTRO del listado y la MARCA de
+     * cada fila no puedan discrepar: los dos salen de esta definicion. El panel
+     * expone la misma regla en PHP con clienteCamposFaltantes(), que ademas dice
+     * QUE campo falta; esta constante es solo la version SQL para poder filtrar
+     * sin traer todas las filas.
+     *
+     * Cubre NULL y cadena vacia: el ABM guarda '' cuando el input viene en
+     * blanco (validarCliente() hace trim y no convierte a NULL), mientras que
+     * las filas creadas por otros caminos pueden traer NULL. Las dos cosas
+     * significan lo mismo aqui.
+     *
+     * Por que estos tres campos: sin ellos el SII no acepta la factura. Ver
+     * CLIENTE_CAMPOS_PARA_FACTURAR en el panel para la cita del Formato DTE.
+     */
+    private const SQL_INCOMPLETO =
+        "(COALESCE(giro, '') = '' OR COALESCE(direccion, '') = '' OR COALESCE(comuna, '') = '')";
+
+    /**
      * WHERE + params comunes del filtro de listado (scope por cuenta + busqueda
-     * opcional por rut/razon social + solo activos opcional).
+     * opcional por rut/razon social + solo activos opcional + solo incompletos
+     * opcional).
      *
      * @return array{0:string, 1:array<string,mixed>}
      */
-    private function filtro(int $cuentaId, ?string $busqueda, bool $soloActivos): array
+    private function filtro(int $cuentaId, ?string $busqueda, bool $soloActivos, bool $soloIncompletos = false): array
     {
         $where  = 'cuenta_id = :cuenta_id';
         $params = [':cuenta_id' => $cuentaId];
@@ -53,15 +74,35 @@ final class MySqlClienteRepository
             $where .= ' AND (rut_cliente LIKE :q OR razon_social LIKE :q)';
             $params[':q'] = '%' . trim($busqueda) . '%';
         }
+        if ($soloIncompletos) {
+            $where .= ' AND ' . self::SQL_INCOMPLETO;
+        }
         return [$where, $params];
+    }
+
+    /**
+     * Cuantos clientes de la cuenta no se pueden facturar por datos faltantes.
+     *
+     * Se cuenta SIEMPRE sobre los ACTIVOS: un cliente dado de baja no se va a
+     * facturar de todos modos, y contarlo inflaria el aviso con ruido que nadie
+     * va a ir a arreglar.
+     */
+    public function contarIncompletos(int $cuentaId): int
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) FROM cliente WHERE cuenta_id = :cuenta_id AND activo = 1 AND ' . self::SQL_INCOMPLETO
+        );
+        $stmt->execute([':cuenta_id' => $cuentaId]);
+
+        return (int) $stmt->fetchColumn();
     }
 
     /**
      * @return list<array<string,mixed>>
      */
-    public function listar(int $cuentaId, ?string $busqueda = null, bool $soloActivos = true, int $limit = 50, int $offset = 0): array
+    public function listar(int $cuentaId, ?string $busqueda = null, bool $soloActivos = true, int $limit = 50, int $offset = 0, bool $soloIncompletos = false): array
     {
-        [$where, $params] = $this->filtro($cuentaId, $busqueda, $soloActivos);
+        [$where, $params] = $this->filtro($cuentaId, $busqueda, $soloActivos, $soloIncompletos);
         $stmt = $this->pdo->prepare(
             'SELECT ' . self::COLUMNAS . ' FROM cliente WHERE ' . $where
             . ' ORDER BY razon_social ASC, id ASC LIMIT :limit OFFSET :offset'
@@ -76,9 +117,9 @@ final class MySqlClienteRepository
         return array_map([$this, 'mapear'], $stmt->fetchAll(PDO::FETCH_ASSOC));
     }
 
-    public function contar(int $cuentaId, ?string $busqueda = null, bool $soloActivos = true): int
+    public function contar(int $cuentaId, ?string $busqueda = null, bool $soloActivos = true, bool $soloIncompletos = false): int
     {
-        [$where, $params] = $this->filtro($cuentaId, $busqueda, $soloActivos);
+        [$where, $params] = $this->filtro($cuentaId, $busqueda, $soloActivos, $soloIncompletos);
         $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM cliente WHERE ' . $where);
         $stmt->execute($params);
 

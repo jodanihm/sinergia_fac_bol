@@ -1155,6 +1155,17 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 .tarjeta--proximamente h2 { display: flex; align-items: center; gap: var(--esp-2); flex-wrap: wrap; font-size: var(--txt-md); }
 .dash-vacio-inline { color: var(--color-texto-tenue); font-style: italic; }
 
+/* CLIENTE QUE NO SE PUEDE FACTURAR. Un dato ausente que IMPIDE EMITIR no puede
+   verse igual que uno simplemente vacio: .dash-vacio-inline es un guion gris e
+   italico, neutro a proposito, y con el un cliente roto era indistinguible de
+   uno al que solo le falta el telefono.
+   Color de texto, no de fondo: la celda vive en una tabla y un relleno la
+   convertiria en un bloque de color entre datos. --color-alerta es el ambar que
+   cumple AA como texto. */
+.cliente-falta { color: var(--color-alerta); font-weight: 600; }
+/* Separacion de la razon social; el badge ya trae su propio color y borde. */
+.cliente-incompleto { margin-left: var(--esp-2); }
+
 .accesos { margin-top: var(--esp-6); border-top: 1px solid var(--color-borde-tenue); padding-top: var(--esp-4); }
 .accesos__lista { display: flex; flex-wrap: wrap; gap: var(--esp-2); padding: 0; margin: var(--esp-2) 0 0; list-style: none; }
 /* Mismo lenguaje que las tarjetas: superficie blanca elevada en vez de una caja
@@ -1563,6 +1574,14 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .alerta__icono { flex: none; line-height: 1.4; }
 .alerta--error { background: var(--color-error-fondo); border-color: #f2c9c4; color: var(--color-error); }
 .alerta--exito { background: var(--color-exito-fondo); border-color: #cbe3cc; color: var(--color-exito); }
+/* Faltaba la variante de ADVERTENCIA: solo habia error y exito, y un aviso que
+   no es ninguna de las dos -- "esto todavia funciona, pero te va a fallar" --
+   se tenia que pintar de rojo como si ya estuviera roto. Usa los mismos tres
+   tokens ambar que .badge--advertencia, sin inventar color nuevo.
+   --color-alerta es el UNICO ambar de la paleta que cumple AA como TEXTO (ver
+   el comentario de :root); el otro es solo para bordes. */
+.alerta--advertencia { background: var(--color-alerta-fondo); border-color: #f3d9bb; color: var(--color-alerta); }
+.alerta--advertencia a { color: inherit; }
 
 /* Zona de carga de archivo. El <input type="file"> real sigue en el DOM con
    .visualmente-oculto; lo que se ve es esta area y el <label> que lo dispara. */

@@ -2,18 +2,31 @@
 /**
  * Maestros > Clientes: listado.
  *
- * Recibe: $clientes, $q, $incluirInactivos, $pagina, $totalPaginas, $total,
- * $flash, $navActivo. Todo de handleClientesListar(), 25 por pagina.
+ * Recibe: $clientes, $q, $incluirInactivos, $soloIncompletos, $totalIncompletos,
+ * $pagina, $totalPaginas, $total, $flash, $navActivo. Todo de
+ * handleClientesListar(), 25 por pagina.
  *
  * Cada cliente trae los campos de MySqlClienteRepository::mapear():
  *   id, rut_cliente, razon_social, giro, direccion, comuna, email, telefono,
  *   activo, created_at, updated_at.
  * giro, direccion, comuna, email y telefono pueden ser null.
  *
- * FILTROS REALES: solo dos parametros GET, q e inactivos (mas pagina). La
- * busqueda es LIKE sobre rut_cliente Y razon_social -- no busca por email ni
+ * FILTROS REALES: tres parametros GET, q, inactivos e incompletos (mas pagina).
+ * La busqueda es LIKE sobre rut_cliente Y razon_social -- no busca por email ni
  * por comuna, y el placeholder no promete mas que eso. El orden lo fija el
  * repositorio: razon_social ASC.
+ *
+ * INCOMPLETO = SIN GIRO, DIRECCION O COMUNA. A ese cliente NO SE LE PUEDE
+ * FACTURAR: los tres campos son codigo 1 ("dato obligatorio, debe estar
+ * siempre") en factura 33 y factura exenta 34 segun la matriz del Formato DTE
+ * v2.5. La marca y el filtro existen porque hasta ahora esos clientes eran
+ * indistinguibles: la tabla mostraba un guion igual que para un dato
+ * simplemente ausente, y el fallo aparecia recien al emitir.
+ *
+ * La marca de CADA FILA sale de clienteCamposFaltantes() y el FILTRO de
+ * MySqlClienteRepository::SQL_INCOMPLETO. Son dos expresiones de la misma
+ * regla en dos lenguajes; si alguna vez dejan de coincidir, el filtro traeria
+ * filas sin marca o al reves.
  *
  * ACTIVO/INACTIVO: activar() y desactivar() son un UPDATE de la columna activo
  * (cambiarActivo()), no un borrado. Por eso "Inactivo" es un estado neutro y no
@@ -28,14 +41,29 @@ require __DIR__ . '/partials/header.php';
 
 // Query string de paginacion: arrastra los filtros activos. Identico al que
 // habia; si se pierde, la paginacion navega sobre otro conjunto.
-$qs = ($q !== '' ? '&q=' . urlencode($q) : '') . ($incluirInactivos ? '&inactivos=1' : '');
+$qs = ($q !== '' ? '&q=' . urlencode($q) : '')
+    . ($incluirInactivos ? '&inactivos=1' : '')
+    . ($soloIncompletos ? '&incompletos=1' : '');
 
-$hayFiltros = $q !== '' || $incluirInactivos;
+$hayFiltros = $q !== '' || $incluirInactivos || $soloIncompletos;
 
 /** Valor de texto opcional: si viene vacio se marca como ausente, no en blanco. */
 $oVacio = static function (?string $v): string {
     $v = trim((string) $v);
     return $v === '' ? '<span class="dash-vacio-inline">&mdash;</span>' : htmlspecialchars($v);
+};
+
+/**
+ * Igual que $oVacio pero para los campos que HACEN FALTA PARA FACTURAR: el
+ * hueco se pinta en rojo y con una etiqueta que dice que falta, en vez del
+ * guion neutro. Un dato ausente que impide emitir no puede verse igual que un
+ * telefono en blanco.
+ */
+$oFalta = static function (?string $v): string {
+    $v = trim((string) $v);
+    return $v === ''
+        ? '<span class="cliente-falta">Falta</span>'
+        : htmlspecialchars($v);
 };
 ?>
 
@@ -58,6 +86,27 @@ $oVacio = static function (?string $v): string {
     </p>
 <?php endif; ?>
 
+<?php
+// AVISO DE INCOMPLETOS. Va antes de los filtros y solo aparece si los hay, con
+// un enlace que aplica el filtro: sin eso, saber que existen 12 clientes rotos
+// no sirve de nada porque hay que encontrarlos entre 400.
+//
+// El conteo NO depende de la busqueda (ver handleClientesListar): dice cuantos
+// hay en la cuenta, no cuantos de los que se estan mirando.
+if (! $soloIncompletos && $totalIncompletos > 0): ?>
+    <p class="alerta alerta--advertencia" role="status">
+        <span class="alerta__icono" aria-hidden="true">&#9888;</span>
+        <span>
+            <strong><?= (int) $totalIncompletos; ?></strong>
+            cliente<?= $totalIncompletos === 1 ? '' : 's'; ?>
+            <?= $totalIncompletos === 1 ? 'no tiene' : 'no tienen'; ?>
+            giro, direccion o comuna, y sin esos datos el SII no acepta la factura.
+            <a href="/maestros/clientes?incompletos=1">Ver
+                <?= $totalIncompletos === 1 ? 'ese cliente' : 'esos clientes'; ?></a>.
+        </span>
+    </p>
+<?php endif; ?>
+
 <form method="get" action="/maestros/clientes" class="filtros">
     <label class="filtros__campo">Buscar
         <input type="text" name="q" class="filtros__input" value="<?= htmlspecialchars($q); ?>"
@@ -66,6 +115,10 @@ $oVacio = static function (?string $v): string {
     <label class="filtros__campo form-check">
         <input type="checkbox" name="inactivos" value="1" <?= $incluirInactivos ? 'checked' : ''; ?>>
         Incluir inactivos
+    </label>
+    <label class="filtros__campo form-check">
+        <input type="checkbox" name="incompletos" value="1" <?= $soloIncompletos ? 'checked' : ''; ?>>
+        Solo los que no puedo facturar
     </label>
     <button type="submit" class="boton-secundario">Filtrar</button>
     <?php if ($hayFiltros): ?>
@@ -108,13 +161,21 @@ $oVacio = static function (?string $v): string {
             </thead>
             <tbody>
                 <?php foreach ($clientes as $c): ?>
+                    <?php $faltan = clienteCamposFaltantes($c); ?>
                     <tr<?= $c['activo'] ? '' : ' class="tabla-datos__fila--inactiva"'; ?>>
                         <td>
                             <?= htmlspecialchars($c['razon_social']); ?>
+                            <?php if ($faltan !== []): ?>
+                                <?php /* El title nombra los campos: la columna direccion no esta
+                                        en la tabla, asi que sin esto un cliente al que solo le
+                                        falta la direccion se veria marcado sin motivo visible. */ ?>
+                                <span class="badge badge--advertencia cliente-incompleto"
+                                      title="Falta <?= htmlspecialchars(implode(', ', $faltan)); ?>">No facturable</span>
+                            <?php endif; ?>
                             <span class="tabla-datos__secundario"><?= htmlspecialchars($c['rut_cliente']); ?></span>
                         </td>
-                        <td><?= $oVacio($c['giro'] ?? null); ?></td>
-                        <td><?= $oVacio($c['comuna'] ?? null); ?></td>
+                        <td><?= $oFalta($c['giro'] ?? null); ?></td>
+                        <td><?= $oFalta($c['comuna'] ?? null); ?></td>
                         <td>
                             <?= $oVacio($c['email'] ?? null); ?>
                             <?php if (trim((string) ($c['telefono'] ?? '')) !== ''): ?>
