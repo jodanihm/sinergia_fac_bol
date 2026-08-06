@@ -5073,6 +5073,65 @@ function calcularEtapasManuales(array $raw, bool $todosAprobados): array
 }
 
 // ===========================================================================
+//  Sesion de DEMOSTRACION (solo lectura) -- ver migracion 029_usuario_demo.sql
+// ===========================================================================
+
+/**
+ * Si el usuario de la sesion actual tiene usuario.demo = 1.
+ *
+ * SE PREGUNTA A LA BASE EN CADA POST, no a $_SESSION. Cachear la bandera en la
+ * sesion ahorraria un SELECT por clave primaria -- nada -- a cambio de que
+ * apagar el demo (UPDATE usuario SET demo = 0) no tuviera efecto hasta que la
+ * persona cerrara sesion. Para una cuenta que existe justamente para entregarse
+ * a terceros, la revocacion tiene que ser inmediata.
+ *
+ * Sin sesion devuelve false a proposito: POST /login y POST /registro corren
+ * antes de que exista usuario_id, y son los dos POST que un demo SI necesita
+ * poder hacer (sin el primero no podria ni entrar).
+ */
+function sesionEsDemo(): bool
+{
+    if (! Auth::autenticado()) {
+        return false;
+    }
+
+    $stmt = Db::conexion()->prepare('SELECT demo FROM usuario WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => Auth::usuarioId()]);
+
+    return (int) $stmt->fetchColumn() === 1;
+}
+
+/**
+ * Corta el request con la pantalla de "modo demostracion" y termina.
+ *
+ * NO es un 403 pelado: esto lo va a ver un prospecto haciendo clic en botones
+ * durante una presentacion, no un atacante. La pagina dice que el sistema hace
+ * la accion de verdad y que en esta cuenta esta desactivada, y ofrece volver.
+ *
+ * 403 igual en el codigo de estado: la accion efectivamente se rechazo, y un
+ * 200 aqui haria que cualquier chequeo automatico creyera que se ejecuto.
+ */
+function cortarPorDemo(): never
+{
+    http_response_code(403);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">'
+        . '<title>Modo demostracion</title>'
+        . '<link rel="stylesheet" href="/css/style.css"></head><body>'
+        . '<h1>Modo demostracion</h1>'
+        . '<p>Esta es una cuenta de <strong>solo lectura</strong>, pensada para recorrer el '
+        . 'sistema completo sin alterar datos. La accion que acabas de intentar existe y '
+        . 'funciona en una cuenta normal &mdash; emitir documentos ante el SII, cargar '
+        . 'certificados y CAF, enviar correos, editar maestros &mdash;, pero aqui esta '
+        . 'desactivada a proposito.</p>'
+        . '<p>Todas las pantallas siguen disponibles para navegar.</p>'
+        . '<p><a href="javascript:history.back()">Volver atras</a> &middot; '
+        . '<a href="/panel">Ir al dashboard</a></p>'
+        . '</body></html>';
+    exit;
+}
+
+// ===========================================================================
 //  Router: metodo y ruta
 // ===========================================================================
 $metodo = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -5110,6 +5169,40 @@ if ($metodo === 'POST' && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))
         . 'Vuelve atras, recarga la pagina y vuelve a intentarlo.</p>'
         . '</body></html>';
     exit;
+}
+
+// ===========================================================================
+//  DEMO: bloqueo CENTRAL de escritura, antes de despachar a CUALQUIER handler.
+//
+//  Va aqui, junto al CSRF y por el MISMO argumento, que ya se demostro correcto
+//  para las ~58 rutas POST de este router: una regla que vale para todas se
+//  aplica una vez, no se reparte en 58 handlers de los que alguien se va a
+//  olvidar. La propiedad que importa no es que hoy queden cubiertas todas las
+//  rutas -- eso lo daria tambien un guard por handler -- sino que la ruta POST
+//  que se escriba MANANA nazca cubierta sin que su autor sepa que esto existe.
+//
+//  POR QUE EL METODO ES EL CRITERIO COMPLETO. En este router la separacion es
+//  limpia y verificable: TODA mutacion de estado del tenant es un POST (emitir,
+//  cargar certificado/CAF, generar y revocar api keys, confirmar etapas de
+//  certificacion, reintentar correos, alta/baja de clientes, productos y
+//  usuarios, y las acciones de superadmin sobre tenants). Los GET renderizan,
+//  listan o proxean binarios ya generados. Bloquear POST bloquea, por lo tanto,
+//  el conjunto entero de acciones con efecto.
+//
+//  LA UNICA ESCRITURA QUE SOBREVIVE ES DELIBERADA: obtenerKeyServicio() crea la
+//  api_key de tipo 'servicio' con la que el propio panel le habla al motor si no
+//  existe, y eso pasa en GET. Es interna (nunca se muestra ni se entrega), no
+//  toca datos del tenant y no contacta al SII; ademas, para la cuenta demo se
+//  siembra por adelantado, asi que en la practica no se dispara. Bloquearla
+//  romperia el panel de emision y los informes, que es justamente lo que hay que
+//  mostrar.
+//
+//  NO cubre la API del motor (X-Api-Key, front controller aparte, ver la nota
+//  del bloque CSRF de arriba): esa superficie no ve esta bandera. La contencion
+//  ahi es no darle al demo ninguna api_key 'externa' activa.
+// ===========================================================================
+if ($metodo === 'POST' && sesionEsDemo()) {
+    cortarPorDemo();
 }
 
 if ($metodo === 'GET' && $ruta === '/') {

@@ -54,3 +54,19 @@ $cssHref    = '/css/style.css' . ($cssVersion ? '?v=' . $cssVersion : '');
 <?php require __DIR__ . '/_nav.php'; ?>
 <?php endif; ?>
 <main id="contenido" aria-label="Contenido principal">
+<?php if ($panelAutenticado && sesionEsDemo()): ?>
+<?php /* Aviso permanente de sesion de solo lectura. Va DENTRO de <main> y no
+         sobre el <body>: el shell es flex y un hermano mas del <nav> le
+         cambiaria el layout a las ~25 vistas. Aqui es simplemente el primer
+         bloque del contenido, en todas.
+
+         Existe porque el bloqueo del router aparece recien DESPUES de hacer
+         clic (ver cortarPorDemo()), y en una demostracion en vivo enterarse ahi
+         llega tarde. Esto lo dice antes, sin apagar ningun boton: la gracia de
+         la cuenta es que se vea el sistema entero, botones incluidos. */ ?>
+<p class="aviso-demo" role="status">
+    <strong>Modo demostracion.</strong>
+    Sesion de solo lectura: puedes recorrer todas las pantallas, pero las acciones
+    que emiten documentos, cargan credenciales o modifican datos estan desactivadas.
+</p>
+<?php endif; ?>

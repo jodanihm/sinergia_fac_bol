@@ -329,6 +329,14 @@ const MIGRACIONES = [
             ['tipo' => 'columnas', 'desc' => 'dte_emitido.exento + impuesto_adicional', 'tabla' => 'dte_emitido', 'columnas' => ['exento', 'impuesto_adicional'], 'esperado' => 2],
         ],
     ],
+    [
+        // Una sola columna en una sola tabla: igual que la 027, una huella basta
+        // y no hay ALTER parcial posible que se le escape.
+        'id' => '029', 'archivo' => '029_usuario_demo.sql', 'nota' => 'ALTER (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'usuario.demo', 'tabla' => 'usuario', 'columnas' => ['demo'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
