@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 use GuzzleHttp\Client;
 use Plantiflex\FacturacionCl\Dto\Credenciales;
+use Plantiflex\FacturacionCl\Dto\EstadisticaEnvioSii;
 use Plantiflex\FacturacionCl\Dto\Libro;
 use Plantiflex\FacturacionCl\Dto\LineaLibro;
 use Plantiflex\FacturacionCl\Correo\EncoladorCorreo;
@@ -2143,15 +2144,46 @@ function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
         // asi que el panel decia en verde "Estado actualizado: RCT." despues de
         // un RECHAZO. Es la misma enfermedad que costo las 68 facturas exentas,
         // en version manual: la respuesta llegaba y se mostraba como si fuera
-        // una buena noticia. La clasificacion es la misma que usa el runner
-        // (RegistroVeredictoSii), para que el boton y el cron nunca discrepen.
+        // una buena noticia.
         //
-        // Y se informa CUANTOS documentos quedaron actualizados: el veredicto es
-        // del sobre entero, y ver "20 documentos" es lo que hace visible que la
-        // consulta no resolvio solo el que se estaba mirando.
+        // Y NO ALCANZABA CON MIRAR EL ESTADO. Medido en produccion con el sobre
+        // 12278726262: quedo guardado con 1 informado, 0 aceptados y 1
+        // RECHAZADO, y el panel lo pinto EN VERDE porque su estado era EPR y EPR
+        // no es un rechazo de sobre. El color lo decide ahora el MOTIVO, que
+        // mira el estado Y los contadores.
+        //
+        // EL MOTIVO NO SE RECALCULA AQUI: viene ya clasificado del motor, que lo
+        // saca de RegistroVeredictoSii::motivoAviso() -- la misma funcion que usa
+        // el runner para decidir si manda correo y el camino de certificacion
+        // para su flash. Tres pantallas, una sola clasificacion. Si el motor
+        // fuera viejo y no mandara 'motivo', el respaldo llama a ESA MISMA
+        // funcion sin bloques, que es exactamente el comportamiento anterior.
         $estadoSii = (string) ($res['body']['estado'] ?? '-');
         $docs      = (int) ($res['body']['documentos'] ?? 0);
         $detalle   = trim((string) ($res['body']['glosa'] ?? ''));
+
+        $motivo = (string) ($res['body']['motivo']
+            ?? RegistroVeredictoSii::motivoAviso($estadoSii, []));
+
+        // Los bloques se reconstruyen para poder decir los numeros con el MISMO
+        // texto que el correo y el log (EstadisticaEnvioSii::resumen()). Un
+        // sobre viejo, de antes de la 030, no trae ninguno -- y ahi esta el caso
+        // de borde que importa: SIN BLOQUES no se afirma nada. Cero rechazados y
+        // "no hay datos" son cosas distintas, y solo la primera se puede decir
+        // en verde.
+        $crudos = is_array($res['body']['estadistica'] ?? null) ? $res['body']['estadistica'] : [];
+        $entero = static fn (array $b, string $k): ?int
+            => isset($b[$k]) && is_numeric($b[$k]) ? (int) $b[$k] : null;
+        $bloques = array_map(
+            static fn (array $b): EstadisticaEnvioSii => new EstadisticaEnvioSii(
+                $entero($b, 'tipoDocto'),
+                $entero($b, 'informados'),
+                $entero($b, 'aceptados'),
+                $entero($b, 'rechazados'),
+                $entero($b, 'reparos'),
+            ),
+            array_values(array_filter($crudos, 'is_array')),
+        );
 
         if ($estadoSii === 'sin_trackid') {
             // CASO APARTE, y no por prolijidad: 'sin_trackid' no es un veredicto
@@ -2163,16 +2195,55 @@ function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
             // un problema, no una consulta normal.
             flashSet('error', 'Este documento no tiene Track ID: no hay envio que consultar en el SII.');
         } else {
-            $mensaje = sprintf(
-                'Estado actualizado: %s%s. %s',
-                $estadoSii,
-                $detalle !== '' ? ' (' . $detalle . ')' : '',
-                $docs === 1
-                    ? 'Se actualizo 1 documento de este envio.'
-                    : sprintf('Se actualizaron %d documentos de este envio.', $docs)
-            );
+            $limpio = $motivo === RegistroVeredictoSii::AVISO_NINGUNO;
 
-            flashSet(RegistroVeredictoSii::esRechazo($estadoSii) ? 'error' : 'exito', $mensaje);
+            // "Se actualizaron 0 documentos" era CIERTO -- rowCount cuenta filas
+            // MODIFICADAS, y reconsultar un sobre que ya estaba en EPR no cambia
+            // ninguna -- pero se lee como "no paso nada", que es lo contrario de
+            // lo que ocurrio. Lo que importa es el veredicto, no cuantas filas
+            // se movieron, asi que el numero solo aparece cuando dice algo: si
+            // hubo cambios, cuantos; si no los hubo, que ya estaba asi.
+            $alcance = $docs === 0
+                ? 'El envio ya tenia guardado este veredicto.'
+                : ($docs === 1
+                    ? 'Se actualizo 1 documento de este envio.'
+                    : sprintf('Se actualizaron %d documentos de este envio.', $docs));
+
+            // EL ENCABEZADO SOLO CAMBIA CUANDO HAY ALGO MALO. En el camino
+            // limpio se conserva "Estado actualizado", palabra por palabra, y no
+            // por nostalgia: glosaMotivo() del caso sin problemas dice "Envio
+            // procesado", y eso seria FALSO para un sobre en curso -- un REC
+            // esta recibido, no procesado. El vocabulario del correo entra
+            // exactamente donde aplica y en ningun otro sitio.
+            $mensaje = $limpio
+                ? sprintf(
+                    'Estado actualizado: %s%s. %s',
+                    $estadoSii,
+                    $detalle !== '' ? ' (' . $detalle . ')' : '',
+                    $alcance
+                )
+                : sprintf(
+                    '%s: %s%s. %s',
+                    RegistroVeredictoSii::glosaMotivo($motivo),
+                    $estadoSii,
+                    $detalle !== '' ? ' (' . $detalle . ')' : '',
+                    $alcance
+                );
+
+            // LOS NUMEROS, cuando hay algo malo que mirar. Sin ellos el usuario
+            // lee "con documentos rechazados" y no tiene idea de cuantos de
+            // cuantos, que es justo el dato que decide si va corriendo al portal
+            // del SII o no.
+            if (! $limpio && $bloques !== []) {
+                $mensaje .= ' El SII informa: '
+                    . implode('; ', array_map(
+                        static fn (EstadisticaEnvioSii $b): string => $b->resumen(),
+                        $bloques
+                    ))
+                    . '. El SII dice cuantos, no cuales: revisa el detalle en el portal del SII.';
+            }
+
+            flashSet($limpio ? 'exito' : 'error', $mensaje);
         }
     } else {
         error_log('panel documentos: estado-sii respondio ' . $res['status'] . ' - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
