@@ -8089,13 +8089,48 @@ function handleCertificacionActualizarPost(): void
         redirigirPrg('/certificacion');
     }
 
-    // Persistir en TODAS las filas de este envio (mismo track_id), scope del
-    // tenant: el estado es del envio completo, no de una fila suelta.
-    $pdo->prepare(
-        "UPDATE dte_emitido SET estado = :estado WHERE track_id = :track AND rut_emisor = :rut AND ambiente = 'certificacion'"
-    )->execute([':estado' => $res['estado'], ':track' => $trackId, ':rut' => $rutEmisor]);
+    // PASA POR RegistroVeredictoSii, IGUAL QUE LOS OTROS DOS LLAMADORES.
+    //
+    // Hasta aqui esta funcion tenia su propio UPDATE, y esa copia se habia ido
+    // separando en tres cosas a la vez: escribia $res['estado'] CRUDO (una
+    // respuesta sin <ESTADO> sobreescribia el estado con cadena vacia, que es
+    // justo el bug que normalizar() existe para tapar), NO guardaba glosa_sii
+    // aunque la consulta ya la traia, y ahora tampoco habria guardado los
+    // contadores. El fan-out por track_id si lo hacia bien -- de hecho fue el
+    // primero en hacerlo --, asi que lo unico que cambia de comportamiento es
+    // que ahora persiste lo mismo que el motor y el runner.
+    //
+    // Es la misma clase de separacion silenciosa que convirtio un incidente de 4
+    // documentos en uno de 68, y por eso el docblock de la clase pide que los
+    // tres pasen por aqui.
+    $estadoNuevo = RegistroVeredictoSii::normalizar($res['estado']);
+    $glosaNueva  = trim($res['glosa']) !== '' ? trim($res['glosa']) : null;
 
-    flashSet('ok', sprintf('Estado actualizado: %s (envio %s)', $res['estado'], $trackId));
+    RegistroVeredictoSii::persistir(
+        $pdo,
+        $rutEmisor,
+        Ambiente::Certificacion->value,
+        $trackId,
+        $estadoNuevo,
+        $glosaNueva,
+        $res['estadistica'],
+    );
+
+    // El aviso del sobre "procesado pero sucio" tambien aplica en certificacion:
+    // un Set Basico en EPR con reparos adentro es exactamente el caso que hace
+    // que alguien crea que ya certifico. Aqui no hay correo -- esto lo dispara
+    // una persona mirando la pantalla -- asi que se dice en el flash.
+    $motivo = RegistroVeredictoSii::motivoAviso($estadoNuevo, $res['estadistica']);
+    if ($motivo === RegistroVeredictoSii::AVISO_NINGUNO) {
+        flashSet('ok', sprintf('Estado actualizado: %s (envio %s)', $estadoNuevo, $trackId));
+    } else {
+        flashSet('error', sprintf(
+            'Estado actualizado: %s (envio %s). ATENCION: %s. Revisa el detalle en el SII.',
+            $estadoNuevo,
+            $trackId,
+            RegistroVeredictoSii::glosaMotivo($motivo)
+        ));
+    }
     redirigirPrg('/certificacion');
 }
 

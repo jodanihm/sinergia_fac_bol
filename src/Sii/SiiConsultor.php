@@ -5,11 +5,13 @@ declare(strict_types=1);
 namespace Plantiflex\FacturacionCl\Sii;
 
 use DOMDocument;
+use DOMElement;
 use GuzzleHttp\ClientInterface;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
 use InvalidArgumentException;
+use Plantiflex\FacturacionCl\Dto\EstadisticaEnvioSii;
 use Plantiflex\FacturacionCl\Enums\Ambiente;
 use Plantiflex\FacturacionCl\Exceptions\ConexionException;
 use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
@@ -27,6 +29,43 @@ use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
  * proceso), etc. Aqui NO se lanza excepcion por el estado de negocio: se
  * devuelve tal cual para que el caller decida. Solo se lanza por fallos de
  * transporte/parseo.
+ *
+ *
+ * EL RESP_BODY DE getEstUp, MEDIDO SOBRE UNA RESPUESTA REAL
+ * -----------------------------------------------------------------------------
+ * Hasta esta entrega se leian ESTADO y GLOSA y se tiraba el resto. El resto es
+ * lo que dice si un sobre EPR trae documentos rechazados adentro. Respuesta real
+ * capturada del log del runner el 04-08-2026 (track 0253081988), desescapada:
+ *
+ *   <SII:RESPUESTA xmlns:SII="http://www.sii.cl/XMLSchema">
+ *    <SII:RESP_BODY>
+ *     <TIPO_DOCTO>33</TIPO_DOCTO><INFORMADOS>22</INFORMADOS><ACEPTADOS>22</ACEPTADOS><RECHAZADOS>0</RECHAZADOS><REPAROS>0</REPAROS>
+ *     <TIPO_DOCTO>56</TIPO_DOCTO><INFORMADOS>2</INFORMADOS><ACEPTADOS>2</ACEPTADOS><RECHAZADOS>0</RECHAZADOS><REPAROS>0</REPAROS>
+ *     <TIPO_DOCTO>61</TIPO_DOCTO><INFORMADOS>6</INFORMADOS><ACEPTADOS>3</ACEPTADOS><RECHAZADOS>0</RECHAZADOS><REPAROS>3</REPAROS>
+ *    </SII:RESP_BODY>
+ *    <SII:RESP_HDR>
+ *     <TRACKID>0253081988</TRACKID><ESTADO>EPR</ESTADO><GLOSA>Envio Procesado</GLOSA><NUM_ATENCION>...</NUM_ATENCION>
+ *    </SII:RESP_HDR>
+ *   </SII:RESPUESTA>
+ *
+ * TRES COSAS QUE MANDAN SOBRE EL PARSEO, Y QUE NO SE DEDUCEN DE NINGUN XSD:
+ *
+ *   1. RESP_BODY VIENE PRIMERO. Por eso ESTADO y GLOSA se buscan DENTRO de
+ *      RESP_HDR y no en todo el documento: hoy funciona porque este RESP_BODY no
+ *      tiene ningun <ESTADO>, pero depender de eso es depender de que el SII no
+ *      agregue un campo.
+ *
+ *   2. LOS BLOQUES SON PLANOS. No hay contenedor por tipo: son cinco etiquetas
+ *      que se repiten en secuencia. Ver parsearEstadistica() para por que eso
+ *      obliga a agrupar por TIPO_DOCTO y no a "leer los cuatro siguientes".
+ *
+ *   3. NO HAY FOLIOS. El SII dice CUANTOS rechazo, no CUALES.
+ *
+ * OJO, el XSD que NO describe esto: docs/29_Schema_XML_Respuesta_SII_Envios/
+ * RespSII_v10.xsd es la RespuestaEnvio del INTERCAMBIO -- la que un receptor le
+ * manda al emisor --, no el cuerpo de getEstUp. Sus nombres (TIPODOC, INFORMADO,
+ * ACEPTA) no calzan con los de arriba y promete un REVISIONENVIO con folios que
+ * aqui no llega. Queda anotado para que nadie vuelva a confundirlos.
  */
 final class SiiConsultor
 {
@@ -42,7 +81,7 @@ final class SiiConsultor
     }
 
     /**
-     * @return array{estado: string, glosa: string, raw: string}
+     * @return array{estado: string, glosa: string, estadistica: list<EstadisticaEnvioSii>, raw: string}
      */
     public function consultarEnvio(
         string $rutEmisor,
@@ -70,11 +109,153 @@ final class SiiConsultor
         $innerXml = $this->extraerXmlInterno($raw, 'getEstUpReturn');
         $doc      = $this->cargarXmlSeguro($innerXml);
 
+        // ESTADO y GLOSA ACOTADOS A RESP_HDR. Antes se buscaban en todo el
+        // documento con getElementsByTagName(...)->item(0), y el orden de los
+        // bloques lo decidia todo. Si RESP_HDR no viniera, se cae al documento
+        // entero: es exactamente lo que se hacia hasta hoy, asi que ninguna
+        // respuesta que funcionaba antes deja de funcionar ahora.
+        $hdr = $this->primerElementoLocal($doc, 'RESP_HDR');
+
         return [
-            'estado' => $this->primerTexto($doc, 'ESTADO'),
-            'glosa'  => $this->primerTexto($doc, 'GLOSA'),
-            'raw'    => $raw,
+            'estado'      => $this->textoEn($hdr, $doc, 'ESTADO'),
+            'glosa'       => $this->textoEn($hdr, $doc, 'GLOSA'),
+            'estadistica' => $this->parsearEstadistica($doc),
+            'raw'         => $raw,
         ];
+    }
+
+    /**
+     * Los contadores por tipo de documento del RESP_BODY.
+     *
+     * POR QUE NO SIRVE "ITERAR TIPO_DOCTO Y LEER LOS CUATRO SIGUIENTES"
+     * -------------------------------------------------------------------------
+     * Los bloques son planos, sin contenedor. Si a un bloque le faltara un campo,
+     * leer por posicion haria que el bloque se comiera el TIPO_DOCTO del
+     * siguiente y TODO lo que viene despues quedaria corrido un lugar. Un solo
+     * campo ausente convertiria la respuesta entera en numeros equivocados --
+     * numeros que ademas parecerian validos.
+     *
+     * Aqui se agrupa POR ETIQUETA, no por posicion: se recorren los hijos de
+     * RESP_BODY en orden, un TIPO_DOCTO ABRE un bloque nuevo y cierra el
+     * anterior, y cada contador conocido rellena el hueco que le corresponde en
+     * el bloque abierto. Un campo que falta queda en null y muere DENTRO de su
+     * bloque: el siguiente empieza limpio en su propio TIPO_DOCTO.
+     *
+     * Un valor no numerico ("", "N/A", basura) se trata igual que uno ausente.
+     * No se convierte a 0: un 0 diria "no hubo rechazos", que es una afirmacion
+     * que no podemos hacer sobre algo que no pudimos leer.
+     *
+     * Sin RESP_BODY -- los sobres que no son EPR no lo traen -- devuelve [].
+     *
+     * @return list<EstadisticaEnvioSii>
+     */
+    private function parsearEstadistica(DOMDocument $doc): array
+    {
+        $body = $this->primerElementoLocal($doc, 'RESP_BODY');
+        if ($body === null) {
+            return [];
+        }
+
+        $campos = [
+            'INFORMADOS' => 'informados',
+            'ACEPTADOS'  => 'aceptados',
+            'RECHAZADOS' => 'rechazados',
+            'REPAROS'    => 'reparos',
+        ];
+
+        $bloques = [];
+        $actual  = null;
+
+        foreach ($body->childNodes as $nodo) {
+            if (! $nodo instanceof DOMElement) {
+                continue;
+            }
+            $etiqueta = $nodo->localName;
+
+            if ($etiqueta === 'TIPO_DOCTO') {
+                if ($actual !== null) {
+                    $bloques[] = $actual;
+                }
+                $actual = [
+                    'tipoDocto'  => $this->enteroONull($nodo->textContent),
+                    'informados' => null,
+                    'aceptados'  => null,
+                    'rechazados' => null,
+                    'reparos'    => null,
+                ];
+                continue;
+            }
+
+            // Un contador ANTES del primer TIPO_DOCTO no tiene bloque al que
+            // pertenecer. Se descarta en vez de inventarle uno: adivinar de que
+            // tipo es seria peor que perderlo.
+            if ($actual === null || ! isset($campos[$etiqueta])) {
+                continue;
+            }
+            $actual[$campos[$etiqueta]] = $this->enteroONull($nodo->textContent);
+        }
+
+        if ($actual !== null) {
+            $bloques[] = $actual;
+        }
+
+        return array_map(
+            static fn (array $b): EstadisticaEnvioSii => new EstadisticaEnvioSii(
+                $b['tipoDocto'],
+                $b['informados'],
+                $b['aceptados'],
+                $b['rechazados'],
+                $b['reparos'],
+            ),
+            $bloques,
+        );
+    }
+
+    /**
+     * Primer elemento cuyo NOMBRE LOCAL sea $local, tenga el prefijo que tenga.
+     *
+     * Los bloques que interesan vienen como <SII:RESP_HDR> y <SII:RESP_BODY>, con
+     * prefijo. getElementsByTagName('RESP_HDR') los encuentra igual en PHP
+     * -- compara contra el nombre local de libxml --, pero de eso no hay ninguna
+     * prueba en este repo: todas las etiquetas que el codigo busca hoy (ESTADO,
+     * GLOSA, TOKEN, SEMILLA) van SIN prefijo, asi que nadie ejercito nunca ese
+     * camino. Y si esa suposicion fuera falsa, el fallo seria del peor tipo
+     * posible: cero bloques, cero rechazados, y un sobre sucio pasando por bueno
+     * exactamente igual que antes de esta entrega, sin ningun error a la vista.
+     *
+     * Recorrer con '*' y comparar localName no supone nada. El documento tiene
+     * decenas de nodos, no miles.
+     */
+    private function primerElementoLocal(DOMDocument $doc, string $local): ?DOMElement
+    {
+        foreach ($doc->getElementsByTagName('*') as $el) {
+            if ($el instanceof DOMElement && $el->localName === $local) {
+                return $el;
+            }
+        }
+
+        return null;
+    }
+
+    /** Entero no negativo, o null si el texto no es exactamente eso. */
+    private function enteroONull(string $texto): ?int
+    {
+        $t = trim($texto);
+
+        return $t !== '' && ctype_digit($t) ? (int) $t : null;
+    }
+
+    /** Texto de $tag dentro de $ambito; si no hay ambito, en todo el documento. */
+    private function textoEn(?DOMElement $ambito, DOMDocument $doc, string $tag): string
+    {
+        if ($ambito !== null) {
+            $node = $ambito->getElementsByTagName($tag)->item(0);
+            if ($node !== null) {
+                return trim((string) $node->textContent);
+            }
+        }
+
+        return $this->primerTexto($doc, $tag);
     }
 
     /**

@@ -1960,6 +1960,7 @@ function consultarEstadoSiiDte(array $tenant, int $tipoDte, int $folio): never
     // como "Sin estado" en el panel. Ver RegistroVeredictoSii::normalizar().
     $estadoNuevo = RegistroVeredictoSii::normalizar($res['estado']);
     $glosaNueva  = $res['glosa'] !== '' ? $res['glosa'] : null;
+    $estadistica = $res['estadistica'];
 
     // FAN-OUT: el veredicto es del SOBRE, asi que se escribe en TODAS las filas
     // que comparten el track_id, no solo en la que se pidio.
@@ -1979,17 +1980,32 @@ function consultarEstadoSiiDte(array $tenant, int $tipoDte, int $folio): never
         (string) $trackId,
         $estadoNuevo,
         $glosaNueva,
+        $estadistica,
     );
 
+    // EPR NO ES ACEPTADO, Y LA RESPUESTA TIENE QUE PODER DECIRLO. Devolver solo
+    // 'estado' obligaria a quien consuma esta API a repetir la interpretacion
+    // por su cuenta -- que es como se llego a que un EPR con rechazos adentro
+    // pasara por bueno. 'motivo' viene ya clasificado y los contadores crudos
+    // van al lado para que se pueda mostrar el "3 de 6" sin recalcular nada.
     responder(200, [
-        'tipoDte'    => $tipoDte,
-        'folio'      => $folio,
-        'trackId'    => (string) $trackId,
-        'estado'     => $estadoNuevo,
-        'glosa'      => $glosaNueva,
+        'tipoDte'     => $tipoDte,
+        'folio'       => $folio,
+        'trackId'     => (string) $trackId,
+        'estado'      => $estadoNuevo,
+        'glosa'       => $glosaNueva,
+        'motivo'      => RegistroVeredictoSii::motivoAviso($estadoNuevo, $estadistica),
+        'estadistica' => array_map(static fn ($b): array => [
+            'tipoDocto'  => $b->tipoDocto,
+            'informados' => $b->informados,
+            'aceptados'  => $b->aceptados,
+            'rechazados' => $b->rechazados,
+            'reparos'    => $b->reparos,
+            'completo'   => $b->completo(),
+        ], $estadistica),
         // Cuantos documentos del sobre quedaron actualizados con este veredicto.
         // Es la senal visible de que el fan-out ocurrio; el panel la muestra.
-        'documentos' => $documentosDelSobre,
+        'documentos'  => $documentosDelSobre,
     ]);
 }
 

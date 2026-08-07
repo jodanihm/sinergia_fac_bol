@@ -4,7 +4,8 @@ declare(strict_types=1);
 
 /**
  * Consulta al SII el veredicto de los envios que todavia no lo tienen, y avisa
- * por correo cuando un sobre vuelve rechazado.
+ * por correo cuando un sobre vuelve rechazado O cuando vuelve "procesado" pero
+ * con documentos rechazados adentro.
  *
  * USO:
  *   php scripts/consultar_veredictos_pendientes.php [--dry-run] [--tope=N]
@@ -55,6 +56,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use GuzzleHttp\Client;
 use Plantiflex\FacturacionCl\Correo\BrevoMailer;
+use Plantiflex\FacturacionCl\Dto\EstadisticaEnvioSii;
 use Plantiflex\FacturacionCl\Enums\Ambiente;
 use Plantiflex\FacturacionCl\Sii\RegistroVeredictoSii;
 use Plantiflex\FacturacionCl\Sii\SiiAutenticador;
@@ -200,32 +202,69 @@ function soltarCandado(PDO $pdo): void
 }
 
 /**
- * Cuerpo del aviso de rechazo. Texto plano dentro de un <pre>: lo lee alguien
- * que tiene que actuar rapido, no es una comunicacion al cliente.
+ * Cuerpo del aviso. Texto plano dentro de un <pre>: lo lee alguien que tiene que
+ * actuar rapido, no es una comunicacion al cliente.
  *
- * @param list<array{tipo_dte:int, folio:int}> $documentos
+ * DOS CASOS, Y EL SEGUNDO ES EL CONFUSO. Un sobre RECHAZADO se entiende solo. Un
+ * sobre EPR con documentos rechazados adentro trae la palabra "procesado" en el
+ * estado, que es la que todo el mundo lee como "salio bien", asi que el cuerpo
+ * empieza diciendo que NO alcanza con mirar el estado y pone los contadores del
+ * SII arriba de todo.
+ *
+ * @param list<array{tipo_dte:int, folio:int}>              $documentos
+ * @param list<EstadisticaEnvioSii>                         $estadistica
  */
-function cuerpoAviso(array $sobre, string $estado, ?string $glosa, array $documentos): string
-{
+function cuerpoAviso(
+    array $sobre,
+    string $estado,
+    ?string $glosa,
+    array $documentos,
+    string $motivo,
+    array $estadistica,
+): string {
     $lineas = [];
     foreach ($documentos as $d) {
         $lineas[] = sprintf('  tipo %d  folio %d', $d['tipo_dte'], $d['folio']);
     }
 
-    return '<p><strong>El SII rechazo un envio.</strong></p><pre>'
+    $contadores = [];
+    foreach ($estadistica as $b) {
+        $contadores[] = '  ' . $b->resumen();
+    }
+    $bloqueContadores = $contadores === []
+        ? '  (el SII no devolvio contadores para este sobre)'
+        : implode("\n", $contadores);
+
+    $titular = $motivo === RegistroVeredictoSii::AVISO_SOBRE_RECHAZADO
+        ? 'El SII rechazo un envio.'
+        : 'El SII proceso el envio, pero NO acepto todo lo que iba adentro.';
+
+    $aclaracion = $motivo === RegistroVeredictoSii::AVISO_SOBRE_RECHAZADO
+        ? '<p>Los folios de estos documentos ya se consumieron. Revisa el detalle '
+            . 'en el panel y corrige antes de reemitir.</p>'
+        : '<p><strong>El estado del sobre es ' . htmlspecialchars($estado) . ', que NO quiere decir aceptado.</strong> '
+            . 'Los contadores de arriba son lo que hay que mirar.</p>'
+            . '<p>El SII informa CUANTOS documentos rechazo u observo por tipo, pero <strong>no cuales</strong>. '
+            . 'Para saber el folio exacto hay que revisarlos en el portal del SII. Por eso mismo estos '
+            . 'documentos <strong>siguen sumando</strong> en los totales del panel: descontar el bloque '
+            . 'entero restaria tambien los documentos buenos del mismo tipo.</p>';
+
+    return '<p><strong>' . $titular . '</strong></p><pre>'
         . htmlspecialchars(sprintf(
-            "Emisor    : %s\nAmbiente  : %s\nTrack ID  : %s\nEstado    : %s\nGlosa     : %s\nDocumentos: %d\n\n%s",
+            "Emisor    : %s\nAmbiente  : %s\nTrack ID  : %s\nEstado    : %s\nGlosa     : %s\nMotivo    : %s\n\n"
+            . "Contadores del SII por tipo:\n%s\n\nDocumentos del sobre (%d):\n%s",
             $sobre['rut_emisor'],
             $sobre['ambiente'],
             $sobre['track_id'],
             $estado,
             $glosa ?? '(el SII no devolvio glosa)',
+            RegistroVeredictoSii::glosaMotivo($motivo),
+            $bloqueContadores,
             count($documentos),
             implode("\n", $lineas),
         ))
         . '</pre>'
-        . '<p>Los folios de estos documentos ya se consumieron. Revisa el detalle '
-        . 'en el panel y corrige antes de reemitir.</p>';
+        . $aclaracion;
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +493,10 @@ $consultados = 0;
 $rechazados  = 0;
 $fallidos    = 0;
 $sinAviso    = 0;
+// Sobres cuyo ESTADO era bueno y cuyo CONTENIDO no. Se cuentan aparte porque son
+// los que hasta hoy pasaban por buenos: si el resumen los sumara con los
+// rechazos de sobre, no se veria que el agujero existia.
+$eprConProblemas = 0;
 $tiempoAgotado = false;
 
 foreach ($sobres as $s) {
@@ -485,29 +528,23 @@ foreach ($sobres as $s) {
         continue;
     }
 
-    $estado = RegistroVeredictoSii::normalizar($res['estado']);
-    $glosa  = trim($res['glosa']) !== '' ? trim($res['glosa']) : null;
+    $estado      = RegistroVeredictoSii::normalizar($res['estado']);
+    $glosa       = trim($res['glosa']) !== '' ? trim($res['glosa']) : null;
+    $estadistica = $res['estadistica'];
 
-    RegistroVeredictoSii::persistir($pdo, $rut, $ambStr, $trackId, $estado, $glosa);
+    RegistroVeredictoSii::persistir($pdo, $rut, $ambStr, $trackId, $estado, $glosa, $estadistica);
     $consultados++;
 
-    // LA RESPUESTA CRUDA AL LOG, SIN PARSEAR.
+    // EL RAW YA NO SE ESCRIBE. Estuvo aqui para una sola cosa: acumular
+    // respuestas reales de getEstUp, que no teniamos, y diseñar el parseo sobre
+    // ellas. Ya cumplio -- el parseo existe (SiiConsultor::parsearEstadistica) y
+    // la respuesta que lo definio esta citada en su docblock, que es donde
+    // sirve. Lo que va al log ahora es lo parseado: un XML de una linea en un log
+    // de cron no lo lee nadie, y los contadores si.
     //
-    // Es el motivo por el que esta linea existe: no tenemos ni una sola
-    // respuesta real de getEstUp: los unicos ejemplos del repo son fixtures
-    // sinteticos con el RESP_BODY vacio, y ningun documento del SII en docs/
-    // describe ese cuerpo. Los contadores de EPR (informados / aceptados /
-    // rechazados / reparos) NO SE PARSEAN EN ESTA ENTREGA justamente por eso:
-    // adivinar nombres de campos produciria ceros que se leerian como "0
-    // rechazados", que es peor que no tener el dato.
-    //
-    // El plan es acumular respuestas reales aqui y diseñar el parseo sobre
-    // ellas. Ver RegistroVeredictoSii: el canal de BOLETAS ya lee esos
-    // contadores (BoletaConsultor::resumir) e incluso bloquea anulaciones con
-    // ellos, asi que el dato existe; la asimetria es solo nuestra.
-    //
-    // Mientras tanto vale repetirlo aqui, donde se lee el log: EPR NO SIGNIFICA
-    // ACEPTADO. Quiere decir que el SII termino de procesar el sobre.
+    // Los dos scripts de mano (consultar_estado_envio.php,
+    // consultar_estado_dte.php) siguen imprimiendo el crudo, y esta bien: los
+    // corre una persona que esta mirando.
     linea(sprintf(
         'sobre %-12s %s %-13s estado=%s docs=%d glosa=%s',
         $trackId,
@@ -517,10 +554,30 @@ foreach ($sobres as $s) {
         $nDocs,
         $glosa ?? '-'
     ));
-    linea('  RAW ' . preg_replace('/\s+/', ' ', trim($res['raw'])));
+    foreach ($estadistica as $bloque) {
+        linea('  ' . $bloque->resumen());
+    }
 
-    if (! RegistroVeredictoSii::esRechazo($estado)) {
+    // DOS PUERTAS AL MISMO AVISO, Y LA SEGUNDA ES LA NUEVA. motivoAviso() mira
+    // las dos y devuelve cual fue:
+    //
+    //   el ESTADO       el sobre entero volvio rechazado. Es la que existia.
+    //   los CONTADORES  el sobre dice EPR y adentro hay documentos rechazados,
+    //                   con reparos, o un bloque que no se pudo leer. Es la que
+    //                   faltaba: sin ella, un EPR con RECHAZADOS 1 seguia de
+    //                   largo, y ya hay dos casos asi en produccion.
+    //
+    // Sigue saliendo UN aviso por sobre y UNA sola vez, sin columna "ya avise":
+    // al persistir EPR el sobre deja de cumplir el WHERE de pendientes, igual
+    // que antes.
+    $motivo = RegistroVeredictoSii::motivoAviso($estado, $estadistica);
+    if ($motivo === RegistroVeredictoSii::AVISO_NINGUNO) {
         continue;
+    }
+    if ($motivo !== RegistroVeredictoSii::AVISO_SOBRE_RECHAZADO) {
+        $eprConProblemas++;
+        linea(sprintf('  *** %s: el estado es %s pero el sobre NO esta limpio ***',
+            RegistroVeredictoSii::glosaMotivo($motivo), $estado));
     }
 
     $rechazados++;
@@ -552,10 +609,19 @@ foreach ($sobres as $s) {
             $stmtDocs->fetchAll(PDO::FETCH_ASSOC)
         );
 
+        // EL ASUNTO DISTINGUE LOS DOS CASOS. Antes todos decian "Envio
+        // RECHAZADO"; si un EPR con rechazos adentro llegara con ese mismo
+        // asunto, el que de verdad hay que abrir se leeria como uno mas.
         $resp = $mailer->enviar(
             destinatarioEmail: $avisoEmail,
-            asunto:            sprintf('[SII] Envio RECHAZADO (%s) - %s track %s', $estado, $rut, $trackId),
-            htmlCuerpo:        cuerpoAviso($s, $estado, $glosa, $documentos),
+            asunto:            sprintf(
+                '[SII] %s (%s) - %s track %s',
+                RegistroVeredictoSii::glosaMotivo($motivo),
+                $estado,
+                $rut,
+                $trackId
+            ),
+            htmlCuerpo:        cuerpoAviso($s, $estado, $glosa, $documentos, $motivo, $estadistica),
         );
 
         $ok = $resp['status'] >= 200 && $resp['status'] < 300;
@@ -599,10 +665,12 @@ if ($sinAviso > 0) {
 }
 
 linea(sprintf(
-    'RESUMEN consultados=%d rechazados=%d fallidos=%d sin_aviso=%d sobres_restantes=%d '
+    'RESUMEN consultados=%d rechazados=%d (de_los_cuales_epr_con_problemas=%d) fallidos=%d '
+    . 'sin_aviso=%d sobres_restantes=%d '
     . '(tope=%d ventana=%dd fuera_de_ventana=%d tiempo=%ds)',
     $consultados,
     $rechazados,
+    $eprConProblemas,
     $fallidos,
     $sinAviso,
     $restantes,
