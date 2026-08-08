@@ -61,6 +61,44 @@ declare(strict_types=1);
  * ellas mas que por el arreglo que recibe en agregar().
  *
  *
+ * LA PAGINA ES A4, NO LETTER, Y NADIE LO SABIA
+ * -----------------------------------------------------------------------------
+ * MEDIDO, no leido: $pdf->getPageHeight() devuelve 297,00 y $pdf->getScaleFactor()
+ * 2,834646. O sea A4 (210 x 297 mm), no Letter (215,9 x 279,4).
+ *
+ * Y NO ES LO QUE PIDE EL CODIGO. La cadena de constructores es:
+ *
+ *   DtePdfDocumento::__construct()  -> parent::__construct()  (sin argumentos)
+ *   sasco\LibreDTE\PDF::__construct($o='P', $u='mm', $s='Letter', $top=8)
+ *   TCPDF::__construct($o, $u, 'Letter', ...)
+ *
+ * TCPDF resuelve el formato con TCPDF_STATIC::getPageSizeFromFormat(), que es
+ * esto entero (tcpdf_static.php:2514):
+ *
+ *   if (isset(self::$page_formats[$format])) { return self::$page_formats[$format]; }
+ *   return self::$page_formats['A4'];
+ *
+ * Un isset() SENSIBLE A MAYUSCULAS y un fallback mudo. La clave del arreglo es
+ * 'LETTER' (tcpdf_static.php:2273); lo que llega es 'Letter'. No coincide, cae a
+ * A4, y no se entera nadie. Es un defecto de LibreDTE de 2015 que arrastramos
+ * junto con el resto de la clase.
+ *
+ * QUE INVALIDA ESTO, porque no es anecdotico:
+ *
+ *   - El salto de pagina automatico esta en 297-25 = 272 mm, no en 254,4.
+ *   - El borde derecho util es 210-15 = 195 mm, no 200,9. Y el codigo dibuja los
+ *     totales en x=200 y la tabla hasta x=200 (addTableWithoutEmptyCols usa
+ *     190 desde x=10), o sea 5 mm DENTRO del margen derecho. MultiTexto con w=0
+ *     ajusta a 195, no a 200,9.
+ *   - Cualquier calculo de presupuesto vertical hecho sobre 279,4 estaba corrido
+ *     17,6 mm.
+ *
+ * NO SE ARREGLA AQUI. Pasar el formato a 'LETTER' cambiaria el tamaño de papel
+ * de TODOS los documentos y el reflujo de todos: es una decision de producto --
+ * y hay una certificacion en vuelo cuyas muestras impresas salen de este mismo
+ * renderizador. Queda medido y escrito; cambiarlo es una entrega propia.
+ *
+ *
  * EL TIMBRE NO SE TOCA
  * -----------------------------------------------------------------------------
  * agregarTimbre() queda identico. El PDF417 no lo genera LibreDTE sino TCPDF
@@ -200,14 +238,47 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
         $this->AddPage();
         // agregar cabecera del documento
         $this->agregarEmisor($dte['Encabezado']['Emisor']);
+
+        // DONDE TERMINA DE VERDAD EL BLOQUE DEL EMISOR. Se captura AQUI, antes
+        // de agregarFolio(), porque ese metodo mueve el cursor por su cuenta
+        // (dibuja el recuadro rojo y la unidad del SII usando getY()).
+        //
+        // agregarEmisor() YA dejaba esta Y -- sus cuatro MultiTexto encadenan
+        // uno debajo del otro -- y hasta hoy se tiraba: el setY(50) de mas abajo
+        // la descartaba sin mirarla.
+        $finEmisor = $this->getY();
+
         $this->agregarFolio(
             $dte['Encabezado']['Emisor']['RUTEmisor'],
             $dte['Encabezado']['IdDoc']['TipoDTE'],
             $dte['Encabezado']['IdDoc']['Folio'],
             $dte['Encabezado']['Emisor']['CmnaOrigen']
         );
+
         // datos del documento
-        $this->setY(50);
+        //
+        // EL BLOQUE DE ABAJO FLUYE, YA NO ARRANCA EN UNA COORDENADA FIJA.
+        //
+        // Era setY(50) a secas, y con eso se montaba. Caso real: la factura
+        // exenta folio 675 de 78225195-3, cuya razon social -- "SOCIEDAD DE
+        // PROFESIONALES ROSAS Y VILLAR LIMITADA", 48 caracteres a Bold 20 -- se
+        // partia en CUATRO lineas al haber logo, el bloque del emisor crecia
+        // hasta y~57 y el giro y la direccion quedaban encima de las etiquetas
+        // Emision, Venta y Señor(es).
+        //
+        // El logo era el detonante, no la causa: la causa es que un bloque que
+        // crece con los datos del cliente estaba seguido de otro clavado en una
+        // constante. Cualquier razon social larga lo rompe, con logo o sin el.
+        //
+        // EL MINIMO DE 50 ES LO QUE PRESERVA LA INERCIA: un documento cuyo
+        // emisor termina antes de 50 -- todos los que hoy salen bien -- toma el
+        // 50 de siempre y no cambia ni un operador de dibujo. Solo se mueve lo
+        // que hoy esta roto.
+        //
+        // No se suma ningun margen: MultiTexto deja el cursor en el BORDE
+        // INFERIOR de la celda, no en la linea base, asi que la separacion
+        // visual ya viene dada por el alto de celda.
+        $this->setY(max(50, $finEmisor));
         $this->agregarFechaEmision($dte['Encabezado']['IdDoc']['FchEmis']);
         if (!empty($dte['Encabezado']['IdDoc']['FmaPago']))
             $this->agregarCondicionVenta($dte['Encabezado']['IdDoc']['FmaPago']);
@@ -252,6 +323,24 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
         if (isset($this->logo)) {
             $this->Image($this->logo, $x, $y, $w_img, 0, 'PNG', (isset($emisor['url'])?$emisor['url']:''), 'T');
             $x = $this->x+3;
+
+            // EL ANCHO SE QUEDA EN 75, Y SE PROBO SUBIRLO. No lo repitas.
+            //
+            // Con logo el texto arranca en x=43 y el recuadro del folio empieza
+            // en x=130, o sea que sobre el papel hay 87 mm y se usan 75. La
+            // cuenta invitaba a subirlo a 85 para recuperar un 13% de ancho y
+            // que la razon social del caso real -- "SOCIEDAD DE PROFESIONALES
+            // ROSAS Y VILLAR LIMITADA", 48 caracteres a Bold 20 -- bajara de 4
+            // lineas a 3.
+            //
+            // SE MIDIO Y NO PASA NADA: con 75 y con 85 salen las MISMAS cuatro
+            // lineas, con los cortes de palabra en los mismos sitios. A ese
+            // cuerpo las palabras son tan largas que 10 mm no alcanzan para
+            // subir ninguna al renglon anterior.
+            //
+            // Asi que subirlo no demuestra beneficio y SI cambia el reflujo de
+            // todos los documentos con logo: pierde la inercia a cambio de nada.
+            // Se revirtio.
         } else {
             $this->y = $y-2;
             $w += 40;
@@ -500,6 +589,35 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
      * @param y Posición vertical de inicio en el PDF
      * @author Esteban De La Fuente Rubio, DeLaF (esteban[at]sasco.cl)
      * @version 2015-09-22
+     *
+     * ------------------------------------------------------------------------
+     * DEFECTO CONOCIDO Y NO ARREGLADO: UNA TABLA LARGA SE DIBUJA ENCIMA DEL
+     * ACUSE DE RECIBO Y DEL TIMBRE.
+     *
+     * Esta tabla FLUYE hacia abajo sin tope propio. El unico corte que existe es
+     * el salto de pagina automatico de TCPDF, que con margen inferior 25 cae en
+     * y = 297 - 25 = 272 mm. (297 y no 279,4: la pagina es A4, ver el docblock
+     * de la clase. Este comentario decia 254,4 y estaba corrido 17,6 mm.) Pero
+     * el mobiliario de abajo esta en coordenadas FIJAS y mucho mas arriba:
+     *
+     *   agregarTimbre()        x=20  y=190
+     *   agregarAcuseRecibo()   x=93  y=190, alto 40  (hasta y=230)
+     *   agregarTotales()       setY(190)
+     *
+     * O sea que entre y=190 y y=254 la tabla y el mobiliario comparten papel, y
+     * gana el que se dibuje despues. Con lineas de ~4 mm, una tabla que arranque
+     * en y~81 llega a 190 alrededor de la fila 27.
+     *
+     * NO SE ARREGLA AQUI, y es deliberado: la solucion pasa por paginar el
+     * detalle -- repitiendo cabecera y moviendo el mobiliario a la ultima pagina
+     * -- y eso es una entrega propia, no una linea. Queda escrito para que el
+     * proximo que lea esto no tenga que descubrirlo con un documento real
+     * encima.
+     *
+     * ES ANTERIOR AL BLOQUE QUE FLUYE: no lo introdujo el setY(max(50, ...)) de
+     * agregar(). Ese cambio acerca el techo unos 9 mm en el peor caso medido; el
+     * defecto ya estaba.
+     * ------------------------------------------------------------------------
      */
     private function agregarDetalle($detalle, $x = 10)
     {
