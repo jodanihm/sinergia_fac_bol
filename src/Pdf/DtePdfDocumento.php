@@ -346,7 +346,7 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
             $w += 40;
         }
         // agregar datos del emisor
-        $this->setFont('', 'B', 20);
+        $this->setFont('', 'B', $this->tamanoRazonSocial((string) $emisor['RznSoc'], $w));
         $this->SetTextColorArray([32, 92, 144]);
         $this->MultiTexto($emisor['RznSoc'], $x, $this->y+2, 'L', $w);
         $this->setFont('', 'B', 9);
@@ -364,6 +364,84 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
             $contacto[] = $emisor['CorreoEmisor'];
         if ($contacto)
             $this->MultiTexto(implode(' / ', $contacto), $x, $this->y, 'L', $w);
+    }
+
+    /**
+     * Tamaños de fuente candidatos para la razon social, del mayor al menor.
+     *
+     * EMPIEZA EN 20 PORQUE ES EL DE SIEMPRE: un nombre que hoy entra en el
+     * maximo de lineas a 20 pt se dibuja EXACTAMENTE igual que antes de esta
+     * entrega -- misma fuente, mismo flujo, ni un operador de diferencia.
+     *
+     * TERMINA EN 14 Y NO EN 12, y el motivo es normativo, no estetico. El SII
+     * exige que la razon social vaya "completa y destacada respecto del giro y
+     * las direcciones", que se dibujan a 9 pt. Es una exigencia RELATIVA, sin
+     * tamaño concreto, asi que lo que hay que poder defender es la jerarquia:
+     *
+     *   14 / 9 = 1,56x   se lee como otro nivel de titulo
+     *   12 / 9 = 1,33x   se empieza a leer como enfasis del mismo nivel
+     *
+     * 12 pt habria comprado una linea en el caso con logo (49 caracteres en 75
+     * mm), pero a costa del unico argumento que sostiene el cumplimiento. La
+     * restriccion que manda es la del SII, no la del hueco.
+     *
+     * @var list<int>
+     */
+    private const RZN_SOC_TAMANOS = [20, 18, 16, 14];
+
+    /**
+     * MAXIMO DE LINEAS al que se intenta ajustar la razon social.
+     *
+     * DOS, porque es lo que hace un membrete: a 20 pt dos lineas ocupan unos
+     * 17,6 mm y el bloque entero del emisor cabe holgado sobre el arranque del
+     * bloque de abajo. Las cuatro lineas del caso real ocupaban 35 mm y son las
+     * que se comian media hoja.
+     */
+    private const RZN_SOC_MAX_LINEAS = 2;
+
+    /**
+     * Tamaño de fuente para la razon social: el MAYOR que entre en el maximo de
+     * lineas, con piso en el ultimo candidato.
+     *
+     * SE MIDE, NO SE CUENTAN CARACTERES. "IIII" y "WWWW" tienen el mismo largo y
+     * miden distinto; y el ancho disponible no es fijo -- son 115 mm sin logo y
+     * 75 con logo --, asi que el MISMO nombre necesita tamaños distintos segun
+     * el documento. Se usa getNumLines(), que es la propia logica de salto de
+     * linea de TCPDF: la misma que va a aplicar MultiCell al dibujar. No una
+     * aproximacion.
+     *
+     * NO ESCRIBE NADA EN EL FLUJO. setFont() con $out=false fija las propiedades
+     * de la fuente sin emitir el operador Tf, y al terminar se restaura la que
+     * estaba. Es el mismo mecanismo que usa TCPDF internamente en
+     * GetArrStringWidth() (tcpdf.php:4137-4160). Si se midiera con setFont()
+     * normal, cada medicion dejaria un Tf en el flujo y la inercia se perderia
+     * incluso para los documentos que no cambian de tamaño.
+     *
+     * SI NINGUN CANDIDATO ENTRA, se usa el mas chico y se aceptan las lineas que
+     * hagan falta. NUNCA se recorta el nombre: el SII lo exige COMPLETO, y un
+     * nombre truncado es un defecto de correccion, no de estetica.
+     *
+     * @param float|int $w ancho disponible en mm (115 sin logo, 75 con logo)
+     */
+    private function tamanoRazonSocial($texto, $w)
+    {
+        $previo = [$this->FontFamily, $this->FontStyle, $this->FontSizePt];
+        $elegido = null;
+
+        foreach (self::RZN_SOC_TAMANOS as $pt) {
+            // $out=false: no emite Tf, solo fija las propiedades para medir.
+            $this->setFont($this->FontFamily, 'B', $pt, '', 'default', false);
+            if ($this->getNumLines($texto, $w) <= self::RZN_SOC_MAX_LINEAS) {
+                $elegido = $pt;
+                break;
+            }
+        }
+
+        // Restaurar, tambien sin emitir: la llamada real a setFont la hace el
+        // caller con el tamaño devuelto, y tiene que ser la UNICA del flujo.
+        $this->setFont($previo[0], $previo[1], $previo[2], '', 'default', false);
+
+        return $elegido ?? self::RZN_SOC_TAMANOS[count(self::RZN_SOC_TAMANOS) - 1];
     }
 
     /**
