@@ -1,0 +1,146 @@
+# docker-compose.vps.yml -- sinergia_fac_bol (VPS)
+#
+# Ningun valor de secreto vive aqui. Los 5 archivos sensibles estan en la raiz
+# de este directorio, en 600 root:root, ignorados por git:
+#   sinergia.env, mysql.env      -> entran por env_file
+#   key.pem, fullchain.pem       -> mount :ro a la raiz de /app
+#                                   (scripts/*.php: __DIR__ . '/../{key,fullchain}.pem')
+#   .rcv_internal_key            -> mount :ro a /app/.rcv_internal_key
+#                                   (public/index.php:305, ruta literal)
+#
+# El unico puerto publicado en todo el stack es 127.0.0.1:8086 (panel), que
+# consume cloudflared. MySQL y el motor no son alcanzables desde fuera de
+# sinergia_net. Esto es deliberado: en este VPS la cadena DOCKER-USER esta
+# vacia, asi que cualquier puerto publicado en 0.0.0.0 se salta ufw y queda
+# expuesto a internet.
+name: sinergia_fac
+
+services:
+  # ── MySQL — solo red interna, sin puerto publicado ────────────
+  mysql:
+    image: mysql:8.0
+    container_name: sinergia_mysql
+    restart: unless-stopped
+    env_file:
+      - mysql.env
+    environment:
+      TZ: America/Santiago
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=-04:00
+    volumes:
+      - sinergia_mysql_data:/var/lib/mysql
+    networks: [sinergia_net]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    mem_limit: 1g
+    memswap_limit: 1g
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ── Motor — API interna, sin puerto publicado ─────────────────
+  motor:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.motor
+    image: sinergia_motor:latest
+    container_name: sinergia_motor
+    restart: unless-stopped
+    working_dir: /app                    # /app/.rcv_internal_key es ruta fija
+    env_file:
+      - sinergia.env
+    environment:
+      DB_HOST: sinergia_mysql
+      DB_PORT: 3306
+      TZ:      America/Santiago
+    volumes:
+      - ./key.pem:/app/key.pem:ro
+      - ./fullchain.pem:/app/fullchain.pem:ro
+      - ./.rcv_internal_key:/app/.rcv_internal_key:ro
+      # LibreDTE: no esta en git ni en la imagen. Va por mount para que la
+      # dependencia externa sea visible aqui; si estuviera en la imagen, un
+      # rebuild tras un clone limpio la produciria sin LibreDTE y sin avisar.
+      # Lo cargan src/Pdf/DtePdfGenerator.php:177 y BoletaPdfGenerator.php:154
+      # con un spl_autoload_register propio sobre /app/oracle/LibreDTE-master/lib.
+      - ./oracle:/app/oracle:ro
+      - sinergia_debug:/app/debug        # dumps de envio (SII_DUMP_ENVIO=1)
+    depends_on:
+      mysql: { condition: service_healthy }
+    networks:
+      sinergia_net:
+      facturacion_bus:
+        aliases: [facturacion]
+    # El motor responde 404 JSON a "/" (public/index.php:487). Cualquier codigo
+    # HTTP sirve como senal de vida; "000" significa que no hubo conexion.
+    healthcheck:
+      test: ["CMD-SHELL", "test \"$$(curl -s -o /dev/null -w '%{http_code}' http://localhost/)\" != \"000\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: 768m
+    memswap_limit: 768m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ── Panel — nginx + php-fpm, unico puerto, solo loopback ──────
+  panel:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.panel
+    image: sinergia_panel:latest
+    container_name: sinergia_panel
+    restart: unless-stopped
+    working_dir: /app
+    env_file:
+      - sinergia.env
+    environment:
+      DB_HOST:   sinergia_mysql
+      DB_PORT:   3306
+      MOTOR_URL: http://sinergia_motor
+      TZ:        America/Santiago
+    volumes:
+      - ./key.pem:/app/key.pem:ro
+      - ./fullchain.pem:/app/fullchain.pem:ro
+      - ./.rcv_internal_key:/app/.rcv_internal_key:ro
+      # El panel lo necesita por MuestrasImpresasZipBuilder -> DtePdfGenerator
+      # (panel/public/index.php:7810). InformePdf NO: usa TCPDF de vendor/.
+      - ./oracle:/app/oracle:ro
+      - sinergia_debug:/app/debug
+    ports:
+      - "127.0.0.1:8086:80"              # SOLO loopback — lo consume cloudflared
+    depends_on:
+      mysql: { condition: service_healthy }
+      motor: { condition: service_started }
+    networks: [sinergia_net]
+    healthcheck:
+      test: ["CMD-SHELL", "test \"$$(curl -s -o /dev/null -w '%{http_code}' http://localhost/)\" != \"000\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # 4 workers php-fpm x 192M = 768M en el peor caso (ver zz-workers.conf).
+    mem_limit: 768m
+    memswap_limit: 768m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+networks:
+  sinergia_net:
+    name: sinergia_net
+    driver: bridge
+
+  facturacion_bus:
+    name: facturacion_bus
+    external: true
+volumes:
+  sinergia_mysql_data:
+  sinergia_debug:

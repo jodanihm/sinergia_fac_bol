@@ -1,0 +1,66 @@
+# .dockerignore -- sinergia_fac_bol
+#
+# CRITICO: sin este archivo, el "COPY . /app" de los Dockerfile hornea los
+# secretos dentro de la imagen. Una imagen es distribuible y sus capas son
+# legibles con "docker save": un .pem ahi dentro es un .pem publicado.
+# Los secretos llegan en runtime por mount :ro y env_file, nunca por COPY.
+
+# --- Secretos (espejo del .gitignore, por si acaso) ---
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.cer
+*.der
+.crypto_master_key
+.crypto_master_key.*
+.rcv_internal_key
+.fact_api_key
+.env
+*.env
+!.env.example
+
+# --- Git y metadatos ---
+.git
+.gitignore
+.graphifyignore
+.claude
+
+# --- Dependencias regeneradas en el build ---
+vendor/
+composer.lock
+
+# --- LibreDTE: entra por bind mount :ro, no por la imagen ---
+# No esta versionado (nunca estuvo en git, ver .gitignore:71 /oracle/), asi que
+# meterlo en la imagen daria una imagen que parece autocontenida pero que un
+# rebuild tras un clone limpio produciria vacia. Fuente de verdad unica: el
+# directorio del host montado por docker-compose.vps.yml.
+oracle/
+
+# --- Infra: no se necesita dentro de la imagen ---
+docker-compose.yml
+docker-compose.vps.yml
+Dockerfile.php
+.dockerignore
+
+# --- Desarrollo y pruebas ---
+tests/
+phpunit.xml
+.phpunit.cache/
+.phpunit.result.cache
+coverage/
+.idea/
+.vscode/
+
+# --- Artefactos locales ---
+debug/
+*.log
+*.bak
+*.bak_*
+*.backup
+*.old
+*.orig
+*.swp
+*.swo
+*~
