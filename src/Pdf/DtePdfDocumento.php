@@ -5,8 +5,9 @@ declare(strict_types=1);
 /**
  * FORK de sasco\LibreDTE\Sii\PDF\Dte (LibreDTE, SASCO SpA, LGPL v3+).
  *
- * Copia literal de esa clase -- 534 lineas de 2015 -- con UN solo cambio de
- * conducta: agregarTotales() dibuja los impuestos adicionales. Todo lo demas
+ * Copia literal de esa clase -- 534 lineas de 2015 -- con DOS cambios de
+ * conducta: agregarTotales() dibuja los impuestos adicionales, y agregar()
+ * dibuja la fecha de vencimiento cuando el documento la trae. Todo lo demas
  * queda como estaba, incluidos los comentarios y la autoria originales.
  *
  * LibreDTE es software libre bajo LGPL v3 o posterior; esta obra derivada
@@ -79,6 +80,13 @@ declare(strict_types=1);
  * operadores de dibujo), que es estable entre corridas. Un documento sin
  * impuesto adicional tiene que producir el mismo flujo que producia la clase
  * original: la rama nueva ni siquiera se entra.
+ *
+ * LOS DOS CAMBIOS CUMPLEN ESE CRITERIO por la misma razon: cada uno vive detras
+ * de un if sobre un dato que puede no venir -- ImptoReten en los totales, FchVenc
+ * en el IdDoc --, asi que un documento que no lo trae recorre exactamente el
+ * mismo camino que antes. Por eso NO se agrego el monto total en palabras, que
+ * era la otra candidata: se calcula desde MntTotal, que existe SIEMPRE, o sea
+ * que habria cambiado el flujo del 100% de los documentos.
  *
  * Esto importa mas que de costumbre porque hay una certificacion en vuelo sin
  * aprobar y las MUESTRAS IMPRESAS salen de este mismo renderizador
@@ -203,6 +211,8 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
         $this->agregarFechaEmision($dte['Encabezado']['IdDoc']['FchEmis']);
         if (!empty($dte['Encabezado']['IdDoc']['FmaPago']))
             $this->agregarCondicionVenta($dte['Encabezado']['IdDoc']['FmaPago']);
+        if (!empty($dte['Encabezado']['IdDoc']['FchVenc']))
+            $this->agregarFechaVencimiento($dte['Encabezado']['IdDoc']['FchVenc']);
         $this->agregarReceptor($dte['Encabezado']['Receptor']);
         if (!empty($dte['Referencia']))
             $this->agregarReferencia($dte['Referencia']);
@@ -369,6 +379,57 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
         $this->Texto('Venta', $x);
         $this->Texto(':', $x+22);
         $this->MultiTexto($this->formas_pago[$condicion_venta], $x+26);
+    }
+
+    /**
+     * Fecha de vencimiento del documento (tag FchVenc del XML).
+     *
+     * SEGUNDO METODO AGREGADO RESPECTO DEL ORIGINAL de 2015 -- el otro es
+     * glosaImpuesto(). El resto de la clase sigue siendo copia literal.
+     *
+     * COPIA EL PATRON DE agregarCondicionVenta(), a proposito y linea por linea:
+     * misma columna izquierda (x=10), misma sangria de la etiqueta y los dos
+     * puntos (x+22 y x+26), y una LINEA MAS del bloque que ya fluye desde
+     * setY(50). Va inmediatamente despues de la condicion de venta porque
+     * "Credito" sin fecha de vencimiento es media frase.
+     *
+     * POR QUE NO EN LA COLUMNA DERECHA, que es donde la pone LibreDTE comercial:
+     * porque esa zona NO esta libre. MultiTexto() se llama con w=0 y en TCPDF eso
+     * significa "hasta el margen derecho" (x=200,9 en Letter), asi que las cajas
+     * de Señor(es), Giro y Direccion ya se extienden hasta ahi y una razon social
+     * larga envuelve dentro de ellas. Seria el mismo choque que ya costo una
+     * cascada de candidatas en glosaImpuesto(), pero contra un dato del cliente
+     * -- o sea imposible de acotar de antemano. La restriccion de esta linea es
+     * VERTICAL: consume alto del tramo que va de y=50 a y=190, compartido con el
+     * receptor, las referencias y la tabla de detalle.
+     *
+     * ETIQUETA "Vence" Y NO "Vencimiento": entre la etiqueta y los dos puntos hay
+     * 22 mm, y a Helvetica Bold 10 -- la fuente activa en este punto --
+     * "Vencimiento" no entra. Ninguna etiqueta de este bloque pasa de 9
+     * caracteres ('Señor(es)', 'Direccion', 'Referenc.'); esta tiene 5, como
+     * 'Venta'.
+     *
+     * FORMATO dd-mm-aaaa Y NO ISO: lo lee el receptor del documento, no un
+     * sistema. Mismo criterio y mismo formato que ya se uso en el cuerpo del
+     * correo de envio.
+     *
+     * INERTE: se llama desde dentro de un if sobre el propio dato, igual que
+     * agregarCondicionVenta(). Un documento sin FchVenc -- todos los anteriores
+     * al 01-08-2026 y todas las boletas, que no llevan el campo -- no entra aqui
+     * y no emite ni un operador de dibujo.
+     *
+     * @param fecha Fecha de vencimiento en formato AAAA-MM-DD
+     * @param x Posición horizontal de inicio en el PDF
+     */
+    private function agregarFechaVencimiento($fecha, $x = 10)
+    {
+        // Si la fecha no fuera interpretable se imprime cruda: una fecha rara a
+        // la vista es mejor que una linea vacia o que un 01-01-1970.
+        $unixtime = strtotime((string) $fecha);
+        $texto = $unixtime !== false ? date('d-m-Y', $unixtime) : (string) $fecha;
+        $this->Texto('Vence', $x);
+        $this->Texto(':', $x+22);
+        $this->MultiTexto($texto, $x+26);
     }
 
     /**
