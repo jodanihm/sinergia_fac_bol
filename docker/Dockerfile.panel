@@ -1,0 +1,72 @@
+# docker/Dockerfile.panel -- sinergia_fac_bol
+#
+# Panel web: php-fpm + nginx en el mismo contenedor via supervisord.
+# Este es el cambio #1 de la migracion: reemplaza al "php -S" de un solo hilo
+# del NAS, que no es aceptable sirviendo trafico real de internet.
+#
+# Extensiones y OpenSSL legacy son identicos al motor y al Dockerfile.php del
+# NAS. Lo unico que cambia es la base (fpm en vez de cli) y el frontal.
+FROM php:8.2-fpm
+
+RUN docker-php-ext-install pdo_mysql
+
+# Ver docker/Dockerfile.motor para el detalle de por que zip y gd.
+# nginx + supervisor son propios del panel; curl es para el healthcheck.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         libzip-dev libpng-dev curl nginx supervisor \
+    && docker-php-ext-install zip gd \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# Timezone Chile para TODO proceso PHP. Sin esto cae a UTC y las emisiones
+# nocturnas (despues de ~20:00 CL) salen con fecha del dia siguiente.
+RUN printf "date.timezone=America/Santiago\n" > "$PHP_INI_DIR/conf.d/zz-timezone.ini"
+
+# OpenSSL 3 "legacy" provider: sin esto, openssl_pkcs12_read() falla con un
+# "invalid password" enganoso al leer certificados .pfx/.p12 del SII cifrados
+# con RC2/3DES (la mayoria de los emitidos), porque OpenSSL 3 desactiva esos
+# algoritmos por defecto. Activa AMBOS proveedores (default + legacy).
+COPY docker/openssl-legacy.cnf /etc/ssl/openssl-legacy.cnf
+ENV OPENSSL_CONF=/etc/ssl/openssl-legacy.cnf
+
+# Limites de PHP. memory_limit alto por PhpSpreadsheet (carga masiva .xlsx);
+# max_execution_time alto porque la emision contra el SII puede tardar.
+RUN printf "memory_limit=192M\nmax_execution_time=300\nupload_max_filesize=32M\npost_max_size=32M\n" \
+    > "$PHP_INI_DIR/conf.d/zz-limites.ini"
+
+# Workers de php-fpm acotados a proposito: 4 x 192M = 768M en el peor caso,
+# que es exactamente el mem_limit del contenedor. El default de la imagen
+# (pm.max_children=5, sin techo de memoria por worker) desbordaria el limite
+# y el kernel mataria el contenedor bajo carga.
+RUN printf "[www]\npm = dynamic\npm.max_children = 4\npm.start_servers = 2\npm.min_spare_servers = 1\npm.max_spare_servers = 3\npm.max_requests = 500\nclear_env = no\n" \
+    > /usr/local/etc/php-fpm.d/zz-workers.conf
+
+# nginx: fuera el sitio default de Debian, entra el nuestro.
+RUN rm -f /etc/nginx/sites-enabled/default /etc/nginx/conf.d/default.conf
+COPY docker/nginx-panel.conf      /etc/nginx/conf.d/panel.conf
+COPY docker/supervisord-panel.conf /etc/supervisor/conf.d/panel.conf
+
+WORKDIR /app
+
+# Dependencias primero, en su propia capa (ver nota en Dockerfile.motor sobre
+# la ausencia de composer.lock y lo que eso implica para la reproducibilidad).
+COPY composer.json ./
+RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
+
+# Codigo. Los secretos NO entran aqui: los excluye .dockerignore y llegan en
+# runtime por mount :ro y env_file.
+COPY . /app
+
+# Ver la nota extensa en docker/Dockerfile.motor: composer.json declara
+# Plantiflex\Integration\Facturacion\ (integration/plantiflex/) bajo
+# autoload-dev, pero es codigo de produccion. El panel lo necesita igual que
+# el motor -- panel/public/index.php:80 reutiliza el motor via este autoloader.
+RUN composer dump-autoload --optimize --dev --no-interaction
+
+RUN chown -R www-data:www-data /app/panel
+
+EXPOSE 80
+
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/supervisord.conf"]

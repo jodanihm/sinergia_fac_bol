@@ -1,0 +1,81 @@
+# docker/Dockerfile.motor -- sinergia_fac_bol
+#
+# Motor DTE: API HTTP interna, sin puerto publicado. Solo el panel le habla,
+# por DNS de la red sinergia_net. No lleva nginx: replica el arranque que ya
+# corre en el NAS (php -S sobre public/), como quedo acordado.
+#
+# Base y extensiones son las mismas del Dockerfile.php del NAS. Los bloques
+# de zip/gd y de OpenSSL legacy se conservan textualmente porque son los dos
+# que ya nos costaron caro: gd por el build, y el legacy provider porque sin
+# el, openssl_pkcs12_read() falla al leer los .pfx del SII con un
+# "invalid password" enganoso.
+FROM php:8.2-cli
+
+RUN docker-php-ext-install pdo_mysql
+
+# Extension zip (clase ZipArchive): la imagen base NO la trae. Necesaria para
+# empaquetar las muestras impresas (Set Basico + Simulacion) en un solo ZIP
+# descargable desde el panel (ver src/Pdf/MuestrasImpresasZipBuilder.php), y
+# tambien la usa PhpSpreadsheet internamente (un .xlsx es un ZIP).
+# docker-php-ext-install la compila desde el .so del sistema: requiere
+# libzip-dev en tiempo de build (Debian, imagen base de php:8.2-cli).
+# Extension gd: requerida por phpoffice/phpspreadsheet (M4, carga masiva de
+# notas de venta) para el lector/escritor de .xlsx; libpng-dev es su
+# dependencia de build.
+# curl (binario) se agrega para el healthcheck del contenedor.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libzip-dev libpng-dev curl \
+    && docker-php-ext-install zip gd \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
+# Timezone Chile para TODO proceso PHP (HTTP y CLI). PHP no lee el env TZ para su
+# zona por defecto; la toma de date.timezone. Sin esto cae a UTC y las emisiones
+# nocturnas (despues de ~20:00 CL) salen con fecha del dia siguiente.
+RUN printf "date.timezone=America/Santiago\n" > "$PHP_INI_DIR/conf.d/zz-timezone.ini"
+
+# OpenSSL 3 "legacy" provider: sin esto, openssl_pkcs12_read() falla con un
+# "invalid password" enganoso al leer certificados .pfx/.p12 del SII cifrados
+# con RC2/3DES (la mayoria de los emitidos), porque OpenSSL 3 desactiva esos
+# algoritmos por defecto. Activa AMBOS proveedores (default + legacy) para
+# cualquier proceso OpenSSL de la imagen (incluye el CLI de PHP).
+COPY docker/openssl-legacy.cnf /etc/ssl/openssl-legacy.cnf
+ENV OPENSSL_CONF=/etc/ssl/openssl-legacy.cnf
+
+# Limites de PHP. La emision contra el SII puede tardar decenas de segundos
+# (getSeed + getToken + envio), y PhpSpreadsheet es glotona de memoria.
+RUN printf "memory_limit=256M\nmax_execution_time=300\n" \
+    > "$PHP_INI_DIR/conf.d/zz-limites.ini"
+
+WORKDIR /app
+
+# Dependencias primero, en su propia capa: mientras composer.json no cambie,
+# un cambio de codigo no vuelve a bajar TCPDF/PhpSpreadsheet/Guzzle.
+# OJO: composer.lock esta gitignored en este repo, asi que esto resuelve
+# versiones frescas en cada build -- no es reproducible entre maquinas.
+COPY composer.json ./
+RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
+
+# Codigo. Los secretos NO entran aqui: los excluye .dockerignore y llegan en
+# runtime por mount :ro (key.pem, fullchain.pem, .rcv_internal_key) y por
+# env_file (sinergia.env).
+COPY . /app
+
+# Regenerar el autoloader CON las reglas de autoload-dev, ya con el codigo
+# presente. No es cosmetico: composer.json declara el namespace
+# Plantiflex\Integration\Facturacion\ (integration/plantiflex/) bajo
+# autoload-dev, pero ahi viven CertificadoCrypto y MySqlEmisorRepository, que
+# son codigo de PRODUCCION -- public/index.php:44 los usa para descifrar los
+# certificados del SII. Con el autoloader de --no-dev, class_exists() da false
+# y el motor no puede emitir.
+# Esto NO instala paquetes de desarrollo: las reglas de autoload-dev apuntan a
+# directorios del propio proyecto, no a dependencias. El flag --dev es
+# obligatorio: composer recuerda que el install fue --no-dev y sin el
+# regenera el autoloader igual de incompleto.
+RUN composer dump-autoload --optimize --dev --no-interaction
+
+EXPOSE 80
+
+# Arranque identico al del NAS: servidor embebido de PHP sobre public/.
+CMD ["php", "-S", "0.0.0.0:80", "-t", "public"]
