@@ -28,6 +28,7 @@ use Plantiflex\FacturacionCl\Enums\TipoLibro;
 use Plantiflex\FacturacionCl\Enums\TipoOperacionLibro;
 use Plantiflex\FacturacionCl\Exceptions\EnvioRechazadoException;
 use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
+use Plantiflex\FacturacionCl\Pdf\LogoEmpresa;
 use Plantiflex\FacturacionCl\Pdf\MuestrasImpresasZipBuilder;
 use Plantiflex\FacturacionCl\Providers\BoletaFacturador;
 use Plantiflex\FacturacionCl\Providers\SiiDirectoFacturador;
@@ -5743,6 +5744,16 @@ if ($metodo === 'POST' && $ruta === '/empresa/importar-datos-sii') {
     handleEmpresaImportarDatosSiiPost();
 }
 
+if ($metodo === 'POST' && $ruta === '/empresa/logo') {
+    Auth::requerirSesion();
+    handleEmpresaLogoPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/empresa/logo/quitar') {
+    Auth::requerirSesion();
+    handleEmpresaLogoQuitarPost();
+}
+
 if ($metodo === 'GET' && $ruta === '/empresa/consultar-sii') {
     Auth::requerirSesion();
     handleEmpresaConsultarSiiGet();
@@ -6211,7 +6222,12 @@ function handleEmpresaGet(): void
         ];
     }
 
-    vista('empresa', ['errores' => [], 'emisor' => $emisor]);
+    // Metadatos del logo, SIN traerse el blob: la pantalla solo muestra medidas
+    // y peso. Ver LogoEmpresa::metadatos().
+    $rutLogo = rutEmisorDeLaCuenta($pdo, Auth::cuentaId());
+    $logo    = $rutLogo === null ? null : LogoEmpresa::metadatos($pdo, $rutLogo);
+
+    vista('empresa', ['errores' => [], 'emisor' => $emisor, 'logo' => $logo]);
 }
 
 // ===========================================================================
@@ -6411,6 +6427,102 @@ function mensajeConsultaSii(string $motivo): string
         default => 'El servicio de consulta no respondio. Puedes intentarlo de nuevo en un momento '
             . 'o completar los datos a mano.',
     };
+}
+
+// ===========================================================================
+//  Handler: POST /empresa/logo   (subir)  y  POST /empresa/logo/quitar
+//
+//  MISMO PATRON QUE EL .pfx, y no por simetria: ese camino ya resolvio bien las
+//  dos cosas que importan de una subida. Se comprueba UPLOAD_ERR_OK mas
+//  is_uploaded_file(), y el archivo se lee A MEMORIA desde tmp_name. NUNCA
+//  move_uploaded_file, nunca una copia en disco del servidor: el binario va
+//  derecho de la memoria a la base.
+//
+//  LO QUE ESTE CAMINO AGREGA Y EL DEL .pfx NO TIENE: un limite de tamano. Hoy no
+//  hay NINGUNO en el panel -- ni en el certificado, ni en el CAF, ni en el
+//  archivo del SII --, y no hay php.ini ni configuracion de nginx versionada que
+//  fije upload_max_filesize. Un .pfx invalido lo rechaza openssl_pkcs12_read; un
+//  PNG de 40 MB pasaria cualquier validacion de formato y terminaria en la base
+//  y en CADA PDF que se genere, adjuntos de correo incluidos.
+//
+//  El logo cuelga de rut_emisor SIN AMBIENTE, asi que el RUT se resuelve por la
+//  fila de dte_emisor que exista, sea de certificacion o de produccion: es la
+//  misma empresa y el mismo logo.
+// ===========================================================================
+function rutEmisorDeLaCuenta(PDO $pdo, int $cuentaId): ?string
+{
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor FROM dte_emisor WHERE cuenta_id = :c ORDER BY ambiente LIMIT 1'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    $rut = $stmt->fetchColumn();
+
+    return $rut === false ? null : (string) $rut;
+}
+
+function handleEmpresaLogoPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = rutEmisorDeLaCuenta($pdo, Auth::cuentaId());
+    if ($rutEmisor === null) {
+        flashSet('error', 'Primero tienes que guardar los datos de la empresa.');
+        redirigirPrg('/empresa');
+    }
+
+    $archivo = $_FILES['logo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        // UPLOAD_ERR_INI_SIZE se distingue del resto: ese es el limite de PHP y
+        // no el nuestro, y el usuario no tiene forma de adivinar cual de los dos
+        // lo freno si los dos dicen lo mismo.
+        $codigo = is_array($archivo) ? ($archivo['error'] ?? -1) : -1;
+        flashSet('error', in_array($codigo, [UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE], true)
+            ? 'El archivo supera el limite de subida del servidor. El logo no puede pasar de 512 KB.'
+            : 'Debes seleccionar un archivo PNG valido.');
+        redirigirPrg('/empresa');
+    }
+
+    // A MEMORIA, igual que el .pfx. El temporal de PHP lo descarta PHP.
+    $bytes = file_get_contents($archivo['tmp_name']);
+    if ($bytes === false || $bytes === '') {
+        flashSet('error', 'No se pudo leer el archivo subido.');
+        redirigirPrg('/empresa');
+    }
+
+    [$error, $medidas] = LogoEmpresa::validar($bytes);
+    if ($error !== null) {
+        flashSet('error', $error);
+        redirigirPrg('/empresa');
+    }
+
+    LogoEmpresa::guardar($pdo, $rutEmisor, $bytes, $medidas[0], $medidas[1]);
+    flashSet('ok', sprintf(
+        'Logo cargado (%dx%d pixeles). Aparece en los documentos que emitas de ahora en adelante.',
+        $medidas[0],
+        $medidas[1]
+    ));
+    redirigirPrg('/empresa');
+}
+
+function handleEmpresaLogoQuitarPost(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = rutEmisorDeLaCuenta($pdo, Auth::cuentaId());
+    if ($rutEmisor === null) {
+        redirigirPrg('/empresa');
+    }
+
+    // QUITARLO ES PARTE DEL ALCANCE, no un extra: sin esto, un logo mal subido
+    // se queda para siempre y la unica salida seria tocar la base a mano.
+    $n = LogoEmpresa::borrar($pdo, $rutEmisor);
+    flashSet($n > 0 ? 'ok' : 'error', $n > 0
+        ? 'Logo quitado. Los documentos vuelven a salir sin logo.'
+        : 'No habia ningun logo cargado.');
+    redirigirPrg('/empresa');
 }
 
 // ===========================================================================
@@ -9954,8 +10066,13 @@ function handleMuestrasImpresasPost(): void
         redirigirPrg('/certificacion/muestras-impresas');
     }
 
+    // El logo lo resuelve el PANEL y se lo entrega hecho al builder: el builder
+    // guarda el generador como callable y no tiene PDO ni sabe de que empresa
+    // es. Aqui las dos cosas estan a mano.
+    $logo = LogoEmpresa::paraTcpdf(LogoEmpresa::leer($pdo, $rutEmisor));
+
     try {
-        $resultado = (new MuestrasImpresasZipBuilder())->construir($documentos);
+        $resultado = (new MuestrasImpresasZipBuilder(null, $logo))->construir($documentos);
     } catch (Throwable $e) {
         flashSet('error', 'No se pudieron generar las muestras impresas: ' . $e->getMessage());
         redirigirPrg('/certificacion/muestras-impresas');

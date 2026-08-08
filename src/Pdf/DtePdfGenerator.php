@@ -52,6 +52,18 @@ final class DtePdfGenerator
      * oracle/LibreDTE-master/lib/Sii/EnvioDte.php:317-336). Alcanza con
      * seleccionar el objeto correcto del array ya devuelto.
      *
+     * EL LOGO ES EL QUINTO PARAMETRO, OPCIONAL Y AL FINAL, y esa posicion no es
+     * casual. El logo NO viaja en el XML -- es el unico dato del PDF que no sale
+     * de ahi --, asi que tiene que entrar por la firma. Y tiene que entrar SIN
+     * mover los cuatro anteriores porque MuestrasImpresasZipBuilder no llama a
+     * este metodo por nombre sino que lo guarda como CALLABLE
+     * (Closure::fromCallable en su constructor): cambiar el orden o el tipo de
+     * los parametros existentes romperia esa indireccion en silencio.
+     *
+     * Se espera lo que devuelve LogoEmpresa::paraTcpdf(): los bytes del PNG con
+     * un '@' delante, o null. Null recorre exactamente el camino de siempre.
+     *
+     * @param ?string $logo Bytes del PNG con prefijo '@', o null si no hay.
      * @return string Binario del PDF.
      */
     public function generarDesdeEnvioXml(
@@ -59,6 +71,7 @@ final class DtePdfGenerator
         bool $cedible = false,
         ?int $tipoDte = null,
         ?int $folio = null,
+        ?string $logo = null,
     ): string {
         date_default_timezone_set('America/Santiago');
         error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING);
@@ -104,6 +117,13 @@ final class DtePdfGenerator
         // sasco\LibreDTE\PDF, que solo existe una vez registrado ese autoloader.
         $pdf = new DtePdfDocumento();
         $pdf->setResolucion($resolucion);
+        // Sin logo NO se llama a setLogo(), y eso es lo que mantiene la inercia:
+        // agregarEmisor() decide por isset($this->logo), asi que una empresa sin
+        // logo dibuja exactamente los mismos operadores que antes de esta
+        // entrega. Es el mismo mecanismo del impuesto adicional y del FchVenc.
+        if ($logo !== null && $logo !== '') {
+            $pdf->setLogo($logo);
+        }
         if ($cedible) {
             $pdf->setCedible(true);
         }

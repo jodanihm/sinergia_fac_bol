@@ -8,6 +8,7 @@ use PDO;
 use Plantiflex\FacturacionCl\Enums\TipoDte;
 use Plantiflex\FacturacionCl\Pdf\BoletaPdfGenerator;
 use Plantiflex\FacturacionCl\Pdf\DtePdfGenerator;
+use Plantiflex\FacturacionCl\Pdf\LogoEmpresa;
 use Throwable;
 
 /**
@@ -141,10 +142,19 @@ final class PreparadorEnvio
         }
 
         // --- El PDF, generado en proceso desde ESOS MISMOS BYTES -------------
+        //
+        // El logo es lo UNICO que no sale de esos bytes: no viaja en el XML. Va
+        // en su propia consulta y no en el SELECT de arriba, para no meter un
+        // MEDIUMBLOB en una fila que ya trae el XML entero -- y porque
+        // dte_logo.rut_emisor y dte_emitido.rut_emisor estan en familias de
+        // collation distintas y un JOIN por texto necesitaria COLLATE explicito
+        // (ver la migracion 031).
+        $logo = LogoEmpresa::paraTcpdf(LogoEmpresa::leer($pdo, (string) $fila['rut_emisor']));
+
         try {
             $pdfBytes = $tipoDte === 39
                 ? (new BoletaPdfGenerator())->generarDesdeEnvioXml($xmlBytes, $tipoDte, $folio)
-                : (new DtePdfGenerator())->generarDesdeEnvioXml($xmlBytes, false, $tipoDte, $folio);
+                : (new DtePdfGenerator())->generarDesdeEnvioXml($xmlBytes, false, $tipoDte, $folio, $logo);
         } catch (Throwable $e) {
             return self::no("Fila {$envioId}: fallo la generacion del PDF - " . $e->getMessage(), 'stderr', 3);
         }

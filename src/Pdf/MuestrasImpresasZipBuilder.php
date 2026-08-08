@@ -41,8 +41,22 @@ final class MuestrasImpresasZipBuilder
 
     private Closure $generarPdf;
 
-    /** @param ?callable(string,bool,int,int):string $generarPdf */
-    public function __construct(?callable $generarPdf = null)
+    /**
+     * EL LOGO ENTRA POR EL CONSTRUCTOR, no por construir().
+     *
+     * Es el llamador incomodo de los tres: el generador se guarda como CALLABLE,
+     * asi que este objeto no puede leer el logo por su cuenta -- no tiene PDO ni
+     * sabe de que empresa se trata. Quien si lo sabe es el handler del panel, que
+     * ya tiene $pdo y $rutEmisor a mano, asi que se lo pasa hecho.
+     *
+     * Va en el constructor y no en construir() porque el logo es de la EMPRESA y
+     * un ZIP de muestras es siempre de UNA empresa: ponerlo por documento
+     * permitiria armar un ZIP con logos distintos, que no significa nada.
+     *
+     * @param ?callable(string,bool,int,int,?string):string $generarPdf
+     * @param ?string $logo Lo que devuelve LogoEmpresa::paraTcpdf(), o null.
+     */
+    public function __construct(?callable $generarPdf = null, private readonly ?string $logo = null)
     {
         $this->generarPdf = Closure::fromCallable(
             $generarPdf ?? [new DtePdfGenerator(), 'generarDesdeEnvioXml']
@@ -84,7 +98,11 @@ final class MuestrasImpresasZipBuilder
                     $d['folio']
                 );
 
-                $pdf    = ($this->generarPdf)($d['xml'], false, $d['tipoDte'], $d['folio']);
+                // El quinto argumento va SIEMPRE, tambien cuando es null. PHP
+                // ignora los argumentos de mas en una funcion de usuario, asi que
+                // el generador FALSO de los tests -- declarado con cuatro
+                // parametros -- sigue funcionando sin tocarlo.
+                $pdf    = ($this->generarPdf)($d['xml'], false, $d['tipoDte'], $d['folio'], $this->logo);
                 $nombre = $nombreBase . '.pdf';
                 $zip->addFromString($nombre, $pdf);
                 $archivos[] = [
@@ -93,7 +111,7 @@ final class MuestrasImpresasZipBuilder
                 ];
 
                 if (in_array($d['tipoDte'], self::TIPOS_CON_CEDIBLE, true)) {
-                    $pdfCedible    = ($this->generarPdf)($d['xml'], true, $d['tipoDte'], $d['folio']);
+                    $pdfCedible    = ($this->generarPdf)($d['xml'], true, $d['tipoDte'], $d['folio'], $this->logo);
                     $nombreCedible = $nombreBase . '_cedible.pdf';
                     $zip->addFromString($nombreCedible, $pdfCedible);
                     $archivos[] = [

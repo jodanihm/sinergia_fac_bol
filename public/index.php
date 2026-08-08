@@ -46,6 +46,7 @@ use Plantiflex\FacturacionCl\Exceptions\EnvioRechazadoException;
 use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
 use Plantiflex\FacturacionCl\Pdf\BoletaPdfGenerator;
 use Plantiflex\FacturacionCl\Pdf\DtePdfGenerator;
+use Plantiflex\FacturacionCl\Pdf\LogoEmpresa;
 use Plantiflex\FacturacionCl\Exceptions\ConsultaContribuyenteException;
 use Plantiflex\FacturacionCl\Providers\ApiGatewayContribuyente;
 use Plantiflex\FacturacionCl\Providers\BoletaFacturador;
@@ -2031,13 +2032,19 @@ function pdfDte(array $tenant, int $tipoDte, int $folio): never
 
     $cedible = ($_GET['cedible'] ?? '') === '1';
 
+    // EL LOGO NO VIENE DEL XML: es el unico dato del PDF que hay que ir a
+    // buscar. Se lee por rut_emisor -- la clave de dte_logo, sin ambiente --, y
+    // si la empresa no tiene, paraTcpdf() devuelve null y el render es el de
+    // siempre. Boleta no lo usa: su renderizador es propio y de otro tamano.
+    $logo = LogoEmpresa::paraTcpdf(LogoEmpresa::leer(pdo(), $rutEmisor));
+
     try {
         // Boleta (39): renderizador propio A5, no pasa por DtePdfGenerator/Sii\PDF\Dte
         // (esa clase asume layout A4, ver BoletaPdfGenerator.php). "cedible" no aplica
         // a boleta (concepto de factoring de factura), se ignora si viene.
         $pdf = $tipoDte === 39
             ? (new BoletaPdfGenerator())->generarDesdeEnvioXml($xml)
-            : (new DtePdfGenerator())->generarDesdeEnvioXml($xml, $cedible, $tipoDte, $folio);
+            : (new DtePdfGenerator())->generarDesdeEnvioXml($xml, $cedible, $tipoDte, $folio, $logo);
     } catch (Throwable $e) {
         responder(500, ['error' => 'fallo la generacion del PDF', 'detalle' => $e->getMessage()]);
     }

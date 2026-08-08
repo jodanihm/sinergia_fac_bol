@@ -168,7 +168,8 @@ function huellaClavePrimaria(PDO $pdo, string $tabla, array $columnas): int
 }
 
 // -----------------------------------------------------------------------------
-//  LAS 23 MIGRACIONES Y SUS HUELLAS.
+//  LAS MIGRACIONES Y SUS HUELLAS.  (decia "las 23" y ya iban 29; el numero se
+//  quita para que no vuelva a quedar viejo cada vez que se agrega una)
 //
 //  Una entrada por migracion. 'huellas' es una lista; cada una se evalua y
 //  aporta un "presente / esperado". El veredicto sale de cuantas huellas
@@ -335,6 +336,26 @@ const MIGRACIONES = [
         'id' => '029', 'archivo' => '029_usuario_demo.sql', 'nota' => 'ALTER (1 tabla)',
         'huellas' => [
             ['tipo' => 'columnas', 'desc' => 'usuario.demo', 'tabla' => 'usuario', 'columnas' => ['demo'], 'esperado' => 1],
+        ],
+    ],
+    [
+        // Las CUATRO columnas van en un solo ALTER bajo una sola guarda, igual
+        // que la 028: una huella con las cuatro alcanza.
+        'id' => '030', 'archivo' => '030_dte_emitido_contadores_sii.sql', 'nota' => 'ALTER (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'dte_emitido.sii_*', 'tabla' => 'dte_emitido',
+             'columnas' => ['sii_informados', 'sii_aceptados', 'sii_rechazados', 'sii_reparos'], 'esperado' => 4],
+        ],
+    ],
+    [
+        // DOS huellas y no una: la tabla puede existir sin su UNIQUE si alguien
+        // la creo a mano, y ese UNIQUE es lo que garantiza UN logo por empresa.
+        // Ademas se comprueba que NO tenga columna ambiente: el logo es de la
+        // empresa, y si apareciera ahi seria otra tabla distinta de esta.
+        'id' => '031', 'archivo' => '031_dte_logo.sql', 'nota' => 'CREATE (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'dte_logo', 'tablas' => ['dte_logo'], 'esperado' => 1],
+            ['tipo' => 'indice', 'desc' => 'uk_logo_emisor', 'tabla' => 'dte_logo', 'indice' => 'uk_logo_emisor'],
         ],
     ],
 ];

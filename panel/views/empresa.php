@@ -190,4 +190,62 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     </div>
 </form>
 
+<?php
+// EL LOGO VA FUERA DEL <form> DE ARRIBA, y no por gusto: HTML no permite
+// formularios anidados, y este necesita enctype multipart mientras que el de los
+// datos de la empresa no. Son dos envios distintos a dos rutas distintas.
+//
+// $logo puede no estar definido: handleEmpresaPost() re-renderiza esta vista
+// cuando la validacion falla y no pasa esa clave. Se resuelve aqui en vez de
+// tocar ese handler, que no tiene nada que ver con el logo.
+$logo = $logo ?? null;
+?>
+<section class="tarjeta" aria-labelledby="titulo-logo">
+    <h2 id="titulo-logo">Logo de la empresa</h2>
+    <p class="dash-subtitulo">
+        Se imprime arriba a la izquierda de tus facturas, notas de credito y notas
+        de debito, al lado de la razon social. Es opcional: sin logo el documento
+        sale exactamente como hasta ahora.
+    </p>
+
+    <?php if ($logo !== null): ?>
+        <p class="alerta alerta--ok" role="status">
+            <span class="alerta__icono" aria-hidden="true">&#10003;</span>
+            <span>
+                Tienes un logo cargado:
+                <strong><?= (int) $logo['ancho_px']; ?>&times;<?= (int) $logo['alto_px']; ?></strong> pixeles,
+                <strong><?= number_format((int) $logo['bytes'] / 1024, 0, ',', '.'); ?> KB</strong>.
+                Actualizado el <?= htmlspecialchars(date('d-m-Y', strtotime((string) $logo['updated_at']))); ?>.
+            </span>
+        </p>
+    <?php endif; ?>
+
+    <form method="post" action="/empresa/logo" enctype="multipart/form-data" class="form-compacto">
+        <?= csrfInput(); ?>
+        <div class="form-campo form-campo--ancho">
+            <label for="logo">Archivo PNG</label>
+            <input type="file" name="logo" id="logo" accept="image/png" required>
+            <small class="form-ayuda">
+                Solo PNG, hasta 512 KB. Se dibuja a 30 mm de ancho, asi que no necesita
+                mas resolucion: unos 400 pixeles de ancho alcanzan y sobran. Si subes
+                uno nuevo, reemplaza al anterior.
+            </small>
+        </div>
+        <div class="acciones-grupo">
+            <button type="submit" class="boton-principal">
+                <?= $logo !== null ? 'Reemplazar logo' : 'Subir logo'; ?>
+            </button>
+        </div>
+    </form>
+
+    <?php if ($logo !== null): ?>
+        <form method="post" action="/empresa/logo/quitar" class="form-compacto">
+            <?= csrfInput(); ?>
+            <div class="acciones-grupo">
+                <button type="submit" class="boton-texto">Quitar el logo</button>
+            </div>
+        </form>
+    <?php endif; ?>
+</section>
+
 <?php require __DIR__ . '/partials/footer.php'; ?>
