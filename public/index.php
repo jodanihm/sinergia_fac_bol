@@ -59,6 +59,7 @@ use Plantiflex\Integration\Facturacion\MySqlIdempotenciaRepository;
 use Plantiflex\Integration\Facturacion\MySqlLibroRepository;
 use Plantiflex\FacturacionCl\Sii\BoletaAutenticador;
 use Plantiflex\FacturacionCl\Sii\BoletaConsultor;
+use Plantiflex\FacturacionCl\Sii\DocumentoDelSobre;
 use Plantiflex\FacturacionCl\Sii\ImpuestoAdicional;
 use Plantiflex\FacturacionCl\Sii\LibroService;
 use Plantiflex\FacturacionCl\Sii\RcvConsultor;
@@ -2217,15 +2218,28 @@ function anularDte(array $tenant, int $tipoDte, int $folio): never
  */
 function reconstruirOriginal(string $envioXml, int $tipoDte, int $folio): DocumentoOriginal
 {
-    $dom  = new DOMDocument();
-    $prev = libxml_use_internal_errors(true);
-    $dom->loadXML($envioXml);
-    libxml_use_internal_errors($prev);
+    // SE UBICA EL DOCUMENTO, NO SE TOMA EL PRIMERO DEL SOBRE.
+    //
+    // El xml persistido es el EnvioDTE COMPLETO. Esta funcion leia con
+    // getElementsByTagNameNS(...)->item(0) sobre el documento entero, asi que
+    // reconstruia el receptor, la fecha y los montos del PRIMER documento del
+    // sobre -- y el foreach de Detalle recorria los de TODOS, o sea que la nota
+    // de credito de anulacion salia con las lineas de los treinta documentos.
+    //
+    // En produccion hay ocho sobres de lote: seis de veinte documentos tipo 34,
+    // uno de siete y uno de cuatro. 136 documentos con el defecto armado. NO
+    // llego a dispararse por una casualidad: el tipo 34 esta fuera de
+    // TIPOS_PERMITIDOS_ANULAR por otro motivo, y no hay ni un tipo 33 emitido
+    // en lote. El bloqueo del 34 estaba protegiendo esto sin que nadie lo
+    // supiera.
+    //
+    // Las tres guardas -- vacio, ilegible, ausente -- y el criterio de busqueda
+    // viven en DocumentoDelSobre, compartidos con SiiDirectoFacturador, que
+    // tenia este MISMO error escrito por separado en datosConsultaDte().
+    $documento = DocumentoDelSobre::ubicar($envioXml, $tipoDte, $folio);
 
-    $txt = static function (string $tag) use ($dom): string {
-        $n = $dom->getElementsByTagNameNS(NS_SII, $tag)->item(0);
-        return $n !== null ? trim($n->textContent) : '';
-    };
+    // AMBITO: el <Documento> ubicado. Es todo el arreglo.
+    $txt = static fn (string $tag): string => DocumentoDelSobre::texto($documento, $tag);
 
     $receptor = new Receptor(
         rut: $txt('RUTRecep'),
@@ -2235,12 +2249,11 @@ function reconstruirOriginal(string $envioXml, int $tipoDte, int $folio): Docume
         comuna: ($c = $txt('CmnaRecep')) !== '' ? $c : null,
     );
 
+    // SOLO LOS Detalle DE ESTE DOCUMENTO. Es la linea que mas dano hacia: un
+    // foreach sobre el sobre entero le metia a la NC las lineas de sus hermanos.
     $detalles = [];
-    foreach ($dom->getElementsByTagNameNS(NS_SII, 'Detalle') as $det) {
-        $hijo = static function (string $tag) use ($det): string {
-            $n = $det->getElementsByTagNameNS(NS_SII, $tag)->item(0);
-            return $n !== null ? trim($n->textContent) : '';
-        };
+    foreach (DocumentoDelSobre::detalles($documento) as $det) {
+        $hijo = static fn (string $tag): string => DocumentoDelSobre::texto($det, $tag);
         $detalles[] = new Detalle(
             $hijo('NmbItem'),
             (float) ($hijo('QtyItem') ?: '1'),
@@ -2251,6 +2264,30 @@ function reconstruirOriginal(string $envioXml, int $tipoDte, int $folio): Docume
 
     $fch = $txt('FchEmis');
 
+    // EL CANARIO DEL TOTAL VIVE AQUI, NO EN EL DTO.
+    //
+    // DocumentoOriginal exigia montoTotal > 0 como sintoma de reconstruccion
+    // rota. Esa regla prohibia un valor VALIDO: una nota de correccion de texto
+    // lleva MntTotal 0 por diseño, y en produccion hay cinco (tipo 56 folios 12
+    // y 13, tipo 61 folios 37, 38 y 39). Se relajo a >= 0.
+    //
+    // Pero el canario no se tira: se mueve al unico sitio donde se puede
+    // distinguir "el elemento no vino" de "vale cero", que es sobre el TEXTO
+    // CRUDO. Al DTO las dos cosas le llegan como int 0 y no puede separarlas.
+    //
+    // Un <Totales> sin MntTotal no lo emite este sistema -- buildTotales()
+    // siempre lo escribe, y es el unico hijo obligatorio del XSD -- asi que si
+    // aparece, el XML no es de una emision nuestra y no hay nada que anular.
+    $totalCrudo = $txt('MntTotal');
+    if ($totalCrudo === '') {
+        throw new RuntimeException(sprintf(
+            'El documento tipo %d folio %d no trae MntTotal en el XML persistido: '
+            . 'no se puede reconstruir para anular ni referenciar.',
+            $tipoDte,
+            $folio,
+        ));
+    }
+
     return new DocumentoOriginal(
         tipoDte:      TipoDte::from($tipoDte),
         folio:        $folio,
@@ -2259,7 +2296,7 @@ function reconstruirOriginal(string $envioXml, int $tipoDte, int $folio): Docume
         detalles:     $detalles,
         montoNeto:    (int) ($txt('MntNeto') ?: '0'),
         iva:          (int) ($txt('IVA') ?: '0'),
-        montoTotal:   (int) ($txt('MntTotal') ?: '0'),
+        montoTotal:   (int) $totalCrudo,
     );
 }
 
