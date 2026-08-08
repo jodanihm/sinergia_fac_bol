@@ -42,13 +42,39 @@ declare(strict_types=1);
  * indistinguible de una creada por su migracion. Sirve para decidir que falta,
  * no como bitacora de lo que paso.
  *
+ * DIFERIDA A PROPOSITO NO ES LO MISMO QUE SE ME OLVIDO
+ * -----------------------------------------------------------------------------
+ * Una migracion puede estar sin aplicar PORQUE ASI SE DECIDIO. La 023 lleva
+ * semanas asi: solo se aplica cuando no queden nulos y el codigo nuevo lleve
+ * tiempo en produccion. Hasta hoy esa intencion vivia SOLO en la cabecera de su
+ * .sql -- un archivo que este script nombra pero nunca abre --, asi que para el
+ * codigo era indistinguible de un descuido y forzaba exit 1.
+ *
+ * Enganchar eso a un despliegue habria abortado TODOS los deploys para siempre.
+ *
+ * Por eso la entrada de una migracion puede llevar la clave 'diferida' con el
+ * MOTIVO. Es un string y no un booleano a proposito: obliga a escribir por que.
+ * Con un true la marca se pone en dos segundos y nadie recuerda la razon seis
+ * semanas despues, que es exactamente como se llego a esta situacion.
+ *
+ * Lo que una marca de diferida NO hace: silenciar. Una diferida sale siempre en
+ * la salida, en su propio bloque y con su motivo. Callarla seria peor que el
+ * problema que resuelve.
+ *
  * USO
  *   php scripts/estado_migraciones.php
  *
  * SALIDA
- *   0  las 23 aplicadas
- *   1  falta alguna (NO_APLICADA o PARCIAL)
+ *   0  todas aplicadas, o las que faltan estan TODAS marcadas como diferidas
+ *   1  falta alguna SIN marcar, o hay alguna PARCIAL (marcada o no)
  *   2  no se pudo conectar o falta configuracion
+ *
+ * PARCIAL ABORTA AUNQUE ESTE DIFERIDA. Diferida significa "todavia no la
+ * corrimos", no "la corrimos a medias": una diferida a medio aplicar es un
+ * estado que nadie decidio y que ningun archivo describe.
+ *
+ * (El resumen no lleva el numero total escrito a mano: decia "las 23" cuando ya
+ * iban 31.)
  */
 
 // -----------------------------------------------------------------------------
@@ -285,6 +311,15 @@ const MIGRACIONES = [
     ],
     [
         'id' => '023', 'archivo' => '023_dte_folio_proximo_inicial_not_null.sql', 'nota' => 'ALTER (misma columna que la 022)',
+        // DIFERIDA A PROPOSITO, no olvidada. El razonamiento completo -- las dos
+        // condiciones que hay que cumplir y por que la migracion se partio en
+        // dos -- esta en la cabecera de 023_dte_folio_proximo_inicial_not_null.sql,
+        // que es donde corresponde y donde se mantiene. Aqui va lo justo para
+        // que el verificador sepa que su ausencia no es un descuido.
+        'diferida' => 'Se aplica SOLO cuando no queden nulos en dte_folio y el codigo que escribe '
+            . 'proximo_folio_inicial lleve tiempo en produccion. Las dos condiciones y el porque de '
+            . 'partirla en dos estan en la cabecera de su .sql. Ver tambien el bloque DATOS de mas '
+            . 'abajo, que dice si hoy esta LISTA o BLOQUEADA.',
         'huellas' => [['tipo' => 'nulabilidad', 'desc' => 'proximo_folio_inicial es NOT NULL', 'tabla' => 'dte_folio', 'columna' => 'proximo_folio_inicial', 'esperado_nulabilidad' => 'NO']],
     ],
     [
@@ -430,8 +465,10 @@ printf("%-5s %-46s %-13s %s\n", 'MIG', 'ARCHIVO', 'VEREDICTO', 'HUELLAS');
 echo str_repeat('-', 96), "\n";
 
 $conteo    = ['APLICADA' => 0, 'PARCIAL' => 0, 'NO_APLICADA' => 0];
-$faltantes = [];
-$parciales = [];
+$faltantes = [];   // sin aplicar y SIN marcar: estas abortan
+$parciales = [];   // a medias: abortan siempre, marcadas o no
+$diferidas = [];   // sin aplicar y marcadas: NO abortan, pero se muestran
+$marcaVieja = [];  // marcadas como diferidas y ya aplicadas: sobra la marca
 
 foreach (MIGRACIONES as $m) {
     $presentes = 0;
@@ -449,18 +486,38 @@ foreach (MIGRACIONES as $m) {
 
     $v = veredicto($presentes, $esperados);
     $conteo[$v]++;
-    if ($v === 'NO_APLICADA') {
-        $faltantes[] = $m['id'];
-    }
+
+    // LA MARCA ES DEL DECLARANTE, EL VEREDICTO ES DE LA BASE. Se cruzan aqui y
+    // no antes: el veredicto sigue describiendo lo que hay en la base, sin
+    // contaminarse con lo que alguien decidio. Lo que la marca cambia es solo
+    // quien aborta.
+    $motivoDiferida = isset($m['diferida']) && trim((string) $m['diferida']) !== ''
+        ? trim((string) $m['diferida'])
+        : null;
+
     if ($v === 'PARCIAL') {
+        // ABORTA AUNQUE ESTE DIFERIDA. Ver la cabecera: "todavia no la corrimos"
+        // y "la corrimos a medias" no son lo mismo.
         $parciales[] = $m['id'];
+    } elseif ($v === 'NO_APLICADA') {
+        if ($motivoDiferida !== null) {
+            $diferidas[] = ['id' => $m['id'], 'archivo' => $m['archivo'], 'motivo' => $motivoDiferida];
+        } else {
+            $faltantes[] = $m['id'];
+        }
+    } elseif ($v === 'APLICADA' && $motivoDiferida !== null) {
+        // LA MARCA CADUCA Y HAY QUE DECIRLO. Sin este aviso, el dia que alguien
+        // aplique la 023 el sistema seguiria declarandola diferida para siempre
+        // y la marca se volveria permanente sin que nadie la revise.
+        $marcaVieja[] = $m['id'];
     }
 
     printf(
         "%-5s %-46s %-13s %d/%d%s\n",
         $m['id'],
         $m['archivo'],
-        $v,
+        // El asterisco marca "sin aplicar, pero a proposito". Se explica al pie.
+        $v . ($v === 'NO_APLICADA' && $motivoDiferida !== null ? '*' : ''),
         $presentes,
         $esperados,
         $detalle === [] ? '' : '  falta: ' . implode('; ', $detalle)
@@ -469,18 +526,42 @@ foreach (MIGRACIONES as $m) {
 
 echo str_repeat('-', 96), "\n";
 printf(
-    "RESUMEN: %d aplicadas, %d parciales, %d sin aplicar (de %d)\n",
+    "RESUMEN: %d aplicadas, %d parciales, %d diferidas a proposito, %d sin aplicar (de %d)\n",
     $conteo['APLICADA'],
     $conteo['PARCIAL'],
-    $conteo['NO_APLICADA'],
+    count($diferidas),
+    count($faltantes),
     count(MIGRACIONES)
 );
 
 if ($parciales !== []) {
     echo "\nPARCIALES (revisar a mano, el archivo no describe este estado): " . implode(', ', $parciales) . "\n";
+    echo "  Una PARCIAL aborta el despliegue AUNQUE este marcada como diferida.\n";
 }
 if ($faltantes !== []) {
-    echo "SIN APLICAR: " . implode(', ', $faltantes) . "\n";
+    echo "\nSIN APLICAR Y SIN MARCAR (esto aborta un despliegue): " . implode(', ', $faltantes) . "\n";
+    echo "  Si alguna esta diferida a proposito, agregale la clave 'diferida' con el motivo\n";
+    echo "  en su entrada de MIGRACIONES, no en una lista aparte.\n";
+}
+
+// LAS DIFERIDAS SE MUESTRAN SIEMPRE. No abortan, pero no se callan: una
+// migracion que no se aplica y de la que nadie se entera es el problema que
+// esta marca vino a resolver, no la solucion.
+if ($diferidas !== []) {
+    echo "\nDIFERIDAS A PROPOSITO (no abortan el despliegue):\n";
+    foreach ($diferidas as $d) {
+        printf("  %-5s %s\n", $d['id'], $d['archivo']);
+        foreach (explode("\n", wordwrap($d['motivo'], 86)) as $l) {
+            echo '        ', $l, "\n";
+        }
+    }
+    echo "  El asterisco de la tabla (NO_APLICADA*) marca estas.\n";
+}
+
+if ($marcaVieja !== []) {
+    echo "\nDIFERIDA PERO YA APLICADA: " . implode(', ', $marcaVieja) . "\n";
+    echo "  Quita la clave 'diferida' de esa(s) entrada(s) de MIGRACIONES: la marca ya no\n";
+    echo "  describe la realidad y, si se queda, nadie la va a volver a mirar.\n";
 }
 
 // --- Advertencias de datos, que el esquema no puede contestar -----------------
@@ -507,6 +588,27 @@ if ($aviso['aplica']) {
 
 echo "\n";
 
-// Exit code: 0 solo si las 23 estan completas. Pensado para engancharlo a un
-// despliegue mas adelante sin rehacer nada.
-exit($conteo['APLICADA'] === count(MIGRACIONES) ? 0 : 1);
+// ---------------------------------------------------------------------------
+//  EXIT CODE
+//
+//  Aborta si falta algo QUE NADIE DECIDIO que faltara:
+//
+//    $faltantes  sin aplicar y sin marcar  -> 1
+//    $parciales  a medias, marcada o no    -> 1
+//    $diferidas  sin aplicar pero decidido -> NO cuenta
+//
+//  Lo consume deploy.sh entre el git pull y el build: si esto da 1, el deploy
+//  se detiene sin haber construido ninguna imagen.
+// ---------------------------------------------------------------------------
+$aborta = $faltantes !== [] || $parciales !== [];
+
+if ($aborta) {
+    echo "VEREDICTO: hay migraciones sin aplicar que NO estan marcadas como diferidas.\n";
+} elseif ($diferidas !== []) {
+    printf("VEREDICTO: al dia, salvo %d diferida(s) a proposito (listadas arriba).\n", count($diferidas));
+} else {
+    echo "VEREDICTO: todas las migraciones aplicadas.\n";
+}
+echo "\n";
+
+exit($aborta ? 1 : 0);

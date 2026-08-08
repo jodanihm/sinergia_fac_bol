@@ -2,11 +2,12 @@
 #
 # deploy.sh -- sinergia_fac_bol (VPS)
 #
-# Despliegue por git: fetch -> pull -> build -> up -> verificar.
+# Despliegue por git: fetch -> pull -> MIGRACIONES -> build -> up -> verificar.
 #
-# NO esta trackeado en git (es infraestructura de esta maquina, no del repo).
 # NO toca la base de datos ni los secretos: esos ya viven en el host y entran
-# a los contenedores por env_file y por mounts :ro.
+# a los contenedores por env_file y por mounts :ro. La comprobacion de
+# migraciones es SOLO LECTURA -- estado_migraciones.php no ejecuta ni una
+# sentencia que escriba -- y no aplica nada: aplicar sigue siendo humano.
 #
 # Convenciones tomadas de /data/licitaalerta/deploy.sh, que es el patron que
 # ya funciona en este VPS: set -e, guarda temprana de prerequisitos,
@@ -169,9 +170,92 @@ else
   git log --oneline "$COMMIT_ANTES..$COMMIT_REMOTO" | sed 's/^/      /'
 fi
 
+# ── Migraciones: la funcion, usada en dry-run y en el deploy real ────────────
+#
+# EL VERIFICADOR TIENE QUE CORRER CON EL CODIGO NUEVO, Y AHI ESTA TODO EL TRUCO.
+#
+# La forma obvia -- docker exec sinergia_panel php scripts/estado_migraciones.php
+# -- ES INCORRECTA en este punto del deploy. En el VPS /app viene DE LA IMAGEN:
+# docker-compose.vps.yml solo monta key.pem, fullchain.pem, .rcv_internal_key,
+# ./oracle y el volumen de debug. scripts/ NO esta montado. Asi que despues del
+# git pull, el contenedor que corre sigue teniendo el verificador VIEJO, cuyo
+# array MIGRACIONES no conoce las migraciones que acaban de llegar: un deploy
+# que trae la 032 diria "todas aplicadas" y pasaria. Falso OK, justo en el caso
+# que este enganche existe para atrapar.
+#
+# La solucion es un contenedor DESECHABLE con la imagen vieja -- que ya trae PHP
+# y pdo_mysql -- y el codigo NUEVO montado encima. Funciona porque
+# estado_migraciones.php no requiere vendor/autoload.php: solo necesita PDO y las
+# env vars, asi que alcanza con montar scripts/.
+#
+# La otra opcion era mover la comprobacion despues del build, donde la imagen
+# nueva ya trae el script. Se descarta: la idea es abortar SIN HABER TOCADO NADA,
+# y un build de dos imagenes en un VPS con 6 vCPU compartidos no es "nada".
+verificar_migraciones() {
+  local modo="$1"   # "dry-run" o "real"
+
+  # LA RED NO SE ESCRIBE FIJA: se deriva del contenedor de mysql que ya esta
+  # corriendo. En este punto del deploy el stack viejo sigue en pie, asi que el
+  # dato existe. Escribir "sinergia_net" a mano seria suponer un nombre que
+  # nunca se verifico contra esta maquina.
+  local red
+  red=$(docker inspect sinergia_mysql \
+          --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
+        | grep -v '^$' | head -n1 || true)
+
+  if [ -z "$red" ]; then
+    falla "no pude derivar la red desde sinergia_mysql (¿el stack viejo esta caido?). Sin red no se puede verificar migraciones."
+  fi
+  echo "    red derivada de sinergia_mysql: $red"
+
+  # La imagen vieja aporta PHP + pdo_mysql; el bind mount aporta el codigo nuevo.
+  docker image inspect sinergia_panel:latest >/dev/null 2>&1 \
+    || falla "no existe la imagen sinergia_panel:latest; no hay donde correr el verificador"
+
+  local salida rc
+  set +e
+  salida=$(docker run --rm --network "$red" \
+             -v "$APP_DIR/scripts:/app/scripts:ro" \
+             --env-file sinergia.env \
+             -e DB_HOST=sinergia_mysql \
+             sinergia_panel:latest \
+             php /app/scripts/estado_migraciones.php 2>&1)
+  rc=$?
+  set -e
+
+  echo "$salida" | sed 's/^/    /'
+
+  case "$rc" in
+    0) ok "migraciones al dia (las diferidas a proposito quedaron listadas arriba)" ;;
+    2)
+      if [ "$modo" = "dry-run" ]; then
+        echo "    DRY-RUN: el verificador no pudo conectar a la base (exit 2). En un deploy real esto ABORTARIA."
+      else
+        falla "el verificador de migraciones no pudo conectar a la base (exit 2)"
+      fi
+      ;;
+    *)
+      if [ "$modo" = "dry-run" ]; then
+        echo "    DRY-RUN: hay migraciones sin aplicar y sin marcar (exit $rc). En un deploy real esto ABORTARIA."
+        echo "    DRY-RUN: no se aborta."
+      else
+        falla "hay migraciones sin aplicar que no estan marcadas como diferidas (exit $rc). Aplicalas antes de desplegar."
+      fi
+      ;;
+  esac
+}
+
 if [ "$DRY_RUN" -eq 1 ]; then
+  # En dry-run se verifica contra el arbol ACTUAL: no hubo pull, asi que las
+  # migraciones nuevas del remoto todavia no estan aqui. Igual sirve -- dice si
+  # la base esta al dia con lo que ya hay -- y se avisa de la limitacion.
+  paso "Verificando migraciones (arbol actual, SIN el pull)"
+  verificar_migraciones "dry-run"
+
   echo
   echo "==> DRY-RUN: aqui se haria pull, build de motor y panel, y up -d."
+  echo "    Nota: la comprobacion de arriba corrio ANTES del pull, asi que no"
+  echo "    incluye migraciones que traigan los commits nuevos."
   rm -f "$VECINOS_ANTES"
   exit 0
 fi
@@ -181,6 +265,16 @@ paso "git pull origin $RAMA"
 git pull --ff-only origin "$RAMA"
 COMMIT_NUEVO=$(git rev-parse HEAD)
 ok "HEAD ahora en ${COMMIT_NUEVO:0:7}"
+
+# ── 4b. Migraciones ───────────────────────────────────────────────────────────
+#
+# VA AQUI Y NO EN OTRO SITIO, por las dos puntas:
+#   DESPUES del pull  -> para ver las migraciones que traen los commits nuevos.
+#   ANTES del build   -> para abortar sin haber construido ni levantado nada. El
+#                        arbol queda adelantado, pero los contenedores viejos
+#                        siguen corriendo y sirviendo.
+paso "Verificando migraciones de la base"
+verificar_migraciones "real"
 
 # ── 5. Build ──────────────────────────────────────────────────────────────────
 paso "Construyendo imagenes (memoria $BUILD_MEM, cpuset $BUILD_CPUSET)"
