@@ -354,7 +354,7 @@ final class SiiDirectoFacturador implements FacturadorInterface
             ));
         }
 
-        $datos = $this->datosConsultaDte($xml);
+        $datos = $this->datosConsultaDte($xml, $tipoDte, $folio);
 
         // Autenticar y resolver el RUT consultante (firmante del certificado).
         $cert           = $this->emisor->obtenerCertificado($cred->rutEmisor, $cred->ambiente);
@@ -376,15 +376,36 @@ final class SiiDirectoFacturador implements FacturadorInterface
         $estado = $res['estado'] !== '' ? $res['estado'] : 'desconocido';
 
         // Sincronizar la BD con el estado real (best-effort: no romper la lectura).
+        //
+        // EL NUM_ATENCION NO SE ESCRIBE EN track_id. NUNCA.
+        //
+        // Esto pasaba antes: $trackId = $res['numAtencion'] y de ahi al UPDATE.
+        // Son dos cosas distintas con nombres parecidos. track_id es el TrackID
+        // del SOBRE que devolvio DTEUpload, y es la clave con la que
+        // RegistroVeredictoSii::persistir() reparte el veredicto a todas las
+        // filas del envio y con la que el runner agrupa los pendientes. El
+        // NUM_ATENCION es una referencia de atencion de ESTA consulta.
+        //
+        // Pisarlo dejaba al documento HUERFANO DE SU SOBRE: el fan-out del
+        // veredicto ya no lo alcanzaba, porque su track habia dejado de ser el
+        // de sus hermanos. Es el mismo mecanismo que se reparo hace poco --
+        // veredictos que se escriben en todas las filas del envio -- roto por
+        // otro lado.
+        //
+        // POR QUE SE DESCARTA Y NO SE GUARDA EN OTRA PARTE: guardarlo pide una
+        // columna, y una columna se justifica por un consumidor. Hoy no hay
+        // ninguno: la funcionalidad de averiguar CUAL documento rechazo el SII
+        // se evaluo y se descarto por volumen -- son 2 documentos en produccion,
+        // se resuelven a mano. Una columna para una funcion que no se esta
+        // construyendo es peso muerto. Y el dato no se pierde: viaja en el
+        // EstadoDte que devuelve este metodo, en raw['numAtencion'].
         try {
-            $trackId = $res['numAtencion'] !== '' ? $res['numAtencion'] : null;
             $this->dteEmitido->actualizarEstado(
                 $cred->rutEmisor,
                 $cred->ambiente,
                 $tipoDte,
                 $folio,
                 $estado,
-                $trackId,
             );
         } catch (Throwable $e) {
             error_log('dte_emitido actualizarEstado fallo (folio ' . $folio . '): ' . $e->getMessage());
@@ -401,27 +422,147 @@ final class SiiDirectoFacturador implements FacturadorInterface
 
     /**
      * Extrae del EnvioDTE los datos que getEstDte exige (FchEmis, RUTRecep,
-     * MntTotal). El tipo y folio los pasa el caller.
+     * MntTotal) DEL DOCUMENTO PEDIDO, no del primero del sobre.
      *
+     * QUE ESTABA MAL, Y POR QUE NADIE LO NOTO
+     * -------------------------------------------------------------------------
+     * Esto leia con getElementsByTagNameNS(...)->item(0) sobre el DOCUMENTO
+     * ENTERO. Y el xml que guarda cada fila de dte_emitido es el EnvioDTE
+     * COMPLETO, no el documento: lo dice persistirEmitidosLote() unas lineas mas
+     * abajo. O sea que en un lote de 20 facturas, 19 recibian el receptor, la
+     * fecha y el monto de la PRIMERA, y el SII contestaba DNK -- "datos no
+     * coinciden" -- para documentos perfectamente validos.
+     *
+     * Nadie lo noto porque este camino no se usa: medido en produccion, no hay
+     * NI UNA fila en estado DOK, y DOK solo lo escribe aqui. Es un defecto
+     * latente, no un incidente.
+     *
+     * Y ES UN DNK INDISTINGUIBLE DEL REAL. El SII responde lo mismo si el
+     * documento fue rechazado que si le mandaste el monto de otro folio: desde
+     * su lado es la misma pregunta mal contestada. Por eso la unica defensa es
+     * no equivocarse al preguntar.
+     *
+     * EL CRITERIO ES EL DE DtePdfGenerator::seleccionarDocumento(), NO UNO NUEVO
+     * -------------------------------------------------------------------------
+     * En el repo habia dos formas de ubicar un documento dentro de un sobre y
+     * NO son equivalentes:
+     *
+     *   seleccionarDocumento()   compara TipoDTE y Folio del propio XML, y
+     *                            LANZA si no encuentra.
+     *   persistirEmitidosLote()  indexa por el atributo ID "F{folio}T{tipo}",
+     *                            que es convencion NUESTRA, y cae a ceros en
+     *                            silencio si no lo encuentra.
+     *
+     * Se toma el primero, por su modo de fallo: caer a ceros es exactamente el
+     * defecto que este arreglo viene a quitar. Y compara los datos del SII en
+     * vez de un ID que ponemos nosotros. Se implementa sobre DOM y no llamando a
+     * esa funcion porque es privada de otra clase y trabaja sobre objetos de
+     * LibreDTE, que esta clase no carga; el CRITERIO es el mismo.
+     *
+     * @throws RuntimeException si el XML no parsea, si el documento no esta en
+     *         el sobre, o si le faltan los datos que getEstDte exige.
      * @return array{fchEmis:string, rutRecep:string, mntTotal:int}
      */
-    private function datosConsultaDte(string $envioXml): array
+    private function datosConsultaDte(string $envioXml, int $tipoDte, int $folio): array
     {
+        // EL VACIO SE ATRAPA ANTES DE loadXML, y no por prolijidad: en PHP 8
+        // DOMDocument::loadXML('') lanza un ValueError -- "Argument #1 ($source)
+        // must not be empty" -- que se escapa POR ENCIMA del $ok de abajo. Ese
+        // mensaje habla de un argumento de una libreria; este dice QUE documento
+        // esta vacio, que es lo que alguien necesita para ir a mirarlo.
+        //
+        // Se comprueba con trim() y no con === '': un XML de puros espacios no
+        // lo frena obtenerXml() del repositorio -- que solo descarta la cadena
+        // vacia exacta -- y aqui reventaria igual, pero por otro camino.
+        if (trim($envioXml) === '') {
+            throw new RuntimeException(sprintf(
+                'El XML persistido del DTE %d/%d esta vacio: no hay de donde sacar los datos que exige getEstDte.',
+                $tipoDte,
+                $folio,
+            ));
+        }
+
         $dom    = new DOMDocument();
         $previo = libxml_use_internal_errors(true);
-        $dom->loadXML($envioXml);
+        $ok     = $dom->loadXML($envioXml);
+        libxml_clear_errors();
         libxml_use_internal_errors($previo);
 
-        $leer = function (string $tag) use ($dom): string {
-            $n = $dom->getElementsByTagNameNS(self::NS_SII, $tag)->item(0);
+        // EL RETORNO DE loadXML SE COMPRUEBA. Antes no: un XML ilegible dejaba
+        // los tres datos vacios y el monto en 0, y se consultaba igual al SII
+        // con esos ceros. La respuesta habria sido DNK y habria parecido un
+        // rechazo. Un dato que no se pudo leer tiene que fallar, no valer cero.
+        if (! $ok) {
+            throw new RuntimeException(sprintf(
+                'El XML persistido del DTE %d/%d no se pudo parsear: no hay de donde sacar los datos que exige getEstDte.',
+                $tipoDte,
+                $folio,
+            ));
+        }
+
+        $documento = $this->documentoDelSobre($dom, $tipoDte, $folio);
+        if ($documento === null) {
+            throw new RuntimeException(sprintf(
+                'El documento tipo %d folio %d no esta en el EnvioDTE persistido.',
+                $tipoDte,
+                $folio,
+            ));
+        }
+
+        // AMBITO: el <Documento> encontrado, no el sobre. Es todo el arreglo.
+        $leer = function (string $tag) use ($documento): string {
+            $n = $documento->getElementsByTagNameNS(self::NS_SII, $tag)->item(0);
             return $n !== null ? trim($n->textContent) : '';
         };
 
+        $fchEmis  = $leer('FchEmis');
+        $rutRecep = $leer('RUTRecep');
+
+        // MntTotal 0 SI es legitimo -- una NC de correccion de texto lo lleva --
+        // asi que no entra en esta guarda. Fecha y receptor vacios no lo son.
+        if ($fchEmis === '' || $rutRecep === '') {
+            throw new RuntimeException(sprintf(
+                'Al documento tipo %d folio %d le faltan datos que getEstDte exige (FchEmis="%s", RUTRecep="%s").',
+                $tipoDte,
+                $folio,
+                $fchEmis,
+                $rutRecep,
+            ));
+        }
+
         return [
-            'fchEmis'  => $leer('FchEmis'),
-            'rutRecep' => $leer('RUTRecep'),
+            'fchEmis'  => $fchEmis,
+            'rutRecep' => $rutRecep,
             'mntTotal' => (int) ($leer('MntTotal') ?: '0'),
         ];
+    }
+
+    /**
+     * El <Documento> de un sobre cuyo IdDoc calza con tipo y folio.
+     *
+     * Se leen del IdDoc y no del Documento entero: <Folio> tambien podria
+     * aparecer en otros bloques, y acotar el ambito cuesta una linea.
+     */
+    private function documentoDelSobre(DOMDocument $dom, int $tipoDte, int $folio): ?DOMElement
+    {
+        foreach ($dom->getElementsByTagNameNS(self::NS_SII, 'Documento') as $documento) {
+            if (! $documento instanceof DOMElement) {
+                continue;
+            }
+            $idDoc = $documento->getElementsByTagNameNS(self::NS_SII, 'IdDoc')->item(0);
+            if (! $idDoc instanceof DOMElement) {
+                continue;
+            }
+            $leer = static function (string $tag) use ($idDoc): string {
+                $n = $idDoc->getElementsByTagNameNS(self::NS_SII, $tag)->item(0);
+                return $n !== null ? trim($n->textContent) : '';
+            };
+            if ((int) $leer('TipoDTE') === $tipoDte && (int) $leer('Folio') === $folio) {
+                return $documento;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -769,6 +910,15 @@ final class SiiDirectoFacturador implements FacturadorInterface
      * y FchEmis si son POR DOCUMENTO: se leen del <Documento> propio de cada
      * folio (ID "F{folio}T{tipo}"), no del primero del sobre como hace
      * extraerMontos().
+     *
+     * ESA AFIRMACION ERA FALSA PARA consultarEstado(), Y SE ARREGLO. Este
+     * docblock decia que los consumidores "ubican el documento adentro por
+     * tipo/folio" y nombraba a consultarEstado(); pero su datosConsultaDte()
+     * tomaba el PRIMER FchEmis, el PRIMER RUTRecep y el PRIMER MntTotal del
+     * sobre entero, asi que en un lote de 20 documentos 19 consultaban al SII
+     * con los datos de otro y recibian DNK. Hoy ubica el documento de verdad
+     * (ver datosConsultaDte()), y por eso la frase de arriba pasa a ser cierta.
+     * Se deja escrito porque la frase sola no se distinguia de la realidad.
      *
      * folio_ref/tipo_dte_ref: a diferencia de persistirEmitido() (que toma
      * referencias[0] tal cual), aqui se toma la PRIMERA referencia con

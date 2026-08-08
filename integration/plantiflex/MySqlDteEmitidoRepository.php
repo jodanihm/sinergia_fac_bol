@@ -132,6 +132,20 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
         return $stmt->fetchColumn() !== false;
     }
 
+    /**
+     * $trackId ES EL TRACK DEL SOBRE, Y NADA MAS.
+     *
+     * Es el identificador que devolvio DTEUpload al subir el EnvioDTE, y es la
+     * clave con la que RegistroVeredictoSii::persistir() reparte el veredicto a
+     * TODAS las filas del envio y con la que el runner de veredictos agrupa los
+     * pendientes. Escribir aqui cualquier otro numero deja al documento huerfano
+     * de su sobre: el fan-out deja de alcanzarlo.
+     *
+     * Ya paso: consultarEstado() de SiiDirectoFacturador pasaba el NUM_ATENCION
+     * de getEstDte, que es una referencia de la CONSULTA y no del envio. Se
+     * quito. Si algun llamador nuevo tiene la tentacion de reusar este parametro
+     * para "algun identificador que devolvio el SII", la respuesta es no.
+     */
     public function actualizarEstado(
         string $rutEmisor,
         Ambiente $ambiente,
