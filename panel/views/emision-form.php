@@ -229,10 +229,43 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <input type="text" inputmode="decimal" name="descuentoGlobalPct" id="descuento-global" value="<?= htmlspecialchars((string) ($form['descuentoGlobalPct'] ?? '')); ?>"<?= $errStyle('descuentoGlobalPct'); ?>>
                         <small class="form-ayuda">Opcional. Aplica sobre los items afectos.</small>
                     </div>
-                    <div class="form-campo">
-                        <label for="observaciones">Observaciones</label>
-                        <input type="text" name="observaciones" id="observaciones" value="<?= htmlspecialchars((string) ($form['observaciones'] ?? '')); ?>">
-                    </div>
+                    <?php
+                    /*
+                     * AQUI ESTABA EL CAMPO "OBSERVACIONES". SE QUITO, Y NO POR ESTETICA.
+                     *
+                     * El dato no llegaba a ninguna parte. La pantalla lo capturaba,
+                     * armarDocumentoEmision() lo metia en el payload y el motor lo
+                     * DESCARTABA EN SILENCIO: validarDocumentoDte() proyectaba el body
+                     * sobre una lista de claves conocidas y 'observaciones' no estaba en
+                     * ella, asi que se perdia sin error, sin log y sin quedar en el XML ni
+                     * en dte_emitido. Cada texto que un usuario escribio aqui se perdio en
+                     * el momento del POST y no hay forma de recuperarlo hacia atras.
+                     *
+                     * Un campo que promete por contexto y no cumple es peor que no tenerlo:
+                     * este ni siquiera traia <small class="form-ayuda">, a diferencia de
+                     * todos sus vecinos, asi que nada le advertia al usuario.
+                     *
+                     * QUE HACE FALTA PARA TRAERLO DE VUELTA -- una sola cosa, y es de
+                     * norma, no de codigo:
+                     *
+                     *   LA CITA DEL FORMATO DTE (docs/09_Formato_DTE_Documentos_
+                     *   Tributarios_Electronicos.pdf) QUE DIGA EN QUE CAMPO DEL XML VA UNA
+                     *   GLOSA LIBRE DE DOCUMENTO, con pagina o seccion.
+                     *
+                     * Los candidatos que hay que resolver CON esa cita, no antes: una
+                     * Referencia con CodRef=3 y RazonRef (que hoy solo se usa para NC/ND,
+                     * apuntando a otro documento) o algun campo de texto del Encabezado,
+                     * que este builder no emite. NO SE PUEDE DEDUCIR DEL XSD: en este
+                     * proyecto ya se midio que el XSD y el Formato DTE no coinciden
+                     * (DirRecep y CmnaRecep son minOccurs=0 en el esquema y obligatorios
+                     * en el formato). Inventar el campo emite un XML que el SII rechaza
+                     * con el folio ya quemado.
+                     *
+                     * Hasta entonces el campo NO vuelve: desde que la lista de claves de
+                     * validarDocumentoDte() es cerrada, mandarlo daria 422 y romperia la
+                     * emision manual entera.
+                     */
+                    ?>
                 </div>
             </section>
 

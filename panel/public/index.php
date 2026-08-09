@@ -1136,10 +1136,10 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
     if ($dg !== '' && is_numeric($dg)) {
         $doc['descuentoGlobalPct'] = (float) $dg;
     }
-    $obs = trim((string) ($post['observaciones'] ?? ''));
-    if ($obs !== '') {
-        $doc['observaciones'] = $obs;
-    }
+    // AQUI SE MANDABA 'observaciones'. Se quito junto con el campo de la vista:
+    // el motor nunca la leyo (validarDocumentoDte() la descartaba en silencio) y
+    // desde que su lista de claves es cerrada, mandarla daria 422. El por que y
+    // lo que hace falta para traerla de vuelta estan en panel/views/emision-form.php.
 
     // Referencias: solo para NC (61) / ND (56), entrada manual (M3).
     if (in_array($tipoDte, [61, 56], true)) {

@@ -605,11 +605,80 @@ responder(404, ['error' => 'ruta no encontrada', 'metodo' => $metodo, 'ruta' => 
 //  referencia madre valida de NC/ND (apunta a otro DTE del mismo set). En el
 //  endpoint unitario se rechazan con error claro en vez de ignorarse.
 //
-//  @return array{tipoDte:int, receptor:array, detalles:array, montosSonBrutos:bool, referencias:array, descuentoGlobalPct:?float}
+//  ESTE @return SE MANTIENE AL DIA A MANO, Y NO ES UN ADORNO. Declaraba seis
+//  claves cuando la funcion ya devolvia nueve, y esa mentira es de la misma
+//  familia que la lista blanca que descartaba en silencio: las dos hacen que el
+//  contrato real solo se pueda averiguar leyendo el return. Quien agregue una
+//  clave toca TRES sitios -- $clavesConocidas, el return y esta linea -- y si no
+//  toca los tres, el motor la rechaza con 422 en vez de perderla.
+//
+//  Las nueve NO son las ocho de $clavesConocidas: emailReceptor no viene del
+//  body, se deriva de receptor.email y no viaja al DTO ni al XML (solo sirve
+//  para encolar el correo).
+//
+//  @return array{
+//      tipoDte:int, receptor:array, detalles:array, montosSonBrutos:bool,
+//      referencias:array, descuentoGlobalPct:?float, formaPago:?int,
+//      fechaVencimiento:?string, emailReceptor:?string
+//  }
 // ===========================================================================
 function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLote = false): array
 {
     $p = $prefijoCampo;
+
+    // --- LA LISTA DE CLAVES DEL DOCUMENTO ES CERRADA ---
+    //
+    // MISMO CRITERIO QUE DteXmlBuilder::resolverTotales(): la lista sigue siendo
+    // cerrada -- aceptar a ciegas dejaria pasar claves inventadas -- pero lo que
+    // no reconoce REVIENTA en vez de desaparecer.
+    //
+    // POR QUE HIZO FALTA: hasta aqui esta funcion PROYECTABA. Leia las ocho
+    // claves que conoce y devolvia un array nuevo; cualquier otra cosa del body
+    // se descartaba EN SILENCIO, sin validarse, sin registrarse y sin llegar al
+    // XML. Asi se perdio 'observaciones' durante toda la vida del formulario de
+    // emision del panel: la pantalla la capturaba, el panel la mandaba en cada
+    // peticion, esta funcion la tiraba, y no se entero nadie -- ni el usuario,
+    // ni el log, ni un test. El campo se quito de la vista en esta misma entrega
+    // (ver la nota en panel/views/emision-form.php).
+    //
+    // EL COSTO DE EQUIVOCARSE ES ASIMETRICO. Una clave que se ignora emite un
+    // documento tributario incompleto CON SU FOLIO YA QUEMADO, y el motivo no
+    // queda en ninguna parte. Un 422 aqui no quema nada: se responde antes de
+    // asignar folio y antes de tocar el SII, tanto en el unitario como en el
+    // lote (donde ademas corta el sub-lote entero, tambien sin quemar folios).
+    //
+    // POR QUE 422 Y NO DocumentoInvalidoException, que es lo que lanza
+    // resolverTotales(): esta funcion se llama FUERA del try de emitirDte() y el
+    // archivo no tiene set_exception_handler, asi que una excepcion aqui seria un
+    // fatal con traza en vez de una respuesta. invalido() es lo que usan los
+    // otros veinte errores de esta funcion y trae el campo exacto.
+    //
+    // emailReceptor NO VA EN LA LISTA: no es una clave del body. Se deriva de
+    // receptor.email (mas abajo) y solo existe en el array que se devuelve.
+    $clavesConocidas = [
+        'tipoDte',
+        'receptor',
+        'detalles',
+        'montosSonBrutos',
+        'referencias',
+        'descuentoGlobalPct',
+        'formaPago',
+        'fechaVencimiento',
+    ];
+    $clavesDesconocidas = array_diff(array_keys($body), $clavesConocidas);
+    if ($clavesDesconocidas !== []) {
+        invalido(
+            sprintf(
+                '%s: claves que el motor no reconoce (%s). El motor NO las ignora: agregalas a '
+                . 'validarDocumentoDte() y al DTO antes de usarlas, o quitalas del payload. '
+                . 'Claves validas: %s.',
+                $p !== '' ? rtrim($p, '.') : 'body',
+                implode(', ', $clavesDesconocidas),
+                implode(', ', $clavesConocidas),
+            ),
+            $p !== '' ? rtrim($p, '.') : 'body',
+        );
+    }
 
     $tipoDte = $body['tipoDte'] ?? null;
     if (! is_int($tipoDte) || ! in_array($tipoDte, TIPOS_PERMITIDOS, true)) {
