@@ -317,53 +317,112 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
      * @author Esteban De La Fuente Rubio, DeLaF (esteban[at]sasco.cl)
      * @version 2015-09-13
      */
-    private function agregarEmisor(array $emisor, $x = 10, $y = 10, $w = 75, $w_img = 30)
+    private function agregarEmisor(array $emisor, $x = 10, $y = 10, $w = 75, $w_img = LogoEmpresa::ANCHO_DIBUJO_MM)
     {
+        // ANCHO COMPLETO DEL BLOQUE. Es el mismo 115 que la rama sin logo venia
+        // calculando con $w += 40: desde x=10 llega a 125, cinco milimetros antes
+        // del recuadro del folio (agregarFolio, x=130). No es un numero nuevo.
+        $xCompleto = $x;
+        $wCompleto = $w + 40;
+
+        // Ancho para la LINEA DEL NOMBRE y Y a partir de la cual el ancho
+        // completo esta libre. Sin logo son los del bloque entero.
+        $wNombre     = $wCompleto;
+        $xNombre     = $xCompleto;
+        $yBajoElLogo = null;
+
         // logo máximo 1/5 del tamaño del documento
         if (isset($this->logo)) {
             $this->Image($this->logo, $x, $y, $w_img, 0, 'PNG', (isset($emisor['url'])?$emisor['url']:''), 'T');
-            $x = $this->x+3;
 
-            // EL ANCHO SE QUEDA EN 75, Y SE PROBO SUBIRLO. No lo repitas.
+            // EL NOMBRE AL LADO DEL LOGO, EL RESTO POR DEBAJO A TODO EL ANCHO.
             //
-            // Con logo el texto arranca en x=43 y el recuadro del folio empieza
-            // en x=130, o sea que sobre el papel hay 87 mm y se usan 75. La
-            // cuenta invitaba a subirlo a 85 para recuperar un 13% de ancho y
-            // que la razon social del caso real -- "SOCIEDAD DE PROFESIONALES
-            // ROSAS Y VILLAR LIMITADA", 48 caracteres a Bold 20 -- bajara de 4
-            // lineas a 3.
+            // Antes los cuatro textos iban en la misma columna angosta de 75 mm
+            // aunque el logo solo ocupara ~12 mm de alto: todo lo que caia por
+            // debajo de esos 12 mm tenia 115 mm disponibles y usaba 75. Ahora el
+            // nombre convive con el logo y el giro / direccion / contacto bajan.
             //
-            // SE MIDIO Y NO PASA NADA: con 75 y con 85 salen las MISMAS cuatro
-            // lineas, con los cortes de palabra en los mismos sitios. A ese
-            // cuerpo las palabras son tan largas que 10 mm no alcanzan para
-            // subir ninguna al renglon anterior.
+            // POR QUE 65 Y NO 75. El logo pasa de 30 a 40 mm de ancho, asi que su
+            // borde derecho se corre de 40 a 50 y el texto arranca en 53 en vez
+            // de 43. Con 65 el nombre termina en 118, EXACTAMENTE donde terminaba
+            // antes, y conserva los 12 mm de aire hasta el recuadro del folio.
+            // Cabrian 77, pero ensanchar hasta rozar el recuadro no compra nada:
+            // el nombre largo ya esta en el piso de la cascada.
+            $xNombre = $this->x + 3;
+            $wNombre = 65;
+
+            // LA BAJADA NO PUEDE SER UNA CONSTANTE, y esto no es prudencia
+            // teorica. Image() recibe h=0, asi que TCPDF calcula el alto
+            // proporcional DEL PNG CONCRETO y lo deja en img_rb_y (tcpdf.php:7282),
+            // que es lo que devuelve getImageRBY(). Con la validacion vigente ese
+            // alto va de 0,27 a 50 mm: cualquier constante que sirva para el logo
+            // de un cliente le dibuja el giro ENCIMA de la imagen a otro.
             //
-            // Asi que subirlo no demuestra beneficio y SI cambia el reflujo de
-            // todos los documentos con logo: pierde la inercia a cambio de nada.
-            // Se revirtio.
+            // Y hay un motivo mas fuerte: LogoEmpresa solo valida AL SUBIR. Los
+            // logos que ya estan en dte_logo se aceptaron midiendo contra 30 mm y
+            // desde esta entrega se dibujan a 40, un 33% mas altos, sin que nadie
+            // los vuelva a mirar. Este max() es la unica defensa que tienen.
+            //
+            // El +2 es la misma separacion que ya se usaba entre el borde superior
+            // y la primera linea de texto.
+            $yBajoElLogo = $this->getImageRBY() + 2;
+
+            // align='T' dejo el cursor en el borde SUPERIOR de la imagen
+            // (tcpdf.php:7321), que es lo que alinea el nombre con el logo.
         } else {
             $this->y = $y-2;
-            $w += 40;
         }
+
         // agregar datos del emisor
-        $this->setFont('', 'B', $this->tamanoRazonSocial((string) $emisor['RznSoc'], $w));
+        //
+        // A LA CASCADA SE LE PASA EL ANCHO DEL NOMBRE, NO EL DEL BLOQUE. Con
+        // $wCompleto elegiria 20 pt para un texto que se dibuja en 65 mm y
+        // volveriamos a las cuatro lineas, pero ahora en cuerpo grande.
+        $this->setFont('', 'B', $this->tamanoRazonSocial((string) $emisor['RznSoc'], $wNombre));
         $this->SetTextColorArray([32, 92, 144]);
-        $this->MultiTexto($emisor['RznSoc'], $x, $this->y+2, 'L', $w);
+        $this->MultiTexto($emisor['RznSoc'], $xNombre, $this->y+2, 'L', $wNombre);
+
+        // Donde arranca el bloque de abajo: lo que termine mas abajo entre el
+        // nombre y el logo. Sin logo, $yBajoElLogo es null y manda el nombre,
+        // igual que siempre.
+        $y2 = $yBajoElLogo !== null ? max($this->y, $yBajoElLogo) : $this->y;
+
         $this->setFont('', 'B', 9);
         $this->SetTextColorArray([0,0,0]);
-        $this->MultiTexto($emisor['GiroEmis'], $x, $this->y, 'L', $w);
-        $this->MultiTexto($emisor['DirOrigen'].', '.$emisor['CmnaOrigen'], $x, $this->y, 'L', $w);
+        $this->MultiTexto($emisor['GiroEmis'], $xCompleto, $y2, 'L', $wCompleto);
+        $this->MultiTexto($emisor['DirOrigen'].', '.$emisor['CmnaOrigen'], $xCompleto, $this->y, 'L', $wCompleto);
         $contacto = [];
         if (!empty($emisor['Telefono'])) {
-            if (!isset($emisor['Telefono'][0]))
-                $emisor['Telefono'] = [$emisor['Telefono']];
-            foreach ($emisor['Telefono'] as $t)
+            // LA GUARDA ANTERIOR NO PODIA FUNCIONAR NUNCA, y se comio el telefono
+            // de todo documento cuyo XML lo trajera.
+            //
+            // Decia: if (!isset($emisor['Telefono'][0])) $emisor['Telefono'] = [...];
+            //
+            // La intencion era envolver el escalar cuando <Telefono> viene una sola
+            // vez, y dejarlo tal cual cuando el XML lo repite y llega como lista.
+            // Pero $string[0] ES ACCESO A OFFSET DE STRING: para '+56 63 2 123456'
+            // vale '+', asi que isset() daba TRUE y el envoltorio no corria jamas.
+            // El foreach recibia el string, PHP 8 emitia
+            // "foreach() argument must be of type array|object, string given",
+            // $contacto se quedaba sin el telefono y la linea salia solo con el
+            // correo -- o no salia, si tampoco habia correo. La guarda solo
+            // acertaba en el unico caso que no la necesitaba: cuando ya era array.
+            //
+            // Nadie lo vio porque DtePdfGenerator apaga los warnings
+            // (error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING),
+            // linea 77) y porque hoy DteXmlBuilder no emite <Telefono>: ningun
+            // documento real entra aqui. Lo encontro el arnes del emisor, que
+            // siembra un emisor con telefono y correo.
+            $telefonos = is_array($emisor['Telefono'])
+                ? $emisor['Telefono']
+                : [$emisor['Telefono']];
+            foreach ($telefonos as $t)
                 $contacto[] = $t;
         }
         if (!empty($emisor['CorreoEmisor']))
             $contacto[] = $emisor['CorreoEmisor'];
         if ($contacto)
-            $this->MultiTexto(implode(' / ', $contacto), $x, $this->y, 'L', $w);
+            $this->MultiTexto(implode(' / ', $contacto), $xCompleto, $this->y, 'L', $wCompleto);
     }
 
     /**
@@ -381,9 +440,16 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
      *   14 / 9 = 1,56x   se lee como otro nivel de titulo
      *   12 / 9 = 1,33x   se empieza a leer como enfasis del mismo nivel
      *
-     * 12 pt habria comprado una linea en el caso con logo (49 caracteres en 75
-     * mm), pero a costa del unico argumento que sostiene el cumplimiento. La
-     * restriccion que manda es la del SII, no la del hueco.
+     * 12 pt habria comprado una linea en el caso con logo (49 caracteres, medido
+     * cuando ese hueco eran 75 mm; hoy son 65), pero a costa del unico argumento
+     * que sostiene el cumplimiento. La restriccion que manda es la del SII, no
+     * la del hueco.
+     *
+     * ESE CASO YA AGOTA LA CASCADA: a 75 mm caia en el piso de 14 pt sin llegar
+     * al maximo de lineas, asi que estrechar a 65 no puede cambiar el tamaño
+     * elegido -- 14 es el ultimo candidato. Lo que puede cambiar es el numero de
+     * lineas, y desde esta entrega eso ya no empuja nada hacia abajo: el bloque
+     * de giro/direccion/contacto arranca en max(fin del nombre, fondo del logo).
      *
      * @var list<int>
      */
@@ -405,7 +471,7 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
      *
      * SE MIDE, NO SE CUENTAN CARACTERES. "IIII" y "WWWW" tienen el mismo largo y
      * miden distinto; y el ancho disponible no es fijo -- son 115 mm sin logo y
-     * 75 con logo --, asi que el MISMO nombre necesita tamaños distintos segun
+     * 65 con logo --, asi que el MISMO nombre necesita tamaños distintos segun
      * el documento. Se usa getNumLines(), que es la propia logica de salto de
      * linea de TCPDF: la misma que va a aplicar MultiCell al dibujar. No una
      * aproximacion.
@@ -421,7 +487,12 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
      * hagan falta. NUNCA se recorta el nombre: el SII lo exige COMPLETO, y un
      * nombre truncado es un defecto de correccion, no de estetica.
      *
-     * @param float|int $w ancho disponible en mm (115 sin logo, 75 con logo)
+     * EL ANCHO QUE SE PASA ES EL DE LA LINEA DEL NOMBRE, no el del bloque del
+     * emisor. Desde que el giro, la direccion y el contacto bajan a todo el
+     * ancho por debajo del logo, esos dos numeros dejaron de ser el mismo: el
+     * nombre convive con el logo en 65 mm y el resto dispone de 115.
+     *
+     * @param float|int $w ancho disponible en mm (115 sin logo, 65 con logo)
      */
     private function tamanoRazonSocial($texto, $w)
     {

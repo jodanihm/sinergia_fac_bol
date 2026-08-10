@@ -44,28 +44,51 @@ final class LogoEmpresa
      */
     public const MAX_BYTES = 512 * 1024;
 
-    /** Ancho con el que agregarEmisor() dibuja el logo. Aqui solo se documenta. */
-    public const ANCHO_DIBUJO_MM = 30;
+    /**
+     * Ancho con el que agregarEmisor() dibuja el logo. NO ES SOLO DOCUMENTACION:
+     * es el default del parametro $w_img de agregarEmisor(), asi que cambiarla
+     * cambia el dibujo. Y alimenta tres mensajes de error de validar(): si se
+     * desincronizara del dibujo real, al usuario se le informaria un alto
+     * resultante que no es el que va a ver en su PDF.
+     */
+    public const ANCHO_DIBUJO_MM = 40;
 
     /** Por debajo de esto no es un logo, es un icono roto. */
     public const MIN_PX = 20;
 
-    /** Techo defensivo: nadie necesita mas para 30 mm de ancho. */
+    /** Techo defensivo: nadie necesita mas para el ancho al que se imprime. */
     public const MAX_PX = 3000;
 
     /**
      * Alto maximo en proporcion al ancho.
      *
      * El manual de muestras impresas del SII pide que el logo no pase de un
-     * QUINTO del documento. La hoja es Letter, 279,4 mm de alto, asi que ese
-     * quinto son 55,9 mm. Dibujado a 30 mm de ancho, una proporcion de 1,5 da
-     * 45 mm de alto: entra con holgura bajo esa regla y deja sitio para el
-     * bloque del emisor, que se dibuja al lado.
+     * QUINTO del documento.
      *
-     * Un logo mas alto que ancho en esa medida se montaria sobre el bloque de
-     * datos que arranca en setY(50).
+     * LA HOJA ES A4, 297 mm, NO LETTER. Esto estuvo mal escrito aqui y por poco
+     * nos hace aprobar un limite fuera de norma, asi que queda anotado: LibreDTE
+     * pide 'Letter' al construir el PDF, pero
+     * TCPDF_STATIC::getPageSizeFromFormat() (tcpdf_static.php:2514) resuelve el
+     * formato con un isset() SENSIBLE A MAYUSCULAS y la clave del arreglo es
+     * 'LETTER' (tcpdf_static.php:2273). No encuentra 'Letter', cae en A4 POR
+     * DEFECTO Y SIN AVISAR. Medido con getPageHeight(): 297,00 mm.
+     *
+     * El quinto, entonces, son 59,4 mm -- no los 55,9 de Letter.
+     *
+     * POR QUE 1,25 Y NO 1,5. Dibujado a 40 mm de ancho (antes eran 30), una
+     * proporcion de 1,5 daria 60 mm: SE PASA del quinto. El maximo aritmetico
+     * seria 1,485, pero un limite que cae 0,6 mm por debajo de un techo
+     * normativo no es un limite, es una coincidencia. Con 1,25 el alto maximo
+     * son 50 mm: 9 mm de margen bajo la regla del SII, y coincide con el piso
+     * de setY(max(50, finEmisor)) del bloque de abajo.
+     *
+     * ESTO NO PROTEGE A LOS LOGOS YA CARGADOS. La validacion corre AL SUBIR, no
+     * al dibujar: lo que ya esta en dte_logo se acepto midiendo contra 30 mm y
+     * ahora se dibuja a 40, un 33% mas alto, sin revalidar. Por eso
+     * agregarEmisor() baja el resto del bloque con
+     * max(fin del nombre, getImageRBY()) en vez de con una constante.
      */
-    public const MAX_PROPORCION_ALTO = 1.5;
+    public const MAX_PROPORCION_ALTO = 1.25;
 
     /**
      * Valida los bytes subidos. Devuelve el mensaje de error, o null si sirve.
