@@ -72,6 +72,10 @@ use Plantiflex\Integration\Facturacion\CotizacionFacturadaException;
 use Plantiflex\Integration\Facturacion\MySqlConsultaVentasRepository;
 use Plantiflex\Integration\Facturacion\ConsultaVentasInvalidaException;
 use Plantiflex\Integration\Facturacion\MySqlChatUsoRepository;
+use Plantiflex\Integration\Facturacion\MySqlProveedorRepository;
+use Plantiflex\Integration\Facturacion\ProveedorDuplicadoException;
+use Plantiflex\Integration\Facturacion\MySqlOrdenCompraRepository;
+use Plantiflex\FacturacionCl\Pdf\OrdenCompraPdfGenerator;
 use Plantiflex\FacturacionCl\Contracts\TraductorPreguntaInterface;
 use Plantiflex\FacturacionCl\Dto\PreguntaTraducida;
 use Plantiflex\FacturacionCl\Dto\VocabularioConsulta;
@@ -442,6 +446,19 @@ function definicionMenu(): array
                 // poder emitir la cola esta vacia por definicion, y su handler
                 // usa exigirProduccionCompleto() igual que sus vecinos.
                 ['clave' => 'ventas.correos', 'label' => 'Envio de correos', 'destino' => '/ventas/correos', 'icono' => 'envio-correo', 'construido' => true, 'requiereProduccion' => true],
+            ],
+        ],
+        // COMPRAS VA DESPUES DE VENTAS Y ANTES DE MAESTROS, y es una seccion
+        // propia y no un item de Maestros: un proveedor es un maestro, pero una
+        // orden de compra es una operacion, y separarlas obligaria al usuario a
+        // ir a dos secciones para hacer una sola cosa.
+        //
+        // requiereProduccion=false en las dos: comprar no emite nada al SII.
+        [
+            'label' => 'Compras',
+            'items' => [
+                ['clave' => 'compras.ordenes', 'label' => 'Ordenes de compra', 'destino' => '/compras/ordenes', 'icono' => 'carga-masiva', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'compras.proveedores', 'label' => 'Proveedores', 'destino' => '/compras/proveedores', 'icono' => 'clientes', 'construido' => true, 'requiereProduccion' => false],
             ],
         ],
         [
@@ -1045,6 +1062,480 @@ function handleProductoDesactivarPost(int $id): void
     }
     flashSet('exito', 'Producto desactivado.');
     redirigirPrg('/maestros/productos');
+}
+
+// ===========================================================================
+//  Compras > Proveedores y ordenes de compra.
+//
+//  VA EN LA DIRECCION CONTRARIA A TODO LO DEMAS: la orden de compra la emite
+//  esta empresa HACIA un proveedor. No pasa por el SII, no consume folio y no
+//  toca el motor -- por eso NINGUN handler de aqui llama a
+//  exigirProduccionCompleto(): se puede comprar sin estar habilitado para
+//  emitir, igual que se puede cotizar.
+// ===========================================================================
+
+function proveedorRepo(): MySqlProveedorRepository
+{
+    return new MySqlProveedorRepository(Db::conexion());
+}
+
+function ordenCompraRepo(): MySqlOrdenCompraRepository
+{
+    return new MySqlOrdenCompraRepository(Db::conexion());
+}
+
+function responder404Compras(string $que, string $volverA): never
+{
+    http_response_code(404);
+    $titulo = $que . ' no encontrado';
+    require __DIR__ . '/../views/partials/header.php';
+    echo '<h1>' . htmlspecialchars($titulo) . '</h1>';
+    echo '<p>No existe o no pertenece a tu empresa. <a href="' . htmlspecialchars($volverA)
+        . '">Volver al listado</a>.</p>';
+    require __DIR__ . '/../views/partials/footer.php';
+    exit;
+}
+
+/**
+ * Valida el POST del maestro de proveedores.
+ *
+ * SIN REGLA DE COMPLETITUD, y es la diferencia con validarCliente(): aquel exige
+ * giro/direccion/comuna porque "sin ellos el SII no acepta la factura". A un
+ * proveedor NO se le emite ningun DTE, asi que esa regla no existe aqui. Solo
+ * RUT y razon social son obligatorios.
+ *
+ * @return array{0:array<string,mixed>, 1:array<string,string>}
+ */
+function validarProveedor(array $post): array
+{
+    $errores = [];
+
+    $rut = Rut::normalizar(trim((string) ($post['rut_proveedor'] ?? '')));
+    if ($rut === '' || ! Rut::valido($rut)) {
+        $errores['rut_proveedor'] = 'El RUT es obligatorio y debe ser valido.';
+    }
+    $razon = trim((string) ($post['razon_social'] ?? ''));
+    if ($razon === '') {
+        $errores['razon_social'] = 'La razon social es obligatoria.';
+    }
+    $email = trim((string) ($post['email'] ?? ''));
+    if ($email !== '' && ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errores['email'] = 'El correo no es valido.';
+    }
+
+    return [[
+        'rut_proveedor'    => $rut,
+        'razon_social'     => $razon,
+        'giro'             => trim((string) ($post['giro'] ?? '')),
+        'direccion'        => trim((string) ($post['direccion'] ?? '')),
+        'comuna'           => trim((string) ($post['comuna'] ?? '')),
+        'email'            => $email,
+        'telefono'         => trim((string) ($post['telefono'] ?? '')),
+        'contacto'         => trim((string) ($post['contacto'] ?? '')),
+        'condiciones_pago' => trim((string) ($post['condiciones_pago'] ?? '')),
+    ], $errores];
+}
+
+function handleProveedoresListar(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = proveedorRepo();
+    $q        = trim((string) ($_GET['q'] ?? ''));
+    $incluirInactivos = ($_GET['inactivos'] ?? '') === '1';
+
+    $porPagina = 25;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $total     = $repo->contar($cuentaId, $q !== '' ? $q : null, ! $incluirInactivos);
+
+    vista('proveedores-listado', [
+        'proveedores'      => $repo->listar($cuentaId, $q !== '' ? $q : null, ! $incluirInactivos,
+            $porPagina, ($pagina - 1) * $porPagina),
+        'q'                => $q,
+        'incluirInactivos' => $incluirInactivos,
+        'pagina'           => $pagina,
+        'totalPaginas'     => max(1, (int) ceil($total / $porPagina)),
+        'total'            => $total,
+        'flash'            => flashTomar(),
+        'navActivo'        => 'compras.proveedores',
+    ]);
+}
+
+function handleProveedorNuevoGet(): void
+{
+    vista('proveedor-form', ['modo' => 'nuevo', 'accion' => '/compras/proveedores/nuevo',
+        'proveedor' => [], 'errores' => [], 'navActivo' => 'compras.proveedores']);
+}
+
+function handleProveedorNuevoPost(): void
+{
+    [$datos, $errores] = validarProveedor($_POST);
+
+    if ($errores === []) {
+        try {
+            proveedorRepo()->crear(Auth::cuentaId(), $datos);
+            flashSet('exito', 'Proveedor creado.');
+            redirigirPrg('/compras/proveedores');
+        } catch (ProveedorDuplicadoException $e) {
+            // El mensaje del repositorio NOMBRA EL RUT: quien carga varios
+            // seguidos necesita saber cual de los que tecleo ya existia.
+            $errores['rut_proveedor'] = $e->getMessage();
+        }
+    }
+
+    vista('proveedor-form', ['modo' => 'nuevo', 'accion' => '/compras/proveedores/nuevo',
+        'proveedor' => $datos, 'errores' => $errores, 'navActivo' => 'compras.proveedores']);
+}
+
+function handleProveedorEditarGet(int $id): void
+{
+    $p = proveedorRepo()->buscarPorId(Auth::cuentaId(), $id);
+    if ($p === null) {
+        responder404Compras('Proveedor', '/compras/proveedores');
+    }
+    vista('proveedor-form', ['modo' => 'editar', 'accion' => "/compras/proveedores/{$id}/editar",
+        'proveedor' => $p, 'errores' => [], 'navActivo' => 'compras.proveedores']);
+}
+
+function handleProveedorEditarPost(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = proveedorRepo();
+    if ($repo->buscarPorId($cuentaId, $id) === null) {
+        responder404Compras('Proveedor', '/compras/proveedores');
+    }
+
+    [$datos, $errores] = validarProveedor($_POST);
+    if ($errores === []) {
+        try {
+            $repo->actualizar($cuentaId, $id, $datos);
+            flashSet('exito', 'Proveedor actualizado.');
+            redirigirPrg('/compras/proveedores');
+        } catch (ProveedorDuplicadoException $e) {
+            $errores['rut_proveedor'] = $e->getMessage();
+        }
+    }
+
+    $datos['id'] = $id;
+    vista('proveedor-form', ['modo' => 'editar', 'accion' => "/compras/proveedores/{$id}/editar",
+        'proveedor' => $datos, 'errores' => $errores, 'navActivo' => 'compras.proveedores']);
+}
+
+function handleProveedorActivarPost(int $id, bool $activar): void
+{
+    $repo = proveedorRepo();
+    $ok = $activar ? $repo->activar(Auth::cuentaId(), $id) : $repo->desactivar(Auth::cuentaId(), $id);
+    if (! $ok) {
+        responder404Compras('Proveedor', '/compras/proveedores');
+    }
+    flashSet('exito', $activar ? 'Proveedor activado.' : 'Proveedor desactivado.');
+    redirigirPrg('/compras/proveedores');
+}
+
+/**
+ * GET /compras/proveedor-por-rut?rut=...  -> JSON.
+ *
+ * MISMO PATRON QUE /ventas/cliente-por-rut, que es el que resolvio la queja de
+ * cotizacion: el datalist PROPONE (para no tener que saberse el RUT) y este
+ * endpoint RELLENA el resto. Los dos juntos; uno solo no alcanza.
+ */
+function handleProveedorPorRutGet(): never
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $rut = Rut::normalizar(trim((string) ($_GET['rut'] ?? '')));
+    if ($rut === '' || ! Rut::valido($rut)) {
+        echo json_encode(['estado' => 'rut_invalido'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $p = proveedorRepo()->buscarPorRut(Auth::cuentaId(), $rut);
+    echo json_encode(
+        $p === null ? ['estado' => 'no_encontrado', 'rut' => $rut]
+                    : ['estado' => 'encontrado', 'proveedor' => $p],
+        JSON_UNESCAPED_UNICODE
+    );
+    exit;
+}
+
+// ---------------------------------------------------------------------------
+//  Ordenes de compra
+// ---------------------------------------------------------------------------
+
+/**
+ * @return array{0:array<string,mixed>, 1:list<array<string,mixed>>, 2:array<string,string>}
+ */
+function validarOrdenCompra(array $post): array
+{
+    $errores = [];
+
+    $rut = Rut::normalizar(trim((string) ($post['proveedor_rut'] ?? '')));
+    if ($rut === '' || ! Rut::valido($rut)) {
+        $errores['proveedor_rut'] = 'El RUT del proveedor es obligatorio y debe ser valido.';
+    }
+    $razon = trim((string) ($post['proveedor_razon_social'] ?? ''));
+    if ($razon === '') {
+        $errores['proveedor_razon_social'] = 'La razon social del proveedor es obligatoria.';
+    }
+    $fecha = trim((string) ($post['fecha'] ?? ''));
+    if ($fecha === '' || ! fechaValida($fecha)) {
+        $errores['fecha'] = 'La fecha es obligatoria (AAAA-MM-DD).';
+    }
+    $entrega = trim((string) ($post['fecha_entrega'] ?? ''));
+    if ($entrega !== '' && ! fechaValida($entrega)) {
+        $errores['fecha_entrega'] = 'La fecha de entrega no es valida.';
+    }
+    if ($entrega !== '' && $fecha !== '' && fechaValida($fecha) && fechaValida($entrega) && $entrega < $fecha) {
+        $errores['fecha_entrega'] = 'La entrega no puede ser anterior a la fecha de la orden.';
+    }
+
+    // proveedor_id SE RESUELVE EN EL SERVIDOR, desde el RUT. Un id que viene del
+    // formulario es un id que el usuario eligio; buscarPorRut() ya lleva
+    // cuenta_id en su WHERE. Que el RUT no este en el maestro es NORMAL: se
+    // compra una vez a alguien que no es proveedor habitual.
+    $proveedorId = null;
+    if ($rut !== '' && Rut::valido($rut)) {
+        $ficha = proveedorRepo()->buscarPorRut(Auth::cuentaId(), $rut);
+        $proveedorId = $ficha !== null ? (int) $ficha['id'] : null;
+    }
+
+    $cabecera = [
+        'proveedor_id'           => $proveedorId,
+        'proveedor_rut'          => $rut,
+        'proveedor_razon_social' => $razon,
+        'proveedor_giro'         => trim((string) ($post['proveedor_giro'] ?? '')),
+        'proveedor_direccion'    => trim((string) ($post['proveedor_direccion'] ?? '')),
+        'proveedor_comuna'       => trim((string) ($post['proveedor_comuna'] ?? '')),
+        'proveedor_email'        => trim((string) ($post['proveedor_email'] ?? '')),
+        'proveedor_contacto'     => trim((string) ($post['proveedor_contacto'] ?? '')),
+        'condiciones_pago'       => trim((string) ($post['condiciones_pago'] ?? '')),
+        'fecha'                  => $fecha,
+        'fecha_entrega'          => $entrega,
+        'lugar_entrega'          => trim((string) ($post['lugar_entrega'] ?? '')),
+        'notas'                  => trim((string) ($post['notas'] ?? '')),
+    ];
+
+    $lineas = [];
+    foreach (is_array($post['lineas'] ?? null) ? $post['lineas'] : [] as $i => $l) {
+        if (! is_array($l)) {
+            continue;
+        }
+        $nombre = trim((string) ($l['nombre'] ?? ''));
+        $cantR  = trim((string) ($l['cantidad'] ?? ''));
+        $precR  = trim((string) ($l['precio_unitario'] ?? ''));
+        if ($nombre === '' && $cantR === '' && $precR === '') {
+            continue;   // fila vacia: se ignora, igual que en emision y cotizacion
+        }
+        if ($nombre === '') {
+            $errores["lineas[{$i}].nombre"] = 'El item necesita nombre.';
+        }
+        // Coma o punto: el usuario escribe en teclado chileno.
+        $cant = (float) str_replace(',', '.', $cantR);
+        if ($cantR === '' || ! is_numeric(str_replace(',', '.', $cantR)) || $cant <= 0) {
+            $errores["lineas[{$i}].cantidad"] = 'La cantidad debe ser mayor que 0.';
+        }
+        $prec = (float) str_replace(',', '.', $precR);
+        if ($precR === '' || ! is_numeric(str_replace(',', '.', $precR)) || $prec < 0) {
+            $errores["lineas[{$i}].precio_unitario"] = 'El precio debe ser 0 o mayor.';
+        }
+        $dpct = trim((string) ($l['descuento_pct'] ?? ''));
+        $dpctN = $dpct === '' ? 0.0 : (float) str_replace(',', '.', $dpct);
+        if ($dpctN < 0 || $dpctN > 100) {
+            $errores["lineas[{$i}].descuento_pct"] = 'El descuento va entre 0 y 100.';
+        }
+
+        $lineas[] = [
+            'producto_id'     => ctype_digit((string) ($l['producto_id'] ?? '')) ? (int) $l['producto_id'] : null,
+            'nombre'          => $nombre,
+            'descripcion'     => trim((string) ($l['descripcion'] ?? '')),
+            'unidad'          => trim((string) ($l['unidad'] ?? '')),
+            'cantidad'        => $cant,
+            'precio_unitario' => $prec,
+            'descuento_pct'   => $dpctN,
+            'exento'          => ! empty($l['exento']),
+        ];
+    }
+
+    if ($lineas === []) {
+        $errores['lineas'] = 'La orden necesita al menos una linea.';
+    }
+
+    return [$cabecera, $lineas, $errores];
+}
+
+function handleOrdenesCompraListar(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = ordenCompraRepo();
+    $q        = trim((string) ($_GET['q'] ?? ''));
+    $incluirInactivas = ($_GET['inactivas'] ?? '') === '1';
+
+    $porPagina = 25;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $total     = $repo->contar($cuentaId, $q !== '' ? $q : null, ! $incluirInactivas);
+
+    vista('ordenes-compra-listado', [
+        'ordenes'          => $repo->listar($cuentaId, $q !== '' ? $q : null, ! $incluirInactivas,
+            $porPagina, ($pagina - 1) * $porPagina),
+        'q'                => $q,
+        'incluirInactivas' => $incluirInactivas,
+        'pagina'           => $pagina,
+        'totalPaginas'     => max(1, (int) ceil($total / $porPagina)),
+        'total'            => $total,
+        'flash'            => flashTomar(),
+        'navActivo'        => 'compras.ordenes',
+    ]);
+}
+
+function renderOrdenCompraForm(string $modo, string $accion, array $orden, array $lineas, array $errores): never
+{
+    vista('orden-compra-form', [
+        'modo'        => $modo,
+        'accion'      => $accion,
+        'orden'       => $orden,
+        'lineas'      => $lineas,
+        'errores'     => $errores,
+        // Mismo camino que el formulario de cotizacion: una consulta al maestro,
+        // el mismo tope y el mismo "solo activos".
+        'productos'   => productoRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
+        'proveedores' => proveedorRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
+        'navActivo'   => 'compras.ordenes',
+    ]);
+}
+
+function handleOrdenCompraNuevaGet(): void
+{
+    renderOrdenCompraForm('nueva', '/compras/ordenes/nueva', ['fecha' => date('Y-m-d')], [], []);
+}
+
+function handleOrdenCompraNuevaPost(): void
+{
+    [$cabecera, $lineas, $errores] = validarOrdenCompra($_POST);
+
+    if ($errores === []) {
+        [$id, $numero] = ordenCompraRepo()->crear(Auth::cuentaId(), $cabecera, $lineas);
+        flashSet('exito', "Orden de compra N° {$numero} creada.");
+        redirigirPrg("/compras/ordenes/{$id}");
+    }
+
+    renderOrdenCompraForm('nueva', '/compras/ordenes/nueva', $cabecera, $lineas, $errores);
+}
+
+function handleOrdenCompraVerGet(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $oc = ordenCompraRepo()->buscarPorId($cuentaId, $id);
+    if ($oc === null) {
+        responder404Compras('Orden de compra', '/compras/ordenes');
+    }
+    vista('orden-compra-detalle', [
+        'orden'     => $oc,
+        'envios'    => ordenCompraRepo()->enviosDe($cuentaId, $id),
+        'flash'     => flashTomar(),
+        'navActivo' => 'compras.ordenes',
+    ]);
+}
+
+function handleOrdenCompraEditarGet(int $id): void
+{
+    $oc = ordenCompraRepo()->buscarPorId(Auth::cuentaId(), $id);
+    if ($oc === null) {
+        responder404Compras('Orden de compra', '/compras/ordenes');
+    }
+    renderOrdenCompraForm('editar', "/compras/ordenes/{$id}/editar", $oc, $oc['lineas'], []);
+}
+
+function handleOrdenCompraEditarPost(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = ordenCompraRepo();
+    if ($repo->buscarPorId($cuentaId, $id) === null) {
+        responder404Compras('Orden de compra', '/compras/ordenes');
+    }
+
+    [$cabecera, $lineas, $errores] = validarOrdenCompra($_POST);
+    if ($errores === []) {
+        // SE PUEDE EDITAR AUNQUE YA SE HAYA ENVIADO, y es deliberado: no hay
+        // estados de seguimiento. Lo que NO se toca es el historial de envios:
+        // editar cambia la orden de hoy, no reescribe el correo que el proveedor
+        // ya recibio.
+        $repo->actualizar($cuentaId, $id, $cabecera, $lineas);
+        flashSet('exito', 'Orden de compra actualizada.');
+        redirigirPrg("/compras/ordenes/{$id}");
+    }
+
+    $cabecera['numero'] = $repo->buscarPorId($cuentaId, $id)['numero'] ?? null;
+    renderOrdenCompraForm('editar', "/compras/ordenes/{$id}/editar", $cabecera, $lineas, $errores);
+}
+
+function handleOrdenCompraPdfGet(int $id): never
+{
+    $cuentaId = Auth::cuentaId();
+    $oc = ordenCompraRepo()->buscarPorId($cuentaId, $id);
+    if ($oc === null) {
+        responder404Compras('Orden de compra', '/compras/ordenes');
+    }
+
+    $pdo       = Db::conexion();
+    $rutEmisor = rutEmisorDeLaCuenta($pdo, $cuentaId);
+    $emisor    = datosEmisorParaImpreso($pdo, $rutEmisor);
+    $logo      = $rutEmisor !== null ? LogoEmpresa::leer($pdo, $rutEmisor) : null;
+
+    try {
+        $pdf = (new OrdenCompraPdfGenerator())->generar(
+            $emisor, $oc, $oc['lineas'], $logo !== null ? LogoEmpresa::paraTcpdf($logo) : null
+        );
+    } catch (Throwable $e) {
+        error_log('orden de compra pdf: ' . $e->getMessage());
+        http_response_code(500);
+        exit('No se pudo generar el PDF de la orden de compra.');
+    }
+
+    header('Content-Type: application/pdf');
+    header(sprintf('Content-Disposition: inline; filename="orden_compra_%d.pdf"', (int) $oc['numero']));
+    header('Content-Length: ' . strlen($pdf));
+    echo $pdf;
+    exit;
+}
+
+/**
+ * Encola el envio. NO ENVIA AQUI: eso lo hace el runner.
+ *
+ * POR QUE ENCOLAR Y NO MANDAR EN LA MISMA PETICION: Brevo puede tardar o fallar,
+ * y el usuario quedaria mirando una pantalla colgada por algo que no es su
+ * culpa. Con la cola, el boton responde al instante y el reintento es del
+ * runner. Mismo criterio que el correo del DTE.
+ */
+function handleOrdenCompraEnviarPost(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = ordenCompraRepo();
+    $oc = $repo->buscarPorId($cuentaId, $id);
+    if ($oc === null) {
+        responder404Compras('Orden de compra', '/compras/ordenes');
+    }
+
+    // El destinatario del formulario gana sobre el congelado en la orden: quien
+    // aprieta enviar puede saber que el correo cambio.
+    $destino = trim((string) ($_POST['destinatario'] ?? ''));
+    if ($destino === '') {
+        $destino = (string) ($oc['proveedor_email'] ?? '');
+    }
+
+    try {
+        $intento = $repo->encolarEnvio($cuentaId, $id, $destino !== '' ? $destino : null);
+        flashSet(
+            $destino !== '' ? 'exito' : 'advertencia',
+            $destino !== ''
+                ? "Envio N° {$intento} encolado a {$destino}. Sale en la proxima pasada del runner."
+                : 'La orden quedo encolada SIN destinatario: no hay a quien mandarla. '
+                    . 'Carga el correo del proveedor y vuelve a enviarla.'
+        );
+    } catch (Throwable $e) {
+        // ENCOLAR NUNCA PUEDE ROMPER NADA: la orden ya existe y el usuario tiene
+        // que poder seguir trabajando. Misma regla que rige el encolado del DTE.
+        error_log('orden de compra: fallo al encolar el envio de la orden ' . $id . ' - ' . $e->getMessage());
+        flashSet('error', 'No se pudo encolar el envio. La orden esta guardada; intenta de nuevo.');
+    }
+
+    redirigirPrg("/compras/ordenes/{$id}");
 }
 
 // ===========================================================================
@@ -6328,6 +6819,74 @@ if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/desactivar$#', 
 }
 
 // --- Informes > Chat de consultas ---
+// --- Compras > Proveedores ---
+//
+// SIN exigirProduccionCompleto() en ninguna: comprar no emite nada al SII.
+if ($metodo === 'GET' && $ruta === '/compras/proveedores') {
+    Auth::requerirSesion();
+    handleProveedoresListar();
+}
+if ($metodo === 'GET' && $ruta === '/compras/proveedores/nuevo') {
+    Auth::requerirSesion();
+    handleProveedorNuevoGet();
+}
+if ($metodo === 'POST' && $ruta === '/compras/proveedores/nuevo') {
+    Auth::requerirSesion();
+    handleProveedorNuevoPost();
+}
+if ($metodo === 'GET' && $ruta === '/compras/proveedor-por-rut') {
+    Auth::requerirSesion();
+    handleProveedorPorRutGet();
+}
+if ($metodo === 'GET' && preg_match('#^/compras/proveedores/(\d+)/editar$#', $ruta, $mProv)) {
+    Auth::requerirSesion();
+    handleProveedorEditarGet((int) $mProv[1]);
+}
+if ($metodo === 'POST' && preg_match('#^/compras/proveedores/(\d+)/editar$#', $ruta, $mProv)) {
+    Auth::requerirSesion();
+    handleProveedorEditarPost((int) $mProv[1]);
+}
+if ($metodo === 'POST' && preg_match('#^/compras/proveedores/(\d+)/(activar|desactivar)$#', $ruta, $mProv)) {
+    Auth::requerirSesion();
+    handleProveedorActivarPost((int) $mProv[1], $mProv[2] === 'activar');
+}
+
+// --- Compras > Ordenes de compra ---
+if ($metodo === 'GET' && $ruta === '/compras/ordenes') {
+    Auth::requerirSesion();
+    handleOrdenesCompraListar();
+}
+if ($metodo === 'GET' && $ruta === '/compras/ordenes/nueva') {
+    Auth::requerirSesion();
+    handleOrdenCompraNuevaGet();
+}
+if ($metodo === 'POST' && $ruta === '/compras/ordenes/nueva') {
+    Auth::requerirSesion();
+    handleOrdenCompraNuevaPost();
+}
+// El PDF y el envio van ANTES que /(\d+)$ para que "12/pdf" no lo capture el
+// patron de ver.
+if ($metodo === 'GET' && preg_match('#^/compras/ordenes/(\d+)/pdf$#', $ruta, $mOc)) {
+    Auth::requerirSesion();
+    handleOrdenCompraPdfGet((int) $mOc[1]);
+}
+if ($metodo === 'POST' && preg_match('#^/compras/ordenes/(\d+)/enviar$#', $ruta, $mOc)) {
+    Auth::requerirSesion();
+    handleOrdenCompraEnviarPost((int) $mOc[1]);
+}
+if ($metodo === 'GET' && preg_match('#^/compras/ordenes/(\d+)/editar$#', $ruta, $mOc)) {
+    Auth::requerirSesion();
+    handleOrdenCompraEditarGet((int) $mOc[1]);
+}
+if ($metodo === 'POST' && preg_match('#^/compras/ordenes/(\d+)/editar$#', $ruta, $mOc)) {
+    Auth::requerirSesion();
+    handleOrdenCompraEditarPost((int) $mOc[1]);
+}
+if ($metodo === 'GET' && preg_match('#^/compras/ordenes/(\d+)$#', $ruta, $mOc)) {
+    Auth::requerirSesion();
+    handleOrdenCompraVerGet((int) $mOc[1]);
+}
+
 // --- Chat ---
 //
 // SIN exigirProduccionCompleto(): preguntar no emite nada. Ver la nota de la

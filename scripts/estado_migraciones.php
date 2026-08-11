@@ -441,6 +441,45 @@ const MIGRACIONES = [
              'columnas' => ['pregunta', 'desenlace'], 'esperado' => 2],
         ],
     ],
+    [
+        // El UNIQUE es la huella que importa: es lo que permite que un mismo RUT
+        // sea cliente Y proveedor de la misma cuenta sin chocar, que fue el
+        // motivo entero de hacer una tabla aparte en vez de generalizar cliente.
+        'id' => '036', 'archivo' => '036_proveedor.sql', 'nota' => 'CREATE (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'proveedor', 'tablas' => ['proveedor'], 'esperado' => 1],
+            ['tipo' => 'indice', 'desc' => 'uk_proveedor_rut', 'tabla' => 'proveedor', 'indice' => 'uk_proveedor_rut'],
+            ['tipo' => 'columnas', 'desc' => 'proveedor.contacto/condiciones_pago', 'tabla' => 'proveedor',
+             'columnas' => ['contacto', 'condiciones_pago'], 'esperado' => 2],
+        ],
+    ],
+    [
+        // Las tres tablas y el UNIQUE del correlativo, que es la ultima linea de
+        // defensa si alguna vez fallara el FOR UPDATE del repositorio.
+        'id' => '037', 'archivo' => '037_orden_compra.sql', 'nota' => 'CREATE (3 tablas)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'orden_compra, orden_compra_linea, orden_compra_correlativo',
+             'tablas' => ['orden_compra', 'orden_compra_linea', 'orden_compra_correlativo'], 'esperado' => 3],
+            ['tipo' => 'indice', 'desc' => 'uk_orden_compra_numero', 'tabla' => 'orden_compra', 'indice' => 'uk_orden_compra_numero'],
+            // Los totales CONGELADOS: si estas columnas faltaran, alguien los
+            // estaria recalculando al mostrar y el papel del proveedor podria
+            // dejar de coincidir con la pantalla.
+            ['tipo' => 'columnas', 'desc' => 'orden_compra.neto/iva/total', 'tabla' => 'orden_compra',
+             'columnas' => ['neto', 'exento', 'iva', 'total'], 'esperado' => 4],
+        ],
+    ],
+    [
+        // La cola PROPIA. Si esta faltara, el envio no tendria donde encolarse y
+        // la tentacion seria colgarlo de dte_envio_correo, que tiene FK
+        // obligatoria a dte_emitido y no admite una orden de compra.
+        'id' => '038', 'archivo' => '038_orden_compra_envio.sql', 'nota' => 'CREATE (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'orden_compra_envio', 'tablas' => ['orden_compra_envio'], 'esperado' => 1],
+            ['tipo' => 'indice', 'desc' => 'uk_oc_envio', 'tabla' => 'orden_compra_envio', 'indice' => 'uk_oc_envio'],
+            ['tipo' => 'columnas', 'desc' => 'orden_compra_envio.message_id', 'tabla' => 'orden_compra_envio',
+             'columnas' => ['message_id'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
