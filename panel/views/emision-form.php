@@ -27,6 +27,15 @@
  *     #productos-list, #receptor-* y #rut-aviso.
  *   - La fila del detalle esta duplicada: aqui en PHP y en nuevaFilaHTML() del
  *     JS. Las dos deben producir el mismo DOM.
+ *
+ * CONVERSION DE COTIZACION (segunda entrega): $form puede traer cotizacion_id,
+ * cotizacion_numero y, en cada detalle, cotizacion_linea_id y pendiente. Cuando
+ * NO vienen -- toda emision normal -- esta vista produce el mismo HTML que antes.
+ *
+ * Y HAY UNA ASIMETRIA A PROPOSITO CON nuevaFilaHTML() DEL JS: la fila de PHP
+ * puede llevar el hidden cotizacion_linea_id y la del JS NUNCA lo lleva. No es un
+ * olvido -- es la regla: una linea que el usuario agrega a mano es venta nueva
+ * dentro de la misma factura y no descuenta saldo de ninguna cotizacion.
  */
 $titulo = $tituloDoc;
 require __DIR__ . '/partials/header.php';
@@ -47,6 +56,12 @@ $errStyle = static function (string $campo) use ($errorCampo): string {
 // Detalles a renderizar: los enviados (re-render) o una linea vacia.
 $detalles = (isset($form['detalles']) && is_array($form['detalles']) && $form['detalles'] !== [])
     ? array_values($form['detalles']) : [[]];
+
+// CONVERSION DE COTIZACION: null en toda emision normal. Cuando es null esta
+// vista se comporta y renderiza exactamente igual que antes de la segunda
+// entrega de cotizaciones -- ni un atributo de diferencia.
+$cotizacionId     = isset($form['cotizacion_id']) ? (int) $form['cotizacion_id'] : null;
+$cotizacionNumero = isset($form['cotizacion_numero']) ? (int) $form['cotizacion_numero'] : null;
 
 // Mapa nombre -> datos para el autocompletado de linea desde el maestro.
 $mapaProductos = [];
@@ -129,6 +144,21 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 <form method="post" action="<?= htmlspecialchars($accion); ?>" id="form-emision" class="form-compacto">
     <?= csrfInput(); ?>
     <input type="hidden" name="idem_key" value="<?= htmlspecialchars($idemKey); ?>">
+    <?php if ($cotizacionId !== null): ?>
+        <?php
+        /* CONVERSION DE UNA COTIZACION. Este hidden y los de cada fila SOLO
+           existen cuando se llega desde /ventas/cotizaciones/{id}/facturar: en
+           una emision normal $cotizacionId es null y esta vista produce
+           EXACTAMENTE el mismo HTML que antes de esta entrega. Ese es el
+           requisito que manda -- el camino que hoy factura de verdad es el que
+           no lleva cotizacion.
+
+           EL ID NO PROTEGE NADA POR SI SOLO: un hidden es texto que el usuario
+           edita. La garantia esta en el servidor, donde cada id se valida contra
+           la cotizacion Y contra la cuenta (pendientesDeLineas()). */
+        ?>
+        <input type="hidden" name="cotizacion_id" value="<?= (int) $cotizacionId; ?>">
+    <?php endif; ?>
 
     <div class="layout-principal-lateral">
         <div>
@@ -340,6 +370,16 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
     <section class="tarjeta" aria-labelledby="titulo-detalle">
         <h2 id="titulo-detalle">Detalle del documento</h2>
+        <?php if ($cotizacionId !== null): ?>
+            <div class="alerta alerta--info" role="status">
+                Facturando la cotizacion N&deg; <?= (int) $cotizacionNumero; ?>.
+                Las cantidades vienen con lo que queda pendiente de cada linea y se pueden
+                bajar; los precios se pueden cambiar. Las lineas ya facturadas por completo
+                aparecen en cero.
+                <strong>Una linea que agregues aqui es venta nueva</strong> y no descuenta
+                saldo de la cotizacion.
+            </div>
+        <?php endif; ?>
         <div class="tabla-scroll">
             <table id="tabla-detalle" class="tabla-datos tabla-editable">
                 <thead>
@@ -355,7 +395,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <tbody>
                     <?php foreach ($detalles as $i => $d): ?>
                         <tr>
-                            <td class="col-producto"><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" aria-label="Producto o servicio"<?= $errStyle("detalles[{$i}].nombre"); ?>></td>
+                            <td class="col-producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" aria-label="Producto o servicio"<?= $errStyle("detalles[{$i}].nombre"); ?>><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
                             <td class="col-cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" aria-label="Cantidad"<?= $errStyle("detalles[{$i}].cantidad"); ?>></td>
                             <td class="col-precio"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][precioUnitario]" value="<?= htmlspecialchars((string) ($d['precioUnitario'] ?? '')); ?>" class="det-precio" aria-label="Precio unitario"<?= $errStyle("detalles[{$i}].precioUnitario"); ?>></td>
                             <td class="col-unidad"><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" aria-label="Unidad"></td>

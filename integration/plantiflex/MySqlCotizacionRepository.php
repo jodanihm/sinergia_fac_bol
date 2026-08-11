@@ -375,6 +375,218 @@ final class MySqlCotizacionRepository
         }
     }
 
+    // =======================================================================
+    //  LA CONVERSION
+    // =======================================================================
+
+    /**
+     * Valida los id de linea que vinieron del formulario contra la cotizacion Y
+     * contra la cuenta, y devuelve el pendiente de cada uno.
+     *
+     * UN ID QUE VIENE DEL FORMULARIO ES UN ID QUE EL USUARIO ELIGIO. Un hidden
+     * es texto que se edita: nada impide mandar el id de una linea de otra
+     * cotizacion, o de otra cuenta. Por eso el WHERE lleva las dos condiciones
+     * -- c.cuenta_id y l.cotizacion_id -- y el llamador compara lo que pidio con
+     * lo que esto devuelve: un id que no vuelve es un id que no existe PARA ESTE
+     * USUARIO, y no se distingue "no existe" de "es de otro" a proposito, mismo
+     * criterio que MySqlClienteRepository.
+     *
+     * @param list<int> $lineaIds
+     * @return array<int,array{cantidad:float, facturada:float, pendiente:float, unidad:?string, nombre:string}>
+     *         indexado por id de linea; solo los que SON de esta cotizacion y cuenta
+     */
+    public function pendientesDeLineas(int $cuentaId, int $cotizacionId, array $lineaIds): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $lineaIds)));
+        if ($ids === []) {
+            return [];
+        }
+        $marcas = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = $this->pdo->prepare(
+            'SELECT l.id, l.nombre, l.unidad, l.cantidad, l.cantidad_facturada '
+            . 'FROM cotizacion_linea l '
+            . 'INNER JOIN cotizacion c ON c.id = l.cotizacion_id '
+            . "WHERE c.cuenta_id = ? AND l.cotizacion_id = ? AND l.id IN ({$marcas})"
+        );
+        $stmt->execute(array_merge([$cuentaId, $cotizacionId], $ids));
+
+        $out = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $f) {
+            $out[(int) $f['id']] = [
+                'nombre'    => (string) $f['nombre'],
+                'unidad'    => $f['unidad'],
+                'cantidad'  => (float) $f['cantidad'],
+                'facturada' => (float) $f['cantidad_facturada'],
+                'pendiente' => (float) $f['cantidad'] - (float) $f['cantidad_facturada'],
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * Descuenta el saldo y deja el vinculo, EN UNA SOLA TRANSACCION LOCAL.
+     *
+     * =====================================================================
+     * ESTA TRANSACCION NO ENVUELVE LA EMISION, Y ESO ES LO QUE LA DEFINE
+     * =====================================================================
+     *
+     * Cuando esto empieza, LA FACTURA YA EXISTE: el motor devolvio 201, el SII
+     * tiene el documento y el folio esta quemado. No hay nada que deshacer.
+     *
+     * Es lo CONTRARIO del patron del encolado de correos (panel/public/index.php,
+     * handleEmisionPost): alli se envuelve lo accesorio -- un correo -- para que
+     * no rompa lo esencial. Aqui lo esencial YA PASO y lo que queda es dejar
+     * constancia. Por eso el rollback de este metodo NO desemite nada: solo evita
+     * dejar el saldo descontado sin vinculo, o el vinculo sin descuento.
+     *
+     * LOS DOS O NINGUNO. Un saldo descontado sin fila en cotizacion_factura es un
+     * descuento que nadie puede rastrear; un vinculo sin descuento deja la
+     * cotizacion facturable dos veces.
+     *
+     * NO SE CAPTURA NADA AQUI. Si esto falla, el llamador tiene que enterarse
+     * para poder registrarlo ruidoso Y AVISARLE AL USUARIO QUE LA FACTURA SI SE
+     * EMITIO, con su folio -- lo peor que puede pasar es que crea que no y
+     * vuelva a emitir, porque los folios no se liberan.
+     *
+     * @param array<int,float> $cantidadPorLinea id de cotizacion_linea => cantidad a descontar
+     * @return int id de la fila de cotizacion_factura
+     */
+    public function registrarFacturacion(
+        int $cuentaId,
+        int $cotizacionId,
+        string $rutEmisor,
+        int $tipoDte,
+        int $folio,
+        ?string $trackId,
+        string $claveIdempotencia,
+        array $cantidadPorLinea,
+    ): int {
+        $this->pdo->beginTransaction();
+        try {
+            // BLOQUEO DE LAS LINEAS ANTES DE LEER EL SALDO. Sin esto, dos
+            // conversiones simultaneas de la misma cotizacion leerian el mismo
+            // pendiente y las dos pasarian la comprobacion.
+            $lock = $this->pdo->prepare(
+                'SELECT l.id FROM cotizacion_linea l '
+                . 'INNER JOIN cotizacion c ON c.id = l.cotizacion_id '
+                . 'WHERE c.cuenta_id = ? AND l.cotizacion_id = ? FOR UPDATE'
+            );
+            $lock->execute([$cuentaId, $cotizacionId]);
+
+            $pendientes = $this->pendientesDeLineas($cuentaId, $cotizacionId, array_keys($cantidadPorLinea));
+
+            $factura = $this->pdo->prepare(
+                'INSERT INTO cotizacion_factura (cuenta_id, cotizacion_id, rut_emisor, tipo_dte, '
+                . ' folio, track_id, clave_idempotencia) '
+                . 'VALUES (:cuenta, :cot, :rut, :tipo, :folio, :track, :clave)'
+            );
+            $factura->execute([
+                'cuenta' => $cuentaId,
+                'cot'    => $cotizacionId,
+                'rut'    => $rutEmisor,
+                'tipo'   => $tipoDte,
+                'folio'  => $folio,
+                'track'  => $trackId,
+                'clave'  => $claveIdempotencia,
+            ]);
+            $facturaId = (int) $this->pdo->lastInsertId();
+
+            $insLinea = $this->pdo->prepare(
+                'INSERT INTO cotizacion_factura_linea (cotizacion_factura_id, cotizacion_linea_id, cantidad) '
+                . 'VALUES (?, ?, ?)'
+            );
+            // EL UPDATE LLEVA SU PROPIA GUARDA EN EL WHERE, ademas del CHECK de
+            // la migracion 032 y de la comprobacion en PHP. Tres capas, y la que
+            // manda es la de la base: si otra transaccion se colo entre la
+            // lectura y esto, rowCount() sale 0 y revienta.
+            $updSaldo = $this->pdo->prepare(
+                'UPDATE cotizacion_linea SET cantidad_facturada = cantidad_facturada + :cant '
+                . 'WHERE id = :id AND cantidad_facturada + :cant2 <= cantidad'
+            );
+
+            foreach ($cantidadPorLinea as $lineaId => $cantidad) {
+                $lineaId  = (int) $lineaId;
+                $cantidad = (float) $cantidad;
+
+                if ($cantidad <= 0) {
+                    continue; // una linea con 0 no descuenta ni deja rastro
+                }
+                if (! isset($pendientes[$lineaId])) {
+                    throw new RuntimeException(
+                        "la linea {$lineaId} no pertenece a la cotizacion {$cotizacionId} de esta cuenta."
+                    );
+                }
+                if ($cantidad > $pendientes[$lineaId]['pendiente'] + 0.00005) {
+                    throw new RuntimeException(sprintf(
+                        'la linea %d tiene %s pendiente y se intento facturar %s.',
+                        $lineaId,
+                        rtrim(rtrim(number_format($pendientes[$lineaId]['pendiente'], 4, '.', ''), '0'), '.'),
+                        rtrim(rtrim(number_format($cantidad, 4, '.', ''), '0'), '.'),
+                    ));
+                }
+
+                $insLinea->execute([$facturaId, $lineaId, $cantidad]);
+                $updSaldo->execute(['cant' => $cantidad, 'id' => $lineaId, 'cant2' => $cantidad]);
+                if ($updSaldo->rowCount() !== 1) {
+                    throw new RuntimeException(
+                        "el saldo de la linea {$lineaId} cambio mientras se facturaba; no se descontó."
+                    );
+                }
+            }
+
+            $this->recalcularEstado($cuentaId, $cotizacionId);
+            $this->pdo->commit();
+
+            return $facturaId;
+        } catch (Throwable $e) {
+            $this->pdo->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Facturas que salieron de una cotizacion, con lo que consumio cada una.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function facturasDe(int $cuentaId, int $cotizacionId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT f.id, f.tipo_dte, f.folio, f.track_id, f.created_at, '
+            . '       COALESCE(SUM(fl.cantidad), 0) AS cantidad_total '
+            . 'FROM cotizacion_factura f '
+            . 'LEFT JOIN cotizacion_factura_linea fl ON fl.cotizacion_factura_id = f.id '
+            . 'WHERE f.cuenta_id = ? AND f.cotizacion_id = ? '
+            . 'GROUP BY f.id, f.tipo_dte, f.folio, f.track_id, f.created_at '
+            . 'ORDER BY f.id ASC'
+        );
+        $stmt->execute([$cuentaId, $cotizacionId]);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * De que cotizacion salio una factura. EL VINCULO INVERSO.
+     *
+     * Se consulta desde el lado del panel y no desde dte_emitido, que es tabla
+     * del motor y no puede llevar esta referencia.
+     *
+     * @return array{cotizacion_id:int, numero:int}|null
+     */
+    public function cotizacionDeFactura(int $cuentaId, string $rutEmisor, int $tipoDte, int $folio): ?array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT c.id AS cotizacion_id, c.numero FROM cotizacion_factura f '
+            . 'INNER JOIN cotizacion c ON c.id = f.cotizacion_id '
+            . 'WHERE f.cuenta_id = ? AND f.rut_emisor = ? AND f.tipo_dte = ? AND f.folio = ? LIMIT 1'
+        );
+        $stmt->execute([$cuentaId, $rutEmisor, $tipoDte, $folio]);
+        $r = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $r === false ? null : ['cotizacion_id' => (int) $r['cotizacion_id'], 'numero' => (int) $r['numero']];
+    }
+
     /** Baja logica. Nunca se borra fisico, igual que cliente y producto. */
     public function desactivar(int $cuentaId, int $id): bool
     {

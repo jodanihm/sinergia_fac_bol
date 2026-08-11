@@ -2,7 +2,7 @@
 /**
  * Detalle de una cotizacion.
  *
- * Recibe: $cotizacion (con 'lineas'), $editable, $flash, $navActivo.
+ * Recibe: $cotizacion (con 'lineas'), $editable, $facturas, $flash, $navActivo.
  *
  * $editable NO SALE DE estado_cache. Lo calcula el handler con
  * tieneFacturacion(), que suma cantidad_facturada de las lineas. El cache es
@@ -56,7 +56,17 @@ $total = round($neto) + round($exento) + $iva;
     <div class="acciones-grupo">
         <a class="boton-secundario" href="/ventas/cotizaciones/<?= (int) $cotizacion['id']; ?>/pdf" target="_blank" rel="noopener">Ver PDF</a>
         <?php if ($editable): ?>
-            <a class="boton-principal" href="/ventas/cotizaciones/<?= (int) $cotizacion['id']; ?>/editar">Editar</a>
+            <a class="boton-secundario" href="/ventas/cotizaciones/<?= (int) $cotizacion['id']; ?>/editar">Editar</a>
+        <?php endif; ?>
+        <?php
+        /* FACTURAR. Se ofrece mientras quede algo pendiente: la facturacion es
+           1:N por partes, asi que una cotizacion a medias se sigue facturando.
+           Es un ENLACE y no un boton de POST: no emite nada, solo abre el
+           formulario de emision precargado -- mismo criterio que "Anular con
+           nota de credito". */
+        ?>
+        <?php if ((string) $cotizacion['estado_cache'] !== 'facturada'): ?>
+            <a class="boton-principal" href="/ventas/cotizaciones/<?= (int) $cotizacion['id']; ?>/facturar">Facturar</a>
         <?php endif; ?>
     </div>
 </div>
@@ -153,6 +163,41 @@ $total = round($neto) + round($exento) + $iva;
         llegar en la factura. Una cotizacion no declara impuestos: no se emite nada al SII.
     </p>
 </section>
+
+<?php if ($facturas !== []): ?>
+    <section class="tarjeta">
+        <h2>Facturas emitidas desde esta cotizacion</h2>
+        <?php
+        /* EL VINCULO VIVE EN cotizacion_factura, del lado del panel, y NO en
+           dte_emitido: esa es tabla del motor, sin cuenta_id y en otra familia de
+           collation, y la escribe el motor. Ver migracion 033. */
+        ?>
+        <div class="tabla-scroll">
+            <table class="tabla-datos">
+                <thead>
+                    <tr>
+                        <th>Documento</th>
+                        <th>Emitida</th>
+                        <th class="tabla-datos__num">Cantidad facturada</th>
+                        <th><span class="visualmente-oculto">Acciones</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($facturas as $f): ?>
+                        <tr>
+                            <td>Tipo <?= (int) $f['tipo_dte']; ?> N&deg; <?= (int) $f['folio']; ?></td>
+                            <td><?= htmlspecialchars(date('d-m-Y H:i', strtotime((string) $f['created_at']))); ?></td>
+                            <td class="tabla-datos__num"><?= $cant($f['cantidad_total']); ?></td>
+                            <td>
+                                <a class="boton-texto" href="/ventas/panel-emision/<?= (int) $f['tipo_dte']; ?>/<?= (int) $f['folio']; ?>">Ver documento</a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    </section>
+<?php endif; ?>
 
 <?php if (trim((string) $cotizacion['notas']) !== ''): ?>
     <section class="tarjeta">

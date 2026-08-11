@@ -1286,11 +1286,14 @@ function handleCotizacionVerGet(int $id): void
     if ($cot === null) {
         responder404Cotizacion();
     }
+    $cuentaId = Auth::cuentaId();
     vista('cotizacion-detalle', [
         'cotizacion' => $cot,
         // SE PREGUNTA POR LAS CANTIDADES, NO POR estado_cache: el cache es para
         // filtrar el listado con indice, no para autorizar. Ver migracion 032.
-        'editable'   => ! cotizacionRepo()->tieneFacturacion(Auth::cuentaId(), $id),
+        'editable'   => ! cotizacionRepo()->tieneFacturacion($cuentaId, $id),
+        // EL VINCULO, en la direccion cotizacion -> facturas.
+        'facturas'   => cotizacionRepo()->facturasDe($cuentaId, $id),
         'flash'      => flashTomar(),
         'navActivo'  => 'ventas.cotizaciones',
     ]);
@@ -1370,6 +1373,162 @@ function handleCotizacionPdfGet(int $id): never
     header('Content-Length: ' . strlen($pdf));
     echo $pdf;
     exit;
+}
+
+/**
+ * Abre el formulario de emision PRECARGADO con las lineas pendientes de una
+ * cotizacion. NO GUARDA NADA: es el mismo criterio del boton "Anular con nota de
+ * credito", que precarga la referencia y deja el formulario editable.
+ *
+ * LAS LINEAS VIAJAN POR ID EN LA URL, NO POR QUERY STRING CON SU CONTENIDO.
+ * Ya estaba medido que N lineas no caben en una URL y que ademas quedarian en el
+ * log de accesos del servidor -- el detalle de lo que un cliente cotizo, en
+ * texto plano en un archivo de log. Aqui la URL lleva un ID y el contenido se
+ * lee de la base, que es exactamente lo que ya hace renderEmisionForm() con los
+ * productos del maestro.
+ *
+ * SIEMPRE FACTURA 33. Convertir a nota de credito o de debito no tiene sentido:
+ * una cotizacion se factura.
+ */
+function handleCotizacionFacturarGet(int $id): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    // El guard de produccion SI aplica aqui, a diferencia del resto del modulo:
+    // esto termina emitiendo un DTE real.
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $cot = cotizacionRepo()->buscarPorId($cuentaId, $id);
+    if ($cot === null) {
+        responder404Cotizacion();
+    }
+
+    $detalles = [];
+    foreach ($cot['lineas'] as $l) {
+        $pendiente = (float) $l['cantidad'] - (float) $l['cantidad_facturada'];
+        $detalles[] = [
+            // EL VINCULO. Viaja como hidden DENTRO de la fila, no por posicion:
+            // el usuario puede agregar y borrar filas, y los indices del POST
+            // llegan con huecos.
+            'cotizacion_linea_id' => (int) $l['id'],
+            'nombre'              => (string) $l['nombre'],
+            // LAS LINEAS YA CERRADAS APARECEN, EN CERO. Ocultarlas haria que el
+            // usuario no entienda por que la cotizacion no cierra.
+            'cantidad'            => $pendiente > 0 ? rtrim(rtrim(number_format($pendiente, 4, '.', ''), '0'), '.') : '0',
+            'precioUnitario'      => rtrim(rtrim(number_format((float) $l['precio_unitario'], 4, '.', ''), '0'), '.'),
+            'unidad'              => (string) ($l['unidad'] ?? ''),
+            'exento'              => ! empty($l['exento']),
+            // Solo para la vista: no viaja al motor ni al descuento.
+            'pendiente'           => $pendiente,
+        ];
+    }
+
+    renderEmisionForm(33, bin2hex(random_bytes(16)), [
+        'cotizacion_id'     => $id,
+        'cotizacion_numero' => (int) $cot['numero'],
+        'receptor' => [
+            'rut'         => (string) $cot['receptor_rut'],
+            'razonSocial' => (string) $cot['receptor_razon_social'],
+            'giro'        => (string) ($cot['receptor_giro'] ?? ''),
+            'direccion'   => (string) ($cot['receptor_direccion'] ?? ''),
+            'comuna'      => (string) ($cot['receptor_comuna'] ?? ''),
+            'email'       => (string) ($cot['receptor_email'] ?? ''),
+        ],
+        'detalles' => $detalles,
+    ], null, null, null);
+}
+
+/**
+ * Descuenta el saldo y deja el vinculo DESPUES de que el motor devolvio 201.
+ *
+ * SE LLAMA CON LA FACTURA YA EMITIDA. Devuelve null si todo salio bien, o el
+ * mensaje para el usuario si el registro fallo -- y en ese caso el mensaje SIEMPRE
+ * empieza diciendo que la factura SI se emitio, con su folio.
+ *
+ * POR QUE NO SE REINTENTA NI SE RECONCILIA SOLO: el caso no ha ocurrido nunca.
+ * Construir un reconciliador para eso seria adelantarse. Lo que si hace falta es
+ * que quede registrado con TODO lo necesario para arreglarlo a mano, y que el
+ * usuario no se quede pensando que no emitio.
+ */
+function registrarConversionCotizacion(
+    int $cuentaId,
+    string $rutEmisor,
+    array $post,
+    array $documento,
+    array $body,
+    string $idemKey,
+): ?string {
+    $cotizacionId = ctype_digit((string) ($post['cotizacion_id'] ?? '')) ? (int) $post['cotizacion_id'] : 0;
+    if ($cotizacionId <= 0) {
+        return null;   // emision normal, sin cotizacion: no hay nada que hacer
+    }
+
+    $tipoDte = (int) ($body['tipoDte'] ?? 0);
+    $folio   = (int) ($body['folio'] ?? 0);
+    $trackId = isset($body['trackId']) ? (string) $body['trackId'] : null;
+
+    // CUANTO DESCUENTA CADA LINEA. Se lee del POST CRUDO y no de $documento,
+    // porque armarDocumentoEmision() ya descarto el id -- y con razon: ese id no
+    // va al motor. Una fila SIN cotizacion_linea_id no entra aqui: es venta
+    // nueva dentro de la misma factura y no descuenta nada.
+    $cantidadPorLinea = [];
+    foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $d) {
+        if (! is_array($d) || ! ctype_digit((string) ($d['cotizacion_linea_id'] ?? ''))) {
+            continue;
+        }
+        $cantidad = (float) str_replace(',', '.', trim((string) ($d['cantidad'] ?? '')));
+        if ($cantidad <= 0) {
+            continue;
+        }
+        $lineaId = (int) $d['cotizacion_linea_id'];
+        // Dos filas con el mismo id se suman: el UNIQUE de
+        // cotizacion_factura_linea rechazaria dos INSERT, y sumar es lo que el
+        // usuario quiso decir.
+        $cantidadPorLinea[$lineaId] = ($cantidadPorLinea[$lineaId] ?? 0.0) + $cantidad;
+    }
+
+    // LA CLAVE, derivada y no aleatoria. Mismo criterio que facturarSubLote():
+    // estable entre reintentos del MISMO envio (el idem_key se conserva en el
+    // hidden), distinta entre dos conversiones de la misma cotizacion.
+    $clave = sprintf('cot-%d-%s', $cotizacionId, $idemKey);
+
+    try {
+        cotizacionRepo()->registrarFacturacion(
+            $cuentaId, $cotizacionId, $rutEmisor, $tipoDte, $folio, $trackId, $clave, $cantidadPorLinea
+        );
+
+        return null;
+    } catch (Throwable $e) {
+        // RUIDOSO Y CON TODO LO NECESARIO PARA REPARARLO A MANO: quien, que
+        // cotizacion, que documento, que clave, y cuanto iba a descontar cada
+        // linea. Sin esas cantidades no se puede rehacer el descuento.
+        error_log(sprintf(
+            'COTIZACION SIN DESCONTAR -- LA FACTURA SI SE EMITIO Y NO SE PUEDE DESHACER. '
+            . 'cuenta=%d rut_emisor=%s cotizacion=%d documento=%d/%d trackId=%s clave=%s '
+            . 'descuentos_pendientes=%s REPARAR A MANO: insertar la fila en cotizacion_factura '
+            . 'con esa clave, sus lineas en cotizacion_factura_linea, sumar esas cantidades a '
+            . 'cotizacion_linea.cantidad_facturada y recalcular estado_cache. Detalle: %s',
+            $cuentaId,
+            $rutEmisor,
+            $cotizacionId,
+            $tipoDte,
+            $folio,
+            $trackId ?? 'null',
+            $clave,
+            json_encode($cantidadPorLinea, JSON_UNESCAPED_UNICODE),
+            $e->getMessage(),
+        ));
+
+        return sprintf(
+            'LA FACTURA SE EMITIO CORRECTAMENTE: tipo %d, folio %d. NO vuelvas a emitirla. '
+            . 'Lo que fallo fue el descuento del saldo de la cotizacion N° %d, que quedo sin '
+            . 'actualizar y hay que corregir a mano. Avisa a soporte con este folio.',
+            $tipoDte,
+            $folio,
+            $cotizacionId,
+        );
+    }
 }
 
 // ===========================================================================
@@ -1806,7 +1965,36 @@ function handleEmisionPost(int $tipoDte): void
             ));
         }
 
-        flashSet('exito', 'Documento emitido.', ['resultado' => [
+        // --- CONVERSION DE COTIZACION (migracion 033) ---
+        //
+        // VA AQUI, DESPUES DEL 201 Y FUERA DE CUALQUIER try QUE ENVUELVA LA
+        // EMISION, y ese orden es el diseño, no una casualidad: cuando esto
+        // corre la factura YA EXISTE ante el SII y el folio esta quemado.
+        //
+        // ES LO CONTRARIO DEL PATRON DEL ENCOLADO de mas abajo. Alli se envuelve
+        // lo accesorio -- un correo -- para que no rompa lo esencial. Aqui lo
+        // esencial YA PASO, y lo que queda es dejar constancia: el descuento del
+        // saldo y el vinculo, los dos o ninguno, en una transaccion LOCAL que no
+        // toca la emision.
+        //
+        // Y POR ESO NO SE TRAGA EL ERROR EN SILENCIO como el encolado: si esto
+        // falla, el usuario TIENE que enterarse de que la factura si se emitio y
+        // con que folio. Lo peor que puede pasar es que crea que no se emitio y
+        // vuelva a emitir, porque los folios no se liberan.
+        //
+        // SIN COTIZACION NO HACE NADA: devuelve null en la primera linea. El
+        // camino de emision normal -- el que hoy factura de verdad -- no cambia.
+        $avisoCotizacion = registrarConversionCotizacion(
+            $cuentaId,
+            $rutEmisor,
+            $_POST,
+            $documento,
+            $body,
+            $idemKey,
+        );
+
+        flashSet($avisoCotizacion === null ? 'exito' : 'advertencia',
+            $avisoCotizacion ?? 'Documento emitido.', ['resultado' => [
             'tipoDte' => $body['tipoDte'] ?? $tipoDte,
             'folio'   => $body['folio'] ?? null,
             'estado'  => $body['estado'] ?? null,
@@ -5906,6 +6094,13 @@ if ($metodo === 'POST' && $ruta === '/ventas/cotizaciones/nueva') {
 if ($metodo === 'GET' && preg_match('#^/ventas/cotizaciones/(\d+)/pdf$#', $ruta, $mCot)) {
     Auth::requerirSesion();
     handleCotizacionPdfGet((int) $mCot[1]);
+}
+
+// Facturar: abre el formulario de emision precargado. NO emite ni guarda nada
+// aqui -- eso pasa en el POST de /ventas/factura, como cualquier otra emision.
+if ($metodo === 'GET' && preg_match('#^/ventas/cotizaciones/(\d+)/facturar$#', $ruta, $mCot)) {
+    Auth::requerirSesion();
+    handleCotizacionFacturarGet((int) $mCot[1]);
 }
 
 if ($metodo === 'GET' && preg_match('#^/ventas/cotizaciones/(\d+)/editar$#', $ruta, $mCot)) {

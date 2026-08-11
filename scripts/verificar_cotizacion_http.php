@@ -36,12 +36,45 @@ declare(strict_types=1);
  *        export PANEL_USER=... PANEL_PASS=...
  *
  *   3. Para el A/B de las vistas que NO se tocan (git no existe en el contenedor):
- *        git show HEAD:panel/views/emision-form.php > scripts/HEAD_emision_form.php
  *        git show HEAD:panel/views/cliente-form.php > scripts/HEAD_cliente_form.php
  *      y despues, por ruta explicita:
- *        rm scripts/HEAD_emision_form.php scripts/HEAD_cliente_form.php
+ *        rm scripts/HEAD_cliente_form.php
+ *
+ *      OJO: emision-form.php NO va aqui. Esa vista SI cambia en esta entrega y su
+ *      comprobacion vive en scripts/verificar_conversion.php, que la compara POR
+ *      RENDER -- ese arnes si necesita su volcado de HEAD.
  *
  * NUNCA SE IMPRIME PANEL_PASS, ni completa ni parcial. Solo su longitud.
+ *
+ * =============================================================================
+ * HUECO DECLARADO: EL POST DE LA CONVERSION NO SE EJERCITA POR HTTP
+ * =============================================================================
+ *
+ * Este arnes llega HASTA EL BORDE de la conversion: abre
+ * GET /ventas/cotizaciones/{id}/facturar, comprueba que el formulario venga con
+ * todo lo que el descuento necesita, Y AHI SE DETIENE. No manda el POST.
+ *
+ * POR QUE NO, Y NO ES PEREZA: ESTE SISTEMA EMITE SOLO EN PRODUCCION. El ambiente
+ * de certificacion existe unicamente para certificar una empresa ante el SII, no
+ * para pruebas; no hay emision de prueba. Esta escrito en el codigo -- el
+ * comentario de handleEmisionPost() dice que "el panel emite solo en produccion
+ * (todas estas rutas pasan por exigirProduccionCompleto y usan la key de
+ * servicio, filtrada por ambiente='produccion')", y por eso el ambiente va fijo
+ * ahi.
+ *
+ * O sea que mandar ese POST no quemaria un folio de prueba: QUEMARIA UN FOLIO
+ * REAL DE PRODUCCION y emitiria una factura de verdad ante el SII, a nombre de
+ * un cliente de verdad. Eso no se hace para probar.
+ *
+ * QUE QUEDA SIN CUBRIR, ENTONCES: el tramo POST /ventas/factura con
+ * cotizacion_id -> 201 del motor -> registrarConversionCotizacion(). La
+ * transaccion local de ese tramo SI esta probada entera, con folios inventados,
+ * en scripts/verificar_conversion.php -- que es exactamente lo que corre despues
+ * del 201. Lo que nadie ejercita es el empalme entre los dos.
+ *
+ * LA PRIMERA CONVERSION REAL LA VA A HACER DANIEL, con una factura de verdad.
+ * Conviene mirarla: que el saldo baje, que aparezca la fila en cotizacion_factura
+ * y que el estado de la cotizacion cambie.
  * -----------------------------------------------------------------------------
  */
 
@@ -131,8 +164,32 @@ if ($sinToken === []) {
 // ===========================================================================
 titulo('VERIFICACION B - las vistas ajenas no se movieron');
 
+// emision-form.php NO ESTA EN ESTA LISTA, Y NO ES UN OLVIDO.
+//
+// Estuvo, y fallaba: desde la segunda entrega de cotizaciones esa vista SI se
+// toca -- ahi vive el hidden del vinculo por linea --, asi que un md5 distinto
+// es lo esperado y no un hallazgo.
+//
+// NO SE REEMPLAZO POR UNA "DIFERENCIA ESPERADA" COMO LA DE observaciones, y hay
+// una razon: alli la diferencia era una CLAVE que desaparece de un array, que se
+// puede enumerar. Aqui es una LINEA DE PLANTILLA reescrita, y saber que solo
+// cambio esa linea no dice nada sobre si RENDERIZA igual, que es la unica
+// pregunta que importa en la pantalla que hoy factura de verdad.
+//
+// ESA PREGUNTA YA TIENE DOS RESPUESTAS MEJORES, y las dos siguen corriendo:
+//
+//   1. scripts/verificar_conversion.php, VERIFICACION 1: extrae los bytes de esa
+//      fila de HEAD y del arbol, EJECUTA LAS DOS como plantilla con el mismo
+//      contexto y compara la salida por md5. Ademas compara el resto de la vista
+//      sin comentarios, descontando esa fila.
+//   2. La VERIFICACION H de este mismo archivo, mas abajo: pide /ventas/factura
+//      por HTTP y comprueba sobre el HTML SERVIDO que no traiga ninguna marca de
+//      cotizacion y que siga trayendo csrf_token e idem_key.
+//
+// Un md5 aqui seria una tercera comprobacion de lo mismo, mas debil que las dos,
+// y con un criterio distinto. Dos arneses midiendo lo mismo de formas que no
+// coinciden es peor que uno.
 foreach ([
-    'emision-form.php' => __DIR__ . '/HEAD_emision_form.php',
     'cliente-form.php' => __DIR__ . '/HEAD_cliente_form.php',
 ] as $nombre => $rutaHead) {
     if (! is_file($rutaHead)) {
@@ -434,6 +491,10 @@ register_shutdown_function(static function () use (&$cotizacionId, $pdo): void {
         return;
     }
     try {
+        // En orden de dependencia. cotizacion_factura no deberia tener filas -- este
+        // arnes no emite --, pero se limpia igual por si una corrida futura las creara.
+        $pdo->prepare('DELETE fl FROM cotizacion_factura_linea fl INNER JOIN cotizacion_factura f ON f.id = fl.cotizacion_factura_id WHERE f.cotizacion_id = ?')->execute([$cotizacionId]);
+        $pdo->prepare('DELETE FROM cotizacion_factura WHERE cotizacion_id = ?')->execute([$cotizacionId]);
         $pdo->prepare('DELETE FROM cotizacion_linea WHERE cotizacion_id = ?')->execute([$cotizacionId]);
         $pdo->prepare('DELETE FROM cotizacion WHERE id = ?')->execute([$cotizacionId]);
         echo "\n  LIMPIEZA: cotizacion {$cotizacionId} y sus lineas borradas.\n";
@@ -468,6 +529,163 @@ if ($cotizacionId !== null) {
 }
 
 // ===========================================================================
+// VERIFICACION G - LA CONVERSION, HASTA EL BORDE
+//
+// SE ABRE EL FORMULARIO DE CONVERSION Y SE COMPRUEBA QUE TRAIGA TODO LO QUE EL
+// DESCUENTO NECESITA. NO SE MANDA EL POST: emitiria una factura REAL en
+// produccion. Ver el hueco declarado en la cabecera de este archivo.
+// ===========================================================================
+titulo('VERIFICACION G - GET del formulario de conversion (sin emitir nada)');
+
+if ($cotizacionId === null) {
+    aviso('no hay cotizacion creada: se salta la conversion.');
+} else {
+    // --- FIXTURE: se simula una facturacion previa TOCANDO LA BASE DIRECTO ---
+    //
+    // Y se hace asi a proposito, no por atajo: la unica forma de mover ese saldo
+    // por el camino real es EMITIR, y emitir aqui quemaria un folio de
+    // produccion. Esto NO prueba el descuento -- eso lo prueba
+    // verificar_conversion.php contra registrarFacturacion() --; solo deja la
+    // cotizacion en el estado que hace falta para mirar la pantalla: una linea a
+    // medias y una cerrada del todo.
+    $lineas = $pdo->prepare('SELECT id, orden, cantidad FROM cotizacion_linea WHERE cotizacion_id = ? ORDER BY orden');
+    $lineas->execute([$cotizacionId]);
+    $filas = $lineas->fetchAll(PDO::FETCH_ASSOC);
+
+    if (count($filas) < 3) {
+        aviso('la cotizacion no tiene las 3 lineas esperadas: se salta la conversion.');
+    } else {
+        // Linea 1 (2,5): se factura 1,25 -> quedan 1,25.
+        $pdo->prepare('UPDATE cotizacion_linea SET cantidad_facturada = ? WHERE id = ?')
+            ->execute([1.25, $filas[0]['id']]);
+        // Linea 3 (1): se cierra del todo -> queda 0.
+        $pdo->prepare('UPDATE cotizacion_linea SET cantidad_facturada = cantidad WHERE id = ?')
+            ->execute([$filas[2]['id']]);
+        $pdo->prepare("UPDATE cotizacion SET estado_cache = 'parcial' WHERE id = ?")->execute([$cotizacionId]);
+
+        $esperado = [
+            (int) $filas[0]['id'] => '1.25',
+            (int) $filas[1]['id'] => '3',
+            (int) $filas[2]['id'] => '0',
+        ];
+        echo "  fixture: linea {$filas[0]['id']} deja 1,25 pendiente; {$filas[1]['id']} intacta; "
+            . "{$filas[2]['id']} CERRADA (pendiente 0).\n";
+
+        $r = pedir('GET', $base . '/ventas/cotizaciones/' . $cotizacionId . '/facturar');
+        printf("  GET .../facturar -> %d %s\n", $r['status'], $r['headers']['location'] ?? '');
+
+        if ($r['status'] === 302 || $r['status'] === 303) {
+            // exigirProduccionCompleto() redirige si la cuenta no tiene emisor,
+            // certificado y CAF de produccion. En una base de pruebas es lo
+            // normal, y NO es un fallo de la entrega.
+            aviso('el formulario redirige: esta cuenta no tiene la produccion completa '
+                . '(exigirProduccionCompleto). LA CONVERSION NO SE PUDO EJERCITAR. '
+                . 'Corre esto con una cuenta habilitada para emitir.');
+        } elseif ($r['status'] !== 200) {
+            mal("GET del formulario de conversion devolvio {$r['status']}.");
+        } else {
+            $h = $r['body'];
+
+            // (a) EL VINCULO DE LA CABECERA.
+            if (preg_match('/name="cotizacion_id"\s+value="(\d+)"/', $h, $m) === 1 && (int) $m[1] === $cotizacionId) {
+                ok("trae cotizacion_id={$cotizacionId}.");
+            } else {
+                mal('no trae el hidden cotizacion_id, o trae otro id.');
+            }
+
+            // (b) UN HIDDEN POR LINEA, con los id REALES.
+            preg_match_all('/name="detalles\[(\d+)\]\[cotizacion_linea_id\]"\s+value="(\d+)"/', $h, $mh, PREG_SET_ORDER);
+            $idsEnPantalla = array_map(static fn ($x) => (int) $x[2], $mh);
+            printf("      hidden de linea encontrados: %d -> %s\n", count($mh), implode(', ', $idsEnPantalla));
+            $idsReales = array_map(static fn ($f) => (int) $f['id'], $filas);
+            if ($idsEnPantalla === $idsReales) {
+                ok('cada fila trae el id de SU linea de cotizacion, en orden.');
+            } else {
+                mal('los id de linea del formulario no son los de la cotizacion: '
+                    . implode(',', $idsEnPantalla) . ' vs ' . implode(',', $idsReales));
+            }
+
+            // (c) LAS CANTIDADES SON EL PENDIENTE, Y LA CERRADA VA EN CERO.
+            //     Se lee el value del input de cantidad de cada fila.
+            preg_match_all('/name="detalles\[(\d+)\]\[cantidad\]"\s+value="([^"]*)"/', $h, $mc, PREG_SET_ORDER);
+            $cantPorIndice = [];
+            foreach ($mc as $x) {
+                $cantPorIndice[(int) $x[1]] = $x[2];
+            }
+            echo "      indice  id_linea  cantidad en pantalla  esperado\n";
+            $todoBien = count($mh) > 0;
+            foreach ($mh as $x) {
+                $idx     = (int) $x[1];
+                $idLinea = (int) $x[2];
+                $enPantalla = $cantPorIndice[$idx] ?? '(sin input)';
+                $esp        = $esperado[$idLinea] ?? '?';
+                printf("      %6d  %8d  %20s  %8s\n", $idx, $idLinea, $enPantalla, $esp);
+                if (rtrim(rtrim((string) $enPantalla, '0'), '.') !== rtrim(rtrim($esp, '0'), '.')) {
+                    $todoBien = false;
+                }
+            }
+            if ($todoBien) {
+                ok('las cantidades vienen con el pendiente de cada linea, y la cerrada en 0.');
+            } else {
+                mal('alguna cantidad no coincide con el pendiente real.');
+            }
+
+            // (d) LA LINEA CERRADA APARECE. No se oculta: si no estuviera, el
+            //     usuario no entenderia por que la cotizacion no cierra.
+            if (in_array((int) $filas[2]['id'], $idsEnPantalla, true)) {
+                ok('la linea ya facturada por completo APARECE, en cero, en vez de ocultarse.');
+            } else {
+                mal('la linea cerrada no aparece en el formulario.');
+            }
+
+            // (e) Y EL AVISO QUE EXPLICA LA REGLA.
+            if (str_contains($h, 'venta nueva')) {
+                ok('el formulario avisa que una linea agregada a mano es venta nueva.');
+            } else {
+                mal('el formulario no avisa que una linea agregada a mano no descuenta saldo.');
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// VERIFICACION H - EL FORMULARIO DE EMISION NORMAL NO CAMBIO
+// ===========================================================================
+titulo('VERIFICACION H - la emision SIN cotizacion sigue siendo la de siempre');
+
+$r = pedir('GET', $base . '/ventas/factura');
+if ($r['status'] === 302 || $r['status'] === 303) {
+    aviso('la pantalla de emision redirige (produccion incompleta en esta cuenta): '
+        . 'no se pudo comparar. Es el mismo guard de la verificacion G.');
+} elseif ($r['status'] !== 200) {
+    mal("GET /ventas/factura devolvio {$r['status']}.");
+} else {
+    $h = $r['body'];
+    // NI UNA MARCA DE COTIZACION. Todo lo agregado a emision-form.php vive
+    // dentro de un if, y sin cotizacion ese if no entra.
+    $coladas = [];
+    foreach (['cotizacion_id', 'cotizacion_linea_id', 'Facturando la cotizacion'] as $marca) {
+        if (str_contains($h, $marca)) {
+            $coladas[] = $marca;
+        }
+    }
+    if ($coladas === []) {
+        ok('el formulario normal no trae NINGUNA marca de cotizacion: el camino que hoy '
+            . 'factura de verdad esta igual.');
+    } else {
+        mal('se colaron marcas de cotizacion en la emision normal: ' . implode(', ', $coladas));
+    }
+    // Y lo que SI tiene que seguir teniendo.
+    foreach ([['name="csrf_token"', 'el token'], ['name="idem_key"', 'la clave de idempotencia']] as [$marca, $que]) {
+        if (str_contains($h, $marca)) {
+            ok("sigue trayendo {$que}.");
+        } else {
+            mal("dejo de traer {$que}.");
+        }
+    }
+}
+
+// ===========================================================================
 // RESUMEN
 // ===========================================================================
 titulo('RESUMEN');
@@ -476,6 +694,14 @@ printf("\n  MEMORIA: pico %.1f MB (limite %s)\n",
     memory_get_peak_usage(true) / 1048576, ini_get('memory_limit'));
 
 echo "\n  LO QUE ESTE ARNES NO CUBRE:\n";
+echo "    - EL POST DE LA CONVERSION. Llega hasta el GET del formulario y se\n";
+echo "      detiene: mandar ese POST emitiria una factura REAL, porque este\n";
+echo "      sistema emite SOLO en produccion -- certificacion sirve para\n";
+echo "      certificar una empresa, no para probar. La transaccion posterior al\n";
+echo "      201 si esta probada entera en scripts/verificar_conversion.php; lo\n";
+echo "      que nadie ejercita es el empalme. LA PRIMERA CONVERSION REAL HAY QUE\n";
+echo "      MIRARLA: que el saldo baje, que aparezca la fila en cotizacion_factura\n";
+echo "      y que cambie el estado de la cotizacion.\n";
 echo "    - El aspecto de la pantalla. Comprueba que las clases esten, no que se\n";
 echo "      vea bien: eso lo mira Daniel con sus ojos.\n";
 echo "    - El JavaScript. curl no ejecuta el fetch de /ventas/cliente-por-rut ni\n";

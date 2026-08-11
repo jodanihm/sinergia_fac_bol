@@ -407,6 +407,19 @@ const MIGRACIONES = [
              'columnas' => ['cantidad_facturada'], 'esperado' => 1],
         ],
     ],
+    [
+        // El UNIQUE de la clave de idempotencia es la huella que importa: es lo
+        // que permitiria construir un reconciliador el dia que haga falta. Sin
+        // el, un descuento que fallara despues del 201 no tendria como
+        // identificarse para repararlo sin adivinar.
+        'id' => '033', 'archivo' => '033_cotizacion_factura.sql', 'nota' => 'CREATE (2 tablas)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'cotizacion_factura, cotizacion_factura_linea',
+             'tablas' => ['cotizacion_factura', 'cotizacion_factura_linea'], 'esperado' => 2],
+            ['tipo' => 'indice', 'desc' => 'uk_cot_factura_idem', 'tabla' => 'cotizacion_factura', 'indice' => 'uk_cot_factura_idem'],
+            ['tipo' => 'indice', 'desc' => 'uk_cot_factura_linea', 'tabla' => 'cotizacion_factura_linea', 'indice' => 'uk_cot_factura_linea'],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
