@@ -2175,6 +2175,161 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .tabla-editable .col-exento   { width: 5rem; text-align: center; }
 .tabla-editable .col-accion   { width: 3rem; text-align: center; }
 
+/* ==========================================================================
+   CHAT
+   ==========================================================================
+
+   TODO SALE DE VARIABLES QUE YA EXISTEN: --color-primario, --color-primario-suave
+   y --radio-*. No se declara ni un color nuevo -- la paleta es la corporativa y
+   esto es un realce, no una identidad aparte.
+
+   EL REALCE DEL MENU SE ENGANCHA POR href Y NO POR UNA CLASE NUEVA, a proposito:
+   asi _nav.php no se toca y su A/B contra HEAD sigue saliendo identico. El href
+   es estable y unico; si la ruta cambiara, este selector deja de aplicar y el
+   enlace vuelve a verse como los demas -- se degrada, no se rompe. */
+.nav-item[href="/chat"] {
+    color: var(--color-primario);
+    font-weight: 600;
+}
+.nav-item[href="/chat"] svg { color: var(--color-primario); }
+.nav-item[href="/chat"]:hover { background: var(--color-primario-suave); }
+
+/* El activo conserva su propio estilo: esta regla solo sube la especificidad
+   lo justo para que el icono siga marcado. */
+.nav-item[href="/chat"].nav-item--activo svg { color: inherit; }
+
+/* --- Cabecera ------------------------------------------------------------ */
+.chat-titulo { display: flex; align-items: flex-start; gap: var(--esp-3); }
+.chat-titulo__icono { color: var(--color-primario); flex: 0 0 auto; margin-top: 2px; }
+
+/* Badge de seguridad. Verde = --color-exito, que ya existe para "esto esta
+   bien"; no se declara un verde nuevo. */
+.chat-badge {
+    display: inline-flex; align-items: center; gap: var(--esp-2);
+    padding: var(--esp-2) var(--esp-3);
+    border-radius: var(--radio-pill);
+    background: var(--color-exito-fondo);
+    color: var(--color-exito);
+    border: 1px solid var(--color-exito);
+    font-size: var(--txt-sm); font-weight: 600; white-space: nowrap;
+}
+.chat-badge__icono { flex: 0 0 auto; }
+
+/* --- Dos columnas -------------------------------------------------------- */
+.chat-layout { display: grid; grid-template-columns: minmax(0, 1fr) 20rem; gap: var(--esp-4); align-items: start; }
+.chat-principal { min-width: 0; }
+.chat-lateral { display: flex; flex-direction: column; gap: var(--esp-4); }
+
+/* --- Bienvenida ---------------------------------------------------------- */
+/* FONDO CELESTE. --color-primario-suave y solo aqui: es la tarjeta que presenta
+   al asistente, y darle ese fondo a cualquier otro bloque le quitaria el valor
+   de distinguir a esta. */
+.chat-bienvenida {
+    display: flex; gap: var(--esp-3); align-items: flex-start;
+    background: var(--color-primario-suave);
+    border-color: var(--color-primario-suave);
+}
+.chat-bienvenida h2 { margin-top: 0; }
+.chat-bienvenida p { margin-bottom: 0; color: var(--color-texto-medio); }
+/* EL AVATAR PASA A BLANCO, y no es estetica: su fondo era
+   --color-primario-suave, o sea el mismo que ahora tiene la tarjeta. De haberlo
+   dejado, el avatar se habria disuelto en ella. */
+.chat-bienvenida__avatar {
+    flex: 0 0 auto; color: var(--color-primario);
+    background: var(--color-superficie);
+    border-radius: var(--radio-lg); padding: var(--esp-2);
+    box-sizing: content-box;
+}
+
+/* --- El campo ------------------------------------------------------------ */
+/* CAMPO DE BUSQUEDA, NO CAJA DE TEXTO.
+ *
+ * La version anterior ponia --esp-2 de padding vertical y con eso quedaba MAS
+ * ALTO que cualquier otro input del panel: la base de .form-compacto usa
+ * --esp-1 (style.css:2065). De ahi el "muy largo".
+ *
+ * Ahora el vertical vuelve a --esp-1 y el horizontal sube a --esp-4. El alto lo
+ * fija el min-height: 2.2rem que .form-compacto ya impone y que NO se toca --
+ * asi este campo mide exactamente lo mismo que un input normal del panel, que es
+ * la referencia de "amistoso" que ya existe. Lo que cambia es la proporcion: el
+ * doble de aire a los lados y el radio de pastilla.
+ *
+ * width: 100% viene de la base y el .form-campo no tiene tope, asi que ocupa el
+ * ancho entero de la tarjeta: no hace falta ensancharlo, hacia falta bajarlo.
+ *
+ * NO SE TOCA font-size: la base ya lo pone en --txt-base (style.css:2071).
+ * Repetirlo aqui haria creer que este campo lo cambia. */
+.chat-pregunta {
+    border-radius: var(--radio-pill);
+    padding: var(--esp-1) var(--esp-4);
+}
+.chat-pregunta:focus {
+    border-color: var(--color-primario);
+    box-shadow: 0 0 0 3px var(--color-primario-suave);
+}
+.chat-contador {
+    display: block; text-align: right;
+    font-size: var(--txt-sm); color: var(--color-texto-tenue);
+}
+.chat-enviar { display: inline-flex; align-items: center; gap: var(--esp-2); }
+
+/* --- Sugerencias --------------------------------------------------------- */
+/* La linea divisoria con el texto al medio, sin pseudo-elementos ni imagenes:
+   un borde superior y el texto sobre el fondo de la tarjeta. */
+.chat-sugerencias { margin-top: var(--esp-4); border-top: 1px solid var(--color-borde-tenue); }
+.chat-sugerencias__titulo { margin: 0; text-align: center; transform: translateY(-50%); }
+.chat-sugerencias__titulo span {
+    background: var(--color-superficie); padding: 0 var(--esp-3);
+    font-size: var(--txt-sm); color: var(--color-texto-tenue);
+}
+.chat-chips { display: flex; flex-wrap: wrap; gap: var(--esp-2); }
+.chat-chip {
+    display: inline-flex; align-items: center; gap: var(--esp-2);
+    padding: var(--esp-2) var(--esp-3);
+    border: 1px solid var(--color-borde-suave);
+    border-radius: var(--radio-pill);
+    background: var(--color-superficie);
+    color: var(--color-texto-suave);
+    font-size: var(--txt-sm); cursor: pointer;
+}
+.chat-chip:hover { border-color: var(--color-primario); color: var(--color-primario); background: var(--color-primario-suave); }
+
+/* --- Cupo ---------------------------------------------------------------- */
+.chat-cupo {
+    display: flex; align-items: center; gap: var(--esp-2); flex-wrap: wrap;
+    margin-top: var(--esp-3); margin-bottom: 0;
+    font-size: var(--txt-sm); color: var(--color-texto-medio);
+}
+.chat-cupo__nota { color: var(--color-texto-tenue); }
+
+/* --- Listas del lateral -------------------------------------------------- */
+.chat-lista { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--esp-2); }
+.chat-sugerida {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--esp-2);
+    width: 100%; text-align: left;
+    padding: var(--esp-2); border: 0; background: none; cursor: pointer;
+    border-radius: var(--radio-md);
+    color: var(--color-texto-suave); font-size: var(--txt-sm);
+}
+.chat-sugerida:hover { background: var(--color-primario-suave); color: var(--color-primario); }
+.chat-sugerida__flecha { flex: 0 0 auto; }
+.chat-lista--checks li { display: flex; align-items: flex-start; gap: var(--esp-2); font-size: var(--txt-sm); color: var(--color-texto-suave); }
+.chat-check { flex: 0 0 auto; color: var(--color-exito); margin-top: 2px; }
+.chat-lista--actividad li { display: flex; flex-direction: column; }
+.chat-actividad__fecha { font-size: var(--txt-sm); color: var(--color-texto-tenue); padding-left: var(--esp-2); }
+
+/* --- Banda de privacidad ------------------------------------------------- */
+.chat-privacidad { display: flex; gap: var(--esp-3); align-items: flex-start; }
+.chat-privacidad h2 { margin-top: 0; }
+.chat-privacidad p { color: var(--color-texto-medio); }
+.chat-privacidad p:last-child { margin-bottom: 0; }
+.chat-privacidad__icono { flex: 0 0 auto; color: var(--color-primario); margin-top: 2px; }
+
+/* Una columna cuando no caben dos. El mismo corte que ya usa el resto. */
+@media (max-width: 1024px) {
+    .chat-layout { grid-template-columns: 1fr; }
+}
+
 /* Descuento por linea (cotizaciones). SE DECLARA EN VEZ DE REUSAR col-cantidad,
    que estaba a mano: no miden lo mismo. Una cantidad puede ser larga -- llega a
    cuatro decimales, "1.234,5678" -- y por eso pide 6.5rem. Un porcentaje esta

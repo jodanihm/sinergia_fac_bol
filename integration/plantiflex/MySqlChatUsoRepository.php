@@ -83,4 +83,53 @@ final class MySqlChatUsoRepository
             . 'ON DUPLICATE KEY UPDATE consultas = consultas + 1'
         )->execute([$cuentaId, $hoy]);
     }
+
+    // =======================================================================
+    //  HISTORIAL (migracion 035)
+    // =======================================================================
+
+    /** Cuantas preguntas muestra la tarjeta de actividad reciente. */
+    public const RECIENTES = 5;
+
+    /**
+     * Guarda la pregunta. VA APARTE DEL CONTADOR a proposito: el contador cuenta
+     * llamadas al proveedor -- lo que cuesta dinero -- y esto guarda lo que el
+     * usuario escribio, que es otra cosa y tiene otro motivo. Una pregunta que
+     * no llego a salir (sin clave) no descuenta cupo pero SI se guarda: para el
+     * usuario, preguntar y que el sistema no este configurado sigue siendo algo
+     * que hizo.
+     *
+     * $desenlace: respondida | imposible | no_entendida | error.
+     */
+    public function registrarPregunta(int $cuentaId, ?int $usuarioId, string $pregunta, string $desenlace): void
+    {
+        $this->pdo->prepare(
+            'INSERT INTO chat_consulta (cuenta_id, usuario_id, pregunta, desenlace) VALUES (?, ?, ?, ?)'
+        )->execute([
+            $cuentaId,
+            $usuarioId,
+            // La columna es VARCHAR(500) y el formulario limita a 500; se corta
+            // igual por si la peticion no vino del formulario.
+            mb_substr(trim($pregunta), 0, 500),
+            $desenlace,
+        ]);
+    }
+
+    /**
+     * Las ultimas preguntas de ESTA cuenta. El cuenta_id va en el WHERE, como en
+     * todo repositorio del anfitrion: la actividad de una empresa no puede
+     * asomarse en la pantalla de otra.
+     *
+     * @return list<array{pregunta:string, desenlace:string, created_at:string}>
+     */
+    public function recientes(int $cuentaId, int $cuantas = self::RECIENTES): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT pregunta, desenlace, created_at FROM chat_consulta '
+            . 'WHERE cuenta_id = ? ORDER BY created_at DESC, id DESC LIMIT ' . max(1, $cuantas)
+        );
+        $stmt->execute([$cuentaId]);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
 }

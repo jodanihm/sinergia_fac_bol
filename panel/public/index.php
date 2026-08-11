@@ -398,6 +398,23 @@ function definicionMenu(): array
 {
     return [
         ['clave' => 'dashboard', 'label' => 'Dashboard', 'destino' => '/panel', 'icono' => 'dashboard', 'construido' => true, 'requiereProduccion' => false],
+        // CHAT VA EN EL NIVEL SUPERIOR, Y NO DENTRO DE INFORMES.
+        //
+        // Estuvo en Informes y ahi no se encontraba, por dos motivos que se
+        // midieron con un usuario real: se llamaba "Preguntar en palabras" -- se
+        // buscaba como "Chat" -- y estaba dentro de un grupo que hay que abrir.
+        //
+        // POR QUE AQUI Y NO EN OTRO GRUPO: no es un informe. Un informe tiene
+        // forma fija y responde UNA pregunta; esto responde preguntas
+        // arbitrarias. Y el nivel superior no se inventa para esto: Dashboard ya
+        // es un item suelto, asi que el patron existe y esto lo reusa.
+        //
+        // requiereProduccion=false: preguntar no emite. Ver la nota del handler.
+        // "Asistente IA" y no "Chat" a secas: se probo con "Chat" y el nombre
+        // dice DONDE se escribe, no QUE hace. LA CLAVE Y EL DESTINO NO CAMBIAN
+        // -- 'chat' y /chat --, solo el texto visible: la clave la usa navActivo
+        // y el destino lo usa el realce del CSS por href.
+        ['clave' => 'chat', 'label' => 'Asistente IA', 'destino' => '/chat', 'icono' => 'ia', 'construido' => true, 'requiereProduccion' => false],
         [
             'label' => 'Ventas',
             'items' => [
@@ -447,10 +464,9 @@ function definicionMenu(): array
                 ['clave' => 'informes.estados', 'label' => 'Documentos por estado', 'destino' => '/informes/estados', 'icono' => 'informe-estados', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'informes.detalle', 'label' => 'Detalle documento a documento', 'destino' => '/informes/detalle', 'icono' => 'informe-detalle', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'informes.folios', 'label' => 'Estado de folios', 'destino' => '/informes/folios', 'icono' => 'informe-folios', 'construido' => true, 'requiereProduccion' => true],
-                // requiereProduccion=true como sus vecinos: consulta dte_emitido
-                // de produccion, asi que sin emisor de produccion no hay nada
-                // que responder y una pregunta gastaria una consulta para nada.
-                ['clave' => 'informes.chat', 'label' => 'Preguntar en palabras', 'destino' => '/informes/chat', 'icono' => 'informe-detalle', 'construido' => true, 'requiereProduccion' => true],
+                // El chat ESTUVO AQUI y se subio al nivel superior: ver la nota
+                // de su entrada, arriba de todo. La ruta vieja /informes/chat
+                // sigue viva como redireccion permanente.
             ],
         ],
         // CERTIFICACION Y PRODUCCION SON DOS SUBGRUPOS HERMANOS, de peso visual
@@ -1101,12 +1117,14 @@ function describirConsulta(array $meta): string
         default      => (string) $meta['metrica'],
     };
     $agrupacion = match ((string) $meta['agruparPor']) {
-        'cliente' => 'por cliente',
-        'mes'     => 'por mes',
-        'tipo'    => 'por tipo de documento',
-        'ninguna' => 'en total',
-        default   => (string) $meta['agruparPor'],
+        'cliente'   => 'por cliente',
+        'mes'       => 'por mes',
+        'tipo'      => 'por tipo de documento',
+        'documento' => 'documento por documento',
+        'ninguna'   => 'en total',
+        default     => (string) $meta['agruparPor'],
     };
+
     $orden = match ((string) $meta['orden']) {
         'metrica_desc' => 'de mayor a menor',
         'metrica_asc'  => 'de menor a mayor',
@@ -1116,6 +1134,15 @@ function describirConsulta(array $meta): string
 
     $desde = date('d-m-Y', (int) strtotime((string) $meta['desde']));
     $hasta = date('d-m-Y', (int) strtotime((string) $meta['hasta']));
+
+    // En el listado la metrica solo ordena: describirla como "monto total,
+    // documento por documento" seria confuso.
+    if ((string) $meta['agruparPor'] === 'documento') {
+        return sprintf(
+            'los documentos emitidos entre el %s y el %s, %s (hasta %d filas)',
+            $desde, $hasta, $orden, (int) $meta['limite']
+        );
+    }
 
     return sprintf(
         '%s, %s, entre el %s y el %s, %s (hasta %d filas)',
@@ -1128,13 +1155,17 @@ function handleChatGet(): void
     $cuentaId = Auth::cuentaId();
     $hoy      = date('Y-m-d');
 
+    $uso = chatUsoRepo();
     vista('chat-consultas', [
         'pregunta'  => '',
         'resultado' => null,
         'aviso'     => null,
-        'usadas'    => chatUsoRepo()->consultasDeHoy($cuentaId, $hoy),
+        'usadas'    => $uso->consultasDeHoy($cuentaId, $hoy),
         'limite'    => MySqlChatUsoRepository::LIMITE_DIARIO,
-        'navActivo' => 'informes.chat',
+        // DATOS REALES DE ESTA CUENTA, no ejemplos: el WHERE de recientes()
+        // lleva cuenta_id, igual que todo repositorio del anfitrion.
+        'recientes' => $uso->recientes($cuentaId),
+        'navActivo' => 'chat',
     ]);
 }
 
@@ -1151,14 +1182,23 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
     $uso    = chatUsoRepo();
     $usadas = $uso->consultasDeHoy($cuentaId, $hoy);
 
-    $pintar = static function (?array $resultado, ?array $aviso) use ($pregunta, $cuentaId, $hoy, $uso): never {
+    // $pintar GUARDA LA PREGUNTA Y DESPUES PINTA, en un solo sitio: asi ningun
+    // camino de salida puede olvidarse de registrarla. $desenlace null significa
+    // "no llegue a preguntar nada" -- pregunta vacia, sin cupo, sin emisor -- y
+    // en esos casos no hay nada que guardar.
+    $pintar = static function (?array $resultado, ?array $aviso, ?string $desenlace = null)
+        use ($pregunta, $cuentaId, $hoy, $uso): never {
+        if ($desenlace !== null) {
+            $uso->registrarPregunta($cuentaId, Auth::usuarioId(), $pregunta, $desenlace);
+        }
         vista('chat-consultas', [
             'pregunta'  => $pregunta,
             'resultado' => $resultado,
             'aviso'     => $aviso,
             'usadas'    => $uso->consultasDeHoy($cuentaId, $hoy),
             'limite'    => MySqlChatUsoRepository::LIMITE_DIARIO,
-            'navActivo' => 'informes.chat',
+            'recientes' => $uso->recientes($cuentaId),
+            'navActivo' => 'chat',
         ]);
     };
 
@@ -1176,6 +1216,20 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
         )]);
     }
 
+    // NO SE PAGA UNA CONSULTA PARA NO PODER RESPONDER. Si la cuenta no tiene
+    // emisor de produccion, no hay ni un documento que consultar: traducir la
+    // pregunta costaria dinero para terminar en "no hay datos".
+    //
+    // Esta comprobacion sustituye al exigirProduccionCompleto() que esta ruta NO
+    // lleva, y es mas exacta: aquel exige ademas certificado, CAF y resolucion
+    // informada -- cosas que hacen falta para EMITIR, no para consultar lo ya
+    // emitido.
+    if (rutEmisorProduccion(Db::conexion(), $cuentaId) === null) {
+        $pintar(null, ['tipo' => 'info', 'texto' =>
+            'Todavia no hay documentos emitidos en produccion para tu empresa, asi que no hay '
+            . 'nada que consultar. Cuando emitas el primero, esta pantalla responde.']);
+    }
+
     $traductor ??= traductorPregunta();
 
     try {
@@ -1186,7 +1240,7 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
             $uso->registrarConsulta($cuentaId, $hoy);
         }
         error_log('chat de consultas: ' . $e->motivo . ' - ' . $e->getMessage());
-        $pintar(null, ['tipo' => 'error', 'texto' => $e->getMessage()]);
+        $pintar(null, ['tipo' => 'error', 'texto' => $e->getMessage()], 'error');
     }
 
     // La llamada salio: cuenta, haya entendido o no.
@@ -1194,11 +1248,11 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
 
     if ($traducida->desenlace === PreguntaTraducida::IMPOSIBLE) {
         // NO ES UN ERROR TECNICO. Es la respuesta, con su motivo.
-        $pintar(null, ['tipo' => 'info', 'texto' => $traducida->motivo]);
+        $pintar(null, ['tipo' => 'info', 'texto' => $traducida->motivo], 'imposible');
     }
     if ($traducida->desenlace === PreguntaTraducida::NO_ENTENDIDA) {
         $pintar(null, ['tipo' => 'info', 'texto' => $traducida->motivo
-            . ' Prueba a decirlo de otra forma, por ejemplo: "cuanto vendi en julio".']);
+            . ' Prueba a decirlo de otra forma, por ejemplo: "cuanto vendi en julio".'], 'no_entendida');
     }
 
     // VALIDACION Y CONSULTA. Las perillas vienen del modelo y NO se confian: las
@@ -1210,14 +1264,15 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
         error_log('chat de consultas: el modelo devolvio perillas invalidas - ' . $e->getMessage()
             . ' - perillas: ' . json_encode($traducida->perillas, JSON_UNESCAPED_UNICODE));
         $pintar(null, ['tipo' => 'info', 'texto' =>
-            'No pude convertir tu pregunta en una consulta valida. Prueba a decirlo de otra forma.']);
+            'No pude convertir tu pregunta en una consulta valida. Prueba a decirlo de otra forma.'],
+            'no_entendida');
     }
 
     $pintar([
         'descripcion' => describirConsulta($datos['meta']),
         'meta'        => $datos['meta'],
         'filas'       => $datos['filas'],
-    ], null);
+    ], null, 'respondida');
 }
 
 // ===========================================================================
@@ -6273,16 +6328,29 @@ if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/desactivar$#', 
 }
 
 // --- Informes > Chat de consultas ---
-if ($metodo === 'GET' && $ruta === '/informes/chat') {
+// --- Chat ---
+//
+// SIN exigirProduccionCompleto(): preguntar no emite nada. Ver la nota de la
+// entrada del menu. Lo que protege el gasto vive en el handler.
+if ($metodo === 'GET' && $ruta === '/chat') {
     Auth::requerirSesion();
-    exigirProduccionCompleto(Db::conexion(), Auth::cuentaId());
     handleChatGet();
 }
 
-if ($metodo === 'POST' && $ruta === '/informes/chat') {
+if ($metodo === 'POST' && $ruta === '/chat') {
     Auth::requerirSesion();
-    exigirProduccionCompleto(Db::conexion(), Auth::cuentaId());
     handleChatPost();
+}
+
+// LA RUTA VIEJA NO QUEDA ROTA. El chat nacio colgando de Informes y alguien
+// puede tenerla en un marcador o en un mensaje. 301 y no 302: la mudanza es
+// definitiva, y asi el navegador deja de pedirla.
+//
+// Solo el GET: el POST viejo no lo hace ningun formulario vivo -- la vista
+// apunta a /chat -- y redirigir un POST perderia el cuerpo de todas formas.
+if ($metodo === 'GET' && $ruta === '/informes/chat') {
+    header('Location: /chat', true, 301);
+    exit;
 }
 
 // --- Ventas > Cotizaciones ---

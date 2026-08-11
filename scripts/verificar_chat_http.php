@@ -118,6 +118,115 @@ if ($vistaNuevaRevisada) {
 }
 
 // ===========================================================================
+// VERIFICACION 4 - LAS VARIABLES DE COLOR EXISTEN
+//
+// SIN SERVIDOR NI BASE, y va temprano porque es el error que ya cometimos con
+// col-descuento: usar una clase o una variable que nadie declaro. Un CSS con una
+// var() inexistente no falla en ninguna parte -- simplemente no se aplica --, y
+// eso se descubre mirando la pantalla, que es tarde.
+// ===========================================================================
+titulo('VERIFICACION 4 - las variables de color y radio existen en style.css');
+
+$css = (string) file_get_contents($RAIZ . '/panel/public/css/style.css');
+
+// TODAS las var() que usan los bloques nuevos, extraidas del propio CSS y no de
+// una lista escrita a mano: se toma el bloque del chat y se leen sus var().
+$bloque = '';
+if (preg_match('/CHAT\s*\n\s*=+.*?(?=\/\* Descuento por linea)/s', $css, $mB) === 1) {
+    $bloque = $mB[0];
+}
+if ($bloque === '') {
+    morir('no se encontro el bloque CHAT en style.css: la comprobacion no puede hacerse.');
+}
+preg_match_all('/var\((--[a-z0-9-]+)\)/i', $bloque, $mV);
+$usadas = array_values(array_unique($mV[1]));
+printf("  variables usadas por el bloque del chat: %s\n", implode(', ', $usadas));
+
+$inexistentes = [];
+foreach ($usadas as $v) {
+    // Se busca su DECLARACION, no cualquier aparicion: "--x:" con dos puntos.
+    if (preg_match('/' . preg_quote($v, '/') . '\s*:/', $css) !== 1) {
+        $inexistentes[] = $v;
+    }
+}
+if ($inexistentes === []) {
+    ok('las ' . count($usadas) . ' variables estan declaradas: ninguna inventada.');
+} else {
+    mal('variables usadas y NO declaradas: ' . implode(', ', $inexistentes));
+}
+
+// Y que sean las CORPORATIVAS, no un color suelto escrito a mano en el bloque.
+if (preg_match('/#[0-9a-f]{3,8}\b/i', $bloque) === 1) {
+    mal('el bloque del chat trae un color literal en vez de una variable.');
+} else {
+    ok('el bloque no declara ningun color literal: todo sale de la paleta.');
+}
+
+// ===========================================================================
+// VERIFICACION 1b - EL MENU: SOLO SE MOVIO EL CHAT
+// ===========================================================================
+titulo('VERIFICACION 1b - _nav.php intacto y ninguna otra entrada movida');
+
+// _nav.php NO SE TOCO, y por eso el realce se engancha por href en el CSS. Si
+// este md5 cambiara, habria que mirar por que.
+$rutaNavHead = __DIR__ . '/HEAD_nav.php';
+if (! is_file($rutaNavHead)) {
+    aviso('falta scripts/HEAD_nav.php (git show HEAD:panel/views/partials/_nav.php > ...): '
+        . 'no se puede comparar el render del menu.');
+} else {
+    $navHead = (string) file_get_contents($rutaNavHead);
+    $navWork = (string) file_get_contents($RAIZ . '/panel/views/partials/_nav.php');
+    printf("  _nav.php  HEAD md5 %s   arbol md5 %s\n", md5($navHead), md5($navWork));
+    if ($navHead === $navWork) {
+        ok('_nav.php IDENTICO a HEAD: el realce no toco la logica del menu.');
+    } else {
+        mal('_nav.php CAMBIO. El realce tenia que engancharse por CSS, no por markup.');
+    }
+}
+
+// Y que ninguna OTRA entrada del menu se haya movido: se comparan las claves y
+// destinos de definicionMenu() contra los de HEAD.
+$rutaPanelHead = __DIR__ . '/HEAD_panel_index.php';
+if (! is_file($rutaPanelHead)) {
+    aviso('falta scripts/HEAD_panel_index.php: no se pueden comparar las entradas del menu.');
+} else {
+    $extraer = static function (string $codigo): array {
+        preg_match_all("/'clave'\s*=>\s*'([^']+)'.*?'destino'\s*=>\s*'([^']+)'/", $codigo, $m, PREG_SET_ORDER);
+        $out = [];
+        foreach ($m as $x) {
+            $out[$x[1]] = $x[2];
+        }
+
+        return $out;
+    };
+    $menuHead = $extraer((string) file_get_contents($rutaPanelHead));
+    $menuWork = $extraer((string) file_get_contents($RAIZ . '/panel/public/index.php'));
+
+    $movidas = [];
+    foreach ($menuHead as $clave => $destino) {
+        if ($clave === 'informes.chat') {
+            continue;   // esa es la que se movio, a proposito
+        }
+        if (! isset($menuWork[$clave])) {
+            $movidas[] = "{$clave} DESAPARECIO";
+        } elseif ($menuWork[$clave] !== $destino) {
+            $movidas[] = "{$clave}: {$destino} -> {$menuWork[$clave]}";
+        }
+    }
+    printf("  entradas en HEAD: %d, en el arbol: %d\n", count($menuHead), count($menuWork));
+    if ($movidas === []) {
+        ok('ninguna otra entrada del menu cambio de clave ni de destino.');
+    } else {
+        mal('entradas movidas: ' . implode(' | ', $movidas));
+    }
+    if (isset($menuWork['chat']) && $menuWork['chat'] === '/chat') {
+        ok("la entrada nueva existe con clave 'chat' y destino /chat.");
+    } else {
+        mal("no se encontro la entrada 'chat' => '/chat'.");
+    }
+}
+
+// ===========================================================================
 // PANTALLA 0 - BASE Y SIEMBRA
 // ===========================================================================
 titulo('PANTALLA 0 - BASE Y SIEMBRA');
@@ -150,6 +259,7 @@ register_shutdown_function(static function () use (&$cuentaA, &$cuentaB, $pdo): 
                 $pdo->prepare('DELETE FROM dte_emitido WHERE rut_emisor = ?')->execute([$rut]);
             }
             $pdo->prepare('DELETE FROM chat_consulta_uso WHERE cuenta_id = ?')->execute([$cid]);
+            $pdo->prepare('DELETE FROM chat_consulta WHERE cuenta_id = ?')->execute([$cid]);
             $pdo->prepare('DELETE FROM dte_emisor WHERE cuenta_id = ?')->execute([$cid]);
             $pdo->prepare('DELETE FROM cliente WHERE cuenta_id = ?')->execute([$cid]);
             $pdo->prepare('DELETE FROM cuenta WHERE id = ?')->execute([$cid]);
@@ -269,12 +379,23 @@ if ($base === '' || $user === '' || $pass === '') {
     }
     ok('sesion iniciada.');
 
-    $r = pedir('GET', $base . '/informes/chat');
+    // LA RUTA VIEJA NO PUEDE QUEDAR ROTA. El chat nacio en /informes/chat y
+    // alguien puede tenerla guardada.
+    $rViejo = pedir('GET', $base . '/informes/chat');
+    printf("  GET /informes/chat -> %d\n", $rViejo['status']);
+    if ($rViejo['status'] === 301) {
+        ok('la ruta vieja redirige con 301 a la nueva: no queda rota.');
+    } elseif ($rViejo['status'] === 404) {
+        mal('la ruta vieja da 404: un marcador guardado deja de funcionar.');
+    } else {
+        aviso("la ruta vieja devolvio {$rViejo['status']} y se esperaba 301.");
+    }
+
+    $r = pedir('GET', $base . '/chat');
     if (in_array($r['status'], [302, 303], true)) {
-        aviso('la pantalla redirige: esta cuenta no tiene produccion completa. '
-            . 'No se pudo ejercitar por HTTP.');
+        aviso('la pantalla redirige: revisa el guard. No se pudo ejercitar por HTTP.');
     } elseif ($r['status'] !== 200) {
-        mal("GET /informes/chat devolvio {$r['status']}.");
+        mal("GET /chat devolvio {$r['status']}.");
     } else {
         ok('la pantalla se abre (200).');
         $tok = tokenDe($r['body']);
@@ -294,7 +415,7 @@ if ($base === '' || $user === '' || $pass === '') {
         if ($tok !== null) {
             // EL POST DE VERDAD. Sin clave en el entorno del panel, esto ejercita
             // el formulario entero y el CUARTO desenlace sin gastar saldo.
-            $r = pedir('POST', $base . '/informes/chat', ['csrf_token' => $tok, 'pregunta' => 'cuanto vendi en marzo']);
+            $r = pedir('POST', $base . '/chat', ['csrf_token' => $tok, 'pregunta' => 'cuanto vendi en marzo']);
             printf("  POST -> %d\n", $r['status']);
             if ($r['status'] === 403) {
                 mal('403: el token no viajo. Es el defecto de la cotizacion, otra vez.');
@@ -418,6 +539,167 @@ echo "      dashMetricasPorTipo()/dashResumen() de HEAD -- vive en\n";
 echo "      scripts/verificar_consulta_ventas.php, verificacion 1. Aqui se\n";
 echo "      comprueba el resultado contra la siembra, que es lo que este arnes\n";
 echo "      puede afirmar sin duplicar aquella.\n";
+
+// ===========================================================================
+// VERIFICACION 2b - EL LISTADO Y EL DESGLOSE
+// ===========================================================================
+titulo('VERIFICACION 2b - listado por documento, desglose y tope de filas');
+
+$repoL = new \Plantiflex\Integration\Facturacion\MySqlConsultaVentasRepository(
+    $pdo,
+    new \Plantiflex\Integration\Facturacion\MySqlClienteRepository($pdo)
+);
+
+// (a) EL DESGLOSE VIENE SIEMPRE, sea cual sea la metrica pedida.
+$r = $repoL->consultar($cuentaA, ['metrica' => 'documentos', 'agruparPor' => 'ninguna',
+    'desde' => $DESDE, 'hasta' => $HASTA]);
+$d = $r['filas'][0]['desglose'] ?? [];
+printf("      desglose: documentos=%s neto=%s exento=%s impuesto=%s monto=%s\n",
+    $d['documentos'] ?? '?', $d['neto'] ?? '?', $d['exento'] ?? '?',
+    $d['impuesto'] ?? '?', $d['monto'] ?? '?');
+$faltan = array_diff(['documentos', 'neto', 'exento', 'impuesto', 'monto', 'promedio'], array_keys($d));
+if ($faltan === []) {
+    ok('pidiendo "documentos" vienen igual las seis cifras: la metrica ya no puede '
+        . 'esconder el numero que el usuario queria.');
+} else {
+    mal('faltan en el desglose: ' . implode(', ', $faltan));
+}
+
+// (b) EL TOTAL SIGUE SIENDO EL MISMO. Es la condicion que no se relaja.
+if ((int) ($d['neto'] ?? 0) === $esperadoA) {
+    ok('el neto del desglose sigue coincidiendo: ' . $esperadoA . '.');
+} else {
+    mal('el neto del desglose es ' . ($d['neto'] ?? '?') . " y deberia ser {$esperadoA}.");
+}
+
+// (c) EL LISTADO: filas de documento, con folio, fecha, tipo y cliente.
+$lista = $repoL->consultar($cuentaA, ['metrica' => 'monto', 'agruparPor' => 'documento',
+    'desde' => $DESDE, 'hasta' => $HASTA, 'limite' => 50]);
+echo "\n      folio    fecha       tipo  cliente                     neto\n";
+foreach ($lista['filas'] as $f) {
+    printf("      %-8d %-11s %-5d %-25s %10s\n", $f['folio'], $f['fecha'], $f['tipo'],
+        mb_substr((string) $f['etiqueta'], 0, 25), $f['desglose']['neto']);
+}
+$folios = array_column($lista['filas'], 'folio');
+if (count($folios) === 3) {
+    ok('el listado devuelve los 3 documentos que cuentan.');
+} else {
+    mal('el listado devolvio ' . count($folios) . ' filas y deberian ser 3.');
+}
+
+// (d) EL RCT NO APARECE. Es el mismo filtro, tambien al listar.
+$netosListados = array_sum(array_map(static fn ($f) => (float) $f['desglose']['neto'], $lista['filas']));
+printf("      suma de los netos listados: %s (total del periodo: %d)\n", $netosListados, $esperadoA);
+if (abs($netosListados - $esperadoA) < 0.5) {
+    ok('sumar el listado da el total: el RCT no aparece y la NC va en negativo.');
+} else {
+    mal('el listado no suma el total: o falta el filtro, o falta el signo.');
+}
+
+// (e) EL TOPE DE FILAS, Y QUE SE SEPA QUE SE RECORTO.
+$corto = $repoL->consultar($cuentaA, ['metrica' => 'monto', 'agruparPor' => 'documento',
+    'desde' => $DESDE, 'hasta' => $HASTA, 'limite' => 2]);
+printf("      con limite=2: %d filas, hayMas=%s\n",
+    count($corto['filas']), var_export($corto['meta']['hayMas'], true));
+if (count($corto['filas']) === 2 && $corto['meta']['hayMas'] === true) {
+    ok('respeta el tope Y avisa de que hay mas: una lista truncada en silencio se '
+        . 'leeria como completa.');
+} else {
+    mal('el tope o el aviso de recorte no funcionan.');
+}
+$completo = $repoL->consultar($cuentaA, ['metrica' => 'monto', 'agruparPor' => 'documento',
+    'desde' => $DESDE, 'hasta' => $HASTA, 'limite' => 50]);
+if ($completo['meta']['hayMas'] === false) {
+    ok('y NO avisa cuando no recorto: el aviso significa algo.');
+} else {
+    mal('avisa de recorte cuando devolvio todo.');
+}
+
+// (f) AISLAMIENTO, TAMBIEN EN EL LISTADO.
+$listaB = $repoL->consultar($cuentaB, ['metrica' => 'monto', 'agruparPor' => 'documento',
+    'desde' => $DESDE, 'hasta' => $HASTA, 'limite' => 50]);
+$foliosB = array_column($listaB['filas'], 'folio');
+printf("      folios de A: %s | folios de B: %s\n", implode(',', $folios), implode(',', $foliosB));
+if (array_intersect($folios, $foliosB) === [] && $foliosB !== []) {
+    ok('el listado de B no comparte ni un documento con el de A.');
+} else {
+    mal('los listados de las dos cuentas se mezclan.');
+}
+
+// ===========================================================================
+// VERIFICACION 7 - EL CONTADOR Y LA ACTIVIDAD RECIENTE SON DATOS REALES
+// ===========================================================================
+titulo('VERIFICACION 7 - contador e historial: datos reales y aislados');
+
+if ($pdo->query("SHOW TABLES LIKE 'chat_consulta'")->fetchColumn() === false) {
+    morir('falta chat_consulta: aplica la migracion 035. ARNES SIN CORRER en esta parte.');
+}
+ok('la 035 esta aplicada.');
+
+$usoH = new MySqlChatUsoRepository($pdo);
+
+// (a) EL CONTADOR ARRANCA EN CERO Y SUBE CON LO QUE PASA, no es un numero fijo.
+$antes = $usoH->consultasDeHoy($cuentaA, date('Y-m-d'));
+$usoH->registrarConsulta($cuentaA, date('Y-m-d'));
+$despues = $usoH->consultasDeHoy($cuentaA, date('Y-m-d'));
+printf("      contador de A: %d -> %d\n", $antes, $despues);
+if ($despues === $antes + 1) {
+    ok('el contador refleja lo que ocurrio: no esta escrito a mano.');
+} else {
+    mal('el contador no subio al registrar una consulta.');
+}
+
+// (b) EL HISTORIAL GUARDA LO QUE SE PREGUNTO, con su desenlace.
+$marcaA = 'pregunta de la cuenta A ' . bin2hex(random_bytes(3));
+$marcaB = 'pregunta de la cuenta B ' . bin2hex(random_bytes(3));
+$usoH->registrarPregunta($cuentaA, null, $marcaA, 'respondida');
+$usoH->registrarPregunta($cuentaA, null, 'una que no se pudo', 'imposible');
+$usoH->registrarPregunta($cuentaB, null, $marcaB, 'respondida');
+
+$recA = $usoH->recientes($cuentaA);
+$recB = $usoH->recientes($cuentaB);
+echo "      recientes de A:\n";
+foreach ($recA as $r) {
+    printf("        [%s] %s\n", $r['desenlace'], mb_substr((string) $r['pregunta'], 0, 50));
+}
+$textosA = array_column($recA, 'pregunta');
+$textosB = array_column($recB, 'pregunta');
+
+if (in_array($marcaA, $textosA, true)) {
+    ok('la pregunta quedo guardada y vuelve en la actividad reciente.');
+} else {
+    mal('la pregunta no aparece en el historial.');
+}
+if (in_array('imposible', array_column($recA, 'desenlace'), true)) {
+    ok('el desenlace se guarda: una pregunta sin respuesta se distingue de una respondida.');
+} else {
+    mal('el desenlace no se esta guardando.');
+}
+
+// (c) AISLAMIENTO, TAMBIEN AQUI. Es texto escrito por el cliente: que se asome
+//     en la pantalla de otra empresa seria peor que un total mal sumado.
+if (! in_array($marcaB, $textosA, true) && ! in_array($marcaA, $textosB, true)) {
+    ok('ninguna cuenta ve las preguntas de la otra.');
+} else {
+    mal('SE FILTRAN PREGUNTAS ENTRE CUENTAS.');
+}
+
+// (d) EL TOPE DE FILAS de la tarjeta.
+for ($i = 0; $i < 10; $i++) {
+    $usoH->registrarPregunta($cuentaA, null, "relleno {$i}", 'respondida');
+}
+$rec = $usoH->recientes($cuentaA);
+printf("      con 13 preguntas guardadas, la tarjeta muestra %d\n", count($rec));
+if (count($rec) === MySqlChatUsoRepository::RECIENTES) {
+    ok('muestra las ' . MySqlChatUsoRepository::RECIENTES . ' ultimas, no todas.');
+} else {
+    mal('la tarjeta devolvio ' . count($rec) . ' filas.');
+}
+if ((string) $rec[0]['pregunta'] === 'relleno 9') {
+    ok('y son las MAS RECIENTES primero.');
+} else {
+    mal("la primera fila es '{$rec[0]['pregunta']}' y deberia ser la ultima guardada.");
+}
 
 // ===========================================================================
 // VERIFICACION 5 - EL TOPE

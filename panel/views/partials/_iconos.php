@@ -81,6 +81,31 @@ const ICONOS = [
     'informe-folios' => '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/>'
         . '<line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
 
+    // -- Chat --
+    //
+    // DESTELLOS, NO UN BOCADILLO DE CONVERSACION. El bocadillo diria "aqui se
+    // habla" y eso ya lo dice la palabra "Chat"; lo que el icono tiene que
+    // agregar es que ESTO ES DISTINTO. Los destellos son la convencion que la
+    // gente lee como IA hoy, sin tener que aprenderla.
+    //
+    // Mismo trazo que todos: sin relleno, stroke-width lo pone iconoSvg().
+    'ia' => '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/>'
+        . '<path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>'
+        . '<path d="M5 15l.6 1.6L7.2 17l-1.6.6L5 19.2l-.6-1.6L2.8 17l1.6-.4z"/>',
+    // El avatar del asistente. Un robot y no una cara humana: lo que contesta es
+    // un programa, y dibujarlo como persona seria decir otra cosa.
+    'robot' => '<rect x="4" y="8" width="16" height="12" rx="2"/>'
+        . '<path d="M12 8V4"/><circle cx="12" cy="3" r="1"/>'
+        . '<line x1="9" y1="13" x2="9" y2="14"/><line x1="15" y1="13" x2="15" y2="14"/>'
+        . '<path d="M9.5 17h5"/><path d="M2 12v3"/><path d="M22 12v3"/>',
+    'escudo' => '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
+        . '<polyline points="9 12 11 14 15 10"/>',
+    'enviar' => '<line x1="22" y1="2" x2="11" y2="13"/>'
+        . '<polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+    'check' => '<polyline points="20 6 9 17 4 12"/>',
+    'flecha' => '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
+    'reloj' => '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
+
     // -- Configuracion empresa (los cuatro primeros, en los DOS ambientes) --
     'empresa' => '<rect x="2" y="7" width="20" height="14" rx="2" ry="2"/>'
         . '<path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',

@@ -430,6 +430,17 @@ const MIGRACIONES = [
              'columnas' => ['consultas'], 'esperado' => 1],
         ],
     ],
+    [
+        // El historial de preguntas. REVIERTE la decision de la 034 de no
+        // guardarlas, y la 035 explica por que: la tarjeta de actividad reciente
+        // le da el motivo que antes faltaba.
+        'id' => '035', 'archivo' => '035_chat_consulta.sql', 'nota' => 'CREATE (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'chat_consulta', 'tablas' => ['chat_consulta'], 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'chat_consulta.pregunta/desenlace', 'tabla' => 'chat_consulta',
+             'columnas' => ['pregunta', 'desenlace'], 'esperado' => 2],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
