@@ -393,6 +393,20 @@ const MIGRACIONES = [
             ['tipo' => 'indice', 'desc' => 'uk_logo_emisor', 'tabla' => 'dte_logo', 'indice' => 'uk_logo_emisor'],
         ],
     ],
+    [
+        // TRES huellas, una por tabla, y ademas el UNIQUE del correlativo.
+        // uk_cotizacion_numero es lo que impide que dos altas simultaneas se
+        // lleven el mismo numero si alguna vez fallara el FOR UPDATE del
+        // repositorio: es la ultima linea de defensa y tiene que estar.
+        'id' => '032', 'archivo' => '032_cotizacion.sql', 'nota' => 'CREATE (3 tablas)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'cotizacion, cotizacion_linea, cotizacion_correlativo',
+             'tablas' => ['cotizacion', 'cotizacion_linea', 'cotizacion_correlativo'], 'esperado' => 3],
+            ['tipo' => 'indice', 'desc' => 'uk_cotizacion_numero', 'tabla' => 'cotizacion', 'indice' => 'uk_cotizacion_numero'],
+            ['tipo' => 'columnas', 'desc' => 'cotizacion_linea.cantidad_facturada', 'tabla' => 'cotizacion_linea',
+             'columnas' => ['cantidad_facturada'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

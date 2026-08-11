@@ -28,6 +28,7 @@ use Plantiflex\FacturacionCl\Enums\TipoLibro;
 use Plantiflex\FacturacionCl\Enums\TipoOperacionLibro;
 use Plantiflex\FacturacionCl\Exceptions\EnvioRechazadoException;
 use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
+use Plantiflex\FacturacionCl\Pdf\CotizacionPdfGenerator;
 use Plantiflex\FacturacionCl\Pdf\LogoEmpresa;
 use Plantiflex\FacturacionCl\Pdf\MuestrasImpresasZipBuilder;
 use Plantiflex\FacturacionCl\Providers\BoletaFacturador;
@@ -66,6 +67,8 @@ use Plantiflex\Integration\Facturacion\MySqlSetBasicoSokRepository;
 use Plantiflex\Integration\Facturacion\MySqlSetPruebasArchivoRepository;
 use Plantiflex\Integration\Facturacion\MySqlClienteRepository;
 use Plantiflex\Integration\Facturacion\ClienteDuplicadoException;
+use Plantiflex\Integration\Facturacion\MySqlCotizacionRepository;
+use Plantiflex\Integration\Facturacion\CotizacionFacturadaException;
 use Plantiflex\Integration\Facturacion\MySqlProductoRepository;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
@@ -402,6 +405,11 @@ function definicionMenu(): array
                         ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'icono' => 'nota-debito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
                 ],
+                // requiereProduccion=FALSE, y es lo que la distingue de todas sus
+                // vecinas: una cotizacion no pasa por el SII, asi que se puede
+                // hacer antes de estar habilitado para emitir -- que es justo
+                // cuando un cliente nuevo necesita cotizar.
+                ['clave' => 'ventas.cotizaciones', 'label' => 'Cotizaciones', 'destino' => '/ventas/cotizaciones', 'icono' => 'factura', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'icono' => 'carga-masiva', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'icono' => 'facturacion-masiva', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'icono' => 'panel-emision', 'construido' => true, 'requiereProduccion' => true],
@@ -1009,6 +1017,336 @@ function handleProductoDesactivarPost(int $id): void
     }
     flashSet('exito', 'Producto desactivado.');
     redirigirPrg('/maestros/productos');
+}
+
+// ===========================================================================
+//  Ventas > Cotizaciones (primera entrega: crear, listar, editar, ver, PDF).
+//
+//  UNA COTIZACION NO ES UN DTE. No pasa por el SII, no consume folio del CAF y
+//  no toca el motor: todo esto vive en la base del panel. Por eso NINGUN handler
+//  de aqui llama a exigirProduccionCompleto() -- se puede cotizar sin tener
+//  emisor, certificado ni CAF cargados, que es justamente el momento en que un
+//  cliente nuevo quiere cotizar.
+//
+//  LA CONVERSION A FACTURA NO ESTA EN ESTA ENTREGA. El saldo por linea existe en
+//  la base (cotizacion_linea.cantidad_facturada) y nace en 0; nada lo mueve
+//  todavia. Ver la nota de estado_cache en la migracion 032.
+// ===========================================================================
+
+function cotizacionRepo(): MySqlCotizacionRepository
+{
+    return new MySqlCotizacionRepository(Db::conexion());
+}
+
+/**
+ * Datos del emisor para el impreso de la cotizacion, con las MISMAS claves que
+ * usa el renderizador del DTE (RznSoc, GiroEmis, DirOrigen, CmnaOrigen...).
+ *
+ * SALEN DE dte_emisor Y NO DE UN XML, que es la diferencia con el PDF del DTE:
+ * alli el emisor viene del documento firmado, aqui no hay documento. Se prefiere
+ * la fila de PRODUCCION y se cae a la de certificacion si no existe -- una
+ * cotizacion se puede hacer antes de estar habilitado para emitir, y en ese
+ * momento lo unico cargado es certificacion.
+ *
+ * Telefono y CorreoEmisor NO existen en dte_emisor, asi que la linea de contacto
+ * no se dibuja. Es el mismo hueco que ya esta medido en el DTE, donde tampoco
+ * viajan en el XML.
+ *
+ * @return array<string,mixed>
+ */
+function datosEmisorParaImpreso(PDO $pdo, ?string $rutEmisor): array
+{
+    if ($rutEmisor === null) {
+        return [];
+    }
+    $stmt = $pdo->prepare(
+        'SELECT rut_emisor, razon_social, giro, dir_origen, cmna_origen FROM dte_emisor '
+        . "WHERE rut_emisor = :rut ORDER BY FIELD(ambiente, 'produccion', 'certificacion') LIMIT 1"
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false) {
+        return [];
+    }
+
+    return [
+        'RUTEmisor'  => $fila['rut_emisor'],
+        'RznSoc'     => $fila['razon_social'],
+        'GiroEmis'   => $fila['giro'],
+        'DirOrigen'  => $fila['dir_origen'],
+        'CmnaOrigen' => $fila['cmna_origen'],
+    ];
+}
+
+function responder404Cotizacion(): never
+{
+    http_response_code(404);
+    $titulo = 'Cotizacion no encontrada';
+    require __DIR__ . '/../views/partials/header.php';
+    echo '<h1>Cotizacion no encontrada</h1>';
+    echo '<p>La cotizacion no existe o no pertenece a tu empresa. '
+        . '<a href="/ventas/cotizaciones">Volver al listado</a>.</p>';
+    require __DIR__ . '/../views/partials/footer.php';
+    exit;
+}
+
+/**
+ * Valida el POST del formulario. Devuelve [cabecera, lineas, errores].
+ *
+ * LAS LINEAS SE VALIDAN UNA POR UNA Y CON SU INDICE en la clave del error, para
+ * que la vista pueda marcar la fila exacta -- mismo criterio que el 422 del
+ * motor, que devuelve "detalles[3].cantidad".
+ *
+ * @return array{0:array<string,mixed>, 1:list<array<string,mixed>>, 2:array<string,string>}
+ */
+function validarCotizacion(array $post): array
+{
+    $errores = [];
+
+    $rut = Rut::normalizar(trim((string) ($post['receptor_rut'] ?? '')));
+    if ($rut === '' || ! Rut::valido($rut)) {
+        $errores['receptor_rut'] = 'El RUT del cliente es obligatorio y debe ser valido.';
+    }
+    $razon = trim((string) ($post['receptor_razon_social'] ?? ''));
+    if ($razon === '') {
+        $errores['receptor_razon_social'] = 'La razon social del cliente es obligatoria.';
+    }
+
+    $fecha = trim((string) ($post['fecha'] ?? ''));
+    if ($fecha === '' || ! fechaValida($fecha)) {
+        $errores['fecha'] = 'La fecha es obligatoria (AAAA-MM-DD).';
+    }
+    $validaHasta = trim((string) ($post['valida_hasta'] ?? ''));
+    if ($validaHasta !== '' && ! fechaValida($validaHasta)) {
+        $errores['valida_hasta'] = 'La fecha de vigencia no es valida.';
+    }
+    if ($validaHasta !== '' && $fecha !== '' && fechaValida($fecha) && fechaValida($validaHasta)
+        && $validaHasta < $fecha) {
+        $errores['valida_hasta'] = 'La vigencia no puede ser anterior a la fecha de la cotizacion.';
+    }
+
+    $cabecera = [
+        'cliente_id'            => ctype_digit((string) ($post['cliente_id'] ?? '')) ? (int) $post['cliente_id'] : null,
+        'receptor_rut'          => $rut,
+        'receptor_razon_social' => $razon,
+        'receptor_giro'         => trim((string) ($post['receptor_giro'] ?? '')),
+        'receptor_direccion'    => trim((string) ($post['receptor_direccion'] ?? '')),
+        'receptor_comuna'       => trim((string) ($post['receptor_comuna'] ?? '')),
+        'receptor_email'        => trim((string) ($post['receptor_email'] ?? '')),
+        'fecha'                 => $fecha,
+        'valida_hasta'          => $validaHasta,
+        'notas'                 => trim((string) ($post['notas'] ?? '')),
+    ];
+
+    $lineas = [];
+    foreach (is_array($post['lineas'] ?? null) ? $post['lineas'] : [] as $i => $l) {
+        if (! is_array($l)) {
+            continue;
+        }
+        $nombre = trim((string) ($l['nombre'] ?? ''));
+        $cantR  = trim((string) ($l['cantidad'] ?? ''));
+        $precR  = trim((string) ($l['precio_unitario'] ?? ''));
+        // Fila totalmente vacia: se ignora, igual que en el formulario de emision.
+        if ($nombre === '' && $cantR === '' && $precR === '') {
+            continue;
+        }
+        if ($nombre === '') {
+            $errores["lineas[{$i}].nombre"] = 'El item necesita nombre.';
+        }
+        // LA CANTIDAD ADMITE DECIMALES a proposito: media hora de servicio es un
+        // caso legitimo y el saldo se lleva por cantidad. Se acepta coma o punto
+        // porque el usuario escribe en teclado chileno.
+        $cant = (float) str_replace(',', '.', $cantR);
+        if ($cantR === '' || ! is_numeric(str_replace(',', '.', $cantR)) || $cant <= 0) {
+            $errores["lineas[{$i}].cantidad"] = 'La cantidad debe ser mayor que 0.';
+        }
+        $prec = (float) str_replace(',', '.', $precR);
+        if ($precR === '' || ! is_numeric(str_replace(',', '.', $precR)) || $prec < 0) {
+            $errores["lineas[{$i}].precio_unitario"] = 'El precio debe ser 0 o mayor.';
+        }
+        $dpct = trim((string) ($l['descuento_pct'] ?? ''));
+        $dpctN = $dpct === '' ? 0.0 : (float) str_replace(',', '.', $dpct);
+        if ($dpctN < 0 || $dpctN > 100) {
+            $errores["lineas[{$i}].descuento_pct"] = 'El descuento va entre 0 y 100.';
+        }
+
+        $lineas[] = [
+            'producto_id'     => ctype_digit((string) ($l['producto_id'] ?? '')) ? (int) $l['producto_id'] : null,
+            'nombre'          => $nombre,
+            'descripcion'     => trim((string) ($l['descripcion'] ?? '')),
+            'unidad'          => trim((string) ($l['unidad'] ?? '')),
+            'cantidad'        => $cant,
+            'precio_unitario' => $prec,
+            'descuento_pct'   => $dpctN,
+            'exento'          => ! empty($l['exento']),
+        ];
+    }
+
+    if ($lineas === []) {
+        $errores['lineas'] = 'La cotizacion necesita al menos una linea.';
+    }
+
+    return [$cabecera, $lineas, $errores];
+}
+
+function handleCotizacionesListar(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = cotizacionRepo();
+    $q        = trim((string) ($_GET['q'] ?? ''));
+    $estado   = trim((string) ($_GET['estado'] ?? ''));
+    $estado   = in_array($estado, ['sin_facturar', 'parcial', 'facturada'], true) ? $estado : null;
+    $incluirInactivas = ($_GET['inactivas'] ?? '') === '1';
+
+    $porPagina = 25;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $total     = $repo->contar($cuentaId, $q !== '' ? $q : null, ! $incluirInactivas, $estado);
+    $cots      = $repo->listar($cuentaId, $q !== '' ? $q : null, ! $incluirInactivas, $estado,
+        $porPagina, ($pagina - 1) * $porPagina);
+
+    vista('cotizaciones-listado', [
+        'cotizaciones'     => $cots,
+        'q'                => $q,
+        'estado'           => $estado,
+        'incluirInactivas' => $incluirInactivas,
+        'pagina'           => $pagina,
+        'totalPaginas'     => max(1, (int) ceil($total / $porPagina)),
+        'total'            => $total,
+        'flash'            => flashTomar(),
+        'navActivo'        => 'ventas.cotizaciones',
+    ]);
+}
+
+function renderCotizacionForm(string $modo, string $accion, array $cotizacion, array $lineas, array $errores): never
+{
+    vista('cotizacion-form', [
+        'modo'        => $modo,
+        'accion'      => $accion,
+        'cotizacion'  => $cotizacion,
+        'lineas'      => $lineas,
+        'errores'     => $errores,
+        // El mismo datalist que usa el formulario de emision, por el mismo
+        // camino: productoRepo()->listar(). No se duplica la consulta ni el
+        // criterio de "solo activos".
+        'productos'   => productoRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
+        'navActivo'   => 'ventas.cotizaciones',
+    ]);
+}
+
+function handleCotizacionNuevaGet(): void
+{
+    renderCotizacionForm(
+        'nueva',
+        '/ventas/cotizaciones/nueva',
+        ['fecha' => date('Y-m-d')],
+        [],
+        []
+    );
+}
+
+function handleCotizacionNuevaPost(): void
+{
+    [$cabecera, $lineas, $errores] = validarCotizacion($_POST);
+
+    if ($errores === []) {
+        [$id, $numero] = cotizacionRepo()->crear(Auth::cuentaId(), $cabecera, $lineas);
+        flashSet('exito', "Cotizacion N° {$numero} creada.");
+        redirigirPrg("/ventas/cotizaciones/{$id}");
+    }
+
+    renderCotizacionForm('nueva', '/ventas/cotizaciones/nueva', $cabecera, $lineas, $errores);
+}
+
+function handleCotizacionVerGet(int $id): void
+{
+    $cot = cotizacionRepo()->buscarPorId(Auth::cuentaId(), $id);
+    if ($cot === null) {
+        responder404Cotizacion();
+    }
+    vista('cotizacion-detalle', [
+        'cotizacion' => $cot,
+        // SE PREGUNTA POR LAS CANTIDADES, NO POR estado_cache: el cache es para
+        // filtrar el listado con indice, no para autorizar. Ver migracion 032.
+        'editable'   => ! cotizacionRepo()->tieneFacturacion(Auth::cuentaId(), $id),
+        'flash'      => flashTomar(),
+        'navActivo'  => 'ventas.cotizaciones',
+    ]);
+}
+
+function handleCotizacionEditarGet(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $cot      = cotizacionRepo()->buscarPorId($cuentaId, $id);
+    if ($cot === null) {
+        responder404Cotizacion();
+    }
+    if (cotizacionRepo()->tieneFacturacion($cuentaId, $id)) {
+        flashSet('error', 'Esa cotizacion ya tiene facturacion y no se puede editar.');
+        redirigirPrg("/ventas/cotizaciones/{$id}");
+    }
+
+    renderCotizacionForm('editar', "/ventas/cotizaciones/{$id}/editar", $cot, $cot['lineas'], []);
+}
+
+function handleCotizacionEditarPost(int $id): void
+{
+    $cuentaId = Auth::cuentaId();
+    $repo     = cotizacionRepo();
+    if ($repo->buscarPorId($cuentaId, $id) === null) {
+        responder404Cotizacion();
+    }
+
+    [$cabecera, $lineas, $errores] = validarCotizacion($_POST);
+
+    if ($errores === []) {
+        try {
+            $repo->actualizar($cuentaId, $id, $cabecera, $lineas);
+            flashSet('exito', 'Cotizacion actualizada.');
+            redirigirPrg("/ventas/cotizaciones/{$id}");
+        } catch (CotizacionFacturadaException $e) {
+            // Borde de carrera: se emitio una factura parcial entre el GET del
+            // formulario y este guardado. El repositorio lo detecta DENTRO de la
+            // transaccion, con las lineas bloqueadas.
+            flashSet('error', $e->getMessage());
+            redirigirPrg("/ventas/cotizaciones/{$id}");
+        }
+    }
+
+    $cabecera['numero'] = $repo->buscarPorId($cuentaId, $id)['numero'] ?? null;
+    renderCotizacionForm('editar', "/ventas/cotizaciones/{$id}/editar", $cabecera, $lineas, $errores);
+}
+
+function handleCotizacionPdfGet(int $id): never
+{
+    $cuentaId = Auth::cuentaId();
+    $cot      = cotizacionRepo()->buscarPorId($cuentaId, $id);
+    if ($cot === null) {
+        responder404Cotizacion();
+    }
+
+    $pdo       = Db::conexion();
+    $rutEmisor = rutEmisorDeLaCuenta($pdo, $cuentaId);
+    $emisor    = datosEmisorParaImpreso($pdo, $rutEmisor);
+    $logo      = $rutEmisor !== null ? LogoEmpresa::leer($pdo, $rutEmisor) : null;
+
+    try {
+        $pdf = (new CotizacionPdfGenerator())->generar(
+            $emisor,
+            $cot,
+            $cot['lineas'],
+            $logo !== null ? LogoEmpresa::paraTcpdf($logo) : null
+        );
+    } catch (Throwable $e) {
+        error_log('cotizacion pdf: ' . $e->getMessage());
+        http_response_code(500);
+        exit('No se pudo generar el PDF de la cotizacion.');
+    }
+
+    header('Content-Type: application/pdf');
+    header(sprintf('Content-Disposition: inline; filename="cotizacion_%d.pdf"', (int) $cot['numero']));
+    header('Content-Length: ' . strlen($pdf));
+    echo $pdf;
+    exit;
 }
 
 // ===========================================================================
@@ -5520,6 +5858,46 @@ if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/activar$#', $ru
 if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/desactivar$#', $ruta, $mCli)) {
     Auth::requerirSesion();
     handleClienteDesactivarPost((int) $mCli[1]);
+}
+
+// --- Ventas > Cotizaciones ---
+//
+// NINGUNA de estas rutas llama a exigirProduccionCompleto(): una cotizacion no
+// pasa por el SII y se puede hacer sin emisor, certificado ni CAF cargados.
+if ($metodo === 'GET' && $ruta === '/ventas/cotizaciones') {
+    Auth::requerirSesion();
+    handleCotizacionesListar();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/cotizaciones/nueva') {
+    Auth::requerirSesion();
+    handleCotizacionNuevaGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/ventas/cotizaciones/nueva') {
+    Auth::requerirSesion();
+    handleCotizacionNuevaPost();
+}
+
+// El PDF va ANTES que /(\d+)$ para que "12/pdf" no lo capture el patron de ver.
+if ($metodo === 'GET' && preg_match('#^/ventas/cotizaciones/(\d+)/pdf$#', $ruta, $mCot)) {
+    Auth::requerirSesion();
+    handleCotizacionPdfGet((int) $mCot[1]);
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/cotizaciones/(\d+)/editar$#', $ruta, $mCot)) {
+    Auth::requerirSesion();
+    handleCotizacionEditarGet((int) $mCot[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/cotizaciones/(\d+)/editar$#', $ruta, $mCot)) {
+    Auth::requerirSesion();
+    handleCotizacionEditarPost((int) $mCot[1]);
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/cotizaciones/(\d+)$#', $ruta, $mCot)) {
+    Auth::requerirSesion();
+    handleCotizacionVerGet((int) $mCot[1]);
 }
 
 // --- Maestros > Productos ---
