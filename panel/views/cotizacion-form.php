@@ -3,7 +3,7 @@
  * Alta y edicion de una cotizacion.
  *
  * Recibe: $modo ('nueva'|'editar'), $accion, $cotizacion, $lineas, $errores,
- * $productos, $navActivo.
+ * $productos, $clientes, $navActivo.
  *
  * UNA SOLA VISTA PARA LOS DOS MODOS. La unica diferencia visible es el titulo y
  * el numero, que en alta todavia no existe -- el correlativo se reserva al
@@ -16,9 +16,14 @@
  * eso es un error del usuario, no una emision duplicada ante el SII.
  *
  * CONTRATO CON EL BACKEND Y EL JS -- no tocar sin revisar validarCotizacion():
+ *   - csrfInput() dentro del <form>. SIN ESA LINEA LA PANTALLA NO SE PUEDE USAR:
+ *     el chequeo CSRF es central y corre antes de despachar cualquier POST.
+ *   - class="form-compacto" en el <form>: de ella cuelga el estilo de los
+ *     inputs de la tabla de lineas (style.css:2162).
  *   - name de cada control, con la sintaxis de arrays lineas[i][campo].
  *   - id/clase que usa el JS: #form-cotizacion, #tabla-lineas, #agregar-linea,
- *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list.
+ *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list,
+ *     #clientes-list, #receptor_rut y #rut-aviso.
  *   - La fila esta duplicada: aqui en PHP y en nuevaFilaHTML() del JS. Las dos
  *     deben producir el mismo DOM. Mismo criterio que emision-form.php.
  */
@@ -66,15 +71,31 @@ foreach ($productos as $p) {
     </div>
 <?php endif; ?>
 
-<form id="form-cotizacion" method="post" action="<?= htmlspecialchars($accion); ?>">
+<?php
+/* class="form-compacto" NO ES DECORACION. El estilo de los inputs que van
+   DENTRO de la tabla de lineas cuelga de esa clase (style.css:2162:
+   ".form-compacto .tabla-editable input"). Sin ella los campos salen a tamaño
+   completo dentro de celdas pensadas para el compacto, que es exactamente por
+   lo que esta pantalla "se veia mal" en la primera prueba real. */
+?>
+<form id="form-cotizacion" method="post" action="<?= htmlspecialchars($accion); ?>" class="form-compacto">
+    <?php
+    /* EL TOKEN CSRF VA AQUI, PRIMERO Y SIEMPRE. Su ausencia dejo esta pantalla
+       IMPOSIBLE DE USAR en produccion: el chequeo es CENTRAL (index.php:5741,
+       antes de despachar cualquier POST), asi que sin este input el handler no
+       llega a ejecutarse nunca y el usuario ve un 403. Toda vista con un
+       <form method="post"> lleva esta linea; hay un arnes que lo comprueba
+       sobre TODAS las vistas, no solo sobre esta. */
+    ?>
+    <?= csrfInput(); ?>
 
     <section class="tarjeta" aria-labelledby="titulo-cliente">
         <h2 id="titulo-cliente">Cliente</h2>
         <div class="form-grid">
             <div class="form-campo">
                 <label for="receptor_rut">RUT</label>
-                <input type="text" name="receptor_rut" id="receptor_rut" value="<?= $v('receptor_rut'); ?>"<?= $err('receptor_rut'); ?>>
-                <small class="form-ayuda">Con guion y digito verificador.</small>
+                <input type="text" list="clientes-list" name="receptor_rut" id="receptor_rut" value="<?= $v('receptor_rut'); ?>" placeholder="76543210-9" aria-describedby="rut-aviso"<?= $err('receptor_rut'); ?>>
+                <small class="form-ayuda" id="rut-aviso" aria-live="polite">Elige uno de tus clientes o escribe un RUT nuevo.</small>
             </div>
             <div class="form-campo form-campo--ancho">
                 <label for="receptor_razon_social">Razon social</label>
@@ -98,6 +119,22 @@ foreach ($productos as $p) {
                 <input type="email" name="receptor_email" id="receptor_email" value="<?= $v('receptor_email'); ?>">
             </div>
         </div>
+        <?php
+        /* EL DATALIST PROPONE, NO OBLIGA. Un RUT que no este en el maestro se
+           escribe a mano y se guarda igual: cotizacion.cliente_id queda NULL y
+           los datos van sueltos en las columnas receptor_*. Ese es el caso
+           normal de una cotizacion a un prospecto, no un error.
+
+           POR QUE ADEMAS DEL fetch DE emision-form Y NO EN VEZ DE EL: ese fetch
+           autocompleta DESPUES de teclear el RUT completo, asi que con 82
+           clientes cargados el usuario seguia teniendo que saberselo de memoria.
+           El datalist resuelve elegir; el fetch resuelve rellenar. Las dos. */
+        ?>
+        <datalist id="clientes-list">
+            <?php foreach ($clientes as $c): ?>
+                <option value="<?= htmlspecialchars((string) $c['rut_cliente']); ?>"><?= htmlspecialchars((string) $c['razon_social']); ?></option>
+            <?php endforeach; ?>
+        </datalist>
     </section>
 
     <section class="tarjeta" aria-labelledby="titulo-fechas">
@@ -202,6 +239,44 @@ foreach ($productos as $p) {
 
     // Al elegir un producto del datalist se rellenan precio, unidad y exento
     // SOLO si estan vacios: nunca se pisa lo que el usuario ya escribio.
+    // AUTOCOMPLETADO DEL CLIENTE POR RUT. Reusa el endpoint que ya existe para
+    // el formulario de emision (/ventas/cliente-por-rut, ruta index.php:5940):
+    // no se agrega ninguna via nueva ni se duplica la consulta al maestro.
+    // Se dispara en 'change' ademas de en 'blur' porque elegir del datalist con
+    // el raton no siempre produce blur.
+    var rut = document.getElementById('receptor_rut');
+    var aviso = document.getElementById('rut-aviso');
+    function buscarCliente() {
+        var vRut = rut.value.trim();
+        if (vRut === '') { aviso.textContent = 'Elige uno de tus clientes o escribe un RUT nuevo.'; return; }
+        fetch('/ventas/cliente-por-rut?rut=' + encodeURIComponent(vRut))
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.estado === 'rut_invalido') { aviso.textContent = 'RUT invalido.'; return; }
+                if (data.estado === 'no_encontrado') {
+                    // NO ES UN ERROR: se cotiza a prospectos que todavia no son
+                    // clientes. Se guarda igual, con cliente_id en null.
+                    aviso.textContent = 'Cliente nuevo: completa sus datos y se guardan con la cotizacion.';
+                    return;
+                }
+                var c = data.cliente || {};
+                // Solo se rellena lo que este VACIO: nunca se pisa lo que el
+                // usuario ya escribio.
+                [['receptor_razon_social', c.razon_social], ['receptor_giro', c.giro],
+                 ['receptor_direccion', c.direccion], ['receptor_comuna', c.comuna],
+                 ['receptor_email', c.email]].forEach(function (par) {
+                    var el = document.getElementById(par[0]);
+                    if (el && el.value === '' && par[1]) { el.value = par[1]; }
+                });
+                aviso.textContent = c.activo === false
+                    ? 'Cliente encontrado (INACTIVO en tus maestros).'
+                    : 'Cliente encontrado: datos autocompletados.';
+            })
+            .catch(function () { aviso.textContent = ''; });
+    }
+    rut.addEventListener('blur', buscarCliente);
+    rut.addEventListener('change', buscarCliente);
+
     tbody.addEventListener('change', function (e) {
         if (!e.target.classList.contains('lin-nombre')) { return; }
         var p = PRODUCTOS[e.target.value];

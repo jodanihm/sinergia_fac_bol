@@ -1125,8 +1125,25 @@ function validarCotizacion(array $post): array
         $errores['valida_hasta'] = 'La vigencia no puede ser anterior a la fecha de la cotizacion.';
     }
 
+    // --- cliente_id SE RESUELVE EN EL SERVIDOR, DESDE EL RUT ---
+    //
+    // NO se lee del POST. Un id que venga del formulario es un id que el cliente
+    // eligio, y aqui el aislamiento por cuenta es lo unico que separa el maestro
+    // de un tenant del de otro: se busca por RUT con buscarPorRut($cuentaId, ...),
+    // que ya lleva cuenta_id en el WHERE.
+    //
+    // QUE EL RUT NO ESTE EN EL MAESTRO ES EL CASO NORMAL, NO UN ERROR: se cotiza
+    // a prospectos que todavia no son clientes. Ahi cliente_id queda NULL y los
+    // datos se guardan sueltos en las columnas receptor_*, que es exactamente
+    // para lo que esa columna es nullable y sin FK (migracion 032).
+    $clienteId = null;
+    if ($rut !== '' && Rut::valido($rut)) {
+        $fichaCliente = clienteRepo()->buscarPorRut(Auth::cuentaId(), $rut);
+        $clienteId = $fichaCliente !== null ? (int) $fichaCliente['id'] : null;
+    }
+
     $cabecera = [
-        'cliente_id'            => ctype_digit((string) ($post['cliente_id'] ?? '')) ? (int) $post['cliente_id'] : null,
+        'cliente_id'            => $clienteId,
         'receptor_rut'          => $rut,
         'receptor_razon_social' => $razon,
         'receptor_giro'         => trim((string) ($post['receptor_giro'] ?? '')),
@@ -1229,6 +1246,12 @@ function renderCotizacionForm(string $modo, string $accion, array $cotizacion, a
         // camino: productoRepo()->listar(). No se duplica la consulta ni el
         // criterio de "solo activos".
         'productos'   => productoRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
+        // CLIENTES PARA EL DATALIST, con el mismo tope y el mismo "solo activos"
+        // que los productos. El formulario de emision no los trae -- alli el
+        // cliente se resuelve por fetch DESPUES de teclear el RUT completo --, y
+        // eso era justamente el problema: con 82 clientes cargados habia que
+        // saberse el RUT de memoria. Aqui se proponen ADEMAS del fetch.
+        'clientes'    => clienteRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
         'navActivo'   => 'ventas.cotizaciones',
     ]);
 }

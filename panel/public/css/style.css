@@ -2175,6 +2175,15 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .tabla-editable .col-exento   { width: 5rem; text-align: center; }
 .tabla-editable .col-accion   { width: 3rem; text-align: center; }
 
+/* Descuento por linea (cotizaciones). SE DECLARA EN VEZ DE REUSAR col-cantidad,
+   que estaba a mano: no miden lo mismo. Una cantidad puede ser larga -- llega a
+   cuatro decimales, "1.234,5678" -- y por eso pide 6.5rem. Un porcentaje esta
+   ACOTADO por construccion entre 0 y 100 (lo valida validarCotizacion() y lo
+   fija la columna DECIMAL(5,2) de la migracion 032), asi que su contenido nunca
+   pasa de "100" o "12,5". Lo mas ancho que tiene que caber es el titulo,
+   "Desc. %", y para eso alcanzan los mismos 5.5rem que usa col-unidad. */
+.tabla-editable .col-descuento { width: 5.5rem; }
+
 /* Boton de quitar linea. La CLASE y el markup no se tocan (el JS los usa por
    classList.contains y por e.target): esto es solo presentacion. Sin elementos
    hijos, para que e.target siga siendo el propio boton. */
