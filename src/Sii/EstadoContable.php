@@ -223,7 +223,23 @@ final class EstadoContable
      */
     public static function sqlSumaConSigno(string $columna, string $columnaTipo = 'tipo_dte'): string
     {
-        return 'SUM(CASE WHEN ' . $columnaTipo . ' = ' . self::TIPO_NOTA_CREDITO
+        return 'SUM(' . self::sqlConSigno($columna, $columnaTipo) . ')';
+    }
+
+    /**
+     * El mismo signo, SIN agregar: para listar documento a documento.
+     *
+     * Existe para que un listado y su total no puedan discrepar. Si el listado
+     * mostrara la nota de credito en positivo y el total la restara, sumar las
+     * filas a mano daria otra cosa que la cifra de arriba -- y quien lo notara no
+     * sabria cual de las dos creer.
+     *
+     * sqlSumaConSigno() esta escrita EN TERMINOS DE ESTA, no al reves, para que
+     * la regla exista una sola vez.
+     */
+    public static function sqlConSigno(string $columna, string $columnaTipo = 'tipo_dte'): string
+    {
+        return '(CASE WHEN ' . $columnaTipo . ' = ' . self::TIPO_NOTA_CREDITO
             . ' THEN -' . $columna . ' ELSE ' . $columna . ' END)';
     }
 

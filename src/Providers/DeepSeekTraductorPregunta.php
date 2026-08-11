@@ -264,9 +264,23 @@ final class DeepSeekTraductorPregunta implements TraductorPreguntaInterface
             3) Si la pregunta no es sobre facturacion, o no la entiendes:
             {"desenlace":"no_entendida","motivo":"explicacion breve y en español para el usuario"}
 
+            EJEMPLOS DE QUE ELEGIR (las opciones salen de la lista de arriba, estos
+            ejemplos solo muestran COMO se usan):
+            - "detalle de facturacion de agosto", "muestrame los documentos de agosto",
+              "listado de facturas del mes" -> agruparPor "documento": el usuario quiere
+              ver los documentos uno por uno, no un total.
+            - "cuanto vendi en agosto", "cual fue mi facturacion del año" -> agruparPor
+              "ninguna": quiere una cifra del periodo. La respuesta siempre incluye neto,
+              exento, impuestos y cantidad de documentos, asi que no hace falta que elijas
+              entre ellos: usa "monto" salvo que pregunte por uno en concreto.
+            - "mi mejor cliente", "a quien le vendi mas" -> agruparPor "cliente".
+            - "que mes vendi mas", "como me fue mes a mes" -> agruparPor "mes".
+
             REGLAS:
             - Prefiere decir "imposible" o "no_entendida" antes que adivinar. Una respuesta
               inventada es peor que un "no se puede".
+            - Con agruparPor "documento", pon un limite acorde a lo que se pidio: un mes
+              cabe en 100, "todo el año" no cabe en ninguna pantalla. Si dudas, usa 50.
             - No agregues claves que no esten en la lista de opciones validas: se rechazan.
             - Si la pregunta no indica periodo, usa el año en curso hasta {$hoy}.
             - Si no pide agrupacion, usa "ninguna". Si no pide orden, usa "metrica_desc".

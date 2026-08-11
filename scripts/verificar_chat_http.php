@@ -572,6 +572,72 @@ if ((int) ($d['neto'] ?? 0) === $esperadoA) {
     mal('el neto del desglose es ' . ($d['neto'] ?? '?') . " y deberia ser {$esperadoA}.");
 }
 
+// (b2) EL DESGLOSE EN **TODAS** LAS AGRUPACIONES, NO SOLO SIN AGRUPAR.
+//
+// Esta comprobacion nace de un fallo real: en produccion, una consulta agrupada
+// POR MES llenó la pantalla de "Undefined array key desglose". Lo que ya estaba
+// cubierto era el caso 'ninguna', y por eso no se vio venir. Aqui se recorren
+// las cuatro agrupaciones y se exige la MISMA forma de fila en todas.
+echo "\n  DESGLOSE POR AGRUPACION (el caso que fallo en produccion):\n";
+$clavesEsperadas = ['documentos', 'neto', 'exento', 'impuesto', 'monto', 'promedio'];
+$todasBien = true;
+foreach (['ninguna', 'mes', 'cliente', 'tipo'] as $agr) {
+    $rr = $repoL->consultar($cuentaA, [
+        'metrica' => 'monto', 'agruparPor' => $agr,
+        'desde' => $DESDE, 'hasta' => $HASTA, 'orden' => 'metrica_desc', 'limite' => 10,
+    ]);
+    $filas = $rr['filas'];
+    $sinDesglose = 0;
+    $sinClaves   = [];
+    foreach ($filas as $fila) {
+        if (! array_key_exists('desglose', $fila) || ! is_array($fila['desglose'])) {
+            $sinDesglose++;
+            continue;
+        }
+        $faltan = array_diff($clavesEsperadas, array_keys($fila['desglose']));
+        if ($faltan !== []) {
+            $sinClaves = array_unique(array_merge($sinClaves, $faltan));
+        }
+    }
+    printf("      %-9s %2d filas, sin desglose: %d, claves faltantes: %s\n",
+        $agr, count($filas), $sinDesglose, $sinClaves === [] ? '(ninguna)' : implode(',', $sinClaves));
+    if ($sinDesglose > 0 || $sinClaves !== []) {
+        $todasBien = false;
+        mal("agrupando por '{$agr}' hay filas sin el desglose completo: es el defecto de produccion.");
+    }
+}
+if ($todasBien) {
+    ok('las cuatro agrupaciones devuelven la MISMA forma de fila, con las seis cifras.');
+}
+
+// (b3) LA CONSULTA EXACTA QUE FALLO, reproducida tal cual.
+$caso = $repoL->consultar($cuentaA, [
+    'metrica' => 'monto', 'agruparPor' => 'mes',
+    'desde' => '2026-01-01', 'hasta' => '2026-08-11',
+    'orden' => 'metrica_desc', 'limite' => 10,
+]);
+echo "\n      monto por mes, 01-01-2026 a 11-08-2026, hasta 10 filas:\n";
+foreach ($caso['filas'] as $fila) {
+    printf("        %-16s docs=%d neto=%s monto=%s\n", $fila['etiqueta'],
+        $fila['desglose']['documentos'], $fila['desglose']['neto'], $fila['desglose']['monto']);
+}
+if ($caso['filas'] !== []) {
+    ok('la consulta que fallo en produccion devuelve filas completas.');
+} else {
+    aviso('la consulta que fallo no devolvio filas con esta siembra: revisa el periodo.');
+}
+
+// (b4) Y LA VISTA NO PUEDE VOLVER A LEER 'desglose' SIN GUARDA.
+$vistaChat = (string) file_get_contents($RAIZ . '/panel/views/chat-consultas.php');
+if (preg_match('/\$f\[[\'"]desglose[\'"]\]\s*(?!\?\?)/', $vistaChat) === 1
+    && ! str_contains($vistaChat, "\$f['desglose'] ?? null")) {
+    mal("la vista lee \$f['desglose'] sin ?? : una fila incompleta volveria a llenar la "
+        . 'pantalla de warnings de PHP.');
+} else {
+    ok("la vista lee \$f['desglose'] con guarda: una fila incompleta muestra guiones y un "
+        . 'aviso, no warnings de PHP.');
+}
+
 // (c) EL LISTADO: filas de documento, con folio, fecha, tipo y cliente.
 $lista = $repoL->consultar($cuentaA, ['metrica' => 'monto', 'agruparPor' => 'documento',
     'desde' => $DESDE, 'hasta' => $HASTA, 'limite' => 50]);

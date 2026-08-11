@@ -76,7 +76,21 @@ final class MySqlConsultaVentasRepository
      */
     public const METRICAS = ['monto', 'documentos', 'promedio', 'exento', 'neto', 'impuesto'];
 
-    public const AGRUPACIONES = ['cliente', 'mes', 'tipo', 'ninguna'];
+    /**
+     * 'documento' ES UNA AGRUPACION MAS, NO UNA PERILLA NUEVA.
+     *
+     * La objecion contra meterla aqui era que su fila tiene otra forma -- folio,
+     * fecha, tipo, cliente -- y que 'metrica' se volvia absurda al listar
+     * ("promedio por documento" no significa nada). Las dos desaparecen desde
+     * que TODA consulta devuelve el desglose completo: 'metrica' ya no elige que
+     * numero se calcula, sino por cual se ORDENA y cual se destaca. Con eso
+     * 'documento' encaja sin agregar un sexto boton que el modelo pueda
+     * equivocar, y sin combinaciones invalidas que haya que rechazar una a una.
+     *
+     * La fila de 'documento' trae claves de mas (folio, fecha, tipo, rut) ademas
+     * de las de siempre; la pantalla pinta otra tabla cuando las ve.
+     */
+    public const AGRUPACIONES = ['cliente', 'mes', 'tipo', 'documento', 'ninguna'];
 
     public const ORDENES = ['metrica_desc', 'metrica_asc', 'grupo_asc'];
 
@@ -130,30 +144,57 @@ final class MySqlConsultaVentasRepository
             return ['filas' => [], 'meta' => $this->meta($p, null, 'la cuenta no tiene emisor de produccion')];
         }
 
-        // TODAS LAS METRICAS DE DINERO PASAN POR sqlSumaConSigno(), y ninguna
-        // multiplica la columna por un signo: las cinco columnas de dinero de
-        // dte_emitido son UNSIGNED y ese producto revienta con
-        // "BIGINT UNSIGNED value is out of range" antes de llegar al SUM. La
-        // forma correcta -- el menos pegado a la columna dentro del CASE -- es la
-        // que usa el dashboard desde hace meses. Ver el docblock del metodo.
-        $suma = static fn (string $columna): string => EstadoContable::sqlSumaConSigno($columna);
+        // EL FILTRO DEL PERIODO Y DE LA CUENTA, UNO SOLO PARA LOS DOS CAMINOS.
+        $donde = "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+            . '  AND fecha_emision BETWEEN :desde AND :hasta '
+            // REUSADO VERBATIM, no copiado. Ver el docblock de la clase. Aplica
+            // IGUAL al listado: un RCT no puede aparecer en una lista de
+            // documentos que dice ser lo que se facturo.
+            . EstadoContable::sqlExcluirRechazados();
 
-        $expr = match ($p['metrica']) {
-            'monto'      => $suma('total'),
-            'neto'       => $suma('neto'),
-            'exento'     => $suma('exento'),
-            // Los parentesis son necesarios: sin ellos el menos del CASE solo
-            // afectaria a iva y el impuesto adicional se sumaria en positivo.
-            'impuesto'   => $suma('(iva + impuesto_adicional)'),
-            'documentos' => 'COUNT(*)',
-            // NULLIF para no dividir por cero: un grupo sin filas no llega aqui,
-            // pero la expresion tiene que ser correcta por si misma.
-            'promedio'   => $suma('total') . ' / NULLIF(COUNT(*), 0)',
-        };
+        $params = [':rut' => $rutEmisor, ':desde' => $p['desde'], ':hasta' => $p['hasta']];
 
-        // La expresion de agrupacion. 'cliente' REPLICA Rut::normalizar() en SQL,
-        // igual que dashTopClientes(): sin eso el mismo cliente cargado una vez
-        // con puntos y otra sin puntos sale como dos filas.
+        // UNA FILA DE MAS PARA SABER SI SE RECORTO. Sin esto no se puede
+        // distinguir "hay exactamente 20" de "hay 4.000 y te mostre 20", y la
+        // pantalla no podria avisar. Se pide n+1 y se descarta la sobrante.
+        $limiteSql = $p['limite'] + 1;
+
+        if ($p['agruparPor'] === 'documento') {
+            $crudas = $this->filasDeDocumentos($donde, $params, $p, $limiteSql);
+        } else {
+            $crudas = $this->filasAgregadas($donde, $params, $p, $limiteSql);
+        }
+
+        $hayMas = count($crudas) > $p['limite'];
+        if ($hayMas) {
+            array_pop($crudas);
+        }
+
+        return [
+            'filas' => $this->etiquetar($cuentaId, $p['agruparPor'], $crudas, $p['metrica']),
+            'meta'  => $this->meta($p, $rutEmisor, null) + ['hayMas' => $hayMas],
+        ];
+    }
+
+    /**
+     * TODAS LAS CIFRAS EN CADA FILA, SIEMPRE.
+     *
+     * Antes se calculaba SOLO la metrica pedida y el resto no existia. Eso
+     * obligaba al modelo a acertar entre 'monto' y 'neto' -- y si erraba, el
+     * usuario veia un numero correcto que contestaba otra pregunta, sin forma de
+     * notarlo. Ahora la metrica solo decide POR CUAL SE ORDENA y cual destaca la
+     * pantalla; los cinco numeros viajan igual.
+     *
+     * El costo es cuatro SUM de mas sobre las mismas filas ya filtradas: nada.
+     *
+     * @param array<string,mixed> $p
+     * @return list<array<string,mixed>>
+     */
+    private function filasAgregadas(string $donde, array $params, array $p, int $limiteSql): array
+    {
+        // 'cliente' REPLICA Rut::normalizar() en SQL, igual que dashTopClientes():
+        // sin eso el mismo cliente cargado una vez con puntos y otra sin puntos
+        // sale como dos filas.
         $grupo = match ($p['agruparPor']) {
             'cliente' => "UPPER(REPLACE(REPLACE(TRIM(receptor_rut), '.', ''), ' ', ''))",
             'mes'     => "DATE_FORMAT(fecha_emision, '%Y-%m')",
@@ -161,31 +202,71 @@ final class MySqlConsultaVentasRepository
             'ninguna' => null,
         };
 
-        $orden = match ($p['orden']) {
-            'metrica_desc' => 'valor DESC',
-            'metrica_asc'  => 'valor ASC',
-            'grupo_asc'    => $grupo === null ? 'valor DESC' : 'grupo ASC',
-        };
-
         $sql = 'SELECT ' . ($grupo === null ? "'' AS grupo" : $grupo . ' AS grupo') . ', '
-            . $expr . ' AS valor, COUNT(*) AS documentos '
-            . 'FROM dte_emitido '
-            . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
-            . '  AND fecha_emision BETWEEN :desde AND :hasta '
-            // REUSADO VERBATIM, no copiado. Ver el docblock de la clase.
-            . EstadoContable::sqlExcluirRechazados()
+            . 'COUNT(*) AS documentos, '
+            . EstadoContable::sqlSumaConSigno('neto') . ' AS neto, '
+            . EstadoContable::sqlSumaConSigno('exento') . ' AS exento, '
+            // Los parentesis son necesarios: sin ellos el menos del CASE solo
+            // afectaria a iva y el impuesto adicional se sumaria en positivo.
+            . EstadoContable::sqlSumaConSigno('(iva + impuesto_adicional)') . ' AS impuesto, '
+            . EstadoContable::sqlSumaConSigno('total') . ' AS monto, '
+            // NULLIF para no dividir por cero.
+            . EstadoContable::sqlSumaConSigno('total') . ' / NULLIF(COUNT(*), 0) AS promedio '
+            . 'FROM dte_emitido ' . $donde
             . ($grupo === null ? '' : 'GROUP BY grupo ')
-            . 'ORDER BY ' . $orden . ' '
-            . 'LIMIT ' . $p['limite'];
+            . 'ORDER BY ' . $this->ordenSql($p, $grupo !== null) . ' '
+            . 'LIMIT ' . $limiteSql;
 
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute([':rut' => $rutEmisor, ':desde' => $p['desde'], ':hasta' => $p['hasta']]);
-        $crudas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $stmt->execute($params);
 
-        return [
-            'filas' => $this->etiquetar($cuentaId, $p['agruparPor'], $crudas),
-            'meta'  => $this->meta($p, $rutEmisor, null),
-        ];
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /**
+     * Documento a documento. NO agrega: cada fila es un DTE.
+     *
+     * LLEVA EL SIGNO POR FILA, no solo en los totales: si el listado mostrara la
+     * nota de credito en positivo, sumar las filas a mano daria otra cosa que la
+     * cifra de arriba y quien lo notara no sabria cual creer.
+     *
+     * @param array<string,mixed> $p
+     * @return list<array<string,mixed>>
+     */
+    private function filasDeDocumentos(string $donde, array $params, array $p, int $limiteSql): array
+    {
+        $sql = 'SELECT folio, fecha_emision, tipo_dte, '
+            . "UPPER(REPLACE(REPLACE(TRIM(receptor_rut), '.', ''), ' ', '')) AS grupo, "
+            . '1 AS documentos, '
+            . EstadoContable::sqlConSigno('neto') . ' AS neto, '
+            . EstadoContable::sqlConSigno('exento') . ' AS exento, '
+            . EstadoContable::sqlConSigno('(iva + impuesto_adicional)') . ' AS impuesto, '
+            . EstadoContable::sqlConSigno('total') . ' AS monto, '
+            . EstadoContable::sqlConSigno('total') . ' AS promedio '
+            . 'FROM dte_emitido ' . $donde
+            // Por defecto, el mas reciente primero: es lo que se espera de un
+            // "muestrame los documentos de agosto".
+            . 'ORDER BY ' . $this->ordenSql($p, false, 'fecha_emision DESC, folio DESC') . ' '
+            . 'LIMIT ' . $limiteSql;
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->execute($params);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    /** @param array<string,mixed> $p */
+    private function ordenSql(array $p, bool $hayGrupo, string $porDefecto = 'monto DESC'): string
+    {
+        // La metrica se usa como NOMBRE DE COLUMNA del SELECT, y por eso puede ir
+        // literal: sale de una lista cerrada validada, no del usuario.
+        $col = $p['metrica'];
+
+        return match ($p['orden']) {
+            'metrica_desc' => "{$col} DESC",
+            'metrica_asc'  => "{$col} ASC",
+            'grupo_asc'    => $hayGrupo ? 'grupo ASC' : $porDefecto,
+        };
     }
 
     // =======================================================================
@@ -314,10 +395,12 @@ final class MySqlConsultaVentasRepository
      * @param list<array<string,mixed>> $crudas
      * @return list<array{grupo:?string, etiqueta:string, valor:float, documentos:int}>
      */
-    private function etiquetar(int $cuentaId, string $agruparPor, array $crudas): array
+    private function etiquetar(int $cuentaId, string $agruparPor, array $crudas, string $metrica = 'monto'): array
     {
         $nombres = [];
-        if ($agruparPor === 'cliente' && $crudas !== []) {
+        // TAMBIEN EN EL LISTADO: el nombre del cliente de cada documento sale del
+        // maestro, con la MISMA consulta en lote y el MISMO escopado por cuenta.
+        if (in_array($agruparPor, ['cliente', 'documento'], true) && $crudas !== []) {
             $ruts    = array_map(static fn (array $f): string => (string) $f['grupo'], $crudas);
             $nombres = $this->clientes->buscarPorRuts($cuentaId, $ruts);
         }
@@ -328,17 +411,43 @@ final class MySqlConsultaVentasRepository
         $salida = [];
         foreach ($crudas as $f) {
             $grupo = (string) $f['grupo'];
-            $salida[] = [
+
+            // EL DESGLOSE VIAJA SIEMPRE, en todas las agrupaciones. 'valor' se
+            // conserva -- es la cifra de la metrica pedida -- para que quien ya
+            // lo leia no tenga que cambiar.
+            $desglose = [
+                'documentos' => (int) $f['documentos'],
+                'neto'       => (float) $f['neto'],
+                'exento'     => (float) $f['exento'],
+                'impuesto'   => (float) $f['impuesto'],
+                'monto'      => (float) $f['monto'],
+                'promedio'   => (float) $f['promedio'],
+            ];
+
+            $fila = [
                 'grupo'      => $agruparPor === 'ninguna' ? null : $grupo,
                 'etiqueta'   => match ($agruparPor) {
-                    'cliente' => isset($nombres[$grupo]) ? (string) $nombres[$grupo]['razon_social'] : $grupo,
+                    'cliente', 'documento' => isset($nombres[$grupo]) ? (string) $nombres[$grupo]['razon_social'] : $grupo,
                     'mes'     => ($meses[(int) substr($grupo, 5, 2)] ?? $grupo) . ' ' . substr($grupo, 0, 4),
                     'tipo'    => self::glosaTipo((int) $grupo),
                     'ninguna' => 'total del periodo',
                 },
-                'valor'      => (float) $f['valor'],
-                'documentos' => (int) $f['documentos'],
+                'valor'      => (float) ($f[$metrica] ?? 0),
+                'documentos' => $desglose['documentos'],
+                'desglose'   => $desglose,
             ];
+
+            // CLAVES DE MAS SOLO EN EL LISTADO. La pantalla las ve y pinta otra
+            // tabla; ninguna otra agrupacion las trae.
+            if ($agruparPor === 'documento') {
+                $fila['folio']  = (int) $f['folio'];
+                $fila['fecha']  = (string) $f['fecha_emision'];
+                $fila['tipo']   = (int) $f['tipo_dte'];
+                $fila['glosaTipo'] = self::glosaTipo((int) $f['tipo_dte']);
+                $fila['rut']    = $grupo;
+            }
+
+            $salida[] = $fila;
         }
 
         return $salida;

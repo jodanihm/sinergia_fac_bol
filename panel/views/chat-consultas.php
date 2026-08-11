@@ -214,23 +214,63 @@ $sugerencias = [
                             /* TODAS LAS CIFRAS, SIEMPRE. La metrica que el modelo
                                eligio solo decide cual se destaca -- asi, si
                                interpreto "monto" donde el usuario queria "neto",
-                               el numero que buscaba igual esta a la vista. */
-                            $d = $f['desglose'];
+                               el numero que buscaba igual esta a la vista.
+
+                               EL ?? NO ES DEFENSA CONTRA UN CASO IMPOSIBLE: paso
+                               en produccion. La vista nueva se desplego con el
+                               repositorio VIEJO, que no mandaba 'desglose', y la
+                               pantalla se lleno de "Undefined array key" sobre la
+                               respuesta del usuario.
+
+                               Y NO SE RELLENA CON CEROS EN SILENCIO. Un cero es
+                               un dato y aqui no lo hay: se muestra un guion en lo
+                               que falta, se conserva lo que SI vino (valor y
+                               documentos) y se avisa debajo de la tabla. Rellenar
+                               con ceros habria convertido un despliegue a medias
+                               en cifras falsas que nadie revisa. */
+                            $d = $f['desglose'] ?? null;
+                            if ($d === null) {
+                                $desgloseIncompleto = true;
+                                $d = [
+                                    'documentos' => $f['documentos'] ?? null,
+                                    // La metrica pedida SI se conoce: es 'valor'.
+                                    $metrica     => $f['valor'] ?? null,
+                                ];
+                            }
+                            $cifra = static fn (string $k) => array_key_exists($k, $d) && $d[$k] !== null
+                                ? $d[$k] : null;
                             ?>
                             <tr>
                                 <td><?= htmlspecialchars((string) $f['etiqueta']); ?></td>
                                 <td class="tabla-datos__num<?= $metrica === 'documentos' ? ' tabla-datos__num--destacado' : ''; ?>">
-                                    <?= number_format((float) $d['documentos'], 0, ',', '.'); ?>
+                                    <?= $cifra('documentos') !== null ? number_format((float) $cifra('documentos'), 0, ',', '.') : '&mdash;'; ?>
                                 </td>
-                                <td class="tabla-datos__num<?= $metrica === 'neto' ? ' tabla-datos__num--destacado' : ''; ?>"><?= $monto($d['neto']); ?></td>
-                                <td class="tabla-datos__num<?= $metrica === 'exento' ? ' tabla-datos__num--destacado' : ''; ?>"><?= $monto($d['exento']); ?></td>
-                                <td class="tabla-datos__num<?= $metrica === 'impuesto' ? ' tabla-datos__num--destacado' : ''; ?>"><?= $monto($d['impuesto']); ?></td>
-                                <td class="tabla-datos__num<?= in_array($metrica, ['monto', 'promedio'], true) ? ' tabla-datos__num--destacado' : ''; ?>"><?= $monto($d['monto']); ?></td>
+                                <?php foreach (['neto', 'exento', 'impuesto', 'monto'] as $col): ?>
+                                    <?php
+                                    $destacada = $col === $metrica
+                                        || ($col === 'monto' && $metrica === 'promedio');
+                                    ?>
+                                    <td class="tabla-datos__num<?= $destacada ? ' tabla-datos__num--destacado' : ''; ?>">
+                                        <?= $cifra($col) !== null ? $monto($cifra($col)) : '&mdash;'; ?>
+                                    </td>
+                                <?php endforeach; ?>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
+            <?php if (! empty($desgloseIncompleto)): ?>
+                <?php
+                /* EL AVISO ES PARA QUE UN DESPLIEGUE A MEDIAS SE VEA. Sin el, la
+                   tabla saldria con guiones y pareceria que no hay datos, cuando
+                   lo que pasa es que la pantalla y la consulta estan en versiones
+                   distintas. */
+                ?>
+                <div class="alerta alerta--advertencia" role="status">
+                    Algunas cifras no llegaron completas. Es un problema del sistema, no de tu
+                    pregunta: avisa a soporte y menciona esta pantalla.
+                </div>
+            <?php endif; ?>
         <?php endif; ?>
 
         <?php if (! empty($resultado['meta']['hayMas'])): ?>
