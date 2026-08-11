@@ -69,6 +69,14 @@ use Plantiflex\Integration\Facturacion\MySqlClienteRepository;
 use Plantiflex\Integration\Facturacion\ClienteDuplicadoException;
 use Plantiflex\Integration\Facturacion\MySqlCotizacionRepository;
 use Plantiflex\Integration\Facturacion\CotizacionFacturadaException;
+use Plantiflex\Integration\Facturacion\MySqlConsultaVentasRepository;
+use Plantiflex\Integration\Facturacion\ConsultaVentasInvalidaException;
+use Plantiflex\Integration\Facturacion\MySqlChatUsoRepository;
+use Plantiflex\FacturacionCl\Contracts\TraductorPreguntaInterface;
+use Plantiflex\FacturacionCl\Dto\PreguntaTraducida;
+use Plantiflex\FacturacionCl\Dto\VocabularioConsulta;
+use Plantiflex\FacturacionCl\Exceptions\TraduccionPreguntaException;
+use Plantiflex\FacturacionCl\Providers\DeepSeekTraductorPregunta;
 use Plantiflex\Integration\Facturacion\MySqlProductoRepository;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
@@ -439,6 +447,10 @@ function definicionMenu(): array
                 ['clave' => 'informes.estados', 'label' => 'Documentos por estado', 'destino' => '/informes/estados', 'icono' => 'informe-estados', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'informes.detalle', 'label' => 'Detalle documento a documento', 'destino' => '/informes/detalle', 'icono' => 'informe-detalle', 'construido' => true, 'requiereProduccion' => true],
                 ['clave' => 'informes.folios', 'label' => 'Estado de folios', 'destino' => '/informes/folios', 'icono' => 'informe-folios', 'construido' => true, 'requiereProduccion' => true],
+                // requiereProduccion=true como sus vecinos: consulta dte_emitido
+                // de produccion, asi que sin emisor de produccion no hay nada
+                // que responder y una pregunta gastaria una consulta para nada.
+                ['clave' => 'informes.chat', 'label' => 'Preguntar en palabras', 'destino' => '/informes/chat', 'icono' => 'informe-detalle', 'construido' => true, 'requiereProduccion' => true],
             ],
         ],
         // CERTIFICACION Y PRODUCCION SON DOS SUBGRUPOS HERMANOS, de peso visual
@@ -1017,6 +1029,195 @@ function handleProductoDesactivarPost(int $id): void
     }
     flashSet('exito', 'Producto desactivado.');
     redirigirPrg('/maestros/productos');
+}
+
+// ===========================================================================
+//  Informes > Chat de consultas.
+//
+//  JUNTA DOS PIEZAS QUE YA EXISTEN Y NO REIMPLEMENTA NINGUNA:
+//    - DeepSeekTraductorPregunta traduce la pregunta a las cinco perillas.
+//    - MySqlConsultaVentasRepository valida esas perillas y consulta.
+//
+//  EL ORDEN IMPORTA Y ES: pregunta -> traductor -> validacion -> consulta.
+//  El cuenta_id lo pone ESTE codigo con Auth::cuentaId(), nunca el formulario ni
+//  el modelo: al proveedor solo viaja la pregunta, y la firma de traducir() ni
+//  siquiera admite datos del tenant.
+// ===========================================================================
+
+/** El traductor. Se inyecta en los tests/arneses con un Guzzle de MockHandler. */
+function traductorPregunta(): TraductorPreguntaInterface
+{
+    return DeepSeekTraductorPregunta::desdeEntorno();
+}
+
+function chatUsoRepo(): MySqlChatUsoRepository
+{
+    return new MySqlChatUsoRepository(Db::conexion());
+}
+
+function consultaVentasRepo(): MySqlConsultaVentasRepository
+{
+    return new MySqlConsultaVentasRepository(Db::conexion(), clienteRepo());
+}
+
+/**
+ * El vocabulario que ve el modelo, CONSTRUIDO CON LAS CONSTANTES DEL
+ * REPOSITORIO. Aqui es donde se cablea lo que VocabularioConsultaTest fija: si
+ * alguien agrega una metrica alla y no aparece aqui, ese test se pone rojo.
+ */
+function vocabularioConsulta(): VocabularioConsulta
+{
+    return new VocabularioConsulta(
+        MySqlConsultaVentasRepository::METRICAS,
+        MySqlConsultaVentasRepository::AGRUPACIONES,
+        MySqlConsultaVentasRepository::ORDENES,
+        MySqlConsultaVentasRepository::LIMITE_MAX,
+        MySqlConsultaVentasRepository::AGRUPACIONES_IMPOSIBLES,
+    );
+}
+
+/**
+ * QUE CONSULTA SE HIZO, EN PALABRAS.
+ *
+ * NO ES ADORNO: es lo unico que le permite al usuario darse cuenta de que su
+ * pregunta se interpreto mal. Un numero solo, sin decir de que es, pasa por
+ * bueno aunque conteste otra cosa -- y el usuario no tiene forma de saberlo.
+ * Mismo criterio que la formula que el dashboard imprime bajo su cifra.
+ *
+ * Se arma desde la meta que devuelve el repositorio, o sea desde las perillas YA
+ * VALIDADAS, no desde lo que dijo el modelo.
+ *
+ * @param array<string,mixed> $meta
+ */
+function describirConsulta(array $meta): string
+{
+    $metrica = match ((string) $meta['metrica']) {
+        'monto'      => 'monto total',
+        'neto'       => 'monto neto',
+        'exento'     => 'monto exento',
+        'impuesto'   => 'impuestos (IVA mas impuestos adicionales)',
+        'documentos' => 'cantidad de documentos',
+        'promedio'   => 'monto promedio por documento',
+        default      => (string) $meta['metrica'],
+    };
+    $agrupacion = match ((string) $meta['agruparPor']) {
+        'cliente' => 'por cliente',
+        'mes'     => 'por mes',
+        'tipo'    => 'por tipo de documento',
+        'ninguna' => 'en total',
+        default   => (string) $meta['agruparPor'],
+    };
+    $orden = match ((string) $meta['orden']) {
+        'metrica_desc' => 'de mayor a menor',
+        'metrica_asc'  => 'de menor a mayor',
+        'grupo_asc'    => 'en orden',
+        default        => (string) $meta['orden'],
+    };
+
+    $desde = date('d-m-Y', (int) strtotime((string) $meta['desde']));
+    $hasta = date('d-m-Y', (int) strtotime((string) $meta['hasta']));
+
+    return sprintf(
+        '%s, %s, entre el %s y el %s, %s (hasta %d filas)',
+        $metrica, $agrupacion, $desde, $hasta, $orden, (int) $meta['limite']
+    );
+}
+
+function handleChatGet(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $hoy      = date('Y-m-d');
+
+    vista('chat-consultas', [
+        'pregunta'  => '',
+        'resultado' => null,
+        'aviso'     => null,
+        'usadas'    => chatUsoRepo()->consultasDeHoy($cuentaId, $hoy),
+        'limite'    => MySqlChatUsoRepository::LIMITE_DIARIO,
+        'navActivo' => 'informes.chat',
+    ]);
+}
+
+/**
+ * El flujo entero. $traductor se puede inyectar para los arneses: en produccion
+ * llega null y se construye desde el entorno, igual que hace el resto del panel.
+ */
+function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
+{
+    $cuentaId = Auth::cuentaId();
+    $hoy      = date('Y-m-d');
+    $pregunta = trim((string) ($_POST['pregunta'] ?? ''));
+
+    $uso    = chatUsoRepo();
+    $usadas = $uso->consultasDeHoy($cuentaId, $hoy);
+
+    $pintar = static function (?array $resultado, ?array $aviso) use ($pregunta, $cuentaId, $hoy, $uso): never {
+        vista('chat-consultas', [
+            'pregunta'  => $pregunta,
+            'resultado' => $resultado,
+            'aviso'     => $aviso,
+            'usadas'    => $uso->consultasDeHoy($cuentaId, $hoy),
+            'limite'    => MySqlChatUsoRepository::LIMITE_DIARIO,
+            'navActivo' => 'informes.chat',
+        ]);
+    };
+
+    if ($pregunta === '') {
+        $pintar(null, ['tipo' => 'info', 'texto' => 'Escribe una pregunta.']);
+    }
+
+    // EL TOPE SE MIRA ANTES DE LLAMAR, que es el punto entero: la pregunta N+1
+    // no tiene que llegar al proveedor. Ver el docblock de MySqlChatUsoRepository.
+    if ($usadas >= MySqlChatUsoRepository::LIMITE_DIARIO) {
+        $pintar(null, ['tipo' => 'advertencia', 'texto' => sprintf(
+            'Llegaste al limite de %d consultas por dia. El contador se reinicia mañana. '
+            . 'Mientras tanto, los informes del menu responden lo mismo sin limite.',
+            MySqlChatUsoRepository::LIMITE_DIARIO
+        )]);
+    }
+
+    $traductor ??= traductorPregunta();
+
+    try {
+        $traducida = $traductor->traducir($pregunta, vocabularioConsulta(), $hoy);
+    } catch (TraduccionPreguntaException $e) {
+        // SIN CLAVE NO SE DESCUENTA CUPO: no hubo llamada, no hubo gasto.
+        if ($e->motivo !== TraduccionPreguntaException::SIN_CLAVE) {
+            $uso->registrarConsulta($cuentaId, $hoy);
+        }
+        error_log('chat de consultas: ' . $e->motivo . ' - ' . $e->getMessage());
+        $pintar(null, ['tipo' => 'error', 'texto' => $e->getMessage()]);
+    }
+
+    // La llamada salio: cuenta, haya entendido o no.
+    $uso->registrarConsulta($cuentaId, $hoy);
+
+    if ($traducida->desenlace === PreguntaTraducida::IMPOSIBLE) {
+        // NO ES UN ERROR TECNICO. Es la respuesta, con su motivo.
+        $pintar(null, ['tipo' => 'info', 'texto' => $traducida->motivo]);
+    }
+    if ($traducida->desenlace === PreguntaTraducida::NO_ENTENDIDA) {
+        $pintar(null, ['tipo' => 'info', 'texto' => $traducida->motivo
+            . ' Prueba a decirlo de otra forma, por ejemplo: "cuanto vendi en julio".']);
+    }
+
+    // VALIDACION Y CONSULTA. Las perillas vienen del modelo y NO se confian: las
+    // valida el repositorio con su lista cerrada, igual que un POST malformado.
+    // Y el cuenta_id lo pone esta linea, no el formulario ni el modelo.
+    try {
+        $datos = consultaVentasRepo()->consultar($cuentaId, $traducida->perillas);
+    } catch (ConsultaVentasInvalidaException $e) {
+        error_log('chat de consultas: el modelo devolvio perillas invalidas - ' . $e->getMessage()
+            . ' - perillas: ' . json_encode($traducida->perillas, JSON_UNESCAPED_UNICODE));
+        $pintar(null, ['tipo' => 'info', 'texto' =>
+            'No pude convertir tu pregunta en una consulta valida. Prueba a decirlo de otra forma.']);
+    }
+
+    $pintar([
+        'descripcion' => describirConsulta($datos['meta']),
+        'meta'        => $datos['meta'],
+        'filas'       => $datos['filas'],
+    ], null);
 }
 
 // ===========================================================================
@@ -6069,6 +6270,19 @@ if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/activar$#', $ru
 if ($metodo === 'POST' && preg_match('#^/maestros/clientes/(\d+)/desactivar$#', $ruta, $mCli)) {
     Auth::requerirSesion();
     handleClienteDesactivarPost((int) $mCli[1]);
+}
+
+// --- Informes > Chat de consultas ---
+if ($metodo === 'GET' && $ruta === '/informes/chat') {
+    Auth::requerirSesion();
+    exigirProduccionCompleto(Db::conexion(), Auth::cuentaId());
+    handleChatGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/informes/chat') {
+    Auth::requerirSesion();
+    exigirProduccionCompleto(Db::conexion(), Auth::cuentaId());
+    handleChatPost();
 }
 
 // --- Ventas > Cotizaciones ---

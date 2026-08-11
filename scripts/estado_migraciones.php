@@ -420,6 +420,16 @@ const MIGRACIONES = [
             ['tipo' => 'indice', 'desc' => 'uk_cot_factura_linea', 'tabla' => 'cotizacion_factura_linea', 'indice' => 'uk_cot_factura_linea'],
         ],
     ],
+    [
+        // Una tabla y su columna. Si falta, el chat no tiene donde contar y cada
+        // pregunta gastaria saldo sin tope.
+        'id' => '034', 'archivo' => '034_chat_consulta_uso.sql', 'nota' => 'CREATE (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'chat_consulta_uso', 'tablas' => ['chat_consulta_uso'], 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'chat_consulta_uso.consultas', 'tabla' => 'chat_consulta_uso',
+             'columnas' => ['consultas'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
