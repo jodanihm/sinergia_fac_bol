@@ -166,6 +166,67 @@ final class EstadoContable
         return ' AND ' . $columna . ' IN (' . self::listaSql() . ') ';
     }
 
+    /**
+     * Tipo de DTE que RESTA en cualquier total de ventas: la nota de credito.
+     *
+     * VIVE AQUI POR EL MISMO MOTIVO QUE LA LISTA DE ARRIBA. "Que documentos
+     * cuentan para un total" y "con que signo cuentan" son la misma pregunta, y
+     * tenerlas en archivos distintos es como estaba el filtro antes de esta
+     * clase: repartido, y con un total distinto segun la pantalla.
+     *
+     * DUPLICACION CONOCIDA Y NO CERRADA: el panel tiene su propia
+     * DASH_TIPO_NOTA_CREDITO = 61 (panel/public/index.php) y dashResumen()
+     * aplica el signo en PHP. No se toca aqui porque eso es el camino que hoy
+     * factura y se mira todos los dias; pero es la misma copia que
+     * sqlExcluirRechazados() vino a eliminar, y el dia que alguien cambie una
+     * sin la otra los numeros dejaran de cuadrar.
+     */
+    public const TIPO_NOTA_CREDITO = 61;
+
+    /**
+     * SUMA de una columna de dinero CON EL SIGNO de la nota de credito: resta lo
+     * que la NC anula, suma el resto.
+     *
+     *   EstadoContable::sqlSumaConSigno('neto')
+     *   -> SUM(CASE WHEN tipo_dte = 61 THEN -neto ELSE neto END)
+     *
+     * ES LA MISMA REGLA QUE dashResumen() APLICA EN PHP: "Neto del periodo =
+     * (33 factura + 39 boleta + 56 nota de debito) - (61 nota de credito)". Sin
+     * el signo, una anulacion SUMA en vez de restar y el cliente aparece con el
+     * doble de lo que vendio.
+     *
+     * -------------------------------------------------------------------------
+     * POR QUE EL MENOS VA PEGADO A LA COLUMNA DENTRO DEL CASE, Y NO COMO FACTOR
+     * -------------------------------------------------------------------------
+     * La primera version de este metodo devolvia el SIGNO suelto, para
+     * multiplicarlo:  SUM((CASE WHEN tipo_dte = 61 THEN -1 ELSE 1 END) * neto).
+     * Es aritmeticamente lo mismo y REVIENTA:
+     *
+     *   SQLSTATE[22003]: BIGINT UNSIGNED value is out of range in
+     *   '((case when (tipo_dte = 61) then -(1) else 1 end) * dte_emitido.neto)'
+     *
+     * Las columnas de dinero de dte_emitido son UNSIGNED (neto, exento, iva,
+     * impuesto_adicional, total), y en MySQL una multiplicacion en la que uno de
+     * los operandos es unsigned se evalua en aritmetica unsigned: el producto
+     * negativo se sale del rango y falla ANTES de llegar al SUM.
+     *
+     * ESTA FORMA ES LA DEL DASHBOARD, y no una variante inventada: es
+     * literalmente la de dashTopClientes(),
+     *   SUM(CASE WHEN tipo_dte = :nc THEN -total ELSE total END),
+     * que lleva meses en produccion sumando notas de credito sin reventar. Ante
+     * dos escrituras de la misma regla, manda la que ya funciona -- no un CAST
+     * que habria que justificar.
+     *
+     * @param string $columna      columna o expresion a sumar; puede ir entre
+     *                             parentesis, ej. '(iva + impuesto_adicional)'.
+     * @param string $columnaTipo  columna del tipo de documento, con o sin alias.
+     */
+    public static function sqlSumaConSigno(string $columna, string $columnaTipo = 'tipo_dte'): string
+    {
+        return 'SUM(CASE WHEN ' . $columnaTipo . ' = ' . self::TIPO_NOTA_CREDITO
+            . ' THEN -' . $columna . ' ELSE ' . $columna . ' END)';
+    }
+
     private static function listaSql(): string
     {
         return implode(', ', array_map(
