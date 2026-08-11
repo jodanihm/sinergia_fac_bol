@@ -513,11 +513,19 @@ if ($r['status'] !== 200) {
     } else {
         ok('el formulario de envio emite el token.');
     }
-    // La advertencia tiene que estar donde el usuario lee el estado.
-    if (str_contains($r['body'], 'no es lo mismo que recibido')) {
-        ok('la pantalla advierte que "aceptado" no es "recibido".');
+    // LA ADVERTENCIA DE BREVO NO PUEDE APARECER TODAVIA, Y ESO ES LO QUE SE
+    // COMPRUEBA -- no lo contrario.
+    //
+    // Antes esto la buscaba y la daba por buena si estaba. Estaba mal: en este
+    // punto no se ha enviado nada -- ni siquiera se ha apretado el boton -- asi
+    // que decirle al usuario que "pudo no llegar" afirma algo falso. La
+    // advertencia solo corresponde junto a una fila en estado 'enviado'.
+    if (! str_contains($r['body'], 'no es lo mismo que recibido')) {
+        ok('sin envios, la pantalla NO muestra la advertencia de Brevo: no se afirma que se '
+            . 'haya intentado enviar algo que no se intento.');
     } else {
-        aviso('la advertencia sobre aceptado/recibido no aparece todavia (solo sale con envios).');
+        mal('la pantalla muestra "aceptado no es recibido" sin que se haya enviado nada: '
+            . 'da a entender que ya se intento y pudo fallar.');
     }
 
     if ($tokDet !== '') {
@@ -548,6 +556,26 @@ if (count($envios) === 1 && (string) $envios[0]['estado'] === 'pendiente') {
     ok("la fila quedo en orden_compra_envio con estado 'pendiente'.");
 } else {
     mal('no quedo exactamente una fila pendiente: ' . count($envios) . ' fila(s).');
+}
+
+// LO QUE VE EL USUARIO JUSTO DESPUES DEL CLIC. Es el momento que estaba mal: la
+// respuesta inmediata tiene que hablar de lo que acaba de pasar -- quedo listo y
+// sale en unos minutos -- y NO de que Brevo pudo no entregarlo.
+$r = pedir('GET', $base . '/compras/ordenes/' . $ordenId);
+if ($r['status'] === 200) {
+    if (! str_contains($r['body'], 'no es lo mismo que recibido')) {
+        ok('con la fila en cola y ninguna enviada, la advertencia de Brevo sigue sin aparecer.');
+    } else {
+        mal('la advertencia de Brevo aparece con la orden solo ENCOLADA: '
+            . 'afirma que se intento enviar cuando no se intento.');
+    }
+    if (str_contains($r['body'], 'Todavia no ha salido ningun correo')) {
+        ok('en su lugar dice lo que de verdad esta pasando: todavia no ha salido nada.');
+    } else {
+        mal('no explica que el envio esta en cola: el usuario no sabe si tiene que esperar.');
+    }
+} else {
+    mal("el detalle devolvio {$r['status']} despues de encolar.");
 }
 // NO SE ENVIO NADA: el runner es quien manda, y no ha corrido.
 if ($envios !== [] && (int) $envios[0]['intentos'] === 0 && $envios[0]['message_id'] === null) {

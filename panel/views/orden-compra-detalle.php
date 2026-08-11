@@ -158,6 +158,25 @@ $badgeEnvio = static function (string $e): array {
         </div>
     </form>
 
+    <?php
+    /* LA ADVERTENCIA SOBRE BREVO SOLO APLICA SI YA SE INTENTO ENVIAR.
+     *
+     * Antes se pintaba en cuanto habia UNA fila en la cola, o sea justo despues
+     * de apretar el boton -- cuando el correo todavia no salio, porque el runner
+     * corre aparte. Decirle ahi que "pudo no llegar" da a entender que ya se
+     * intento y fallo, cuando ni siquiera se intento.
+     *
+     * Ahora depende de que haya al menos un envio en estado 'enviado': ese es el
+     * unico momento en que Brevo dijo que lo acepto, y por lo tanto el unico en
+     * que tiene sentido aclarar que aceptado no es recibido. */
+    $hayEnviados = false;
+    foreach ($envios as $e) {
+        if ((string) $e['estado'] === 'enviado') {
+            $hayEnviados = true;
+            break;
+        }
+    }
+    ?>
     <?php if ($envios !== []): ?>
         <h3 class="titulo-sub">Envios</h3>
         <div class="tabla-scroll">
@@ -182,6 +201,19 @@ $badgeEnvio = static function (string $e): array {
                                 <?php if (! empty($e['error_mensaje'])): ?>
                                     <span class="tabla-datos__secundario"><?= htmlspecialchars((string) $e['error_mensaje']); ?></span>
                                 <?php endif; ?>
+                                <?php
+                                /* EL MATIZ VA PEGADO A LA FILA QUE LO NECESITA, no
+                                   suelto al pie: es de ESTE envio, el que Brevo
+                                   acepto, y no de los que siguen en cola. */
+                                ?>
+                                <?php if ((string) $e['estado'] === 'enviado'): ?>
+                                    <span class="tabla-datos__secundario">
+                                        Aceptado no es lo mismo que recibido
+                                        <?php if (! empty($e['message_id'])): ?>
+                                            &middot; id <?= htmlspecialchars((string) $e['message_id']); ?>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endif; ?>
                             </td>
                             <td class="tabla-datos__num"><?= (int) $e['intentos']; ?></td>
                             <td><?= htmlspecialchars(date('d-m-Y H:i', (int) strtotime((string) $e['updated_at']))); ?></td>
@@ -190,17 +222,24 @@ $badgeEnvio = static function (string $e): array {
                 </tbody>
             </table>
         </div>
-        <p class="nota">
+        <?php if ($hayEnviados): ?>
+            <p class="nota">
+                <strong>Aceptado no es lo mismo que recibido.</strong> Si el correo del proveedor
+                esta bloqueado en el servicio de envio, la respuesta es igual de exitosa y el
+                mensaje no se entrega. Ante un &laquo;no me llego&raquo;, soporte puede rastrearlo
+                con el identificador que queda guardado en cada envio.
+            </p>
+        <?php else: ?>
             <?php
-            /* LA ADVERTENCIA VA DONDE EL USUARIO LEE EL ESTADO, no solo en el
-               codigo: si dice "aceptado" y el proveedor asegura que no le llego,
-               las dos cosas pueden ser ciertas a la vez. */
+            /* SOLO HAY FILAS EN COLA. Se dice lo que de verdad esta pasando --
+               nada ha salido todavia -- en vez de la advertencia de Brevo, que
+               aqui no viene al caso. */
             ?>
-            <strong>Aceptado por Brevo no es lo mismo que recibido.</strong> Si el correo del
-            proveedor esta bloqueado en el servicio de envio, la respuesta es igual de exitosa y
-            el mensaje no se entrega. Ante un &laquo;no me llego&raquo;, soporte puede rastrearlo
-            con el identificador que queda guardado en cada envio.
-        </p>
+            <p class="nota">
+                Todavia no ha salido ningun correo: las ordenes se envian en tandas, cada pocos
+                minutos. Cuando salga, esta tabla lo va a mostrar.
+            </p>
+        <?php endif; ?>
     <?php endif; ?>
 </section>
 

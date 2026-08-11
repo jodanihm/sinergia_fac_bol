@@ -1521,10 +1521,17 @@ function handleOrdenCompraEnviarPost(int $id): void
 
     try {
         $intento = $repo->encolarEnvio($cuentaId, $id, $destino !== '' ? $destino : null);
+        // EL MENSAJE DEL CLIC HABLA DE LO QUE ACABA DE PASAR Y DE NADA MAS.
+        //
+        // Decia "sale en la proxima pasada del runner": correcto pero escrito
+        // para nosotros, no para quien compra. Y la pantalla ademas mostraba la
+        // advertencia de Brevo en ese instante, dando a entender que ya se habia
+        // intentado enviar y podia no haber llegado -- cuando ni siquiera se
+        // intento. Ese matiz vive ahora junto a la fila que SI se envio.
         flashSet(
             $destino !== '' ? 'exito' : 'advertencia',
             $destino !== ''
-                ? "Envio N° {$intento} encolado a {$destino}. Sale en la proxima pasada del runner."
+                ? "La orden quedo lista para enviarse a {$destino}. Sale en los proximos minutos."
                 : 'La orden quedo encolada SIN destinatario: no hay a quien mandarla. '
                     . 'Carga el correo del proveedor y vuelve a enviarla.'
         );
