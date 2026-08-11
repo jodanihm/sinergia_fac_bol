@@ -181,6 +181,38 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
     private $sinAcuseRecibo = [39, 41, 56, 61, 111, 112]; ///< Notas de crédito, notas de débito y boletas no tienen acuse de recibo
 
     /**
+     * Donde arranca el pie (timbre y acuse) cuando el contenido no llega hasta
+     * ahi. ES EL VALOR HISTORICO, y por eso el caso normal no cambia: hasta 25
+     * lineas de detalle el max() de agregar() toma este 190 y el documento sale
+     * byte a byte igual que antes.
+     */
+    private const Y_PIE = 190;
+
+    /**
+     * Distancia entre el fin del contenido y el pie cuando el contenido pasa de
+     * Y_PIE. No hay un valor "correcto" heredado -- antes esta situacion
+     * simplemente se dibujaba encima --, asi que se elige el minimo que separa
+     * visiblemente dos bloques sin gastar hoja.
+     */
+    private const SEPARACION_PIE = 6;
+
+    /**
+     * Alto del bloque del pie, para decidir si cabe en la pagina.
+     *
+     * EL BLOQUE SON LOS TRES JUNTOS -- totales, timbre y acuse -- porque los
+     * tres arrancan en Y_PIE y se reparten el ancho. El mas alto manda: el acuse
+     * es un rectangulo de 40 mm (190..230) y CEDIBLE va 55 mm mas abajo (245),
+     * con su linea de texto. 60 cubre el conjunto.
+     *
+     * SE PREFIERE PASARSE ANTES QUE QUEDARSE CORTO: sobrar unos milimetros
+     * adelanta un salto de pagina; faltar parte el acuse entre dos hojas.
+     */
+    private const ALTO_PIE = 60;
+
+    /** 245 - 190: la distancia que CEDIBLE siempre tuvo respecto del pie. */
+    private const CEDIBLE_BAJO_PIE = 55;
+
+    /**
      * Constructor de la clase
      * @author Esteban De La Fuente Rubio, DeLaF (esteban[at]sasco.cl)
      * @version 2015-09-09
@@ -290,15 +322,84 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
         $this->agregarDetalle($dte['Detalle']);
         if (!empty($dte['DscRcgGlobal']))
             $this->agregarDescuentosRecargos($dte['DscRcgGlobal']);
-        $this->agregarTotales($dte['Encabezado']['Totales']);
+        // ===================================================================
+        //  EL PIE VA DONDE TERMINO LA TABLA, NO EN y=190 FIJO
+        // ===================================================================
+        //
+        // EL DEFECTO QUE ESTO ARREGLA, MEDIDO: a partir de 26 lineas de detalle
+        // la tabla se dibujaba ENCIMA del timbre y del acuse. El motivo es que
+        // los tres elementos del pie iban en coordenadas fijas (timbre y acuse
+        // en 190, CEDIBLE en 245) mientras la tabla no tenia mas tope que el
+        // salto automatico de TCPDF, que en A4 dispara recien en 272 mm. O sea
+        // que entre 190 y 272 la tabla dibujaba libremente sobre ellos: 82 mm de
+        // zona de choque.
+        //
+        // POR QUE NO SE ARREGLA CONFIGURANDO TCPDF. setAutoPageBreak($auto,
+        // $margin) hace PageBreakTrigger = h - margin (tcpdf.php:2868): el
+        // margen inferior es del DOCUMENTO, no de la pagina. Reservar los ~60 mm
+        // del pie los reservaria en TODAS las paginas, desperdiciando un quinto
+        // de cada hoja intermedia. Y AcceptPageBreak() decide SI saltar, no
+        // donde va el mobiliario.
+        //
+        // ASI QUE SE INVIERTE EL ORDEN: la tabla ya se dibujo y pagino sola con
+        // el margen normal; ahora se mira DONDE TERMINO y el pie se pone debajo.
+        //
+        // ES EL MISMO CRITERIO QUE EL setY(max(50, $finEmisor)) DE ARRIBA, y por
+        // eso se escribe igual: un bloque que crece con los datos no puede ir
+        // seguido de otro clavado en una constante.
+        //
+        // EL max() ES LO QUE PRESERVA LA INERCIA. Un documento cuyo contenido
+        // termina antes de 190 -- o sea todos los que hoy salen bien, hasta 25
+        // lineas -- toma el 190 de siempre y no cambia ni un operador de dibujo.
+        // Solo se mueve lo que hoy esta roto.
+        //
+        // -------------------------------------------------------------------
+        // EL PIE SON **TRES** BLOQUES, NO DOS, Y ESTAN EN LA MISMA BANDA
+        // -------------------------------------------------------------------
+        // A y=190 no solo estan el timbre (x 20-90) y el acuse (x 93-143):
+        // tambien los TOTALES, que agregarTotales() dibuja a la derecha tras
+        // hacer setY(190) en su linea 967. Los tres comparten franja vertical y
+        // se reparten el ancho, asi que se mueven JUNTOS o no se mueve ninguno.
+        //
+        // LA PRIMERA VERSION DE ESTE ARREGLO LEIA getY() DESPUES DE
+        // agregarTotales(), y por eso fallo: lo que medía era el fin del bloque
+        // de totales -- clavado en 190 -- y no el de la tabla. Daba ~202,5 con
+        // 1 linea y ~202,5 con 40, o sea un valor casi constante que movia el
+        // pie 18,5 mm en TODOS los documentos (rompiendo los tres md5 cortos) y
+        // que nunca crecia lo suficiente para disparar el salto de pagina.
+        //
+        // Se lee ANTES de los totales, que es donde de verdad termina el
+        // contenido que fluye: agregarDetalle() deja el cursor donde acaba la
+        // tabla, y agregarDescuentosRecargos() escribe justo debajo.
+        $finContenido = $this->getY();
+        $yPie = max(self::Y_PIE, $finContenido + self::SEPARACION_PIE);
+
+        // SI EL PIE NO CABE ENTERO, PAGINA NUEVA. El limite se pregunta y no se
+        // escribe: getPageHeight() - getBreakMargin() es la misma cuenta con la
+        // que TCPDF decide sus propios saltos, asi que no puede desincronizarse
+        // de ella. Partir el acuse entre dos hojas seria cambiar un defecto por
+        // otro.
+        $limiteUtil = $this->getPageHeight() - $this->getBreakMargin();
+        if ($yPie + self::ALTO_PIE > $limiteUtil) {
+            $this->AddPage();
+            $yPie = self::Y_PIE;
+        }
+
+        // EL ORDEN DE DIBUJO NO CAMBIA -- totales, timbre, acuse --, y eso
+        // importa: el md5 del flujo compara operadores en secuencia, asi que
+        // reordenarlos rompería la inercia aunque el resultado se viera igual.
+        $this->agregarTotales($dte['Encabezado']['Totales'], $yPie);
+
         // agregar timbre
-        $this->agregarTimbre($timbre);
+        $this->agregarTimbre($timbre, 20, $yPie, 70);
         // agregar acuse de recibo y leyenda de destino sólo si no es nota de
         // crédito ni nota de débito
         if (!in_array($dte['Encabezado']['IdDoc']['TipoDTE'], $this->sinAcuseRecibo)) {
-            $this->agregarAcuseRecibo();
+            $this->agregarAcuseRecibo(93, $yPie, 50, 40);
             if ($this->cedible)
-                $this->agregarLeyendaDestino();
+                // 55 es la distancia que CEDIBLE tenia respecto del pie: 245-190.
+                // Se conserva relativa para que el caso normal salga identico.
+                $this->agregarLeyendaDestino($yPie + self::CEDIBLE_BAJO_PIE);
         }
     }
 
@@ -740,8 +841,16 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
      * @version 2015-09-22
      *
      * ------------------------------------------------------------------------
-     * DEFECTO CONOCIDO Y NO ARREGLADO: UNA TABLA LARGA SE DIBUJA ENCIMA DEL
-     * ACUSE DE RECIBO Y DEL TIMBRE.
+     * DEFECTO YA ARREGLADO -- SE DEJA LA DESCRIPCION PORQUE EXPLICA EL DISEÑO
+     * ACTUAL. Una tabla larga se dibujaba encima del acuse de recibo y del
+     * timbre. Se corrigio en agregar(), moviendo el pie a
+     * max(190, fin del contenido + separacion) con salto de pagina si no cabe;
+     * NO se toco esta funcion. El punto de quiebre medido con datos sinteticos
+     * fue N = 26 lineas -- la estimacion "alrededor de la fila 27" que decia
+     * este comentario quedo a una fila. Ese 26 es una COTA SUPERIOR: se midio
+     * con la linea base del texto del ultimo item, y el borde inferior de la
+     * tabla cae unos milimetros mas abajo, asi que documentos algo mas cortos
+     * ya rozaban el pie.
      *
      * Esta tabla FLUYE hacia abajo sin tope propio. El unico corte que existe es
      * el salto de pagina automatico de TCPDF, que con margen inferior 25 cae en
@@ -757,11 +866,16 @@ final class DtePdfDocumento extends \sasco\LibreDTE\PDF
      * gana el que se dibuje despues. Con lineas de ~4 mm, una tabla que arranque
      * en y~81 llega a 190 alrededor de la fila 27.
      *
-     * NO SE ARREGLA AQUI, y es deliberado: la solucion pasa por paginar el
-     * detalle -- repitiendo cabecera y moviendo el mobiliario a la ultima pagina
-     * -- y eso es una entrega propia, no una linea. Queda escrito para que el
-     * proximo que lea esto no tenga que descubrirlo con un documento real
-     * encima.
+     * POR QUE LA CABECERA DE LA TABLA **NO** SE REPITE EN CADA PAGINA, que es lo
+     * que aquel comentario daba por parte de la solucion: addTable() del padre
+     * solo emite <thead> -- que es lo que TCPDF repite al saltar -- cuando
+     * count($options['width']) == count($headers) (lib/PDF.php:180). Aqui el
+     * ancho de la columna "Item" es 0 y ademas se usa
+     * addTableWithoutEmptyCols(), que ELIMINA columnas vacias y descuadra ese
+     * conteo. Conseguirlo obligaria a cambiar los anchos y el metodo de dibujo, o
+     * sea a mover el flujo de TODOS los documentos con detalle -- justo lo que el
+     * arreglo del pie evito. Queda pendiente y separado: es cosmetico y esto era
+     * correctitud.
      *
      * ES ANTERIOR AL BLOQUE QUE FLUYE: no lo introdujo el setY(max(50, ...)) de
      * agregar(). Ese cambio acerca el techo unos 9 mm en el peor caso medido; el
