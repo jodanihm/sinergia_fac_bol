@@ -1910,7 +1910,59 @@ const CHAT_ARMADO_CANDIDATOS = 6;
  * Asi esta capa se puede desplegar sola sin exponer nada a medias. La abre la
  * capa que cierra el circulo, en el mismo commit que lo cierra.
  */
-const CHAT_ARMADO_HABILITADO = false;
+const CHAT_ARMADO_HABILITADO = true;
+
+/**
+ * =========================================================================
+ * DIAGNOSTICO TEMPORAL -- QUITAR CUANDO EL DEFECTO ESTE CERRADO
+ * =========================================================================
+ *
+ * POR QUE EXISTE: tres hipotesis seguidas se descartaron leyendo el codigo
+ * mientras produccion seguia fallando igual. La traza estatica dice que el camino
+ * de armado tiene que entrar, y no entra. Sin un rastro del servidor no hay forma
+ * de saber cual de las dos cosas es falsa.
+ *
+ * NO ES LOGGING PERMANENTE. Se apaga poniendo la constante en false, y se borra
+ * entero cuando la causa este identificada.
+ *
+ * QUE NO SE ESCRIBE: ninguna clave, ningun secreto. El mensaje del usuario SI se
+ * escribe, recortado a 120 caracteres -- es el dato central del diagnostico y es
+ * del propio tenant, en su propio servidor.
+ */
+const CHAT_ARMADO_DIAGNOSTICO = true;
+
+/**
+ * Una linea de diagnostico, por los DOS caminos a la vez.
+ *
+ *   error_log()  -> stderr de php-fpm -> supervisord -> `docker logs sinergia_panel`.
+ *                   Es el que seguro funciona: es el mismo que ya usan los
+ *                   error_log() del chat y de la emision.
+ *   /app/debug/  -> el volumen sinergia_debug, montado en el panel por el compose.
+ *                   Sobrevive al contenedor y se lee de una. PUEDE FALLAR: el
+ *                   volumen lo crea Docker como root y los workers de php-fpm
+ *                   corren como www-data. Por eso el fallo se traga: si no se
+ *                   puede escribir, queda el de arriba, que es el importante.
+ *
+ * El prefijo CHATDIAG es para poder filtrar con grep sin arrastrar el resto.
+ *
+ * @param array<string,mixed> $datos
+ */
+function chatDiag(string $etapa, array $datos = []): void
+{
+    if (! CHAT_ARMADO_DIAGNOSTICO) {
+        return;
+    }
+
+    $linea = sprintf(
+        'CHATDIAG %s | %s | %s',
+        date('Y-m-d H:i:s'),
+        $etapa,
+        json_encode($datos, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+    );
+
+    error_log($linea);
+    @file_put_contents('/app/debug/chat-armado.log', $linea . "\n", FILE_APPEND);
+}
 
 /** El traductor de armado. Se inyecta en los arneses, igual que el de consultas. */
 function traductorArmado(): TraductorArmadoFacturaInterface
@@ -2238,17 +2290,35 @@ function chatTurnoDeArmado(
     //
     // Se apaga aqui y no en la vista porque aqui es donde se gasta el dinero: con
     // esta linea, el traductor de armado no se llama NUNCA en produccion.
+    $estado    = chatArmadoEstado($conversacionId) ?? [];
+    $enCurso   = ($estado['turnos'] ?? []) !== [];
+    $pareceArm = chatPareceArmado($pregunta);
+
+    // DIAGNOSTICO 1: TODO lo que decide el ruteo, de una sola vez y ANTES de
+    // cualquier return. Si esta linea no aparece en el log, el problema no esta
+    // aqui dentro: es que a esta funcion no se la esta llamando.
+    chatDiag('entrada', [
+        'habilitado'     => CHAT_ARMADO_HABILITADO,
+        'mensaje'        => mb_substr($pregunta, 0, 120),
+        'pareceArmado'   => $pareceArm,
+        'enCurso'        => $enCurso,
+        'conversacionId' => mb_substr($conversacionId, 0, 8),
+        'turnosPrevios'  => count(is_array($estado['turnos'] ?? null) ? $estado['turnos'] : []),
+        'borradorPrevio' => json_encode($estado['borrador'] ?? [], JSON_UNESCAPED_UNICODE),
+    ]);
+
     if (! CHAT_ARMADO_HABILITADO) {
+        chatDiag('sale-a-consultas', ['rama' => 'interruptor CHAT_ARMADO_HABILITADO en false']);
+
         return;
     }
-
-    $estado  = chatArmadoEstado($conversacionId) ?? [];
-    $enCurso = ($estado['turnos'] ?? []) !== [];
 
     // UNA CONVERSACION EN CURSO SE LLEVA EL TURNO SIN MIRAR LA FRASE. Es el
     // traductor quien decide si continua o cambio de tema, no la heuristica: en
     // mitad de un armado, "5000" o "si" no tienen ninguna señal que buscar.
-    if (! $enCurso && ! chatPareceArmado($pregunta)) {
+    if (! $enCurso && ! $pareceArm) {
+        chatDiag('sale-a-consultas', ['rama' => 'no hay conversacion en curso y la frase no parece armado']);
+
         return;
     }
 
@@ -2259,6 +2329,7 @@ function chatTurnoDeArmado(
     // que el usuario venia diciendo.
     $pdo  = Db::conexion();
     $prod = estadoEmisionProduccion($pdo, $cuentaId);
+    chatDiag('guard-produccion', ['falta' => $prod['falta'] ?? 'nada']);
     if ($prod['falta'] !== null) {
         $donde = [
             'empresa'     => 'los datos de tu empresa en produccion',
@@ -2278,6 +2349,14 @@ function chatTurnoDeArmado(
 
     $traductor ??= traductorArmado();
 
+    // DIAGNOSTICO 3: se llega A LLAMAR al traductor de armado. Si aparece
+    // 'entrada' pero no aparece esto, el turno murio en el guard de produccion.
+    chatDiag('llamando-traductor-armado', [
+        'clase'        => get_class($traductor),
+        'turnos'       => count($turnos),
+        'conBorrador'  => (is_array($estado['borrador'] ?? null) ? $estado['borrador'] : []) !== [],
+    ]);
+
     try {
         // SOLO LAS FRASES DEL USUARIO Y EL BORRADOR QUE EL MODELO ESCRIBIO. Lo que
         // el panel resolvio del maestro vive en $estado['cliente'] y NO se pasa.
@@ -2293,9 +2372,22 @@ function chatTurnoDeArmado(
         if ($e->motivo !== TraduccionPreguntaException::SIN_CLAVE) {
             $uso->registrarConsulta($cuentaId, $hoy);
         }
+        chatDiag('excepcion-del-traductor', [
+            'motivo'  => $e->motivo,
+            'clase'   => get_class($e),
+            'mensaje' => mb_substr($e->getMessage(), 0, 200),
+        ]);
         error_log('chat armado: ' . $e->motivo . ' - ' . $e->getMessage());
         $pintar(null, ['tipo' => 'error', 'texto' => $e->getMessage()], 'error');
     }
+
+    // DIAGNOSTICO 4: EL DESENLACE EXACTO. Es el dato que decide todo lo que sigue.
+    chatDiag('desenlace', [
+        'desenlace'  => $r->desenlace,
+        'pregunta'   => mb_substr((string) $r->pregunta, 0, 120),
+        'motivo'     => mb_substr((string) $r->motivo, 0, 120),
+        'documentos' => count(chatDocumentosDelBorrador($r->borrador)),
+    ]);
 
     $uso->registrarConsulta($cuentaId, $hoy);
 
@@ -2303,6 +2395,8 @@ function chatTurnoDeArmado(
     // no dijo que se arrepentia. Se vuelve para que el turno lo atienda el camino
     // de consultas, y lo que venia armando sigue donde estaba.
     if ($r->desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA) {
+        chatDiag('sale-a-consultas', ['rama' => 'el traductor de armado dijo cambio_de_tema']);
+
         return;
     }
 
@@ -2787,7 +2881,21 @@ function handleChatPost(
     //
     // Si el turno NO es de armado, esta llamada RETORNA y sigue el camino de
     // consultas de siempre, sin haber tocado nada.
+    // DIAGNOSTICO 0: ANTES de la llamada. Si en el log no aparece ni esta linea,
+    // el binario que corre no tiene este codigo -- y entonces el problema es el
+    // despliegue, no el chat.
+    chatDiag('handleChatPost-antes-de-armado', [
+        'mensaje' => mb_substr($pregunta, 0, 120),
+        'usadas'  => $usadas,
+        'limite'  => $limite,
+    ]);
+
     chatTurnoDeArmado($cuentaId, $conversacionId, $pregunta, $hoy, $uso, $traductorArmado, $pintar);
+
+    // DIAGNOSTICO 5: si se llega aqui, el armado devolvio el control y el turno lo
+    // va a atender el camino de consultas. La rama exacta la dijo la linea
+    // 'sale-a-consultas' de mas arriba.
+    chatDiag('sigue-por-consultas', ['mensaje' => mb_substr($pregunta, 0, 120)]);
 
     // NO SE PAGA UNA CONSULTA PARA NO PODER RESPONDER. Si la cuenta no tiene
     // emisor de produccion, no hay ni un documento que consultar: traducir la
@@ -2818,6 +2926,14 @@ function handleChatPost(
 
     // La llamada salio: cuenta, haya entendido o no.
     $uso->registrarConsulta($cuentaId, $hoy);
+
+    // DIAGNOSTICO 6: que contesto el traductor de CONSULTAS. Es el que produjo el
+    // mensaje que ve el usuario, asi que sirve para atar el texto de la pantalla
+    // con la rama que lo trajo hasta aqui.
+    chatDiag('desenlace-consultas', [
+        'desenlace' => $traducida->desenlace,
+        'motivo'    => mb_substr((string) $traducida->motivo, 0, 160),
+    ]);
 
     if ($traducida->desenlace === PreguntaTraducida::IMPOSIBLE) {
         // NO ES UN ERROR TECNICO. Es la respuesta, con su motivo.

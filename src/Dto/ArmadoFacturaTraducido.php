@@ -32,6 +32,12 @@ namespace Plantiflex\FacturacionCl\Dto;
  *                 tome el modelo -- que ya esta leyendo la frase -- y no una
  *                 heuristica en PHP compitiendo con el.
  *
+ *                 SOLO EXISTE SI HAY UNA CONVERSACION EN CURSO. En el primer
+ *                 turno no hay nada que abandonar, asi que "esto no continua lo
+ *                 que se venia armando" seria cierto siempre y el desenlace se
+ *                 tragaria cualquier pedido. El traductor ni lo ofrece ni lo
+ *                 acepta en ese caso -- ver DeepSeekTraductorArmadoFactura.
+ *
  *   noEntendida   No se entendio, o no es un pedido de factura ni una pregunta.
  *                 Lleva motivo, que se le muestra al usuario tal cual.
  *
