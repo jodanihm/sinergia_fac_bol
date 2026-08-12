@@ -1763,9 +1763,14 @@ function chatConversacionRegistrar(string $id): string
     // propio arreglo: la primera clave es la mas vieja. Ordenar por 'creada' seria
     // peor -- dos conversaciones del mismo segundo quedarian en orden arbitrario.
     while (count($_SESSION[CHAT_ARMADO_SESION]) > CHAT_ARMADO_MAX_CONVERSACIONES) {
+        // "PRESCINDIBLE" ES LA QUE NO TIENE UN ARMADO EN CURSO, y se mira 'turnos'
+        // y no el estado entero: desde que existe el hilo visible, una
+        // conversacion de puras consultas TAMBIEN tiene estado, y mirar el estado
+        // completo haria que cuatro pestañas de consulta se llevaran por delante
+        // el armado que si estaba a medias.
         $victima = null;
         foreach ($_SESSION[CHAT_ARMADO_SESION] as $clave => $entrada) {
-            if (($entrada['estado'] ?? []) === [] && $clave !== $id) {
+            if (($entrada['estado']['turnos'] ?? []) === [] && $clave !== $id) {
                 $victima = $clave;
                 break;
             }
@@ -1827,6 +1832,113 @@ function chatArmadoGuardar(string $id, array $estado): void
 function chatArmadoOlvidar(string $id): void
 {
     unset($_SESSION[CHAT_ARMADO_SESION][$id]);
+}
+
+/**
+ * Cuantos turnos se conservan por conversacion.
+ *
+ * MISMO CRITERIO QUE EL TOPE DE CONVERSACIONES: $_SESSION se serializa entera en
+ * cada peticion, asi que un hilo no puede crecer sin techo. 20 turnos son diez
+ * idas y vueltas, mas de lo que dura cualquier armado real.
+ */
+const CHAT_HILO_MAX_TURNOS = 20;
+
+/**
+ * Agrega un turno al hilo visible de una conversacion.
+ *
+ * =========================================================================
+ * ESTE HILO NO VIAJA AL MODELO. NUNCA.
+ * =========================================================================
+ * Al traductor se le sigue pasando $estado['turnos'] -- solo frases del usuario --
+ * y el borrador que el propio modelo escribio. Este 'hilo' es OTRA cosa: es lo
+ * que se pinta en pantalla, e incluye lo que dijo el asistente, que a su vez
+ * puede contener datos que el panel resolvio del maestro (razon social, giro,
+ * direccion de un cliente). Mandarlo seria filtrar por la puerta de atras
+ * exactamente lo que la firma de traducir() impide por la de adelante.
+ *
+ * Se guardan en claves distintas a proposito: 'turnos' es del modelo, 'hilo' es
+ * de la pantalla. Confundirlas es el error que hay que hacer imposible.
+ *
+ * -------------------------------------------------------------------------
+ * SE LEE EL ESTADO DE LA SESION EN CADA LLAMADA, no se recibe por parametro: en
+ * un mismo turno, chatTurnoDeArmado() ya guardo su estado antes de que esto
+ * corra, y trabajar sobre una copia vieja borraria lo que aquel escribio.
+ *
+ * EL RESULTADO PESADO SOLO SOBREVIVE EN EL ULTIMO TURNO. Una consulta puede
+ * devolver 100 filas; veinte de esas en la sesion serian megabytes serializados
+ * en cada peticion. Los turnos viejos conservan su frase, que es lo que se lee al
+ * desplazarse hacia arriba, y sueltan la tabla.
+ *
+ * @param array<string,mixed>|null $resultado tabla de una consulta, si la hubo
+ */
+function chatHiloAgregar(string $id, string $rol, string $texto, ?array $resultado = null, string $tipo = 'info'): void
+{
+    $estado = chatArmadoEstado($id) ?? [];
+    $hilo   = is_array($estado['hilo'] ?? null) ? $estado['hilo'] : [];
+
+    // Los turnos que ya estaban sueltan su tabla: solo el ultimo la conserva.
+    foreach ($hilo as $i => $t) {
+        unset($hilo[$i]['resultado']);
+    }
+
+    $hilo[] = ['rol' => $rol, 'texto' => $texto, 'tipo' => $tipo, 'resultado' => $resultado];
+
+    // Se descartan los MAS VIEJOS, que es lo que nadie va a releer.
+    if (count($hilo) > CHAT_HILO_MAX_TURNOS) {
+        $hilo = array_slice($hilo, -CHAT_HILO_MAX_TURNOS);
+    }
+
+    $estado['hilo'] = array_values($hilo);
+    chatArmadoGuardar($id, $estado);
+}
+
+/**
+ * El hilo de una conversacion, listo para pintar.
+ *
+ * @return list<array<string,mixed>>
+ */
+function chatHiloDe(string $id): array
+{
+    $estado = chatArmadoEstado($id) ?? [];
+
+    return is_array($estado['hilo'] ?? null) ? array_values($estado['hilo']) : [];
+}
+
+/**
+ * La ultima conversacion que TIENE ALGO QUE MOSTRAR, o null.
+ *
+ * =========================================================================
+ * POR QUE NO SIRVE chatBorradorPendiente() PARA ESTO, aunque lo parezca
+ * =========================================================================
+ *
+ * Son DOS PREGUNTAS DISTINTAS y yo las confundi al construir el hilo:
+ *
+ *   chatBorradorPendiente()  ->  "¿hay un ARMADO a medias?"   mira 'turnos'
+ *   esta funcion             ->  "¿hay algo que PINTAR?"      mira 'hilo'
+ *
+ * 'turnos' solo lo escribe chatTurnoDeArmado(). Una conversacion de puras
+ * consultas tiene hilo y NO tiene turnos -- a proposito, para que la banda
+ * amarilla de "borrador a medias" no aparezca cuando nadie esta armando nada.
+ *
+ * EL DEFECTO QUE ESTO ARREGLA, MEDIDO: al entrar a /chat sin ?c, el GET pedia la
+ * conversacion a chatBorradorPendiente(), que para una consulta devolvia null.
+ * Entonces se estrenaba una conversacion nueva, con el hilo vacio, y la respuesta
+ * que el usuario acababa de recibir DESAPARECIA de la pantalla -- estando viva en
+ * la sesion. Lo caza el arnes de consultas, que hace justo eso: postea y despues
+ * pide /chat a secas, igual que quien vuelve por el menu.
+ *
+ * @return string|null id de la conversacion
+ */
+function chatConversacionConHilo(): ?string
+{
+    $ultima = null;
+    foreach ($_SESSION[CHAT_ARMADO_SESION] ?? [] as $id => $entrada) {
+        if (is_array($entrada['estado']['hilo'] ?? null) && $entrada['estado']['hilo'] !== []) {
+            $ultima = (string) $id;
+        }
+    }
+
+    return $ultima;
 }
 
 /**
@@ -2779,16 +2891,51 @@ function handleChatExcelGet(): void
     exit;
 }
 
+/**
+ * Que conversacion pinta este GET.
+ *
+ * TRES CASOS, EN ESTE ORDEN:
+ *
+ *   1. Viene ?c=... y la sesion la conoce -> esa. Es el caso del redirect que
+ *      hace el POST, y es POR PESTAÑA: cada una vuelve a la suya y dos
+ *      conversaciones simultaneas no se pisan. Un id ajeno o inventado no sirve
+ *      de nada -- solo indexa dentro de $_SESSION de ESTE navegador --, asi que
+ *      llevarlo en la URL no entrega ninguna capacidad. Y no es contenido: es un
+ *      identificador opaco, no el detalle de lo que alguien facturo.
+ *
+ *   2. Sin ?c pero con una conversacion QUE TENGA HILO -> esa. Es lo que hace que
+ *      entrar a /chat por el menu no borre de la pantalla lo que sigue en sesion.
+ *      Se pregunta por el HILO y no por el borrador: ver chatConversacionConHilo(),
+ *      donde esta el defecto que costo esta distincion.
+ *
+ *   3. Nada -> conversacion nueva.
+ */
+function chatConversacionDelGet(): string
+{
+    $pedida = (string) ($_GET['c'] ?? '');
+    if (preg_match('/^[0-9a-f]{32}$/', $pedida) === 1 && isset($_SESSION[CHAT_ARMADO_SESION][$pedida])) {
+        return $pedida;
+    }
+
+    $conHilo = chatConversacionConHilo();
+    if ($conHilo !== null) {
+        return $conHilo;
+    }
+
+    return chatConversacionRegistrar(chatConversacionNueva());
+}
+
 function handleChatGet(): void
 {
     $cuentaId = Auth::cuentaId();
     $hoy      = date('Y-m-d');
 
+    $conversacionId = chatConversacionDelGet();
+
     $uso = chatUsoRepo();
     vista('chat-consultas', [
         'pregunta'  => '',
-        'resultado' => null,
-        'aviso'     => null,
+        'hilo'      => chatHiloDe($conversacionId),
         'usadas'    => $uso->consultasDeHoy($cuentaId, $hoy),
         // EL TOPE ES DE LA CUENTA (migracion 040), no una constante: se lee por
         // cuenta para que subirselo a una sea un UPDATE y no un despliegue.
@@ -2796,9 +2943,10 @@ function handleChatGet(): void
         // DATOS REALES DE ESTA CUENTA, no ejemplos: el WHERE de recientes()
         // lleva cuenta_id, igual que todo repositorio del anfitrion.
         'recientes' => $uso->recientes($cuentaId),
-        // EL IDENTIFICADOR DE ESTA PESTAÑA. Se genera aqui, una sola vez, igual
-        // que el idem_key de la emision.
-        'conversacionId' => chatConversacionRegistrar(chatConversacionNueva()),
+        // EL IDENTIFICADOR DE ESTA PESTAÑA. Con el patron del idem_key de la
+        // emision, pero ya no siempre nuevo: si el POST redirigio aqui, se
+        // conserva el suyo para que el hilo continue en vez de empezar de cero.
+        'conversacionId' => $conversacionId,
         'pendiente' => chatBorradorPendiente(),
         'flash'     => flashTomar(),
         'navActivo' => 'chat',
@@ -2833,34 +2981,45 @@ function handleChatPost(
     $usadas = $uso->consultasDeHoy($cuentaId, $hoy);
     $limite = $uso->limiteDiario($cuentaId);
 
-    // $pintar GUARDA LA PREGUNTA Y DESPUES PINTA, en un solo sitio: asi ningun
-    // camino de salida puede olvidarse de registrarla. $desenlace null significa
-    // "no llegue a preguntar nada" -- pregunta vacia, sin cupo, sin emisor -- y
-    // en esos casos no hay nada que guardar.
+    // $pintar GUARDA EL TURNO Y REDIRIGE. En un solo sitio, asi ningun camino de
+    // salida puede olvidarse. $desenlace null significa "no llegue a preguntar
+    // nada" -- sin cupo, sin emisor -- y en esos casos no hay historial que
+    // guardar, pero el turno SI se ve en pantalla: el usuario escribio algo y
+    // merece leer la respuesta debajo de lo suyo.
+    //
+    // =====================================================================
+    // YA NO PINTA: REDIRIGE (303) Y EL GET PINTA. Es PRG, y arregla de paso un
+    // defecto que estaba en produccion sin que nadie lo reportara: al renderizar
+    // directo desde el POST, un F5 reenviaba la pregunta y GASTABA OTRA LLAMADA
+    // al proveedor. Ahora el refresco recarga un GET, que no cuesta nada.
+    //
+    // El id de conversacion viaja en la URL para que cada pestaña vuelva A LA
+    // SUYA -- ver chatConversacionDelGet() --, y el ancla #ultimo deja el
+    // navegador en el turno recien agregado incluso sin JavaScript.
+    // =====================================================================
     $pintar = static function (?array $resultado, ?array $aviso, ?string $desenlace = null)
-        use ($pregunta, $cuentaId, $hoy, $uso, $limite, $conversacionId): never {
+        use ($pregunta, $cuentaId, $hoy, $uso, $conversacionId): never {
         if ($desenlace !== null) {
             $uso->registrarPregunta($cuentaId, Auth::usuarioId(), $pregunta, $desenlace);
         }
-        vista('chat-consultas', [
-            'pregunta'  => $pregunta,
-            'resultado' => $resultado,
-            'aviso'     => $aviso,
-            'usadas'    => $uso->consultasDeHoy($cuentaId, $hoy),
-            'limite'    => $limite,
-            'recientes' => $uso->recientes($cuentaId),
-            'conversacionId' => $conversacionId,
-            // SE CALCULA AL PINTAR, no antes: el turno que acaba de pasar pudo
-            // haber creado o cerrado el borrador, y un valor tomado al entrar
-            // mostraria el estado anterior.
-            'pendiente' => chatBorradorPendiente(),
-            'flash'     => flashTomar(),
-            'navActivo' => 'chat',
-        ]);
+
+        chatHiloAgregar($conversacionId, 'usuario', $pregunta);
+        chatHiloAgregar(
+            $conversacionId,
+            'asistente',
+            (string) ($aviso['texto'] ?? ($resultado['descripcion'] ?? '')),
+            $resultado,
+            (string) ($aviso['tipo'] ?? 'info'),
+        );
+
+        redirigirPrg('/chat?c=' . $conversacionId . '#ultimo');
     };
 
+    // MENSAJE VACIO: no ensucia el hilo con un turno en blanco. Se avisa por
+    // flash y se vuelve, que es lo que hace el resto del panel.
     if ($pregunta === '') {
-        $pintar(null, ['tipo' => 'info', 'texto' => 'Escribe una pregunta.']);
+        flashSet('info', 'Escribe una pregunta.');
+        redirigirPrg('/chat?c=' . $conversacionId);
     }
 
     // EL TOPE SE MIRA ANTES DE LLAMAR, que es el punto entero: la pregunta N+1

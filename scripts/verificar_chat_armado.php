@@ -791,26 +791,253 @@ if ($h === []) {
     mal('sin clave igual llamo al proveedor.');
 }
 
-// LO QUE VIAJA AL MODELO: solo las frases del usuario. Se mira el cuerpo real.
+// ===========================================================================
+// LO QUE VIAJA AL MODELO -- LA COMPROBACION MAS IMPORTANTE DE ESTE ARNES
+//
+// SE MIRAN LOS BYTES REALES de la peticion, no lo que el codigo dice que manda.
+//
+// ---------------------------------------------------------------------------
+// POR QUE ESTA COMPROBACION SE REESCRIBIO: DABA FALSAS ALARMAS
+//
+// La version anterior hacia, entre otras cosas:
+//
+//     str_contains($cuerpo, (string) $cuentaId)
+//
+// con $cuentaId un entero de la siembra. Buscar un numero suelto como subcadena
+// dentro de un JSON de varios kilobytes es una loteria: el prompt lleva 255 tres
+// veces (los largos de columna), 100, 10, 10000 y la fecha 2026-08-12. Una cuenta
+// con id 10, 12, 20, 25, 26, 55, 100 o 255 hacia saltar la alarma sin que
+// hubiera filtrado NADA. Y como el id lo asigna el AUTO_INCREMENT, el resultado
+// dependia de cuantas veces se habia corrido el arnes antes.
+//
+// ES LA MISMA FAMILIA DE DEFECTO que ya aparecio en este proyecto al comparar un
+// folio como entero con str_contains(). Un numero corto no identifica nada.
+//
+// UNA ALARMA FALSA EN UNA COMPROBACION DE PRIVACIDAD NO ES INOCUA: enseña a
+// desconfiar de ella, y el dia que suene de verdad va a parecer otro falso
+// positivo. Por eso se cambia por marcas que solo pueden estar si algo se filtro.
+//
+// TAMPOCO SE BUSCAN NOMBRES DE CAMPO ('giro', 'direccion', 'comuna',
+// 'razonSocial'): el prompt los menciona a proposito, para pedirle esos datos al
+// modelo. Buscarlos seria el mismo error al reves. Se buscan los VALORES.
+// ===========================================================================
+echo "\n  QUE VIAJA AL PROVEEDOR (bytes reales de la peticion)\n";
+
+// EL CANARIO. Una cadena que no existe en ninguna otra parte del sistema: si
+// aparece en el cuerpo, viajo desde el hilo y no hay otra explicacion posible.
+//
+// LLEVA UNA Ñ Y UNA TILDE A PROPOSITO. Ver la nota sobre el escapado de mas
+// abajo: sin ellas, este canario no probaria que la busqueda funciona con los
+// nombres reales de clientes chilenos, que es donde estan los acentos.
+$CANARIO = 'CANARIO-QUE-NO-DEBE-VIAJAR-7f3a91-Ñuñoa-Pérez';
+
+// UN ESTADO COMO EL QUE DE VERDAD TIENE UNA CONVERSACION A MEDIAS: con su hilo
+// visible (que incluye lo que dijo el asistente, con datos del maestro dentro) y
+// con el cliente ya resuelto. Es exactamente la forma que tiene el defecto que
+// se quiere impedir.
+$estadoSucio = [
+    'turnos'   => ['facturale a Perez el diseño'],
+    'borrador' => ['cliente' => ['rut' => '76192083-9']],
+    'hilo'     => [
+        ['rol' => 'usuario',   'texto' => 'facturale a Perez el diseño'],
+        ['rol' => 'asistente', 'texto' => "Uso a CLIENTE DE ARNES SPA (76192083-9). {$CANARIO}"],
+    ],
+    'cliente'  => [
+        'razon_social' => 'CLIENTE DE ARNES SPA',
+        'giro'         => 'SERVICIOS DE PRUEBA',
+        'direccion'    => 'CALLE FALSA 123',
+        'comuna'       => 'VALDIVIA',
+    ],
+];
+
+// SE COPIA LITERALMENTE LO QUE PASA chatTurnoDeArmado(): los turnos del usuario
+// mas el mensaje de ahora, y el borrador del propio modelo. Si algun dia esa
+// llamada cambiara para mandar el estado completo, esta prueba lo caza.
 $h = [];
 $t = traductorArmadoFalso([sobreArmado('{"desenlace":"cambio_de_tema"}')], 'clave-falsa', $h);
-$t->traducir(['facturale a Perez'], ['cliente' => ['rut' => '76192083-9']], vocabularioArmado(), '2026-08-12');
+$t->traducir(
+    array_values(array_merge($estadoSucio['turnos'], ['y agregale el hosting'])),
+    is_array($estadoSucio['borrador'] ?? null) ? $estadoSucio['borrador'] : [],
+    vocabularioArmado(),
+    '2026-08-12'
+);
 $cuerpo = (string) $h[0]['request']->getBody();
-if (! str_contains($cuerpo, 'CLIENTE DE ARNES SPA') && ! str_contains($cuerpo, (string) $cuentaId)) {
-    ok('en el cuerpo enviado NO aparece ni la razon social del maestro ni el cuenta_id.');
+printf("      bytes enviados: %d\n", strlen($cuerpo));
+
+// ---------------------------------------------------------------------------
+// EL CUERPO SE NORMALIZA ANTES DE BUSCAR NADA, Y ESTO NO ES UN DETALLE.
+//
+// Guzzle serializa la opcion 'json' con json_encode() Y FLAGS POR DEFECTO, o sea
+// SIN JSON_UNESCAPED_UNICODE. Todo lo que no sea ASCII viaja escapado:
+//
+//     "facturale a Perez el diseño"  ->  facturale a Perez el diseño
+//
+// Buscar la cadena con tilde o ñ contra los bytes crudos NO LA ENCUENTRA aunque
+// este ahi. Eso ya produjo un fallo -- "no viajaron las frases del usuario" --
+// cuando la frase si habia viajado.
+//
+// Y EL LADO GRAVE ES EL OTRO: si un valor FILTRADO llevara acento (una razon
+// social como "Comercial Pérez", una comuna como "Ñuñoa"), las marcas de
+// privacidad no lo habrian visto. Un falso negativo ahi es mucho peor que el
+// falso positivo del entero de ayer: la alarma se queda callada mientras el dato
+// sale.
+//
+// Se decodifica y se vuelve a codificar SIN escapar: asi una misma busqueda
+// encuentra el texto escrito como se lee, venga escapado o no.
+// ---------------------------------------------------------------------------
+$decodificado = json_decode($cuerpo, true);
+if (! is_array($decodificado)) {
+    mal('el cuerpo enviado al proveedor no es JSON valido: no se puede inspeccionar. '
+        . 'ESTA COMPROBACION NO CORRIO.');
+    $plano = $cuerpo;
 } else {
-    mal('viajo informacion del tenant al proveedor. ESTO ROMPE LA REGLA DE PRIVACIDAD.');
+    $plano = (string) json_encode($decodificado, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    if ($plano !== $cuerpo) {
+        ok('el cuerpo venia con caracteres escapados (\\uXXXX) y se normalizo antes de buscar.');
+    }
 }
-if (str_contains($cuerpo, 'facturale a Perez')) {
-    ok('y si viaja la frase del usuario, que es lo unico que debe viajar.');
+
+// Cada marca es un VALOR que solo pudo salir del maestro o del hilo. Ninguna es
+// una palabra que el prompt use por su cuenta.
+$filtrado = [];
+foreach ([
+    $CANARIO               => 'el canario del hilo',
+    'CLIENTE DE ARNES SPA' => 'la razon social resuelta del maestro',
+    'SERVICIOS DE PRUEBA'  => 'el giro del maestro',
+    'CALLE FALSA 123'      => 'la direccion del maestro',
+    'VALDIVIA'             => 'la comuna del maestro',
+    '"hilo"'               => 'la clave del hilo visible',
+    '"rol"'                => 'la estructura de turnos del hilo',
+] as $marca => $queEs) {
+    if (str_contains($plano, $marca)) {
+        $filtrado[] = $queEs . ' (' . mb_substr($marca, 0, 40) . ')';
+    }
+}
+if ($filtrado === []) {
+    ok('NADA del tenant viaja: ni el hilo, ni lo que el panel resolvio del maestro. '
+        . '7 marcas comprobadas contra los bytes reales, ya normalizados.');
 } else {
-    mal('no viajo ni la frase del usuario: el traductor no esta mandando el turno.');
+    mal('VIAJO INFORMACION DEL TENANT AL PROVEEDOR. ESTO ROMPE LA REGLA DE PRIVACIDAD. '
+        . 'Se encontro: ' . implode('; ', $filtrado));
+}
+
+// LA BUSQUEDA TIENE QUE SABER ENCONTRAR ACENTOS, y se demuestra en vez de
+// suponerlo: se busca en el cuerpo una cadena acentuada que SI esta ahi. Si esto
+// fallara, las siete marcas de arriba no valdrian nada -- estarian dando verde
+// por no saber mirar, que es la peor forma de pasar una prueba de privacidad.
+if (str_contains($plano, 'diseño')) {
+    ok('la busqueda encuentra texto acentuado: las 7 marcas de arriba son fiables '
+        . 'aunque el dato filtrado llevara ñ o tilde.');
+} else {
+    mal('la busqueda NO encuentra "diseño" pese a estar en el cuerpo: las marcas de privacidad '
+        . 'estan ciegas a los acentos y su verde no significa nada.');
+}
+
+// Y LA OTRA MITAD: lo que SI tiene que viajar. Sin esto, un traductor que no
+// mandara nada pasaria la prueba de arriba con nota perfecta.
+if (str_contains($plano, 'facturale a Perez el diseño') && str_contains($plano, 'y agregale el hosting')) {
+    ok('y si viajan las frases del usuario -- las dos --, que es lo unico que debe viajar.');
+} else {
+    mal('no viajaron las frases del usuario: el traductor no esta mandando los turnos.');
+}
+if (str_contains($plano, '76192083-9')) {
+    ok('el RUT tecleado por el usuario tambien viaja, y esta bien: es su pedido, no un dato '
+        . 'que el sistema fue a buscar. Es el limite que la pantalla ya declara.');
+} else {
+    aviso('el RUT del borrador previo no viajo; el modelo va a tener que volver a preguntarlo.');
 }
 
 // ===========================================================================
-// VERIFICACION 7 - POR HTTP
+// VERIFICACION 7 - EL HILO VISIBLE
+//
+// Nace del hallazgo de UX de Daniel: la respuesta aparecia suelta debajo del
+// cuadro, sin señal de que ahi seguia la conversacion. Ahora hay turnos, y hay
+// tres cosas que pueden salir mal en silencio: que el hilo no se guarde, que
+// crezca sin techo dentro de $_SESSION, y que las tablas viejas no se suelten.
 // ===========================================================================
-titulo('VERIFICACION 7 - el camino por HTTP');
+titulo('VERIFICACION 7 - el hilo de turnos y su tope');
+
+$_SESSION[CHAT_ARMADO_SESION] = [];
+$idHilo = chatConversacionRegistrar(chatConversacionNueva());
+
+if (chatHiloDe($idHilo) === []) {
+    ok('una conversacion recien abierta tiene el hilo vacio.');
+} else {
+    mal('el hilo nace con algo dentro.');
+}
+
+chatHiloAgregar($idHilo, 'usuario', 'cuanto vendi en julio');
+chatHiloAgregar($idHilo, 'asistente', 'monto total, en total, entre el 01-07 y el 31-07',
+    ['descripcion' => 'monto total', 'filas' => [], 'meta' => []]);
+
+$hilo = chatHiloDe($idHilo);
+printf("  turnos tras una vuelta: %d  (%s)\n", count($hilo),
+    implode(' -> ', array_column($hilo, 'rol')));
+if (count($hilo) === 2 && $hilo[0]['rol'] === 'usuario' && $hilo[1]['rol'] === 'asistente') {
+    ok('una pregunta y su respuesta quedan como DOS turnos, en orden.');
+} else {
+    mal('el hilo no guardo los dos turnos en orden: ' . json_encode(array_column($hilo, 'rol')));
+}
+if (is_array($hilo[1]['resultado'] ?? null)) {
+    ok('el turno del asistente conserva su tabla.');
+} else {
+    mal('la tabla de la consulta no se guardo con su turno.');
+}
+
+// EL TOPE. Se pasa de largo a proposito y se comprueba que lo que se descarta
+// son LOS MAS VIEJOS -- descartar los nuevos dejaria el hilo congelado.
+for ($i = 1; $i <= 25; $i++) {
+    chatHiloAgregar($idHilo, $i % 2 === 0 ? 'asistente' : 'usuario', "turno de relleno {$i}");
+}
+$hilo = chatHiloDe($idHilo);
+printf("  turnos tras agregar 25 mas: %d (tope %d)\n", count($hilo), CHAT_HILO_MAX_TURNOS);
+if (count($hilo) === CHAT_HILO_MAX_TURNOS) {
+    ok('el hilo se corta en ' . CHAT_HILO_MAX_TURNOS . ': $_SESSION no crece sin techo.');
+} else {
+    mal('el hilo quedo con ' . count($hilo) . ' turnos.');
+}
+if ((string) end($hilo)['texto'] === 'turno de relleno 25') {
+    ok('y lo que sobrevive es lo RECIENTE: el ultimo turno es el ultimo escrito.');
+} else {
+    mal('el ultimo turno del hilo es "' . (string) end($hilo)['texto'] . '".');
+}
+
+// LAS TABLAS VIEJAS SE SUELTAN. Veinte resultados de 100 filas cada uno serian
+// megabytes serializados en CADA peticion de esa sesion.
+$conTabla = 0;
+foreach ($hilo as $t) {
+    if (is_array($t['resultado'] ?? null)) {
+        $conTabla++;
+    }
+}
+printf("  turnos que todavia cargan una tabla: %d\n", $conTabla);
+if ($conTabla <= 1) {
+    ok('solo el ultimo turno conserva tabla: los anteriores guardan su frase y sueltan el peso.');
+} else {
+    mal("{$conTabla} turnos siguen cargando su tabla en la sesion.");
+}
+
+// DE QUE CONVERSACION SE PINTA EL HILO. Es lo que hace que el redirect del POST
+// vuelva a la pestaña correcta.
+$_GET['c'] = $idHilo;
+if (chatConversacionDelGet() === $idHilo) {
+    ok('con ?c=<id> conocido, el GET pinta ESA conversacion: cada pestaña vuelve a la suya.');
+} else {
+    mal('el GET no respeta el ?c= que le manda el redirect.');
+}
+$_GET['c'] = str_repeat('f', 32);
+$caida = chatConversacionDelGet();
+if ($caida !== str_repeat('f', 32)) {
+    ok('un ?c= desconocido NO se acepta: no se puede pintar el hilo de una conversacion ajena.');
+} else {
+    mal('el GET acepto un identificador que la sesion no conoce.');
+}
+unset($_GET['c']);
+
+// ===========================================================================
+// VERIFICACION 8 - POR HTTP
+// ===========================================================================
+titulo('VERIFICACION 8 - el camino por HTTP');
 
 $panel = rtrim((string) getenv('PANEL_URL'), '/');
 $user  = (string) getenv('PANEL_USER');
@@ -822,13 +1049,13 @@ if ($panel === '' || $user === '' || $pass === '') {
 } else {
     $cookies = tempnam(sys_get_temp_dir(), 'arnes_ck_');
 
-    $pedir = static function (string $metodo, string $url, array $campos = []) use ($cookies): array {
+    $pedir = static function (string $metodo, string $url, array $campos = [], bool $seguir = true) use ($cookies): array {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_COOKIEJAR      => $cookies,
             CURLOPT_COOKIEFILE     => $cookies,
-            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_FOLLOWLOCATION => $seguir,
             CURLOPT_TIMEOUT        => 30,
         ]);
         if ($metodo === 'POST') {
@@ -889,16 +1116,45 @@ if ($panel === '' || $user === '' || $pass === '') {
             mal('POST /chat/confirmar con id inventado respondio ' . $conf['codigo']);
         }
 
-        // Y EL CHAT DE CONSULTAS SIGUE FUNCIONANDO: una pregunta normal no puede
-        // haberse ido al camino de armado.
+        // EL POST DEL CHAT AHORA ES PRG. Se pide SIN seguir el redirect para ver
+        // el codigo de verdad: 303 y no 200.
+        //
+        // NO ES COSMETICO. Mientras el POST renderizaba directo, un F5 reenviaba
+        // la pregunta y GASTABA OTRA LLAMADA al proveedor -- un defecto que
+        // estuvo en produccion sin que nadie lo reportara. Con 303, el refresco
+        // recarga un GET y no cuesta nada.
         $consulta = $pedir('POST', $panel . '/chat', [
             'csrf_token' => $token($chat['cuerpo']),
             'pregunta'   => 'cuanto vendi en julio',
-        ]);
-        if ($consulta['codigo'] === 200) {
-            ok('una consulta normal sigue respondiendo 200 (regresion del camino viejo).');
+        ], false);
+        printf("      POST /chat sin seguir redirect -> HTTP %d\n", $consulta['codigo']);
+        if ($consulta['codigo'] === 303) {
+            ok('el POST responde 303 (PRG): un F5 ya no reenvia la pregunta ni gasta otra llamada.');
         } else {
-            mal('la consulta de siempre respondio ' . $consulta['codigo']);
+            mal('el POST respondio ' . $consulta['codigo'] . ' y se esperaba 303. Si renderiza '
+                . 'directo, el F5 vuelve a cobrar.');
+        }
+
+        // Y siguiendolo, la pantalla responde y trae el hilo con el turno nuevo.
+        $tras = $pedir('POST', $panel . '/chat', [
+            'csrf_token' => $token($chat['cuerpo']),
+            'pregunta'   => 'cuanto vendi en julio',
+        ]);
+        if ($tras['codigo'] === 200) {
+            ok('siguiendo el redirect, la pantalla responde 200 (regresion del camino viejo).');
+        } else {
+            mal('tras el redirect, la pantalla respondio ' . $tras['codigo']);
+        }
+        if (str_contains($tras['cuerpo'], 'chat-turno--usuario')
+            && str_contains($tras['cuerpo'], 'chat-turno--asistente')) {
+            ok('el hilo se pinta con los dos roles: la respuesta ya no flota suelta abajo.');
+        } else {
+            mal('la pantalla no trae burbujas de usuario y asistente.');
+        }
+        if (str_contains($tras['cuerpo'], 'id="ultimo"')) {
+            ok('y el ultimo turno lleva el ancla #ultimo, que es a donde apunta el redirect.');
+        } else {
+            mal('falta el ancla #ultimo: el navegador no tiene a donde saltar sin JavaScript.');
         }
     }
     @unlink($cookies);

@@ -415,18 +415,77 @@ if ($base === '' || $user === '' || $pass === '') {
         if ($tok !== null) {
             // EL POST DE VERDAD. Sin clave en el entorno del panel, esto ejercita
             // el formulario entero y el CUARTO desenlace sin gastar saldo.
+            // ¿ESTE POST VA A COSTAR DINERO? Se mide, no se supone.
+            //
+            // El arnes no puede leer el entorno del contenedor del panel -- corre
+            // en otro proceso --, asi que preguntar por DEEPSEEK_API_KEY aqui no
+            // dice nada sobre lo que ve el panel. Lo que SI es observable es el
+            // contador: chat_consulta_uso solo sube cuando la llamada al proveedor
+            // salio de verdad. Se mira antes y despues.
+            $consultasHoy = static function () use ($pdo): int {
+                $s = $pdo->prepare('SELECT COALESCE(SUM(consultas), 0) FROM chat_consulta_uso WHERE dia = ?');
+                $s->execute([date('Y-m-d')]);
+
+                return (int) $s->fetchColumn();
+            };
+            $gastoAntes = $consultasHoy();
+
             $r = pedir('POST', $base . '/chat', ['csrf_token' => $tok, 'pregunta' => 'cuanto vendi en marzo']);
             printf("  POST -> %d\n", $r['status']);
+
+            $gastoDespues = $consultasHoy();
+            $gastadas     = $gastoDespues - $gastoAntes;
+            printf("  consultas contabilizadas por este POST: %d\n", $gastadas);
+            if ($gastadas > 0) {
+                aviso(sprintf(
+                    'ESTA CORRIDA GASTO %d llamada(s) REALES al proveedor: la clave SI esta '
+                    . 'configurada en el panel de este entorno. No es gratis correr este arnes. '
+                    . 'Para una corrida sin costo, deja DEEPSEEK_API_KEY vacia en sinergia.env y '
+                    . 'recrea el contenedor del panel: el codigo lo detecta y responde sin llamar.',
+                    $gastadas
+                ));
+            } else {
+                ok('el POST no gasto ninguna llamada al proveedor (el contador no se movio).');
+            }
+
+            // EL 200 DE ANTES ERA CORRECTO HASTA QUE EL CHAT PASO A PRG.
+            //
+            // Este handler renderizaba directo desde el POST, y por eso un F5
+            // reenviaba la pregunta y GASTABA OTRA LLAMADA al proveedor -- un
+            // defecto que estuvo en produccion sin que nadie lo reportara. Desde
+            // que responde 303 y el GET pinta, el refresco no cuesta nada.
+            //
+            // pedir() NO sigue redirects (CURLOPT_FOLLOWLOCATION => false), asi
+            // que el 303 se ve tal cual y despues se pide la pantalla aparte, que
+            // es exactamente lo que hace un navegador.
             if ($r['status'] === 403) {
                 mal('403: el token no viajo. Es el defecto de la cotizacion, otra vez.');
-            } elseif ($r['status'] === 200) {
-                ok('el POST se procesa y repinta la pantalla (200), sin reventar.');
-                if (str_contains($r['body'], 'DEEPSEEK_API_KEY') || str_contains($r['body'], 'no esta configurado')) {
-                    ok('sin clave, la pantalla lo dice en vez de reventar (cuarto desenlace).');
+            } elseif ($r['status'] === 303) {
+                ok('el POST responde 303 (PRG): un F5 ya no reenvia la pregunta ni vuelve a cobrar.');
+
+                $pantalla = pedir('GET', $base . '/chat');
+                if ($pantalla['status'] !== 200) {
+                    mal("tras el 303, GET /chat devolvio {$pantalla['status']}.");
                 } else {
-                    aviso('el POST no dio el mensaje de "sin clave": puede que la clave SI este '
-                        . 'configurada en este entorno, y entonces esta pregunta gasto una consulta real.');
+                    ok('y la pantalla siguiente responde 200.');
+                    if (str_contains($pantalla['body'], 'DEEPSEEK_API_KEY')
+                        || str_contains($pantalla['body'], 'no esta configurado')) {
+                        ok('sin clave, la pantalla lo dice en vez de reventar (cuarto desenlace).');
+                    } else {
+                        // Ya no se especula: el contador de mas arriba lo dijo con
+                        // un numero.
+                        ok('la pantalla no dio el mensaje de "sin clave", coherente con el contador.');
+                    }
+                    // El turno tiene que verse como turno, no como texto suelto.
+                    if (str_contains($pantalla['body'], 'chat-turno--usuario')) {
+                        ok('la pregunta quedo en el hilo, como burbuja del usuario.');
+                    } else {
+                        mal('la pantalla no muestra el turno del usuario: el hilo no se guardo.');
+                    }
                 }
+            } elseif ($r['status'] === 200) {
+                mal('el POST devolvio 200: renderiza directo y no hace PRG. Con eso, un F5 '
+                    . 'reenvia la pregunta y gasta otra llamada al proveedor.');
             } else {
                 mal("el POST devolvio {$r['status']}.");
             }
