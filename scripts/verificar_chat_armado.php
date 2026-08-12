@@ -290,6 +290,21 @@ $casosRuteo = [
     ['emite una factura para Comercial Perez',       true],
     ['hazme una factura de 30000 al cliente nuevo',  true],
     ['cobrale el arriendo a Juan',                   true],
+
+    // --- LA FRASE REAL DE PRODUCCION, LITERAL ---------------------------------
+    // La escribio Daniel el 12-08-2026 y el chat le contesto con el mensaje del
+    // camino de consultas. Se guarda TAL CUAL, con su ortografia y todo: una
+    // variante "parecida" no habria servido para reproducirlo, que fue
+    // exactamente lo que paso con las 12 de arriba.
+    ['quiero que me hagas una factura excenta para el cliente plantiflex por 1300 pesos', true],
+
+    // Variantes con los errores de tipeo que aparecen de verdad. Ninguna toca la
+    // raiz 'factur', que es lo unico que mira la regla -- por eso todas pasan, y
+    // por eso este bloque demuestra que la ortografia NO era la causa.
+    ['quiero que me hagas una factura exenta para plantiflex por 1300 pesos',  true],
+    ['kiero una factura para plantiflex de 1300',                              true],
+    ['necesito facturarle 1300 a plantiflex',                                  true],
+    ['hazme una fatura para plantiflex',                                       false],
 ];
 
 $erroresRuteo = 0;
@@ -302,14 +317,39 @@ foreach ($casosRuteo as [$frase, $esperado]) {
         $erroresRuteo++;
     }
 }
+$totalRuteo = count($casosRuteo);
 if ($erroresRuteo === 0) {
-    ok('las 12 frases se rutean como corresponde.');
+    ok("las {$totalRuteo} frases se rutean como corresponde, incluida la de produccion.");
 } else {
     // NO todos los errores cuestan lo mismo, y por eso se dice cual es cual.
-    mal("{$erroresRuteo} de 12 frases mal ruteadas. Una CONSULTA mandada a armado cuesta una "
-        . 'llamada de mas y se recupera sola (cambio_de_tema); un ARMADO mandado a consulta NO '
+    mal("{$erroresRuteo} de {$totalRuteo} frases mal ruteadas. Una CONSULTA mandada a armado cuesta "
+        . 'una llamada de mas y se recupera sola (cambio_de_tema); un ARMADO mandado a consulta NO '
         . 'se recupera y el usuario recibe una respuesta que no pidio.');
 }
+
+// --- HUECOS CONOCIDOS DE LA HEURISTICA -------------------------------------
+//
+// NO SON FALLOS: son el precio declarado de una regla de tres lineas, y salieron
+// a la luz al trazar la frase de produccion. Se imprimen como AVISO para que
+// esten a la vista y para que, si algun dia se decide taparlos, exista el sitio
+// donde comprobarlo. Hoy NO se tapan: cambiar la regla sin decidirlo antes es
+// como se rompen las cosas que funcionan.
+echo "\n  HUECOS CONOCIDOS (no son fallos; se miden para tenerlos a la vista)\n";
+$frontera = [
+    ['que me hagas una factura para plantiflex por 1300',
+     'abre con "que", que esta en la lista de interrogativas'],
+    ['¿me puedes hacer una factura de 1300 a plantiflex?',
+     'lleva signos de interrogacion, y un pedido en forma de pregunta es un pedido'],
+    ['quiero ver mi ultima factura',
+     'menciona "factur" sin pedir emitir: se va a armado y vuelve por cambio_de_tema'],
+];
+foreach ($frontera as [$frase, $porque]) {
+    printf("      %-52s -> %s\n", mb_substr($frase, 0, 50), chatPareceArmado($frase) ? 'armado' : 'consulta');
+    printf("        %s\n", $porque);
+}
+aviso('los tres casos de arriba estan MEDIDOS, no arreglados. Los dos primeros son falsos '
+    . 'negativos (un pedido tratado como consulta, que NO se recupera solo); el tercero es un '
+    . 'falso positivo, que cuesta una llamada y se recupera.');
 
 // ===========================================================================
 // SIEMBRA
@@ -648,22 +688,82 @@ function sobreArmado(string $contenido): Response
     ]));
 }
 
+// El CUARTO elemento es el borrador previo. cambio_de_tema necesita uno: desde el
+// arreglo del defecto del 12-08-2026 ese desenlace no existe en el primer turno.
 $casosDesenlace = [
-    ['faltan_datos',   '{"desenlace":"faltan_datos","pregunta":"¿que precio?","borrador":{"cliente":{"rut":"1-9"}}}', ArmadoFacturaTraducido::FALTAN_DATOS],
-    ['borrador_listo', '{"desenlace":"borrador_listo","borrador":{"documentos":[{"item":{"nombre":"x","cantidad":1,"precioUnitario":100}}]}}', ArmadoFacturaTraducido::BORRADOR_LISTO],
-    ['cambio_de_tema', '{"desenlace":"cambio_de_tema"}', ArmadoFacturaTraducido::CAMBIO_DE_TEMA],
-    ['no_entendida',   '{"desenlace":"no_entendida","motivo":"no se"}', ArmadoFacturaTraducido::NO_ENTENDIDA],
+    ['faltan_datos',   '{"desenlace":"faltan_datos","pregunta":"¿que precio?","borrador":{"cliente":{"rut":"1-9"}}}', ArmadoFacturaTraducido::FALTAN_DATOS, []],
+    ['borrador_listo', '{"desenlace":"borrador_listo","borrador":{"documentos":[{"item":{"nombre":"x","cantidad":1,"precioUnitario":100}}]}}', ArmadoFacturaTraducido::BORRADOR_LISTO, []],
+    ['cambio_de_tema', '{"desenlace":"cambio_de_tema"}', ArmadoFacturaTraducido::CAMBIO_DE_TEMA, ['cliente' => ['rut' => '76192083-9']]],
+    ['no_entendida',   '{"desenlace":"no_entendida","motivo":"no se"}', ArmadoFacturaTraducido::NO_ENTENDIDA, []],
 ];
-foreach ($casosDesenlace as [$nombre, $json, $esperado]) {
+foreach ($casosDesenlace as [$nombre, $json, $esperado, $previo]) {
     $h = [];
     $t = traductorArmadoFalso([sobreArmado($json)], 'clave-falsa', $h);
-    $res = $t->traducir(['algo'], [], vocabularioArmado(), '2026-08-12');
+    $res = $t->traducir(['algo'], $previo, vocabularioArmado(), '2026-08-12');
     printf("      %-16s -> %s\n", $nombre, $res->desenlace);
     if ($res->desenlace === $esperado) {
         ok("desenlace '{$nombre}' reconocido.");
     } else {
         mal("desenlace '{$nombre}' salio como '{$res->desenlace}'.");
     }
+}
+
+// --- EL DEFECTO DE PRODUCCION DEL 12-08-2026 -------------------------------
+//
+// Daniel escribio "quiero que me hagas una factura excenta para el cliente
+// plantiflex por 1300 pesos" y recibio el mensaje del camino de consultas. La
+// heuristica de ruteo habia acertado; lo que fallo fue que el modelo contesto
+// "cambio_de_tema" EN EL PRIMER TURNO -- donde no habia nada que abandonar -- y
+// el turno cayo al otro camino despues de pagar dos llamadas.
+//
+// ESTE CASO REPRODUCE EXACTAMENTE ESO: primer turno, borrador previo VACIO, y el
+// modelo respondiendo cambio_de_tema. Tiene que fallar, no colarse.
+echo "\n  EL DEFECTO DE PRODUCCION: cambio_de_tema en el primer turno\n";
+
+$fraseReal = 'quiero que me hagas una factura excenta para el cliente plantiflex por 1300 pesos';
+
+$h = [];
+$t = traductorArmadoFalso([sobreArmado('{"desenlace":"cambio_de_tema"}')], 'clave-falsa', $h);
+try {
+    $res = $t->traducir([$fraseReal], [], vocabularioArmado(), '2026-08-12');
+    mal('con borrador previo VACIO, un "cambio_de_tema" se acepto y salio como "'
+        . $res->desenlace . '". Es el defecto de produccion: el pedido se va al camino de '
+        . 'consultas y el usuario recibe una respuesta que no pidio.');
+} catch (Throwable $e) {
+    ok('sin borrador previo, "cambio_de_tema" se RECHAZA: ' . mb_substr($e->getMessage(), 0, 90));
+}
+
+// Y EL PROMPT NI SE LO OFRECE. Se mira el cuerpo real que se envio: si la palabra
+// no esta en las instrucciones, el modelo no puede copiarla de ahi.
+$cuerpoPrimerTurno = (string) ($h[0]['request'] ?? null)?->getBody();
+if ($cuerpoPrimerTurno !== '' && ! str_contains($cuerpoPrimerTurno, 'cambio_de_tema')) {
+    ok('y el prompt del primer turno NI MENCIONA cambio_de_tema: no hay de donde copiarlo.');
+} else {
+    mal('el prompt del primer turno sigue ofreciendo cambio_de_tema.');
+}
+
+// CON UNA CONVERSACION EN CURSO, EL MISMO DESENLACE ES VALIDO Y TIENE QUE PASAR.
+// Sin esta mitad, el arreglo podria haber sido "quitar cambio_de_tema" a secas,
+// que romperia el caso para el que existe.
+$h2 = [];
+$t2 = traductorArmadoFalso([sobreArmado('{"desenlace":"cambio_de_tema"}')], 'clave-falsa', $h2);
+$res2 = $t2->traducir(
+    [$fraseReal, 'cuanto facture en julio'],
+    ['cliente' => ['rut' => '76192083-9']],   // <- borrador previo: hay algo en curso
+    vocabularioArmado(),
+    '2026-08-12'
+);
+if ($res2->desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA) {
+    ok('con un borrador en curso, cambio_de_tema SIGUE funcionando: el arreglo no lo mato.');
+} else {
+    mal('con borrador en curso, cambio_de_tema salio como "' . $res2->desenlace
+        . '": se rompio el caso para el que ese desenlace existe.');
+}
+$cuerpoSegundoTurno = (string) ($h2[0]['request'] ?? null)?->getBody();
+if (str_contains($cuerpoSegundoTurno, 'cambio_de_tema')) {
+    ok('y ahi el prompt SI lo ofrece: la opcion aparece solo cuando puede aplicar.');
+} else {
+    mal('con borrador en curso el prompt tampoco lo ofrece: el modelo no puede elegirlo.');
 }
 
 // Un desenlace inventado NO puede caer en "no entendida": tiene que verse.

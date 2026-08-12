@@ -115,7 +115,14 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             return ArmadoFacturaTraducido::noEntendida('no escribiste nada todavia.');
         }
 
-        $mensajes = [['role' => 'system', 'content' => $this->instrucciones($vocabulario, $hoy)]];
+        // ¿HAY ALGO EN CURSO? De esto depende que el desenlace "cambio_de_tema"
+        // exista o no. Ver el docblock de instrucciones() y el de interpretar().
+        $hayBorradorPrevio = $borradorPrevio !== [];
+
+        $mensajes = [[
+            'role'    => 'system',
+            'content' => $this->instrucciones($vocabulario, $hoy, $hayBorradorPrevio),
+        ]];
 
         // EL BORRADOR PREVIO VA COMO MENSAJE DEL ASISTENTE, que es lo que fue: lo
         // escribio el modelo. Ponerlo como mensaje del usuario le diria que la
@@ -166,7 +173,7 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             throw TraduccionArmadoException::sinRespuesta("HTTP {$status}");
         }
 
-        return $this->interpretar($texto);
+        return $this->interpretar($texto, $hayBorradorPrevio);
     }
 
     /**
@@ -179,8 +186,32 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
      * UN DESENLACE DESCONOCIDO ES UN ERROR, NO UN CAJON. Se lanza en vez de caer
      * en "no entendida": si el modelo empieza a inventar desenlaces, hay que verlo
      * en el log, no taparlo con un mensaje amable.
+     *
+     * -------------------------------------------------------------------------
+     * $hayBorradorPrevio: "cambio_de_tema" NO EXISTE EN EL PRIMER TURNO
+     *
+     * DEFECTO MEDIDO EN PRODUCCION (12-08-2026). Daniel escribio "quiero que me
+     * hagas una factura excenta para el cliente plantiflex por 1300 pesos" y el
+     * chat le contesto con el mensaje del camino de consultas. La heuristica de
+     * ruteo habia hecho bien su trabajo -- la frase entro al armado --, pero el
+     * modelo contesto "cambio_de_tema", el turno cayo al camino de consultas y el
+     * usuario recibio una respuesta que no pedia, despues de pagar DOS llamadas.
+     *
+     * POR QUE EL MODELO NO SE EQUIVOCO DEL TODO: ese desenlace significa "esto no
+     * continua lo que se venia armando", y en el primer turno NO SE VENIA ARMANDO
+     * NADA. La afirmacion era literalmente cierta. El error estaba en ofrecerle
+     * una opcion que solo tiene sentido con una conversacion abierta.
+     *
+     * DOS CAPAS, Y CADA UNA HACE UNA COSA DISTINTA. instrucciones() deja de
+     * mencionar el desenlace cuando no aplica -- eso baja la probabilidad casi a
+     * cero, pero un prompt es una instruccion y no un contrato. Esta comprobacion
+     * es la que GARANTIZA: sin borrador previo, un "cambio_de_tema" es un valor
+     * que no estaba en la lista, y se trata igual que cualquier otro desenlace
+     * inventado. Mismo criterio que el vocabulario de consultas con el
+     * repositorio: uno cuenta que se puede pedir, el otro decide si sirve.
+     * -------------------------------------------------------------------------
      */
-    private function interpretar(string $texto): ArmadoFacturaTraducido
+    private function interpretar(string $texto, bool $hayBorradorPrevio): ArmadoFacturaTraducido
     {
         $sobre = json_decode($texto, true);
         if (! is_array($sobre)) {
@@ -202,6 +233,13 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
         $borrador  = is_array($dato['borrador'] ?? null) ? $dato['borrador'] : [];
 
         if ($desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA) {
+            if (! $hayBorradorPrevio) {
+                throw TraduccionArmadoException::respuestaIlegible(
+                    'dijo "cambio_de_tema" en el primer turno, cuando no habia ninguna '
+                    . 'conversacion que abandonar. Ese desenlace no se le ofrecio.'
+                );
+            }
+
             return ArmadoFacturaTraducido::cambioDeTema();
         }
 
@@ -260,9 +298,44 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
      * (faltan_datos) y puede decir que no entendio. Un modelo al que solo se le
      * ofrece "arma la factura" rellena los huecos con lo que sea, y aqui los
      * huecos son montos y RUT.
+     *
+     * EL PROMPT CAMBIA SEGUN HAYA O NO ALGO EN CURSO: sin borrador previo, la
+     * opcion "cambio_de_tema" NI SE MENCIONA. Ofrecer una opcion que no puede
+     * aplicar es invitar a que se use, y eso fue exactamente el defecto de
+     * produccion que documenta interpretar(). Las opciones se numeran solas para
+     * que quitar una no deje un hueco en la lista.
      */
-    private function instrucciones(VocabularioArmadoFactura $vocabulario, string $hoy): string
-    {
+    private function instrucciones(
+        VocabularioArmadoFactura $vocabulario,
+        string $hoy,
+        bool $hayBorradorPrevio,
+    ): string {
+        $formas = [
+            'Si falta algun dato para armar el borrador (lo mas frecuente):' . "\n"
+            . '{"desenlace":"faltan_datos","pregunta":"lo que hay que preguntarle, en una o dos lineas y en español","borrador":{...lo que ya entendiste hasta ahora...}}',
+
+            'Si ya tienes todo:' . "\n"
+            . '{"desenlace":"borrador_listo","borrador":{"cliente":{"rut":"...","nombre":"...","razonSocial":"...","giro":"...","direccion":"...","comuna":"..."},"formaPago":"...","documentos":[{"item":{"nombre":"...","cantidad":1,"precioUnitario":10000,"exento":false}}]}}',
+        ];
+
+        // SOLO CON ALGO EN CURSO. En el primer turno no hay nada que abandonar, y
+        // "esto no continua lo que se venia armando" seria cierto SIEMPRE.
+        if ($hayBorradorPrevio) {
+            $formas[] = 'Si el mensaje NO continua lo que se venia armando -- por ejemplo el usuario' . "\n"
+                . '   pregunta "cuanto facture en julio" en mitad del armado:' . "\n"
+                . '{"desenlace":"cambio_de_tema"}';
+        }
+
+        $formas[] = 'Si no entiendes el pedido, o no es sobre facturar:' . "\n"
+            . '{"desenlace":"no_entendida","motivo":"explicacion breve y en español para el usuario"}';
+
+        $opciones = '';
+        foreach ($formas as $i => $forma) {
+            $opciones .= ($i + 1) . ') ' . $forma . "\n\n";
+        }
+        $opciones = rtrim($opciones);
+        $cuantas  = count($formas);
+
         return <<<TXT
             Ayudas a preparar facturas electronicas chilenas conversando. NO emites nada:
             armas un borrador que despues una persona revisa y confirma. NO inventas RUT,
@@ -287,20 +360,9 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             Cuando el pedido produce VARIOS documentos, cada uno lleva EXACTAMENTE UN item.
 
             Responde SIEMPRE un unico objeto JSON, sin texto alrededor, con una de estas
-            cuatro formas:
+            {$cuantas} formas, y NINGUNA OTRA:
 
-            1) Si falta algun dato para armar el borrador (lo mas frecuente):
-            {"desenlace":"faltan_datos","pregunta":"lo que hay que preguntarle, en una o dos lineas y en español","borrador":{...lo que ya entendiste hasta ahora...}}
-
-            2) Si ya tienes todo:
-            {"desenlace":"borrador_listo","borrador":{"cliente":{"rut":"...","nombre":"...","razonSocial":"...","giro":"...","direccion":"...","comuna":"..."},"formaPago":"...","documentos":[{"item":{"nombre":"...","cantidad":1,"precioUnitario":10000,"exento":false}}]}}
-
-            3) Si el mensaje NO continua lo que se venia armando -- por ejemplo el usuario
-               pregunta "cuanto facture en julio" en mitad del armado:
-            {"desenlace":"cambio_de_tema"}
-
-            4) Si no entiendes el pedido, o no es sobre facturar:
-            {"desenlace":"no_entendida","motivo":"explicacion breve y en español para el usuario"}
+            {$opciones}
 
             REGLAS:
             - Del cliente basta con el RUT si el usuario lo da: el sistema busca el resto.
