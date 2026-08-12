@@ -81,6 +81,10 @@ use Plantiflex\FacturacionCl\Dto\PreguntaTraducida;
 use Plantiflex\FacturacionCl\Dto\VocabularioConsulta;
 use Plantiflex\FacturacionCl\Exceptions\TraduccionPreguntaException;
 use Plantiflex\FacturacionCl\Providers\DeepSeekTraductorPregunta;
+use Plantiflex\FacturacionCl\Contracts\TraductorArmadoFacturaInterface;
+use Plantiflex\FacturacionCl\Dto\ArmadoFacturaTraducido;
+use Plantiflex\FacturacionCl\Dto\VocabularioArmadoFactura;
+use Plantiflex\FacturacionCl\Providers\DeepSeekTraductorArmadoFactura;
 use Plantiflex\Integration\Facturacion\MySqlProductoRepository;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
@@ -1825,6 +1829,555 @@ function chatArmadoOlvidar(string $id): void
     unset($_SESSION[CHAT_ARMADO_SESION][$id]);
 }
 
+// ---------------------------------------------------------------------------
+//  ARMADO DE FACTURAS POR CONVERSACION
+//
+//  El chat NUNCA emite. Arma un borrador y lo entrega a un camino que YA EXISTE:
+//  una factura sola prellena el formulario de emision de siempre; varias se van
+//  por el Excel de la carga masiva. No hay un segundo camino de emision.
+//
+//  LO QUE ESTA CAPA HACE: entender el pedido, resolver el cliente, decidir el
+//  carril, y declarar cuantos folios se van a gastar. Lo que NO hace todavia:
+//  crear nada. Ni el cliente ni la cotizacion ni el Excel. Eso es al confirmar.
+// ---------------------------------------------------------------------------
+
+/**
+ * La forma de pago que se asume cuando el usuario no la dice.
+ *
+ * DECISION DE NEGOCIO, no tecnica, y por eso esta escrita y no deducida. Va al
+ * vocabulario del modelo -- que se lo dice al usuario -- y no se aplica en
+ * silencio: el resumen previo a confirmar la nombra siempre.
+ */
+const CHAT_ARMADO_FORMA_PAGO_DEFECTO = 'CONTADO';
+
+/**
+ * Tope de documentos que puede producir UN pedido conversado.
+ *
+ * No es el tope de la carga masiva (5000 filas): esto es una frase escrita a
+ * mano, y una frase que produce mas de diez documentos casi siempre significa
+ * que se entendio mal, no que alguien quiso facturar cincuenta veces de una
+ * sentada. Quien de verdad necesite ese volumen tiene la carga masiva con su
+ * Excel, que para eso existe.
+ */
+const CHAT_ARMADO_MAX_DOCUMENTOS = 10;
+
+/** Cuantos clientes se piden al desambiguar por nombre: 5 para mostrar, +1 para saber si hay mas. */
+const CHAT_ARMADO_CANDIDATOS = 6;
+
+/**
+ * LA PUERTA DEL ARMADO. Mientras este en false, el chat se comporta EXACTAMENTE
+ * como el chat de consultas de siempre y el traductor de armado no se llama nunca.
+ *
+ * POR QUE EXISTE Y NO ES UNA BANDERA DE ADORNO: esta capa entiende el pedido,
+ * resuelve el cliente y declara los folios, pero todavia no puede crear ni la
+ * cotizacion ni el Excel -- eso es la capa siguiente. Con la puerta abierta,
+ * cualquiera que escribiera "facturale a Perez" entraria en una conversacion sin
+ * final, y ademas pagando llamadas al proveedor por ella.
+ *
+ * Asi esta capa se puede desplegar sola sin exponer nada a medias. La abre la
+ * capa que cierra el circulo, en el mismo commit que lo cierra.
+ */
+const CHAT_ARMADO_HABILITADO = false;
+
+/** El traductor de armado. Se inyecta en los arneses, igual que el de consultas. */
+function traductorArmado(): TraductorArmadoFacturaInterface
+{
+    return DeepSeekTraductorArmadoFactura::desdeEntorno();
+}
+
+/**
+ * El vocabulario que ve el modelo al armar, CONSTRUIDO DESDE DONDE VIVEN LOS
+ * DATOS y no escrito a mano.
+ *
+ * Las formas de pago salen de NOTA_VENTA_FORMAS_PAGO, que es la lista que de
+ * verdad acepta la carga masiva. Se queda UNA palabra por codigo: esa constante
+ * trae CREDITO y CREDITO con tilde apuntando al mismo 2, y ofrecerle las dos al
+ * modelo solo lo haria dudar entre sinonimos.
+ *
+ * Los largos maximos salen de las columnas reales (migracion 015). Se le dicen al
+ * modelo en vez de recortar despues: un giro cortado a la mitad es peor que uno
+ * que nacio corto, y ademas quedaria guardado asi en el maestro.
+ */
+function vocabularioArmado(): VocabularioArmadoFactura
+{
+    $formas = [];
+    foreach (NOTA_VENTA_FORMAS_PAGO as $palabra => $codigo) {
+        $formas[$codigo] ??= $palabra;
+    }
+
+    return new VocabularioArmadoFactura(
+        array_values($formas),
+        CHAT_ARMADO_FORMA_PAGO_DEFECTO,
+        CHAT_ARMADO_MAX_DOCUMENTOS,
+        ['razonSocial' => 255, 'giro' => 255, 'direccion' => 255, 'comuna' => 100],
+    );
+}
+
+/**
+ * ¿Este mensaje parece un pedido de armar factura, y no una consulta?
+ *
+ * =========================================================================
+ * ES UNA HEURISTICA, Y SE ELIGIO SABIENDO QUE LO ES
+ * =========================================================================
+ *
+ * El primer mensaje de una conversacion puede ser cualquiera de las dos cosas, y
+ * los dos traductores son distintos. Las alternativas a decidirlo aqui eran
+ * preguntarle a un modelo cual de los dos usar -- una llamada mas en CADA
+ * mensaje, incluidas las consultas que hoy funcionan y cuestan una sola -- o
+ * llamar a los dos y quedarse con el que conteste, que es lo mismo pero peor.
+ *
+ * LO QUE HACE ACEPTABLE LA HEURISTICA ES QUE UN ERROR SE RECUPERA SOLO, y en una
+ * sola direccion. Si una consulta se rutea a armado, el traductor de armado
+ * responde "cambio_de_tema" y el turno cae al camino de consultas dentro de la
+ * MISMA peticion: el usuario recibe su respuesta correcta y lo unico que se pago
+ * fue una llamada de mas. Al reves no se recupera: una consulta no tiene como
+ * decir "esto en realidad era una factura".
+ *
+ * POR ESO EL SESGO ES HACIA ARMADO cuando hay señal, y no al reves.
+ *
+ * La regla, en dos partes:
+ *   1. Si el mensaje PREGUNTA algo -- signos de interrogacion o abre con una
+ *      palabra interrogativa --, es consulta. "¿cuantas facturas emiti en julio?"
+ *      no puede rutearse a armado por contener la palabra factura.
+ *   2. Si PIDE ver o listar, tambien es consulta. Esto no hace falta para que el
+ *      sistema funcione: existe para que "muestrame las facturas de agosto" --
+ *      que es frecuente y no lleva signos -- no pague la llamada de mas.
+ *   3. Si no es ninguna de las dos y menciona emitir/facturar/cobrar, es armado.
+ */
+function chatPareceArmado(string $texto): bool
+{
+    $t = mb_strtolower(trim($texto), 'UTF-8');
+    if ($t === '') {
+        return false;
+    }
+
+    if (str_contains($t, '?') || str_contains($t, '¿')) {
+        return false;
+    }
+
+    $primera = preg_split('/\s+/', $t)[0] ?? '';
+
+    // Interrogativas SIN TILDE ademas de con tilde: nadie las escribe siempre.
+    $interrogativas = [
+        'cuanto', 'cuánto', 'cuanta', 'cuánta', 'cuantos', 'cuántos', 'cuantas', 'cuántas',
+        'cual', 'cuál', 'cuales', 'cuáles', 'que', 'qué', 'quien', 'quién', 'quienes', 'quiénes',
+        'como', 'cómo', 'cuando', 'cuándo', 'donde', 'dónde', 'porque', 'porqué',
+    ];
+    // Verbos de MIRAR: piden ver algo que ya existe, no crear algo nuevo.
+    $deConsulta = [
+        'muestra', 'muestrame', 'muéstrame', 'lista', 'listame', 'lístame', 'ver', 'dame',
+        'resumen', 'detalle', 'informe', 'total', 'totales', 'busca', 'buscame', 'búscame',
+    ];
+    if (in_array($primera, $interrogativas, true) || in_array($primera, $deConsulta, true)) {
+        return false;
+    }
+
+    // Las raices, no las palabras completas: cubre factura / facturale / facturar
+    // / facturame sin enumerar conjugaciones.
+    //
+    // SIN 'boleta' A PROPOSITO: el chat no arma boletas, asi que "emitir una
+    // boleta" solo gastaria una llamada para terminar en "no entendi". Que caiga
+    // en el camino de consultas, donde al menos el mensaje es honesto.
+    foreach (['factur', 'emit', 'cobrale', 'cobrar'] as $raiz) {
+        if (str_contains($t, $raiz)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Resuelve el cliente del borrador contra el maestro.
+ *
+ * NO CREA NADA. En esta capa solo mira y devuelve que hacer; el alta ocurre al
+ * confirmar, dentro de la misma transaccion que crea la cotizacion.
+ *
+ * @param array<string,mixed> $borrador el del modelo, sin validar
+ *
+ * @return array{estado:string, texto:?string, cliente:?array<string,mixed>, rut:?string}
+ *         estado: listo | preguntar
+ */
+function chatResolverClienteDelBorrador(int $cuentaId, array $borrador): array
+{
+    $datos = is_array($borrador['cliente'] ?? null) ? $borrador['cliente'] : [];
+    $rut   = trim((string) ($datos['rut'] ?? ''));
+
+    // Los dos se miran por separado y no con ?? encadenado: el modelo puede mandar
+    // "nombre":"" y ?? lo daria por bueno, dejando sin usar la razon social que si
+    // venia. El vacio se descarta mirandolo, no coalesciendolo.
+    $nombre = trim((string) ($datos['nombre'] ?? ''));
+    if ($nombre === '') {
+        $nombre = trim((string) ($datos['razonSocial'] ?? ''));
+    }
+
+    if ($rut === '' && $nombre === '') {
+        return ['estado' => 'preguntar', 'cliente' => null, 'rut' => null,
+                'texto' => '¿A que cliente le facturo? Dame su RUT, o su nombre si no lo tienes a mano.'];
+    }
+
+    // --- POR RUT: el camino directo, mismo patron que /ventas/cliente-por-rut ---
+    if ($rut !== '') {
+        $r = resolverClientePorRut($cuentaId, $rut);
+
+        if ($r['estado'] === 'rut_invalido') {
+            return ['estado' => 'preguntar', 'cliente' => null, 'rut' => null, 'texto' => sprintf(
+                'El RUT "%s" no es valido (el digito verificador no cuadra). ¿Me lo repites?',
+                mb_substr($rut, 0, 20)
+            )];
+        }
+
+        if ($r['estado'] === 'no_encontrado') {
+            // NO EXISTE: se piden los cuatro datos del alta. No se crea todavia.
+            //
+            // LA PREGUNTA LA HACE ESTE CODIGO Y NO EL MODELO, y al modelo no se le
+            // dice nada: la respuesta del usuario llega como un turno mas y el
+            // modelo la recoge sola. Contarle "este RUT no esta en tu maestro"
+            // seria mandarle un hecho del tenant, que es justo lo que la regla de
+            // privacidad no permite.
+            return ['estado' => 'preguntar', 'cliente' => null, 'rut' => $r['rut'], 'texto' => sprintf(
+                'El RUT %s no esta en tus clientes, asi que lo doy de alta. Necesito cuatro datos: '
+                . 'razon social, giro, direccion y comuna. Puedes darmelos en una sola linea.',
+                $r['rut']
+            )];
+        }
+
+        return chatClienteEncontrado($r['cliente'], $r['rut']);
+    }
+
+    // --- POR NOMBRE: hay que desambiguar ---
+    //
+    // Se piden los inactivos TAMBIEN. Esconderlos haria que el chat dijera "no
+    // existe" de un cliente al que la carga masiva reactivaria sin preguntar
+    // (ver el alta de handleCargaMasivaPost): dos partes del sistema contestando
+    // distinto sobre la misma ficha.
+    $candidatos = clienteRepo()->listar($cuentaId, $nombre, false, CHAT_ARMADO_CANDIDATOS, 0);
+
+    if ($candidatos === []) {
+        return ['estado' => 'preguntar', 'cliente' => null, 'rut' => null, 'texto' => sprintf(
+            'No encontre ningun cliente que se llame "%s". Si es nuevo, pasame su RUT y lo damos '
+            . 'de alta; si ya existe, prueba con otra parte del nombre.',
+            mb_substr($nombre, 0, 60)
+        )];
+    }
+
+    if (count($candidatos) === 1) {
+        $c = $candidatos[0];
+        // UNO SOLO NO SE DA POR BUENO EN SILENCIO. La busqueda es un LIKE sobre la
+        // razon social: "perez" pega igual en el que el usuario queria y en otro
+        // que se llame parecido, y una factura al cliente equivocado no se
+        // deshace. Se resuelve, pero diciendo a quien.
+        $resuelto = chatClienteEncontrado($c, (string) $c['rut_cliente']);
+        $resuelto['texto'] = sprintf('Uso a %s (%s)%s.', $c['razon_social'], $c['rut_cliente'],
+            $c['activo'] === false ? ', que esta INACTIVO en tus maestros y se reactivaria' : '')
+            . ($resuelto['texto'] !== null ? ' ' . $resuelto['texto'] : '');
+
+        return $resuelto;
+    }
+
+    if (count($candidatos) >= CHAT_ARMADO_CANDIDATOS) {
+        // El sexto no se muestra: esta ahi para saber que hay mas. Una lista larga
+        // no es una eleccion, es ruido.
+        return ['estado' => 'preguntar', 'cliente' => null, 'rut' => null, 'texto' => sprintf(
+            'Tengo mas de %d clientes que coinciden con "%s". Pasame el RUT, o un nombre mas '
+            . 'especifico.',
+            CHAT_ARMADO_CANDIDATOS - 1,
+            mb_substr($nombre, 0, 60)
+        )];
+    }
+
+    $lista = [];
+    foreach ($candidatos as $i => $c) {
+        $lista[] = sprintf('%d) %s (%s)%s', $i + 1, $c['razon_social'], $c['rut_cliente'],
+            $c['activo'] === false ? ' [inactivo]' : '');
+    }
+
+    return ['estado' => 'preguntar', 'cliente' => null, 'rut' => null, 'texto' =>
+        'Encontre varios. ¿Cual es? ' . implode('  ', $lista) . '  Dime el numero o el RUT.'];
+}
+
+/**
+ * El cliente existe: lo unico que queda por mirar es si sirve para facturar.
+ *
+ * SE COMPRUEBA AQUI Y NO AL EMITIR, y el motivo esta medido: la carga masiva ya
+ * trata este caso como ERROR DE FILA y no como advertencia, porque el lote del
+ * motor es todo-o-nada y un solo cliente sin giro tumba hasta 20 notas. Si el
+ * chat armara igual, el borrador moriria en el paso siguiente -- o peor, por el
+ * camino unitario, con un 422 que dice "receptor.giro" sin decir de quien.
+ *
+ * @param array<string,mixed> $cliente
+ *
+ * @return array{estado:string, texto:?string, cliente:?array<string,mixed>, rut:?string}
+ */
+function chatClienteEncontrado(array $cliente, string $rut): array
+{
+    $faltan = clienteCamposFaltantes($cliente);
+    if ($faltan !== []) {
+        return ['estado' => 'preguntar', 'cliente' => null, 'rut' => $rut, 'texto' => sprintf(
+            'El cliente %s (%s) esta en tus maestros, pero le falta %s, y sin %s el SII no acepta '
+            . 'la factura. Completalo en Maestros > Clientes y volvemos, o dame %s aqui mismo.',
+            $cliente['razon_social'],
+            $rut,
+            implode(', ', $faltan),
+            count($faltan) === 1 ? 'ese dato' : 'esos datos',
+            count($faltan) === 1 ? 'el dato' : 'los datos',
+        )];
+    }
+
+    return ['estado' => 'listo', 'cliente' => $cliente, 'rut' => $rut, 'texto' => null];
+}
+
+/**
+ * Los documentos que salen del borrador, ya acotados.
+ *
+ * UN DOCUMENTO POR ITEM, que es la decision tomada: un pedido que menciona dos
+ * cosas produce dos facturas de una linea cada una. Eso NO es una limitacion
+ * inventada aqui -- es la forma del carril del Excel, donde una fila es un
+ * documento de una sola linea y no hay manera de expresar otra cosa.
+ *
+ * @param array<string,mixed> $borrador
+ *
+ * @return list<array<string,mixed>>
+ */
+function chatDocumentosDelBorrador(array $borrador): array
+{
+    $docs = is_array($borrador['documentos'] ?? null) ? array_values($borrador['documentos']) : [];
+
+    return array_slice($docs, 0, CHAT_ARMADO_MAX_DOCUMENTOS);
+}
+
+/**
+ * "Son 3 facturas, o sea 3 folios; tienes 120 disponibles."
+ *
+ * SE DICE SIEMPRE Y ANTES DE ARMAR, sin excepcion. Un documento consume un folio
+ * y un folio no se recupera: el usuario tiene que poder ver el costo antes de que
+ * se decida nada. Es la misma conducta que la pantalla de facturacion masiva, que
+ * muestra el conteo antes de emitir.
+ *
+ * EL DISPONIBLE SALE DE sumarFoliosDisponibles() TAL CUAL, que es la funcion con
+ * la que la facturacion masiva decide si puede seguir. Contar aqui por separado
+ * daria dos numeros para el mismo hecho.
+ */
+function chatDeclararFolios(PDO $pdo, string $rutEmisor, int $cuantos): string
+{
+    $disponibles = sumarFoliosDisponibles($pdo, $rutEmisor, 33);
+
+    $base = sprintf(
+        '%s, o sea %s. Te %s %d disponible%s.',
+        $cuantos === 1 ? 'Es 1 factura' : "Son {$cuantos} facturas",
+        $cuantos === 1 ? '1 folio' : "{$cuantos} folios",
+        $disponibles === 1 ? 'queda' : 'quedan',
+        $disponibles,
+        $disponibles === 1 ? '' : 's',
+    );
+
+    if ($disponibles < $cuantos) {
+        return $base . ' NO ALCANZAN: carga mas folios en Configuracion antes de emitir.';
+    }
+
+    return $base;
+}
+
+/**
+ * El turno, cuando es de armado. Si NO lo es, RETORNA y el llamador sigue con el
+ * camino de consultas de siempre.
+ *
+ * Es la unica salida "normal" de esta funcion: todos los demas caminos terminan
+ * en $pintar(), que no vuelve.
+ *
+ * @param callable(?array,?array,?string):never $pintar
+ */
+function chatTurnoDeArmado(
+    int $cuentaId,
+    string $conversacionId,
+    string $pregunta,
+    string $hoy,
+    MySqlChatUsoRepository $uso,
+    ?TraductorArmadoFacturaInterface $traductor,
+    callable $pintar,
+): void {
+    // LA PUERTA, CERRADA HASTA QUE EXISTA EL OTRO LADO.
+    //
+    // Esta capa entiende el pedido, resuelve el cliente y declara los folios,
+    // pero NO puede crear todavia ni la cotizacion ni el Excel: eso es la capa
+    // siguiente. Con la puerta abierta, cualquiera que escribiera "facturale a
+    // Perez" entraria en una conversacion que no termina en ninguna parte.
+    //
+    // Se apaga aqui y no en la vista porque aqui es donde se gasta el dinero: con
+    // esta linea, el traductor de armado no se llama NUNCA en produccion.
+    if (! CHAT_ARMADO_HABILITADO) {
+        return;
+    }
+
+    $estado  = chatArmadoEstado($conversacionId) ?? [];
+    $enCurso = ($estado['turnos'] ?? []) !== [];
+
+    // UNA CONVERSACION EN CURSO SE LLEVA EL TURNO SIN MIRAR LA FRASE. Es el
+    // traductor quien decide si continua o cambio de tema, no la heuristica: en
+    // mitad de un armado, "5000" o "si" no tienen ninguna señal que buscar.
+    if (! $enCurso && ! chatPareceArmado($pregunta)) {
+        return;
+    }
+
+    // EL GUARD DE PRODUCCION VA ANTES DE LLAMAR AL MODELO. Armar un borrador para
+    // una cuenta que no puede emitir es pagar por algo que termina en un redirect.
+    // Se usa estadoEmisionProduccion() y NO exigirProduccionCompleto(): aquel
+    // redirige, y un portazo en mitad de una conversacion se lleva por delante lo
+    // que el usuario venia diciendo.
+    $pdo  = Db::conexion();
+    $prod = estadoEmisionProduccion($pdo, $cuentaId);
+    if ($prod['falta'] !== null) {
+        $donde = [
+            'empresa'     => 'los datos de tu empresa en produccion',
+            'certificado' => 'el certificado digital de produccion',
+            'caf'         => 'al menos un CAF de produccion',
+        ][$prod['falta']] ?? 'la configuracion de produccion';
+
+        $pintar(null, ['tipo' => 'info', 'texto' =>
+            "Para armar una factura falta {$donde}. Completalo en Configuracion y volvemos: "
+            . 'no gaste ninguna consulta en esto.'], null);
+    }
+
+    $turnos = array_values(array_merge(
+        is_array($estado['turnos'] ?? null) ? $estado['turnos'] : [],
+        [$pregunta]
+    ));
+
+    $traductor ??= traductorArmado();
+
+    try {
+        // SOLO LAS FRASES DEL USUARIO Y EL BORRADOR QUE EL MODELO ESCRIBIO. Lo que
+        // el panel resolvio del maestro vive en $estado['cliente'] y NO se pasa.
+        $r = $traductor->traducir(
+            $turnos,
+            is_array($estado['borrador'] ?? null) ? $estado['borrador'] : [],
+            vocabularioArmado(),
+            $hoy
+        );
+    } catch (TraduccionPreguntaException $e) {
+        // Un mismo catch para los dos traductores: TraduccionArmadoException
+        // hereda, y la politica de cupo es la misma -- sin clave no hubo llamada.
+        if ($e->motivo !== TraduccionPreguntaException::SIN_CLAVE) {
+            $uso->registrarConsulta($cuentaId, $hoy);
+        }
+        error_log('chat armado: ' . $e->motivo . ' - ' . $e->getMessage());
+        $pintar(null, ['tipo' => 'error', 'texto' => $e->getMessage()], 'error');
+    }
+
+    $uso->registrarConsulta($cuentaId, $hoy);
+
+    // CAMBIO DE TEMA: el borrador NO se descarta. El usuario pregunto otra cosa,
+    // no dijo que se arrepentia. Se vuelve para que el turno lo atienda el camino
+    // de consultas, y lo que venia armando sigue donde estaba.
+    if ($r->desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA) {
+        return;
+    }
+
+    if ($r->desenlace === ArmadoFacturaTraducido::NO_ENTENDIDA) {
+        // EL TURNO NO SE GUARDA. Meter en el hilo una frase que no se entendio
+        // solo la arrastraria a todas las vueltas siguientes.
+        $pintar(null, ['tipo' => 'info', 'texto' => (string) $r->motivo], 'no_entendida');
+    }
+
+    // Desde aqui el turno SI cuenta como parte de la conversacion.
+    $estado['turnos']   = $turnos;
+    $estado['borrador'] = $r->borrador;
+
+    if ($r->desenlace === ArmadoFacturaTraducido::FALTAN_DATOS) {
+        chatArmadoGuardar($conversacionId, $estado);
+        $pintar(null, ['tipo' => 'info', 'texto' => (string) $r->pregunta], 'armando');
+    }
+
+    // --- BORRADOR_LISTO: el modelo cree que tiene todo. Ahora manda el panel. ---
+
+    $documentos = chatDocumentosDelBorrador($r->borrador);
+    if ($documentos === []) {
+        chatArmadoGuardar($conversacionId, $estado);
+        $pintar(null, ['tipo' => 'info', 'texto' =>
+            '¿Que le facturo? Dime el detalle y el monto.'], 'armando');
+    }
+
+    // EL CLIENTE LO RESUELVE EL PANEL, NUNCA EL MODELO. Al modelo no se le paso
+    // el maestro ni se le va a pasar: solo escribio el RUT o el nombre que tecleo
+    // el usuario, y contra eso se busca aqui.
+    $cliente = chatResolverClienteDelBorrador($cuentaId, $r->borrador);
+    if ($cliente['estado'] !== 'listo') {
+        chatArmadoGuardar($conversacionId, $estado);
+        $pintar(null, ['tipo' => 'info', 'texto' => (string) $cliente['texto']], 'armando');
+    }
+
+    // EL CARRIL SALE DE CUANTOS DOCUMENTOS SON, no de cuantos clientes. Tres
+    // facturas al MISMO cliente son tres documentos y van por el Excel igual: la
+    // carga masiva nunca junta filas del mismo RUT, y una cotizacion de tres
+    // lineas produciria una sola factura, que es lo contrario de lo pedido.
+    $carril = count($documentos) === 1 ? 'cotizacion' : 'excel';
+
+    $estado['cliente'] = $cliente['cliente'];   // NO viaja al modelo. Nunca.
+    $estado['carril']  = $carril;
+    $estado['listo']   = true;
+    chatArmadoGuardar($conversacionId, $estado);
+
+    $pintar(null, ['tipo' => 'info', 'texto' => chatResumenBorrador(
+        $pdo, (string) $prod['rut'], $cliente, $documentos, $r->borrador, $carril, $cliente['texto']
+    )], 'armando');
+}
+
+/**
+ * El resumen que el usuario lee ANTES de que se cree nada.
+ *
+ * Dice, en este orden: a quien, que, con que forma de pago, cuantos folios cuesta
+ * y por donde va a salir. Los folios NUNCA se omiten -- ver chatDeclararFolios().
+ *
+ * @param array{estado:string, texto:?string, cliente:?array<string,mixed>, rut:?string} $cliente
+ * @param list<array<string,mixed>> $documentos
+ * @param array<string,mixed> $borrador
+ */
+function chatResumenBorrador(
+    PDO $pdo,
+    string $rutEmisor,
+    array $cliente,
+    array $documentos,
+    array $borrador,
+    string $carril,
+    ?string $notaCliente,
+): string {
+    $lineas = [];
+    if ($notaCliente !== null && trim($notaCliente) !== '') {
+        $lineas[] = trim($notaCliente);
+    }
+
+    $lineas[] = sprintf('Cliente: %s (%s).',
+        $cliente['cliente']['razon_social'] ?? '?', $cliente['rut'] ?? '?');
+
+    foreach ($documentos as $i => $d) {
+        $item = is_array($d['item'] ?? null) ? $d['item'] : [];
+        $lineas[] = sprintf(
+            'Factura %d: %s, %s x $%s%s.',
+            $i + 1,
+            trim((string) ($item['nombre'] ?? 'sin detalle')),
+            rtrim(rtrim(number_format((float) ($item['cantidad'] ?? 1), 4, ',', '.'), '0'), ','),
+            number_format((float) ($item['precioUnitario'] ?? 0), 0, ',', '.'),
+            ! empty($item['exento']) ? ' (exento)' : '',
+        );
+    }
+
+    // LA FORMA DE PAGO SE NOMBRA SIEMPRE, incluso cuando es la asumida. Es una
+    // condicion del documento y el usuario tiene que poder corregirla antes de
+    // que se convierta en papel.
+    $forma = trim((string) ($borrador['formaPago'] ?? ''));
+    $lineas[] = $forma !== ''
+        ? "Forma de pago: {$forma}."
+        : 'Forma de pago: ' . CHAT_ARMADO_FORMA_PAGO_DEFECTO . ' (no la dijiste, la asumo).';
+
+    $lineas[] = chatDeclararFolios($pdo, $rutEmisor, count($documentos));
+
+    $lineas[] = $carril === 'cotizacion'
+        ? 'Va a quedar cargado en el formulario de emision para que lo revises y emitas tu.'
+        : 'Como son varias, van a salir en un Excel para la carga masiva, que despues emites desde ahi.';
+
+    return implode(' ', $lineas);
+}
+
 function handleChatGet(): void
 {
     $cuentaId = Auth::cuentaId();
@@ -1853,8 +2406,10 @@ function handleChatGet(): void
  * El flujo entero. $traductor se puede inyectar para los arneses: en produccion
  * llega null y se construye desde el entorno, igual que hace el resto del panel.
  */
-function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
-{
+function handleChatPost(
+    ?TraductorPreguntaInterface $traductor = null,
+    ?TraductorArmadoFacturaInterface $traductorArmado = null,
+): void {
     $cuentaId = Auth::cuentaId();
     $hoy      = date('Y-m-d');
     $pregunta = trim((string) ($_POST['pregunta'] ?? ''));
@@ -1909,6 +2464,16 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
             $limite
         )]);
     }
+
+    // ¿ESTE TURNO ES DE ARMAR UNA FACTURA? Se pregunta ANTES del guard de
+    // "no hay documentos que consultar" de mas abajo, porque ese guard es de
+    // CONSULTAS: una cuenta puede tener todo listo para emitir y todavia no haber
+    // emitido nada, y en ese caso armar su primera factura es exactamente lo que
+    // quiere hacer. El armado trae su propio guard, mas estricto.
+    //
+    // Si el turno NO es de armado, esta llamada RETORNA y sigue el camino de
+    // consultas de siempre, sin haber tocado nada.
+    chatTurnoDeArmado($cuentaId, $conversacionId, $pregunta, $hoy, $uso, $traductorArmado, $pintar);
 
     // NO SE PAGA UNA CONSULTA PARA NO PODER RESPONDER. Si la cuenta no tiene
     // emisor de produccion, no hay ni un documento que consultar: traducir la
