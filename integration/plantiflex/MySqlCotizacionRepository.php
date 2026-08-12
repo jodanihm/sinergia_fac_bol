@@ -273,6 +273,30 @@ final class MySqlCotizacionRepository
      * lineas. Si algo falla, no queda ni un hueco en la numeracion ni una
      * cabecera sin lineas.
      *
+     * -----------------------------------------------------------------------
+     * SI YA HAY UNA TRANSACCION ABIERTA, SE UNE A ELLA EN VEZ DE ABRIR OTRA.
+     *
+     * PDO no anida transacciones: un beginTransaction() con una ya abierta lanza
+     * "There is already an active transaction". Sin esta distincion, un llamador
+     * que necesite crear OTRA COSA junto con la cotizacion -- el caso concreto es
+     * el chat, que da de alta el cliente y crea la cotizacion en el mismo acto --
+     * tendria que elegir entre duplicar el INSERT de este repositorio o dejar un
+     * cliente huerfano si la cotizacion falla. El maestro no tiene borrado
+     * fisico, asi que ese huerfano seria para siempre.
+     *
+     * PARA LOS LLAMADORES QUE YA EXISTIAN NO CAMBIA NADA: sin transaccion previa,
+     * $propia es true y el flujo es identico al de antes -- begin, commit, y
+     * rollback ante cualquier Throwable.
+     *
+     * CUANDO LA TRANSACCION ES AJENA, ESTE METODO NO HACE ROLLBACK: deshacer lo
+     * que otro empezo le borraria trabajo que no es suyo. La excepcion se
+     * relanza igual y el dueño de la transaccion decide. Es la regla de siempre:
+     * quien abre, cierra.
+     *
+     * asignarNumero() sigue funcionando en los dos casos -- exige una transaccion
+     * abierta y la hay, sea de quien sea.
+     * -----------------------------------------------------------------------
+     *
      * @param array<string,mixed>            $datos
      * @param list<array<string,mixed>>      $lineas
      * @return array{0:int, 1:int}
@@ -283,7 +307,10 @@ final class MySqlCotizacionRepository
             throw new RuntimeException('una cotizacion necesita al menos una linea.');
         }
 
-        $this->pdo->beginTransaction();
+        $propia = ! $this->pdo->inTransaction();
+        if ($propia) {
+            $this->pdo->beginTransaction();
+        }
         try {
             $numero = $this->asignarNumero($cuentaId);
 
@@ -304,11 +331,17 @@ final class MySqlCotizacionRepository
             // lo escribe nadie que no sea recalcularEstado().
             $this->recalcularEstado($cuentaId, $id);
 
-            $this->pdo->commit();
+            if ($propia) {
+                $this->pdo->commit();
+            }
 
             return [$id, $numero];
         } catch (Throwable $e) {
-            $this->pdo->rollBack();
+            // Solo se deshace lo que se empezo aqui. Con transaccion ajena, la
+            // excepcion sube y el dueño decide -- ver el docblock.
+            if ($propia) {
+                $this->pdo->rollBack();
+            }
             throw $e;
         }
     }

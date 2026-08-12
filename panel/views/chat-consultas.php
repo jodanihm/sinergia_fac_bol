@@ -7,6 +7,8 @@
  *   $resultado  null, o ['descripcion' => string, 'meta' => array, 'filas' => list]
  *   $aviso      null, o ['tipo' => 'info'|'advertencia'|'error', 'texto' => string]
  *   $conversacionId  identificador de ESTA pestaña (hidden); ver handleChatGet()
+ *   $pendiente  null, o ['id'=>string, 'listo'=>bool, 'documentos'=>int]
+ *   $flash      null, o ['tipo'=>string, 'mensaje'=>string]
  *   $recientes  list de ['pregunta', 'desenlace', 'created_at'] DE ESTA CUENTA
  *
  * LOS CUATRO DESENLACES SE VEN DISTINTO A PROPOSITO:
@@ -60,6 +62,58 @@ $sugerencias = [
     ?>
     <span class="chat-badge"><?= iconoSvg('escudo', 15, 'chat-badge__icono'); ?>Seguro &middot; Solo se envia tu pregunta</span>
 </div>
+
+<?php if (! empty($flash['mensaje'])): ?>
+    <div class="alerta alerta--<?= htmlspecialchars((string) ($flash['tipo'] ?? 'exito')); ?>" role="status">
+        <?= htmlspecialchars((string) $flash['mensaje']); ?>
+        <?php /* El Excel se ofrece PEGADO al mensaje que lo anuncia, no en un menu
+                 aparte: es el unico momento en que el usuario sabe que existe. */ ?>
+        <?php if (($flash['tipo'] ?? '') === 'exito' && str_contains((string) $flash['mensaje'], 'Excel')): ?>
+            <a class="boton-secundario" href="/chat/excel">Bajar el Excel</a>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
+<?php
+/* EL AVISO DE BORRADOR A MEDIAS.
+ *
+ * VA ARRIBA DE TODO Y EN TODAS LAS VUELTAS. Lo que se esta armando vive en la
+ * sesion y no en la base: si el usuario lo olvida, se pierde sin dejar rastro y
+ * sin que nadie se entere. El aviso es lo unico que lo hace visible.
+ *
+ * LAS DOS ACCIONES SON POST, no enlaces: una crea filas y la otra descarta
+ * trabajo, y ninguna de las dos puede ocurrir porque un navegador precargue un
+ * enlace. Por eso llevan csrfInput(), que el router valida para todo POST. */
+?>
+<?php if (! empty($pendiente)): ?>
+    <div class="alerta alerta--advertencia chat-pendiente" role="status">
+        <div>
+            <strong>Tienes un borrador a medias.</strong>
+            <?php if ($pendiente['listo'] && $pendiente['documentos'] > 0): ?>
+                <?= (int) $pendiente['documentos']; ?>
+                factura<?= $pendiente['documentos'] === 1 ? '' : 's'; ?>
+                lista<?= $pendiente['documentos'] === 1 ? '' : 's'; ?> para confirmar.
+                Todavia no se ha creado nada.
+            <?php else: ?>
+                La conversacion quedo sin terminar. Sigue escribiendo para completarla.
+            <?php endif; ?>
+        </div>
+        <div class="acciones-grupo">
+            <?php if ($pendiente['listo'] && $pendiente['documentos'] > 0): ?>
+                <form method="post" action="/chat/confirmar">
+                    <?= csrfInput(); ?>
+                    <input type="hidden" name="conversacion_id" value="<?= htmlspecialchars((string) $pendiente['id']); ?>">
+                    <button type="submit" class="boton-principal">Confirmar y crear</button>
+                </form>
+            <?php endif; ?>
+            <form method="post" action="/chat/descartar">
+                <?= csrfInput(); ?>
+                <input type="hidden" name="conversacion_id" value="<?= htmlspecialchars((string) $pendiente['id']); ?>">
+                <button type="submit" class="boton-texto">Descartar</button>
+            </form>
+        </div>
+    </div>
+<?php endif; ?>
 
 <div class="chat-layout">
     <div class="chat-principal">

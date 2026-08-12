@@ -1829,6 +1829,39 @@ function chatArmadoOlvidar(string $id): void
     unset($_SESSION[CHAT_ARMADO_SESION][$id]);
 }
 
+/**
+ * El borrador a medias que hay que recordarle al usuario, o null si no hay.
+ *
+ * SE BUSCA EN TODAS LAS CONVERSACIONES DE LA SESION y no solo en la de esta
+ * pestaña, porque un GET limpio de /chat estrena identificador: si mirara solo el
+ * suyo, recargar la pagina haria desaparecer el aviso y el borrador quedaria
+ * olvidado de verdad, que es justo lo que este aviso viene a impedir.
+ *
+ * SE DEVUELVE LA MAS RECIENTE cuando hay varias -- dos pestañas armando a la vez.
+ * Mostrarlas todas convertiria el aviso en una lista y cada una tiene su propia
+ * pestaña donde aparece igual.
+ *
+ * @return array{id:string, listo:bool, documentos:int}|null
+ */
+function chatBorradorPendiente(): ?array
+{
+    $pendiente = null;
+    foreach ($_SESSION[CHAT_ARMADO_SESION] ?? [] as $id => $entrada) {
+        $estado = is_array($entrada['estado'] ?? null) ? $entrada['estado'] : [];
+        if (($estado['turnos'] ?? []) === []) {
+            continue;   // pestaña abierta que nunca armo nada
+        }
+        $borrador  = is_array($estado['borrador'] ?? null) ? $estado['borrador'] : [];
+        $pendiente = [
+            'id'         => (string) $id,
+            'listo'      => ! empty($estado['listo']),
+            'documentos' => count(chatDocumentosDelBorrador($borrador)),
+        ];
+    }
+
+    return $pendiente;
+}
+
 // ---------------------------------------------------------------------------
 //  ARMADO DE FACTURAS POR CONVERSACION
 //
@@ -2378,6 +2411,280 @@ function chatResumenBorrador(
     return implode(' ', $lineas);
 }
 
+// ---------------------------------------------------------------------------
+//  CONFIRMAR EL BORRADOR: aqui, y solo aqui, se escribe en la base.
+// ---------------------------------------------------------------------------
+
+/**
+ * UNA COTIZACION POR DOCUMENTO, SIEMPRE. No una con N lineas.
+ *
+ * ESTO NO ES UN DETALLE DE IMPLEMENTACION: es lo que evita una trampa. Una
+ * cotizacion de tres lineas tiene un boton "Facturar" que produce UNA factura de
+ * tres lineas -- exactamente lo contrario de lo que el usuario pidio al decir
+ * "tres facturas". Con una cotizacion por documento, ese boton hace en cada una
+ * lo que corresponde, y el Excel de la carga masiva -- que nunca junta filas del
+ * mismo RUT -- produce lo mismo por su lado. Los dos caminos coinciden.
+ *
+ * El precio es un correlativo por documento. Se paga a proposito: son documentos
+ * distintos y el usuario ya sabe cuantos son, porque el resumen se los dijo.
+ */
+const CHAT_ARMADO_PREFIJO_EXTERNO = 'chat';
+
+/** Donde queda la lista de cotizaciones cuyo Excel esta listo para bajar. */
+const CHAT_ARMADO_EXCEL_SESION = 'chat_armado_excel';
+
+/**
+ * Crea el cliente (si es nuevo) y UNA cotizacion por documento, TODO EN UNA
+ * TRANSACCION.
+ *
+ * EL ORDEN IMPORTA: primero el cliente, porque las cotizaciones guardan su id. Y
+ * las dos cosas van juntas porque el maestro no tiene borrado fisico: un cliente
+ * creado para una cotizacion que despues falla no se puede deshacer, solo
+ * desactivar. MySqlCotizacionRepository::crear() se une a esta transaccion en vez
+ * de abrir la suya -- ver su docblock.
+ *
+ * NO EMITE NADA. Ni toca el motor, ni consume un folio. Lo unico que existe al
+ * salir de aqui son filas del panel.
+ *
+ * @param array<string,mixed> $estado el de la conversacion
+ *
+ * @return array{ids:list<int>, numeros:list<int>, clienteCreado:bool}
+ *
+ * @throws Throwable lo que falle; el llamador ya no tiene nada que deshacer
+ */
+function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
+{
+    $borrador   = is_array($estado['borrador'] ?? null) ? $estado['borrador'] : [];
+    $documentos = chatDocumentosDelBorrador($borrador);
+    if ($documentos === []) {
+        throw new RuntimeException('el borrador no tiene ningun documento.');
+    }
+
+    $datosCliente = is_array($borrador['cliente'] ?? null) ? $borrador['cliente'] : [];
+    $yaExiste     = is_array($estado['cliente'] ?? null) ? $estado['cliente'] : null;
+    $hoy          = date('Y-m-d');
+
+    $pdo->beginTransaction();
+    try {
+        $clienteCreado = false;
+        if ($yaExiste !== null) {
+            $cliente = $yaExiste;
+        } else {
+            // ALTA CON LAS MISMAS PIEZAS QUE EL ABM, no con un INSERT propio:
+            // validarCliente() normaliza el RUT y decide que es obligatorio, y
+            // crear() traduce el errno 1062 a ClienteDuplicadoException. Dos
+            // validadores para la misma tabla terminan discrepando.
+            [$datos, $errores] = validarCliente([
+                'rut_cliente'  => (string) ($datosCliente['rut'] ?? ''),
+                'razon_social' => (string) ($datosCliente['razonSocial'] ?? $datosCliente['nombre'] ?? ''),
+                'giro'         => (string) ($datosCliente['giro'] ?? ''),
+                'direccion'    => (string) ($datosCliente['direccion'] ?? ''),
+                'comuna'       => (string) ($datosCliente['comuna'] ?? ''),
+                'email'        => (string) ($datosCliente['email'] ?? ''),
+            ]);
+            if ($errores !== []) {
+                throw new RuntimeException('el cliente no se puede dar de alta: ' . implode(' ', $errores));
+            }
+
+            $id      = clienteRepo()->crear($cuentaId, $datos);
+            $cliente = ['id' => $id] + $datos + ['razon_social' => $datos['razon_social']];
+            $clienteCreado = true;
+        }
+
+        $ids = $numeros = [];
+        foreach ($documentos as $doc) {
+            $item = is_array($doc['item'] ?? null) ? $doc['item'] : [];
+
+            [$idCot, $numero] = cotizacionRepo()->crear($cuentaId, [
+                'cliente_id'            => (int) ($cliente['id'] ?? 0) ?: null,
+                // LOS DATOS DEL RECEPTOR VAN CONGELADOS, que es lo que la tabla
+                // pide: la ficha puede cambiar despues y este documento no.
+                'receptor_rut'          => (string) ($cliente['rut_cliente'] ?? $datos['rut_cliente'] ?? ''),
+                'receptor_razon_social' => (string) ($cliente['razon_social'] ?? ''),
+                'receptor_giro'         => (string) ($cliente['giro'] ?? ''),
+                'receptor_direccion'    => (string) ($cliente['direccion'] ?? ''),
+                'receptor_comuna'       => (string) ($cliente['comuna'] ?? ''),
+                'receptor_email'        => (string) ($cliente['email'] ?? ''),
+                'fecha'                 => $hoy,
+                'valida_hasta'          => null,
+                'notas'                 => 'Armada con el Asistente IA.',
+            ], [[
+                'orden'           => 1,
+                'producto_id'     => null,
+                'nombre'          => trim((string) ($item['nombre'] ?? 'Servicio')),
+                'descripcion'     => '',
+                'unidad'          => '',
+                'cantidad'        => (float) ($item['cantidad'] ?? 1),
+                'precio_unitario' => (float) ($item['precioUnitario'] ?? 0),
+                'descuento_pct'   => 0,
+                'exento'          => ! empty($item['exento']),
+            ]]);
+
+            $ids[]     = $idCot;
+            $numeros[] = $numero;
+        }
+
+        $pdo->commit();
+
+        return ['ids' => $ids, 'numeros' => $numeros, 'clienteCreado' => $clienteCreado];
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
+/**
+ * El .xlsx de la carga masiva a partir de las cotizaciones ya creadas.
+ *
+ * LAS 16 COLUMNAS DE NOTA_VENTA_ENCABEZADOS, EN SU ORDEN, y tomadas de la propia
+ * constante: leerFilasExcelCargaMasiva() compara la fila 1 con === estricto
+ * contra ella, asi que escribir la lista a mano aqui garantizaria el rechazo el
+ * dia que alguien agregue una columna alla.
+ *
+ * SE LEE DE LA BASE, no del borrador que quedo en la sesion. Las cotizaciones ya
+ * existen y son la version que el usuario confirmo; el borrador es un intermedio.
+ *
+ * @param list<int> $ids
+ */
+function chatArmadoExcel(int $cuentaId, array $ids): string
+{
+    $libro = new Spreadsheet();
+    $hoja  = $libro->getActiveSheet();
+    $hoja->setTitle('Notas de venta');
+    $hoja->fromArray(NOTA_VENTA_ENCABEZADOS, null, 'A1');
+
+    $fila = 2;
+    foreach ($ids as $id) {
+        $cot = cotizacionRepo()->buscarPorId($cuentaId, $id);
+        if ($cot === null) {
+            continue;   // de otra cuenta o borrada: no se filtra ni se inventa
+        }
+        foreach ($cot['lineas'] as $l) {
+            $hoja->fromArray([
+                // IDENTIFICADOR UNICO POR CONSTRUCCION: cotizacion.id es
+                // AUTO_INCREMENT global y (cotizacion_id, orden) ya es UNIQUE en
+                // el esquema. No hay forma de que dos filas choquen.
+                sprintf('%s-%d-%d', CHAT_ARMADO_PREFIJO_EXTERNO, (int) $cot['id'], (int) $l['orden']),
+                (string) $cot['receptor_rut'],
+                (string) $cot['receptor_razon_social'],
+                (string) ($cot['receptor_giro'] ?? ''),
+                (string) ($cot['receptor_direccion'] ?? ''),
+                (string) ($cot['receptor_comuna'] ?? ''),
+                (string) ($cot['receptor_email'] ?? ''),
+                (string) $cot['fecha'],
+                (string) $l['nombre'],
+                (float) $l['cantidad'],
+                (float) $l['precio_unitario'],
+                ! empty($l['exento']) ? 'SI' : 'NO',
+                // FORMA DE PAGO NUNCA VACIA: una celda en blanco no aparta la
+                // fila, RECHAZA EL ARCHIVO ENTERO (ver las cuatro validaciones de
+                // pago de handleCargaMasivaPost). El resumen ya le dijo al usuario
+                // cual es, asi que aqui no se decide nada a sus espaldas.
+                CHAT_ARMADO_FORMA_PAGO_DEFECTO,
+                '',   // fecha_vencimiento: solo obligatoria con CREDITO
+                '',   // folio_boleta_a_anular
+                '',   // fecha_boleta_a_anular
+            ], null, 'A' . $fila);
+            $fila++;
+        }
+    }
+
+    $salida = fopen('php://temp', 'r+');
+    (new XlsxWriter($libro))->save($salida);
+    rewind($salida);
+    $bytes = (string) stream_get_contents($salida);
+    fclose($salida);
+    $libro->disconnectWorksheets();
+
+    return $bytes;
+}
+
+/**
+ * POST /chat/confirmar -- el usuario dijo que si.
+ *
+ * LA CONVERSACION SE OLVIDA AL CONFIRMAR, pase lo que pase con el redirect: lo
+ * que se queria armar ya esta en la base y dejarla abierta invitaria a
+ * confirmarla dos veces.
+ */
+function handleChatConfirmarPost(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $id       = chatConversacionResolver($_POST['conversacion_id'] ?? null);
+    $estado   = chatArmadoEstado($id['id']) ?? [];
+
+    if (empty($estado['listo'])) {
+        flashSet('error', 'Ese borrador ya no esta disponible. Vuelve a pedirlo en el chat.');
+        redirigirPrg('/chat');
+    }
+
+    try {
+        $r = chatArmadoConfirmar(Db::conexion(), $cuentaId, $estado);
+    } catch (Throwable $e) {
+        error_log('chat armado: fallo al confirmar - ' . $e->getMessage());
+        flashSet('error', 'No se pudo crear el borrador: ' . $e->getMessage()
+            . ' No se creo nada a medias.');
+        redirigirPrg('/chat');
+    }
+
+    chatArmadoOlvidar($id['id']);
+
+    // UN SOLO DOCUMENTO: al formulario de emision de siempre, por la ruta que ya
+    // existe. No hay un segundo camino de emision y esta capa no lo inventa.
+    if (count($r['ids']) === 1) {
+        flashSet('exito', sprintf(
+            'Cotizacion N° %d creada%s. Revisa los datos y emite cuando estes listo.',
+            $r['numeros'][0],
+            $r['clienteCreado'] ? ' y cliente dado de alta' : ''
+        ));
+        redirigirPrg('/ventas/cotizaciones/' . $r['ids'][0] . '/facturar');
+    }
+
+    // VARIOS: el Excel de la carga masiva. Los id quedan en la sesion y NO en la
+    // URL -- es el mismo criterio con el que la conversion de cotizacion evita
+    // que el contenido termine en el log de accesos del servidor.
+    $_SESSION[CHAT_ARMADO_EXCEL_SESION] = $r['ids'];
+    flashSet('exito', sprintf(
+        '%d cotizaciones creadas (N° %s)%s. Baja el Excel y subelo en Ventas > Carga masiva de '
+        . 'notas de venta. OJO: ese archivo se carga UNA sola vez -- si lo subes dos veces, la '
+        . 'segunda se rechaza entera para no duplicar las facturas.',
+        count($r['ids']),
+        implode(', ', $r['numeros']),
+        $r['clienteCreado'] ? ', con el cliente dado de alta' : ''
+    ));
+    redirigirPrg('/chat');
+}
+
+/** POST /chat/descartar -- el usuario se arrepintio. No hay nada en la base que borrar. */
+function handleChatDescartarPost(): void
+{
+    $id = chatConversacionResolver($_POST['conversacion_id'] ?? null);
+    chatArmadoOlvidar($id['id']);
+    flashSet('exito', 'Borrador descartado. No se habia creado nada.');
+    redirigirPrg('/chat');
+}
+
+/** GET /chat/excel -- baja el archivo de la ultima confirmacion multiple. */
+function handleChatExcelGet(): void
+{
+    $ids = $_SESSION[CHAT_ARMADO_EXCEL_SESION] ?? null;
+    if (! is_array($ids) || $ids === []) {
+        flashSet('error', 'No hay ningun Excel pendiente de descarga.');
+        redirigirPrg('/chat');
+    }
+
+    // El scope por cuenta lo pone buscarPorId() dentro de chatArmadoExcel(), como
+    // todo repositorio del anfitrion: una cotizacion de otra cuenta no aparece.
+    $bytes = chatArmadoExcel(Auth::cuentaId(), array_map('intval', $ids));
+
+    header('Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    header('Content-Disposition: attachment; filename="facturas_asistente_ia.xlsx"');
+    header('Content-Length: ' . strlen($bytes));
+    echo $bytes;
+    exit;
+}
+
 function handleChatGet(): void
 {
     $cuentaId = Auth::cuentaId();
@@ -2398,6 +2705,8 @@ function handleChatGet(): void
         // EL IDENTIFICADOR DE ESTA PESTAÑA. Se genera aqui, una sola vez, igual
         // que el idem_key de la emision.
         'conversacionId' => chatConversacionRegistrar(chatConversacionNueva()),
+        'pendiente' => chatBorradorPendiente(),
+        'flash'     => flashTomar(),
         'navActivo' => 'chat',
     ]);
 }
@@ -2447,6 +2756,11 @@ function handleChatPost(
             'limite'    => $limite,
             'recientes' => $uso->recientes($cuentaId),
             'conversacionId' => $conversacionId,
+            // SE CALCULA AL PINTAR, no antes: el turno que acaba de pasar pudo
+            // haber creado o cerrado el borrador, y un valor tomado al entrar
+            // mostraria el estado anterior.
+            'pendiente' => chatBorradorPendiente(),
+            'flash'     => flashTomar(),
             'navActivo' => 'chat',
         ]);
     };
@@ -7667,6 +7981,24 @@ if ($metodo === 'GET' && $ruta === '/chat') {
 if ($metodo === 'POST' && $ruta === '/chat') {
     Auth::requerirSesion();
     handleChatPost();
+}
+
+// Las tres del armado. El CSRF ya lo valido el bloque central para todo POST, y
+// el aislamiento por cuenta lo ponen los repositorios: aqui no se repite ninguna
+// de las dos cosas.
+if ($metodo === 'POST' && $ruta === '/chat/confirmar') {
+    Auth::requerirSesion();
+    handleChatConfirmarPost();
+}
+
+if ($metodo === 'POST' && $ruta === '/chat/descartar') {
+    Auth::requerirSesion();
+    handleChatDescartarPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/chat/excel') {
+    Auth::requerirSesion();
+    handleChatExcelGet();
 }
 
 // LA RUTA VIEJA NO QUEDA ROTA. El chat nacio colgando de Informes y alguien

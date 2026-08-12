@@ -2325,6 +2325,15 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .chat-privacidad p:last-child { margin-bottom: 0; }
 .chat-privacidad__icono { flex: 0 0 auto; color: var(--color-primario); margin-top: 2px; }
 
+/* --- Aviso de borrador a medias ------------------------------------------ */
+/* Hereda TODO el color de .alerta--advertencia: aqui solo se resuelve que el
+   texto y los dos botones convivan en una linea y se apilen cuando no caben.
+   Ni un color propio -- un aviso con paleta distinta de las demas alertas se
+   leeria como otra cosa. */
+.chat-pendiente { display: flex; gap: var(--esp-3); align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.chat-pendiente .acciones-grupo { flex: 0 0 auto; }
+.chat-pendiente form { margin: 0; }
+
 /* Una columna cuando no caben dos. El mismo corte que ya usa el resto. */
 @media (max-width: 1024px) {
     .chat-layout { grid-template-columns: 1fr; }
