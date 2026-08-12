@@ -2522,28 +2522,60 @@ function chatTurnoDeArmado(
     $estado['turnos']   = $turnos;
     $estado['borrador'] = $r->borrador;
 
-    if ($r->desenlace === ArmadoFacturaTraducido::FALTAN_DATOS) {
-        chatArmadoGuardar($conversacionId, $estado);
-        $pintar(null, ['tipo' => 'info', 'texto' => (string) $r->pregunta], 'armando');
-    }
-
-    // --- BORRADOR_LISTO: el modelo cree que tiene todo. Ahora manda el panel. ---
-
+    // =====================================================================
+    //  EL CLIENTE SE RESUELVE SIEMPRE, NO SOLO CUANDO EL MODELO DA EL BORRADOR
+    //  POR TERMINADO.
+    //
+    //  DEFECTO MEDIDO EN PRODUCCION. Daniel escribio "claro el rut es 77724622-4
+    //  es solo un item arriendo de software" y el asistente le contesto "¿el
+    //  cliente Plantiflex es nuevo? Si es nuevo necesito razon social, giro,
+    //  direccion y comuna". El RUT estaba ahi, en el borrador, y nadie lo busco.
+    //
+    //  POR QUE PASABA: esta resolucion vivia DESPUES del `if (FALTAN_DATOS)`, y
+    //  esa rama termina en $pintar(), que no vuelve. O sea que en el turno mas
+    //  frecuente de todos -- el modelo pidiendo un dato -- el panel jamas miraba
+    //  el maestro y se limitaba a repetir la pregunta del modelo. El modelo no
+    //  puede saber si un RUT existe: no ve el maestro y no debe verlo. El unico
+    //  que puede contestar esa pregunta es este codigo.
+    //
+    //  LA REGLA, AHORA EXPLICITA: si el borrador trae cliente, se resuelve. Y lo
+    //  que el panel averigua MANDA sobre lo que el modelo iba a preguntar,
+    //  porque el panel sabe algo que el modelo no.
+    // =====================================================================
+    $cliente    = chatResolverClienteDelBorrador($cuentaId, $r->borrador);
     $documentos = chatDocumentosDelBorrador($r->borrador);
-    if ($documentos === []) {
-        chatArmadoGuardar($conversacionId, $estado);
-        $pintar(null, ['tipo' => 'info', 'texto' =>
-            '¿Que le facturo? Dime el detalle y el monto.'], 'armando');
-    }
 
-    // EL CLIENTE LO RESUELVE EL PANEL, NUNCA EL MODELO. Al modelo no se le paso
-    // el maestro ni se le va a pasar: solo escribio el RUT o el nombre que tecleo
-    // el usuario, y contra eso se busca aqui.
-    $cliente = chatResolverClienteDelBorrador($cuentaId, $r->borrador);
+    chatDiag('resolucion-cliente', [
+        'desenlace'  => $r->desenlace,
+        'rutEnBorrador' => mb_substr((string) ($r->borrador['cliente']['rut'] ?? ''), 0, 20),
+        'resultado'  => $cliente['estado'],
+        'texto'      => mb_substr((string) $cliente['texto'], 0, 120),
+        'documentos' => count($documentos),
+    ]);
+
+    // FALTA ALGO DEL CLIENTE: pregunta el PANEL, no el modelo. Su pregunta es la
+    // que sabe si el RUT es invalido, si no existe, o si existe incompleto --
+    // tres cosas que el modelo no puede distinguir.
     if ($cliente['estado'] !== 'listo') {
         chatArmadoGuardar($conversacionId, $estado);
         $pintar(null, ['tipo' => 'info', 'texto' => (string) $cliente['texto']], 'armando');
     }
+
+    // EL CLIENTE YA ESTA. Lo unico que puede faltar es que facturarle.
+    if ($documentos === []) {
+        chatArmadoGuardar($conversacionId, $estado);
+        // Si el modelo pregunto algo concreto, se respeta su pregunta: puede ser
+        // sobre el monto, la cantidad o si el item es exento, y es mejor que la
+        // generica. Lo que ya no puede es preguntar por el cliente, porque a esa
+        // altura no llega.
+        $pintar(null, ['tipo' => 'info', 'texto' => $r->sigueAbierta() && trim((string) $r->pregunta) !== ''
+            ? (string) $r->pregunta
+            : '¿Que le facturo? Dime el detalle y el monto.'], 'armando');
+    }
+
+    // CLIENTE RESUELTO Y AL MENOS UN DOCUMENTO: hay borrador, aunque el modelo lo
+    // haya marcado como incompleto. Se sigue al resumen en vez de devolverle otra
+    // pregunta al usuario -- que fue justo lo que le paso a Daniel.
 
     // EL CARRIL SALE DE CUANTOS DOCUMENTOS SON, no de cuantos clientes. Tres
     // facturas al MISMO cliente son tres documentos y van por el Excel igual: la

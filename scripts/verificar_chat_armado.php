@@ -658,6 +658,72 @@ if ($r4['estado'] === 'listo' && str_contains((string) $r4['texto'], '76192083-9
     mal('el candidato unico no se confirmo en voz alta: ' . json_encode($r4));
 }
 
+// --- EL ORDEN DENTRO DE chatTurnoDeArmado(), MIRADO EN EL FUENTE -----------
+//
+// POR QUE UNA COMPROBACION SOBRE EL TEXTO DEL ARCHIVO Y NO SOBRE EL COMPORTAMIENTO:
+// chatTurnoDeArmado() no se puede llamar desde aqui -- todas sus salidas terminan
+// en $pintar(), que redirige y hace exit. Lo que si se puede comprobar es la
+// unica propiedad que causo el defecto, y es estructural.
+//
+// EL DEFECTO: la resolucion del cliente vivia DESPUES de la rama FALTAN_DATOS, y
+// esa rama no vuelve. Con un RUT en el borrador, el panel nunca miraba el maestro
+// y se limitaba a repetir la pregunta del modelo -- "¿el cliente es nuevo?" --
+// que el modelo no puede responder porque no ve el maestro ni debe verlo.
+echo "\n  EL ORDEN QUE CAUSO EL DEFECTO DEL RUT (12-08-2026)\n";
+
+// LA VERSION ANTERIOR DE ESTE GUARDIAN NO COMPROBABA NADA, y conviene que quede
+// escrito: buscaba la cadena 'ArmadoFacturaTraducido::FALTAN_DATOS)' -- que el
+// propio arreglo habia BORRADO al reemplazar esa rama por $r->sigueAbierta().
+// Como no la encontraba, salia por el aviso de "no se pudo comprobar" y el arnes
+// daba fallos 0 sin haber mirado el orden. Un guardian que no encuentra su ancla
+// tiene que FALLAR, no encogerse de hombros: por eso ahora los tres casos de
+// ancla ausente son mal() y no aviso().
+$fuente = (string) file_get_contents($RAIZ . '/panel/public/index.php');
+
+// SE ACOTA AL CUERPO DE LA FUNCION. Fuera de ella hay otras apariciones de estos
+// nombres -- la declaracion de chatResolverClienteDelBorrador(), por ejemplo --
+// y compararlas entre si no significaria nada.
+$ini = strpos($fuente, 'function chatTurnoDeArmado(');
+$fin = $ini !== false ? strpos($fuente, "\n}\n", $ini) : false;
+
+if ($ini === false || $fin === false) {
+    mal('no se pudo aislar el cuerpo de chatTurnoDeArmado(): la comprobacion del orden NO CORRIO.');
+} else {
+    $cuerpoFn = substr($fuente, $ini, $fin - $ini);
+
+    // LAS DOS ANCLAS, y por que estas:
+    //
+    //   A = la resolucion del cliente.
+    //   B = el PRIMER chatArmadoGuardar($conversacionId, $estado) del tramo que
+    //       maneja el borrador. Cada rama que corta guarda el estado justo antes
+    //       de llamar a $pintar(), asi que la primera aparicion de B marca donde
+    //       empieza a haber salidas.
+    //
+    // EN LA FORMA ROTA, B estaba en la rama FALTAN_DATOS y caia ANTES de A: por
+    // eso el panel nunca miraba el maestro. En la forma correcta, A va primero.
+    // No se ancla en 'FALTAN_DATOS' ni en '$r->pregunta': el primero ya no existe
+    // y el segundo aparece tambien dentro de chatDiag(), antes de A, lo que daria
+    // un fallo falso.
+    $posA = strpos($cuerpoFn, 'chatResolverClienteDelBorrador($cuentaId');
+    $posB = strpos($cuerpoFn, 'chatArmadoGuardar($conversacionId, $estado);');
+
+    if ($posA === false) {
+        mal('dentro de chatTurnoDeArmado() no aparece chatResolverClienteDelBorrador(): '
+            . 'o cambio de nombre, o la resolucion del cliente se quito. La comprobacion NO CORRIO.');
+    } elseif ($posB === false) {
+        mal('dentro de chatTurnoDeArmado() no aparece ningun chatArmadoGuardar($conversacionId, '
+            . '$estado): cambio la forma de guardar el estado y esta comprobacion NO CORRIO.');
+    } elseif ($posA < $posB) {
+        printf("      resolucion en el byte %d del cuerpo, primera salida en el %d\n", $posA, $posB);
+        ok('la resolucion del cliente ocurre ANTES de la primera rama que corta: un RUT en el '
+            . 'borrador se busca en el maestro pase lo que pase.');
+    } else {
+        mal('la resolucion del cliente volvio a quedar DESPUES de la rama que corta. Con un RUT en '
+            . 'el borrador, el panel no va a mirar el maestro y le devolvera al usuario la pregunta '
+            . 'del modelo. Es el defecto que reporto Daniel el 12-08-2026.');
+    }
+}
+
 // Un cliente INCOMPLETO no puede armar: la carga masiva ya lo trata como error de
 // fila porque el lote del motor es todo-o-nada.
 $pdo->prepare('INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, giro) VALUES (?, ?, ?, ?)')
