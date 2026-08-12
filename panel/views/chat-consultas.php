@@ -137,62 +137,6 @@ $sugerencias = [
         </section>
         <?php endif; ?>
 
-        <section class="tarjeta">
-            <form method="post" action="/chat" class="form-compacto" id="form-chat">
-                <?= csrfInput(); ?>
-                <?php
-                /* EL IDENTIFICADOR DE ESTA PESTAÑA, no de la sesion.
-                   Dos pestañas comparten cookie y sesion PHP, asi que sin esto no
-                   habria forma de que una conversacion a medias en una no se
-                   mezclara con la de la otra. Se genera en el GET y vuelve igual
-                   en cada envio -- exactamente el patron del idem_key del
-                   formulario de emision. */
-                ?>
-                <input type="hidden" name="conversacion_id"
-                       value="<?= htmlspecialchars((string) ($conversacionId ?? '')); ?>">
-                <div class="form-campo">
-                    <label for="pregunta">Tu pregunta</label>
-                    <input type="text" name="pregunta" id="pregunta" class="chat-pregunta"
-                           maxlength="<?= $maxPregunta; ?>"
-                           value="<?= htmlspecialchars((string) $pregunta); ?>"
-                           placeholder="cuanto le vendi a cada cliente en los ultimos 6 meses" autofocus>
-                    <?php /* El contador se rellena por JS; sin JS queda el maximo, que sigue siendo cierto. */ ?>
-                    <small class="chat-contador" id="chat-contador" aria-live="polite">
-                        <?= mb_strlen((string) $pregunta); ?>/<?= $maxPregunta; ?>
-                    </small>
-                </div>
-                <div class="acciones-grupo">
-                    <button type="submit" class="boton-principal chat-enviar">
-                        <?= iconoSvg('enviar', 16, ''); ?>Preguntar
-                    </button>
-                </div>
-            </form>
-
-            <div class="chat-sugerencias">
-                <p class="chat-sugerencias__titulo"><span>O prueba con estas sugerencias</span></p>
-                <div class="chat-chips">
-                    <?php foreach ($sugerencias as $s): ?>
-                        <?php /* type=button: RELLENAN el campo, no envian. Preguntar cuesta
-                                 dinero y un clic accidental no puede gastarlo. */ ?>
-                        <button type="button" class="chat-chip" data-pregunta="<?= htmlspecialchars($s['texto']); ?>">
-                            <?= iconoSvg($s['icono'], 14, ''); ?><?= htmlspecialchars($s['texto']); ?>
-                        </button>
-                    <?php endforeach; ?>
-                </div>
-            </div>
-
-            <p class="chat-cupo">
-                <?php
-                /* EL CONTADOR SE MUESTRA SIEMPRE, no solo al agotarse: enterarse del
-                   tope cuando ya no queda es lo que hace que un limite se sienta
-                   arbitrario. El dato es real -- chat_consulta_uso de ESTA cuenta. */
-                ?>
-                <?= iconoSvg('reloj', 15, ''); ?>
-                Llevas <strong><?= (int) $usadas; ?> de <?= (int) $limite; ?></strong> consultas de hoy.
-                <span class="chat-cupo__nota">Se reinicia el contador cada dia a las 00:00 hrs.</span>
-            </p>
-        </section>
-
 <?php
 /* ===================================================================
    EL HILO. Turnos diferenciados, no una respuesta flotando abajo.
@@ -384,6 +328,80 @@ $sugerencias = [
     <?php endif; ?>
 <?php endforeach; ?>
 
+        <?php
+        /* ==============================================================
+           EL CUADRO DE ESCRIBIR VA ABAJO, DESPUES DEL HILO.
+           ==============================================================
+           Estaba arriba, que es de donde venia -- cuando solo habia una pregunta
+           y una respuesta daba igual. Con una conversacion de varios turnos se
+           lee al reves de como se lee cualquier chat: uno escribe abajo y lo
+           nuevo aparece encima del cuadro, no debajo de el.
+
+           SE MUEVE EL MARCADO, NO SE REORDENA CON CSS. Un `order` de flexbox
+           cambia lo que se ve pero no el orden del documento: el lector de
+           pantalla y la navegacion por tabulador seguirian encontrando el campo
+           antes que la conversacion, y sin CSS quedaria igual que antes. */
+        ?>
+        <section class="tarjeta chat-redactor">
+            <form method="post" action="/chat" class="form-compacto" id="form-chat">
+                <?= csrfInput(); ?>
+                <?php
+                /* EL IDENTIFICADOR DE ESTA PESTAÑA, no de la sesion.
+                   Dos pestañas comparten cookie y sesion PHP, asi que sin esto no
+                   habria forma de que una conversacion a medias en una no se
+                   mezclara con la de la otra. Se genera en el GET y vuelve igual
+                   en cada envio -- exactamente el patron del idem_key del
+                   formulario de emision. */
+                ?>
+                <input type="hidden" name="conversacion_id"
+                       value="<?= htmlspecialchars((string) ($conversacionId ?? '')); ?>">
+                <div class="form-campo">
+                    <label for="pregunta"><?= $hilo === [] ? 'Tu pregunta' : 'Sigue la conversacion'; ?></label>
+                    <input type="text" name="pregunta" id="pregunta" class="chat-pregunta"
+                           maxlength="<?= $maxPregunta; ?>"
+                           value="<?= htmlspecialchars((string) $pregunta); ?>"
+                           placeholder="cuanto le vendi a cada cliente en los ultimos 6 meses" autofocus>
+                    <?php /* El contador se rellena por JS; sin JS queda el maximo, que sigue siendo cierto. */ ?>
+                    <small class="chat-contador" id="chat-contador" aria-live="polite">
+                        <?= mb_strlen((string) $pregunta); ?>/<?= $maxPregunta; ?>
+                    </small>
+                </div>
+                <div class="acciones-grupo">
+                    <button type="submit" class="boton-principal chat-enviar">
+                        <?= iconoSvg('enviar', 16, ''); ?>Preguntar
+                    </button>
+                </div>
+            </form>
+
+            <?php /* Las sugerencias solo al empezar: con la conversacion andando
+                     no son ayuda, son ruido entre el hilo y el cuadro. */ ?>
+            <?php if ($hilo === []): ?>
+            <div class="chat-sugerencias">
+                <p class="chat-sugerencias__titulo"><span>O prueba con estas sugerencias</span></p>
+                <div class="chat-chips">
+                    <?php foreach ($sugerencias as $s): ?>
+                        <?php /* type=button: RELLENAN el campo, no envian. Preguntar cuesta
+                                 dinero y un clic accidental no puede gastarlo. */ ?>
+                        <button type="button" class="chat-chip" data-pregunta="<?= htmlspecialchars($s['texto']); ?>">
+                            <?= iconoSvg($s['icono'], 14, ''); ?><?= htmlspecialchars($s['texto']); ?>
+                        </button>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
+
+            <p class="chat-cupo">
+                <?php
+                /* EL CONTADOR SE MUESTRA SIEMPRE, no solo al agotarse: enterarse del
+                   tope cuando ya no queda es lo que hace que un limite se sienta
+                   arbitrario. El dato es real -- chat_consulta_uso de ESTA cuenta. */
+                ?>
+                <?= iconoSvg('reloj', 15, ''); ?>
+                Llevas <strong><?= (int) $usadas; ?> de <?= (int) $limite; ?></strong> consultas de hoy.
+                <span class="chat-cupo__nota">Se reinicia el contador cada dia a las 00:00 hrs.</span>
+            </p>
+        </section>
+
     </div><?php /* /chat-principal */ ?>
 
     <aside class="chat-lateral">
@@ -495,9 +513,12 @@ $sugerencias = [
     // ANTES de que terminen de cargar las tablas, y con una respuesta larga el
     // turno queda fuera de pantalla otra vez. Esto lo reposiciona una vez que la
     // pagina ya midio de verdad.
+    // Con el cuadro de escribir ABAJO, lo natural es dejar a la vista el final de
+    // la pagina: el ultimo turno y, debajo, el campo listo para seguir. Por eso
+    // 'end' y no 'center' -- centrar el turno dejaria el cuadro fuera de pantalla.
     var ultimo = document.getElementById('ultimo');
     if (ultimo) {
-        ultimo.scrollIntoView({ block: 'center' });
+        ultimo.scrollIntoView({ block: 'end' });
     }
 })();
 </script>
