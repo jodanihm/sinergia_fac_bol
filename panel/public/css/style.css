@@ -2325,6 +2325,38 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .chat-privacidad p:last-child { margin-bottom: 0; }
 .chat-privacidad__icono { flex: 0 0 auto; color: var(--color-primario); margin-top: 2px; }
 
+/* --- El hilo: turnos diferenciados --------------------------------------- */
+/* NI UN COLOR NUEVO. El usuario reusa el par de .boton-principal
+   (--color-primario sobre el que ya se midio el contraste del texto invertido) y
+   el asistente reusa --color-primario-suave, el mismo celeste de la tarjeta de
+   bienvenida. --color-superficie-tenue NO se usa: desde la R11 esta reservada
+   para el thead de las tablas y nada mas. */
+.chat-turno { display: flex; margin: var(--esp-3) 0; }
+.chat-turno--usuario { justify-content: flex-end; }
+.chat-turno--asistente { justify-content: flex-start; }
+
+.chat-burbuja {
+    max-width: 75%;
+    padding: var(--esp-3) var(--esp-4);
+    border-radius: var(--radio-lg);
+    line-height: 1.5;
+    overflow-wrap: anywhere;   /* un RUT largo o una URL no rompen el globo */
+}
+.chat-turno--usuario .chat-burbuja {
+    background: var(--color-primario);
+    color: var(--color-superficie);
+    border-bottom-right-radius: var(--radio-sm);
+}
+.chat-turno--asistente .chat-burbuja {
+    background: var(--color-primario-suave);
+    color: var(--color-texto);
+    border-bottom-left-radius: var(--radio-sm);
+}
+
+/* La tabla de una consulta va DEBAJO del globo y a ancho completo: dentro de una
+   burbuja del 75% seria ilegible. Se pega al turno con el margen de arriba. */
+.chat-resultado { margin-top: 0; }
+
 /* --- Aviso de borrador a medias ------------------------------------------ */
 /* Hereda TODO el color de .alerta--advertencia: aqui solo se resuelve que el
    texto y los dos botones convivan en una linea y se apilen cuando no caben.

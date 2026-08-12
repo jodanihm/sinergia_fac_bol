@@ -5,7 +5,8 @@
  * Recibe: $pregunta, $resultado, $aviso, $usadas, $limite, $recientes, $navActivo.
  *
  *   $resultado  null, o ['descripcion' => string, 'meta' => array, 'filas' => list]
- *   $aviso      null, o ['tipo' => 'info'|'advertencia'|'error', 'texto' => string]
+ *   $hilo       lista de turnos: ['rol'=>'usuario'|'asistente', 'texto'=>string,
+ *               'tipo'=>string, 'resultado'=>?array]. Solo el ultimo trae tabla.
  *   $conversacionId  identificador de ESTA pestaña (hidden); ver handleChatGet()
  *   $pendiente  null, o ['id'=>string, 'listo'=>bool, 'documentos'=>int]
  *   $flash      null, o ['tipo'=>string, 'mensaje'=>string]
@@ -118,6 +119,12 @@ $sugerencias = [
 <div class="chat-layout">
     <div class="chat-principal">
 
+        <?php
+        /* LA BIENVENIDA SOLO CUANDO NO HAY CONVERSACION. Encima de diez turnos ya
+           dice lo que el usuario averiguo hace rato, y empuja el hilo fuera de la
+           pantalla justo cuando mas importa verlo. */
+        ?>
+        <?php if ($hilo === []): ?>
         <section class="tarjeta chat-bienvenida">
             <?= iconoSvg('robot', 34, 'chat-bienvenida__avatar'); ?>
             <div>
@@ -128,6 +135,7 @@ $sugerencias = [
                 </p>
             </div>
         </section>
+        <?php endif; ?>
 
         <section class="tarjeta">
             <form method="post" action="/chat" class="form-compacto" id="form-chat">
@@ -185,23 +193,34 @@ $sugerencias = [
             </p>
         </section>
 
-<?php if ($aviso !== null): ?>
-    <?php
-    $clase = match ($aviso['tipo']) {
-        'error'       => 'alerta--error',
-        'advertencia' => 'alerta--advertencia',
-        default       => 'alerta--info',
-    };
-    ?>
-    <div class="alerta <?= $clase; ?>" role="status">
-        <?= htmlspecialchars((string) $aviso['texto']); ?>
+<?php
+/* ===================================================================
+   EL HILO. Turnos diferenciados, no una respuesta flotando abajo.
+   ===================================================================
+   EL DEFECTO QUE ARREGLA, REPORTADO POR DANIEL: con una sola pregunta y una sola
+   respuesta la falta de estructura pasaba desapercibida; con una conversacion de
+   varios turnos, encontrar la continuacion se volvio adivinanza -- y le costo
+   hasta a quien la diseño.
+
+   LAS TABLAS NO VAN DENTRO DEL GLOBO. Una consulta puede devolver 100 filas, y
+   eso metido en una burbuja de 75% de ancho es peor que lo de antes. La burbuja
+   lleva la frase; la tabla se dibuja debajo, a ancho completo, atada a su turno.
+
+   SOLO EL ULTIMO TURNO CONSERVA SU TABLA (ver chatHiloAgregar): los anteriores
+   guardan su frase, que es lo que se relee al desplazarse hacia arriba. */
+?>
+<?php foreach ($hilo as $i => $turno): ?>
+    <?php $esUltimo = $i === count($hilo) - 1; ?>
+    <div class="chat-turno chat-turno--<?= $turno['rol'] === 'usuario' ? 'usuario' : 'asistente'; ?>"
+         <?= $esUltimo ? 'id="ultimo"' : ''; ?>>
+        <div class="chat-burbuja">
+            <?= nl2br(htmlspecialchars((string) $turno['texto'])); ?>
+        </div>
     </div>
-<?php endif; ?>
 
-<?php if ($resultado !== null): ?>
-    <section class="tarjeta">
-        <h2>Respuesta</h2>
-
+    <?php $resultado = $turno['resultado'] ?? null; ?>
+    <?php if (is_array($resultado)): ?>
+    <section class="tarjeta chat-resultado">
         <?php
         /* QUE ENTENDI, EN PALABRAS. Va ARRIBA de los numeros y no debajo: es lo
            que le permite al usuario darse cuenta de que la pregunta se
@@ -362,7 +381,8 @@ $sugerencias = [
             &mdash; el mismo criterio del panel.
         </p>
     </section>
-<?php endif; ?>
+    <?php endif; ?>
+<?php endforeach; ?>
 
     </div><?php /* /chat-principal */ ?>
 
@@ -469,6 +489,16 @@ $sugerencias = [
         actualizar();
         campo.focus();
     });
+
+    // SCROLL AL TURNO NUEVO. El ancla #ultimo de la URL ya lo hace sin
+    // JavaScript -- por eso el redirect la lleva --, pero el navegador la aplica
+    // ANTES de que terminen de cargar las tablas, y con una respuesta larga el
+    // turno queda fuera de pantalla otra vez. Esto lo reposiciona una vez que la
+    // pagina ya midio de verdad.
+    var ultimo = document.getElementById('ultimo');
+    if (ultimo) {
+        ultimo.scrollIntoView({ block: 'center' });
+    }
 })();
 </script>
 
