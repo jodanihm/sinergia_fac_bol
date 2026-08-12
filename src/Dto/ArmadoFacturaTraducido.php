@@ -1,0 +1,122 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Plantiflex\FacturacionCl\Dto;
+
+/**
+ * Lo que el modelo entendio de un pedido de armar factura.
+ *
+ * ES EL HERMANO DE PreguntaTraducida, NO SU REEMPLAZO. Aquel traduce una pregunta
+ * a las cinco perillas de una consulta; este traduce un pedido a un borrador. Se
+ * mantienen separados porque el otro camino ya corre en produccion y su
+ * interprete es lista cerrada: agregarle desenlaces lo haria explotar.
+ *
+ * =============================================================================
+ * CUATRO DESENLACES, Y CADA UNO EXISTE POR UN CASO QUE PASA
+ * =============================================================================
+ *
+ *   faltanDatos   Entendio el pedido pero le falta algo para armarlo: el RUT del
+ *                 cliente, el precio, la forma de pago. Lleva LA PREGUNTA que hay
+ *                 que hacerle al usuario, y el borrador PARCIAL de lo que ya se
+ *                 sabe. Es el desenlace mas frecuente: armar una factura
+ *                 conversando es, casi siempre, varias vueltas de esto.
+ *
+ *   borradorListo Tiene todo. Lleva el borrador completo -- cliente, documentos y
+ *                 sus lineas -- para que el panel lo materialice. NO ESTA
+ *                 VALIDADO: ver mas abajo.
+ *
+ *   cambioDeTema  Lo que escribio el usuario NO es continuacion de la
+ *                 conversacion en curso. Es el caso de "¿cuanto facture en
+ *                 julio?" en mitad de un armado. Existe para que la decision la
+ *                 tome el modelo -- que ya esta leyendo la frase -- y no una
+ *                 heuristica en PHP compitiendo con el.
+ *
+ *   noEntendida   No se entendio, o no es un pedido de factura ni una pregunta.
+ *                 Lleva motivo, que se le muestra al usuario tal cual.
+ *
+ * NO HAY UN DESENLACE "IMPOSIBLE". En el traductor de consultas existe porque hay
+ * preguntas que los datos no pueden responder ("que producto vendi mas"). Aqui no
+ * hay equivalente: si falta un dato, se pide; si el pedido no se entiende, es
+ * noEntendida. Inventarlo dejaria un cajon donde el modelo tiraria lo que no
+ * quiso resolver.
+ *
+ * =============================================================================
+ * EL BORRADOR VIENE SIN VALIDAR, A PROPOSITO
+ * =============================================================================
+ *
+ * Mismo criterio que PreguntaTraducida con las perillas: lo que el modelo dijo se
+ * devuelve tal cual. Validar es del panel -- el RUT con Rut::valido(), el cliente
+ * con validarCliente(), los largos contra las columnas --, y si esta capa
+ * validara tambien habria dos validadores capaces de desincronizarse. Un cliente
+ * alucinado tiene que dar el MISMO rechazo que un POST malformado.
+ *
+ * Y EL PANEL NO PUEDE CONFIAR EN NINGUNA CIFRA DE AQUI sin haberla pasado por su
+ * propia validacion: esto es texto que escribio un modelo, no una entrada de
+ * formulario.
+ */
+final class ArmadoFacturaTraducido
+{
+    public const FALTAN_DATOS   = 'faltan_datos';
+    public const BORRADOR_LISTO = 'borrador_listo';
+    public const CAMBIO_DE_TEMA = 'cambio_de_tema';
+    public const NO_ENTENDIDA   = 'no_entendida';
+
+    /**
+     * @param array<string,mixed> $borrador Lo que el modelo entendio, SIN VALIDAR.
+     *        Completo en BORRADOR_LISTO, parcial en FALTAN_DATOS, vacio en los
+     *        otros dos.
+     * @param string|null $pregunta Lo que hay que preguntarle al usuario. Solo en
+     *        FALTAN_DATOS.
+     * @param string|null $motivo Explicacion para el usuario. Solo en
+     *        NO_ENTENDIDA.
+     */
+    private function __construct(
+        public readonly string $desenlace,
+        public readonly array $borrador,
+        public readonly ?string $pregunta,
+        public readonly ?string $motivo,
+    ) {
+    }
+
+    /** @param array<string,mixed> $borradorParcial */
+    public static function faltanDatos(string $pregunta, array $borradorParcial = []): self
+    {
+        return new self(self::FALTAN_DATOS, $borradorParcial, $pregunta, null);
+    }
+
+    /** @param array<string,mixed> $borrador */
+    public static function borradorListo(array $borrador): self
+    {
+        return new self(self::BORRADOR_LISTO, $borrador, null, null);
+    }
+
+    /**
+     * El mensaje no continua la conversacion en curso.
+     *
+     * NO LLEVA EL TEXTO A REINTERPRETAR: el panel ya lo tiene -- es lo que acaba
+     * de recibir por POST -- y hacerlo viajar de vuelta daria dos copias de la
+     * misma frase, con la del modelo posiblemente reescrita.
+     */
+    public static function cambioDeTema(): self
+    {
+        return new self(self::CAMBIO_DE_TEMA, [], null, null);
+    }
+
+    public static function noEntendida(string $motivo): self
+    {
+        return new self(self::NO_ENTENDIDA, [], null, $motivo);
+    }
+
+    /** ¿Hay algo que materializar? */
+    public function hayQueArmar(): bool
+    {
+        return $this->desenlace === self::BORRADOR_LISTO;
+    }
+
+    /** ¿La conversacion sigue abierta esperando al usuario? */
+    public function sigueAbierta(): bool
+    {
+        return $this->desenlace === self::FALTAN_DATOS;
+    }
+}

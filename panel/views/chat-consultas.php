@@ -6,6 +6,7 @@
  *
  *   $resultado  null, o ['descripcion' => string, 'meta' => array, 'filas' => list]
  *   $aviso      null, o ['tipo' => 'info'|'advertencia'|'error', 'texto' => string]
+ *   $conversacionId  identificador de ESTA pestaña (hidden); ver handleChatGet()
  *   $recientes  list de ['pregunta', 'desenlace', 'created_at'] DE ESTA CUENTA
  *
  * LOS CUATRO DESENLACES SE VEN DISTINTO A PROPOSITO:
@@ -77,6 +78,16 @@ $sugerencias = [
         <section class="tarjeta">
             <form method="post" action="/chat" class="form-compacto" id="form-chat">
                 <?= csrfInput(); ?>
+                <?php
+                /* EL IDENTIFICADOR DE ESTA PESTAÑA, no de la sesion.
+                   Dos pestañas comparten cookie y sesion PHP, asi que sin esto no
+                   habria forma de que una conversacion a medias en una no se
+                   mezclara con la de la otra. Se genera en el GET y vuelve igual
+                   en cada envio -- exactamente el patron del idem_key del
+                   formulario de emision. */
+                ?>
+                <input type="hidden" name="conversacion_id"
+                       value="<?= htmlspecialchars((string) ($conversacionId ?? '')); ?>">
                 <div class="form-campo">
                     <label for="pregunta">Tu pregunta</label>
                     <input type="text" name="pregunta" id="pregunta" class="chat-pregunta"

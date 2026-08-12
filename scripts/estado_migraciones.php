@@ -160,6 +160,43 @@ function huellaNulabilidad(PDO $pdo, string $tabla, string $columna, string $esp
     return ($valor !== false && strtoupper((string) $valor) === $esperado) ? 1 : 0;
 }
 
+/**
+ * Cuantos de $valores estan declarados en el ENUM de $tabla.$columna.
+ *
+ * ES EL MISMO PROBLEMA QUE RESOLVIO huellaNulabilidad() PARA EL PAR 022/023, y
+ * por eso hace falta un tipo de huella propio: la 039 no crea la columna
+ * chat_consulta.desenlace -- esa existe desde la 035 --, le AGREGA valores. Una
+ * huella que solo preguntara "existe la columna" daria la 039 por aplicada en
+ * cuanto hubiera corrido la 035.
+ *
+ * Devuelve CUANTOS encontro y no un si/no, para que la entrada declare cuantos
+ * espera y un ENUM ampliado a medias salga PARCIAL en vez de NO_APLICADA.
+ *
+ * Se busca el valor ENTRE COMILLAS ('armando' y no armando): COLUMN_TYPE llega
+ * como enum('a','b','c') y un valor suelto podria ser subcadena de otro.
+ */
+function huellaValoresEnum(PDO $pdo, string $tabla, string $columna, array $valores): int
+{
+    $stmt = $pdo->prepare(
+        'SELECT column_type FROM information_schema.columns '
+        . 'WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1'
+    );
+    $stmt->execute([$tabla, $columna]);
+    $tipo = $stmt->fetchColumn();
+    if ($tipo === false) {
+        return 0;   // no existe ni la columna
+    }
+
+    $presentes = 0;
+    foreach ($valores as $valor) {
+        if (str_contains((string) $tipo, "'" . $valor . "'")) {
+            $presentes++;
+        }
+    }
+
+    return $presentes;
+}
+
 /** 1 si existe el indice $indice en $tabla; 0 si no. */
 function huellaIndice(PDO $pdo, string $tabla, string $indice): int
 {
@@ -480,6 +517,37 @@ const MIGRACIONES = [
              'columnas' => ['message_id'], 'esperado' => 1],
         ],
     ],
+    [
+        // NO se comprueba "existe chat_consulta.desenlace": esa columna es de la
+        // 035 y daria esta migracion por aplicada sin que nadie corriera el ALTER.
+        // Lo que la 039 hace es AMPLIAR su ENUM, asi que la huella mira los
+        // valores -- mismo criterio que la nulabilidad separa la 022 de la 023
+        // sobre una sola columna.
+        //
+        // Si faltaran, el sintoma no seria un error visible: en modo no estricto
+        // MySQL guardaria la cadena vacia y el historial del chat empezaria a
+        // mentir en silencio sobre como termino cada turno.
+        'id' => '039', 'archivo' => '039_chat_consulta_desenlace_armado.sql', 'nota' => 'ALTER (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'valores_enum', 'desc' => "chat_consulta.desenlace 'armando'/'borrador'",
+             'tabla' => 'chat_consulta', 'columna' => 'desenlace',
+             'valores' => ['armando', 'borrador'], 'esperado' => 2],
+        ],
+    ],
+    [
+        // DOS huellas, y la segunda no sobra. La columna tiene que ser NOT NULL:
+        // MySqlChatUsoRepository::limiteDiario() castea lo que lee con (int), y un
+        // NULL se convertiria en 0 -- que es un tope valido y significa "chat
+        // apagado para esta cuenta". O sea que una columna nulable no daria un
+        // error: apagaria el chat en silencio para quien tuviera NULL.
+        'id' => '040', 'archivo' => '040_cuenta_chat_limite_diario.sql', 'nota' => 'ALTER (1 tabla)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'cuenta.chat_limite_diario', 'tabla' => 'cuenta',
+             'columnas' => ['chat_limite_diario'], 'esperado' => 1],
+            ['tipo' => 'nulabilidad', 'desc' => 'cuenta.chat_limite_diario NOT NULL', 'tabla' => 'cuenta',
+             'columna' => 'chat_limite_diario', 'esperado_nulabilidad' => 'NO'],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
@@ -498,6 +566,8 @@ function evaluarHuella(PDO $pdo, array $h): array
             return ['presente' => huellaClavePrimaria($pdo, $h['tabla'], $h['columnas']), 'esperado' => 1];
         case 'nulabilidad':
             return ['presente' => huellaNulabilidad($pdo, $h['tabla'], $h['columna'], $h['esperado_nulabilidad']), 'esperado' => 1];
+        case 'valores_enum':
+            return ['presente' => huellaValoresEnum($pdo, $h['tabla'], $h['columna'], $h['valores']), 'esperado' => $h['esperado']];
     }
 
     throw new RuntimeException("tipo de huella desconocido: {$h['tipo']}");

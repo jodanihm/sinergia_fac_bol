@@ -27,8 +27,22 @@ use PDO;
  *   toca; un script si.
  *
  * SE PODRA SUBIR CUANDO haya un mes de uso medido: hoy no hay ni un dato de
- * cuantas preguntas hace una cuenta de verdad, asi que 30 es una apuesta
- * conservadora y no una medicion. Cambiar la constante es todo lo que hace falta.
+ * cuantas preguntas hace una cuenta de verdad, asi que el numero es una apuesta
+ * conservadora y no una medicion.
+ *
+ * =============================================================================
+ * EL TOPE YA NO ES UNA CONSTANTE: ES UN DATO DE LA CUENTA (migracion 040)
+ * =============================================================================
+ *
+ * Vive en cuenta.chat_limite_diario, con DEFAULT 60. La constante que queda aqui
+ * es SOLO el valor de respaldo para cuando la fila no se puede leer -- ver
+ * limiteDiario(). El numero subio de 30 a 60 porque el armado de facturas
+ * conversado gasta varias llamadas por factura, no una: con 30, tres facturas
+ * dejaban a la cuenta sin poder consultar el resto del dia.
+ *
+ * QUIEN PREGUNTA POR EL TOPE TIENE QUE PASAR POR limiteDiario($cuentaId). Leer la
+ * constante directo volveria a poner el mismo numero para todas las cuentas, que
+ * es justo lo que la migracion 040 vino a deshacer.
  *
  * =============================================================================
  * QUE SE CUENTA, Y CUANDO
@@ -47,11 +61,44 @@ use PDO;
  */
 final class MySqlChatUsoRepository
 {
-    /** Ver el docblock: apuesta conservadora, no medicion. */
-    public const LIMITE_DIARIO = 30;
+    /**
+     * Valor de RESPALDO, no el tope.
+     *
+     * El tope de verdad es cuenta.chat_limite_diario. Esta constante se usa en un
+     * solo caso: que la fila de la cuenta no se pueda leer. Es el mismo numero que
+     * el DEFAULT de la migracion 040, y los dos tienen que moverse juntos.
+     */
+    public const LIMITE_DIARIO_POR_DEFECTO = 60;
 
     public function __construct(private readonly PDO $pdo)
     {
+    }
+
+    /**
+     * El tope de ESTA cuenta.
+     *
+     * SE LEE EN CADA LLAMADA Y NO SE CACHEA. Es una consulta por clave primaria
+     * sobre una tabla chica, y en una request del chat ocurre una o dos veces; a
+     * cambio, subirle el tope a una cuenta tiene efecto de inmediato y no
+     * despues de reiniciar nada.
+     *
+     * SI LA FILA NO ESTA, DEVUELVE EL RESPALDO Y NO CERO. Un cuenta_id que no
+     * existe solo puede venir de una sesion corrupta o de un arnes mal sembrado;
+     * responder 0 apagaria el chat en silencio y el sintoma seria "no me deja
+     * preguntar" sin ninguna pista. El respaldo deja el sistema utilizable y el
+     * problema visible en su propio sitio.
+     *
+     * EL CERO SI ES UN TOPE VALIDO cuando esta escrito en la columna: significa
+     * "esta cuenta no usa el chat". quedaCupo() lo respeta sin ningun caso
+     * especial, porque las consultas usadas nunca son menores que cero.
+     */
+    public function limiteDiario(int $cuentaId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT chat_limite_diario FROM cuenta WHERE id = ?');
+        $stmt->execute([$cuentaId]);
+        $limite = $stmt->fetchColumn();
+
+        return $limite === false ? self::LIMITE_DIARIO_POR_DEFECTO : (int) $limite;
     }
 
     /** Consultas ya hechas hoy por esta cuenta. */
@@ -68,7 +115,7 @@ final class MySqlChatUsoRepository
 
     public function quedaCupo(int $cuentaId, string $hoy): bool
     {
-        return $this->consultasDeHoy($cuentaId, $hoy) < self::LIMITE_DIARIO;
+        return $this->consultasDeHoy($cuentaId, $hoy) < $this->limiteDiario($cuentaId);
     }
 
     /**
@@ -99,7 +146,14 @@ final class MySqlChatUsoRepository
      * usuario, preguntar y que el sistema no este configurado sigue siendo algo
      * que hizo.
      *
-     * $desenlace: respondida | imposible | no_entendida | error.
+     * $desenlace: respondida | imposible | no_entendida | error | armando |
+     * borrador. Los dos ultimos son del armado de facturas (migracion 039):
+     * 'armando' es un turno que pidio un dato que faltaba -- la conversacion
+     * sigue --, y 'borrador' es el turno que la cerro dejando algo hecho.
+     *
+     * LA LISTA ES CERRADA EN LA BASE, no aqui: la columna es un ENUM y un valor
+     * fuera de lista falla en modo estricto. No se valida en PHP a proposito, para
+     * no tener dos listas que puedan desincronizarse.
      */
     public function registrarPregunta(int $cuentaId, ?int $usuarioId, string $pregunta, string $desenlace): void
     {

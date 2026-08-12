@@ -1648,6 +1648,183 @@ function describirConsulta(array $meta): string
     );
 }
 
+// ---------------------------------------------------------------------------
+//  ESTADO CONVERSACIONAL DEL CHAT (base del armado de facturas)
+//
+//  EL PROBLEMA: el chat es un POST plano que re-renderiza la pagina. No hay nada
+//  que ate el mensaje 3 con los mensajes 1 y 2. La sesion PHP distingue al
+//  usuario y hasta a dos personas de la misma cuenta -- son sesiones distintas --
+//  pero NO distingue dos pestañas del mismo navegador: comparten cookie. Ese
+//  hueco es el que cierra el conversacionId.
+//
+//  EL PATRON NO ES NUEVO: es el mismo del idem_key del formulario de emision. Se
+//  genera UNA vez en el GET con bin2hex(random_bytes(16)), viaja en un hidden y
+//  vuelve igual en cada POST. Dos pestañas son dos GET, o sea dos identificadores
+//  y dos conversaciones que no se tocan.
+//
+//  POR QUE EL ESTADO VIVE EN LA SESION Y NO EN LA BASE: mientras se conversa no
+//  hay nada que valga la pena persistir. Una cotizacion "en construccion"
+//  quemaria un correlativo por cada conversacion abandonada (asignarNumero() lo
+//  reserva de verdad), ademas de que crear() ni siquiera admite una cotizacion sin
+//  lineas. Aqui no queda nada colgado: si la conversacion se abandona, el
+//  recolector de sesiones se la lleva y la base nunca supo que existio.
+//
+//  LO QUE ESTA CAPA NO HACE TODAVIA: nadie escribe estado. handleChatPost() sigue
+//  siendo exactamente el camino de consultas de siempre. Esto es el cableado.
+// ---------------------------------------------------------------------------
+
+/** Clave unica del estado conversacional dentro de $_SESSION. */
+const CHAT_ARMADO_SESION = 'chat_armado';
+
+/**
+ * Cuantas conversaciones se conservan por sesion.
+ *
+ * $_SESSION se serializa entero en cada request, asi que esto no puede crecer
+ * sin tope. Tres pestañas de chat a la vez ya es un caso raro; mas que eso es un
+ * accidente o un script.
+ */
+const CHAT_ARMADO_MAX_CONVERSACIONES = 3;
+
+/** Un identificador de conversacion nuevo. Mismo generador que el idem_key. */
+function chatConversacionNueva(): string
+{
+    return bin2hex(random_bytes(16));
+}
+
+/**
+ * Resuelve el conversacionId que llego por POST, con los tres bordes cubiertos.
+ *
+ *   SIN ID (o con uno que no tiene la forma que emitimos): conversacion NUEVA, sin
+ *   aviso. Es lo que pasa con un formulario cacheado o con un POST armado a mano.
+ *   NUNCA se elige "la ultima conversacion abierta" como continuacion: esa
+ *   heuristica es exactamente la que mezclaria dos pestañas.
+ *
+ *   CON ID CONOCIDO: continua. El estado puede estar vacio y eso es normal -- una
+ *   conversacion que todavia no armo nada.
+ *
+ *   CON ID BIEN FORMADO PERO DESCONOCIDO: la sesion expiro o se reinicio el
+ *   servidor. Se empieza de cero Y SE AVISA, porque el usuario cree que el sistema
+ *   se acuerda de lo que venia diciendo. Adivinar aqui seria lo peor de todo.
+ *
+ * Registra siempre la conversacion resultante: sin ese registro no habria forma de
+ * distinguir "expiro" de "nunca existio", y todo POST de una consulta normal
+ * dispararia el aviso.
+ *
+ * @return array{id:string, aviso:?string}
+ */
+function chatConversacionResolver(mixed $idCrudo): array
+{
+    $id = is_string($idCrudo) ? trim($idCrudo) : '';
+
+    // La forma exacta que emite chatConversacionNueva(): 32 hex. Comprobarla
+    // evita que una cadena cualquiera ocupe una de las tres ranuras.
+    $bienFormado = $id !== '' && preg_match('/^[0-9a-f]{32}$/', $id) === 1;
+
+    if (! $bienFormado) {
+        return ['id' => chatConversacionRegistrar(chatConversacionNueva()), 'aviso' => null];
+    }
+    if (isset($_SESSION[CHAT_ARMADO_SESION][$id])) {
+        return ['id' => $id, 'aviso' => null];
+    }
+
+    return [
+        'id'    => chatConversacionRegistrar(chatConversacionNueva()),
+        'aviso' => 'Esta conversacion ya no esta disponible (pasa cuando queda mucho rato sin '
+            . 'actividad). Empezamos de nuevo: no se creo ni se emitio nada.',
+    ];
+}
+
+/**
+ * Deja la conversacion en la sesion y aplica el tope, descartando las mas viejas.
+ *
+ * SE REGISTRA AUNQUE NO HAYA ESTADO. Una entrada vacia es lo que despues permite
+ * responder "esta conversacion existe" sin haber armado nada todavia.
+ */
+function chatConversacionRegistrar(string $id): string
+{
+    if (! isset($_SESSION[CHAT_ARMADO_SESION]) || ! is_array($_SESSION[CHAT_ARMADO_SESION])) {
+        $_SESSION[CHAT_ARMADO_SESION] = [];
+    }
+    if (! isset($_SESSION[CHAT_ARMADO_SESION][$id])) {
+        $_SESSION[CHAT_ARMADO_SESION][$id] = ['creada' => time(), 'estado' => []];
+    }
+
+    // EL TOPE DESCARTA PRIMERO LAS CONVERSACIONES VACIAS, y solo despues las
+    // viejas con estado. Una entrada vacia es una pestaña que se abrio y nunca
+    // armo nada -- tirarla no pierde nada --, mientras que tirar una con estado le
+    // borra al usuario lo que venia diciendo. Sin esta preferencia, abrir cuatro
+    // pestañas para consultar mataria la conversacion que si estaba a medias.
+    //
+    // Dentro de cada grupo manda el ORDEN DE INSERCION, que en PHP es el orden del
+    // propio arreglo: la primera clave es la mas vieja. Ordenar por 'creada' seria
+    // peor -- dos conversaciones del mismo segundo quedarian en orden arbitrario.
+    while (count($_SESSION[CHAT_ARMADO_SESION]) > CHAT_ARMADO_MAX_CONVERSACIONES) {
+        $victima = null;
+        foreach ($_SESSION[CHAT_ARMADO_SESION] as $clave => $entrada) {
+            if (($entrada['estado'] ?? []) === [] && $clave !== $id) {
+                $victima = $clave;
+                break;
+            }
+        }
+        // Si TODAS tienen estado (o la unica vacia es la recien registrada), cae
+        // la mas antigua. Se recorre en vez de usar array_shift() porque hay que
+        // poder SALTARSE $id: una conversacion no puede ser la victima de su
+        // propio registro.
+        //
+        // El !== estricto es seguro aqui: un id de 32 hex nunca lo convierte PHP
+        // en clave entera -- si trae letras no es numerico, y si son 32 digitos se
+        // pasa de PHP_INT_MAX --, asi que las claves siempre son cadenas.
+        if ($victima === null) {
+            foreach (array_keys($_SESSION[CHAT_ARMADO_SESION]) as $clave) {
+                if ($clave !== $id) {
+                    $victima = $clave;
+                    break;
+                }
+            }
+        }
+        if ($victima === null) {
+            break; // solo queda $id: no hay nada mas que descartar
+        }
+        unset($_SESSION[CHAT_ARMADO_SESION][$victima]);
+    }
+
+    return $id;
+}
+
+/**
+ * El estado de una conversacion, o null si no existe.
+ *
+ * @return array<string,mixed>|null
+ */
+function chatArmadoEstado(string $id): ?array
+{
+    $entrada = $_SESSION[CHAT_ARMADO_SESION][$id] ?? null;
+
+    return is_array($entrada) && is_array($entrada['estado'] ?? null) ? $entrada['estado'] : null;
+}
+
+/**
+ * Guarda el estado de una conversacion.
+ *
+ * NO SE GUARDA NADA QUE VAYA AL MODELO SIN MIRAR. Lo que el panel resuelve del
+ * maestro se guarda aqui, si, pero en su propia clave: al traductor solo se le
+ * pasan las frases del usuario y el borrador que el mismo escribio. Ver la nota
+ * de privacidad de TraductorArmadoFacturaInterface.
+ *
+ * @param array<string,mixed> $estado
+ */
+function chatArmadoGuardar(string $id, array $estado): void
+{
+    chatConversacionRegistrar($id);
+    $_SESSION[CHAT_ARMADO_SESION][$id]['estado'] = $estado;
+}
+
+/** Cierra una conversacion: se confirmo, se descarto, o ya no hace falta. */
+function chatArmadoOlvidar(string $id): void
+{
+    unset($_SESSION[CHAT_ARMADO_SESION][$id]);
+}
+
 function handleChatGet(): void
 {
     $cuentaId = Auth::cuentaId();
@@ -1659,10 +1836,15 @@ function handleChatGet(): void
         'resultado' => null,
         'aviso'     => null,
         'usadas'    => $uso->consultasDeHoy($cuentaId, $hoy),
-        'limite'    => MySqlChatUsoRepository::LIMITE_DIARIO,
+        // EL TOPE ES DE LA CUENTA (migracion 040), no una constante: se lee por
+        // cuenta para que subirselo a una sea un UPDATE y no un despliegue.
+        'limite'    => $uso->limiteDiario($cuentaId),
         // DATOS REALES DE ESTA CUENTA, no ejemplos: el WHERE de recientes()
         // lleva cuenta_id, igual que todo repositorio del anfitrion.
         'recientes' => $uso->recientes($cuentaId),
+        // EL IDENTIFICADOR DE ESTA PESTAÑA. Se genera aqui, una sola vez, igual
+        // que el idem_key de la emision.
+        'conversacionId' => chatConversacionRegistrar(chatConversacionNueva()),
         'navActivo' => 'chat',
     ]);
 }
@@ -1677,15 +1859,28 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
     $hoy      = date('Y-m-d');
     $pregunta = trim((string) ($_POST['pregunta'] ?? ''));
 
+    // EL IDENTIFICADOR DE LA CONVERSACION SOBREVIVE AL POST. Sin esto el hidden se
+    // regeneraria en cada re-render y no habria dos turnos que pudieran atarse:
+    // el mecanismo estaria roto desde el primer dia aunque nadie lo notara hasta
+    // la capa que arma facturas.
+    //
+    // EL AVISO DE "conversacion perdida" NO SE PINTA EN ESTA CAPA, y es
+    // deliberado: todavia nadie guarda estado, asi que no hay nada que se haya
+    // podido perder, y mostrarlo cambiaria lo que ve hoy quien solo consulta. Lo
+    // consume la capa que arma.
+    $conversacion   = chatConversacionResolver($_POST['conversacion_id'] ?? null);
+    $conversacionId = $conversacion['id'];
+
     $uso    = chatUsoRepo();
     $usadas = $uso->consultasDeHoy($cuentaId, $hoy);
+    $limite = $uso->limiteDiario($cuentaId);
 
     // $pintar GUARDA LA PREGUNTA Y DESPUES PINTA, en un solo sitio: asi ningun
     // camino de salida puede olvidarse de registrarla. $desenlace null significa
     // "no llegue a preguntar nada" -- pregunta vacia, sin cupo, sin emisor -- y
     // en esos casos no hay nada que guardar.
     $pintar = static function (?array $resultado, ?array $aviso, ?string $desenlace = null)
-        use ($pregunta, $cuentaId, $hoy, $uso): never {
+        use ($pregunta, $cuentaId, $hoy, $uso, $limite, $conversacionId): never {
         if ($desenlace !== null) {
             $uso->registrarPregunta($cuentaId, Auth::usuarioId(), $pregunta, $desenlace);
         }
@@ -1694,8 +1889,9 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
             'resultado' => $resultado,
             'aviso'     => $aviso,
             'usadas'    => $uso->consultasDeHoy($cuentaId, $hoy),
-            'limite'    => MySqlChatUsoRepository::LIMITE_DIARIO,
+            'limite'    => $limite,
             'recientes' => $uso->recientes($cuentaId),
+            'conversacionId' => $conversacionId,
             'navActivo' => 'chat',
         ]);
     };
@@ -1706,11 +1902,11 @@ function handleChatPost(?TraductorPreguntaInterface $traductor = null): void
 
     // EL TOPE SE MIRA ANTES DE LLAMAR, que es el punto entero: la pregunta N+1
     // no tiene que llegar al proveedor. Ver el docblock de MySqlChatUsoRepository.
-    if ($usadas >= MySqlChatUsoRepository::LIMITE_DIARIO) {
+    if ($usadas >= $limite) {
         $pintar(null, ['tipo' => 'advertencia', 'texto' => sprintf(
             'Llegaste al limite de %d consultas por dia. El contador se reinicia mañana. '
             . 'Mientras tanto, los informes del menu responden lo mismo sin limite.',
-            MySqlChatUsoRepository::LIMITE_DIARIO
+            $limite
         )]);
     }
 

@@ -774,8 +774,13 @@ titulo('VERIFICACION 5 - pasado el tope, no se llama al proveedor');
 
 $uso = new MySqlChatUsoRepository($pdo);
 $hoy = date('Y-m-d');
-$limite = MySqlChatUsoRepository::LIMITE_DIARIO;
-printf("  limite diario: %d\n", $limite);
+// EL TOPE SE LE PREGUNTA AL REPOSITORIO, no a una constante: desde la migracion
+// 040 vive en cuenta.chat_limite_diario y puede ser distinto por cuenta. Leer la
+// constante aqui haria que este arnes probara un numero que la cuenta sembrada
+// quiza no tiene, y el bucle de abajo dejaria de agotar el cupo de verdad.
+$limite = $uso->limiteDiario($cuentaA);
+printf("  limite diario de la cuenta A: %d (respaldo del codigo: %d)\n",
+    $limite, MySqlChatUsoRepository::LIMITE_DIARIO_POR_DEFECTO);
 
 for ($i = 0; $i < $limite; $i++) {
     $uso->registrarConsulta($cuentaA, $hoy);
