@@ -995,6 +995,73 @@ if (str_contains($cuerpoSegundoTurno, 'cambio_de_tema')) {
     mal('con borrador en curso el prompt tampoco lo ofrece: el modelo no puede elegirlo.');
 }
 
+// --- LA RED DE SEGURIDAD DE LA HEURISTICA (13-08-2026) ---------------------
+//
+// Daniel escribio "puedes mostrarme los ultimos clientes facturados," -- una
+// consulta -- y recibio "solo puedo ayudarte a preparar borradores de facturas".
+//
+// DOS CAUSAS ENCADENADAS: la heuristica la mando a armado (mira la PRIMERA
+// palabra, y ahi dice "puedes"; la frase menciona "facturados"), y una vez alli
+// ya no habia salida -- cambio_de_tema quedo cerrado para el primer turno al
+// arreglar el defecto anterior, y no_entendida termina en pantalla.
+//
+// es_consulta devuelve la salida. Se prueba en el PRIMER turno, sin borrador
+// previo, que es justo donde no existia.
+echo "\n  LA RED DE SEGURIDAD: es_consulta funciona SIN borrador previo\n";
+
+$frasesMalRuteadas = [
+    'puedes mostrarme los ultimos clientes facturados,',   // la de Daniel, literal
+    'me puedes mostrar lo facturado en julio',
+    'necesito ver lo facturado este mes',
+    'dime cuanto facture en julio',
+];
+foreach ($frasesMalRuteadas as $frase) {
+    // Se comprueba primero que la heuristica SIGUE mandandolas a armado: si algun
+    // dia se arregla el problema (a), esta prueba tiene que decirlo en vez de
+    // pasar por un motivo distinto del que dice probar.
+    $vaArmado = chatPareceArmado($frase);
+
+    $h = [];
+    $t = traductorArmadoFalso([sobreArmado('{"desenlace":"es_consulta"}')], 'clave-falsa', $h);
+    $res = $t->traducir([$frase], [], vocabularioArmado(), '2026-08-13');
+
+    printf("      %-52s heuristica=%s  desenlace=%s\n",
+        mb_substr($frase, 0, 50), $vaArmado ? 'armado' : 'consulta', $res->desenlace);
+
+    if ($res->desenlace === ArmadoFacturaTraducido::ES_CONSULTA && $res->vaAConsultas()) {
+        ok('"' . mb_substr($frase, 0, 34) . '..." vuelve al camino de consultas.');
+    } else {
+        mal('"' . mb_substr($frase, 0, 34) . '..." quedo atrapada en armado como "'
+            . $res->desenlace . '": el usuario recibe una respuesta que no pidio.');
+    }
+    if (! $vaArmado) {
+        aviso('esa frase ya NO la rutea la heuristica a armado: el problema (a) se arreglo y '
+            . 'esta prueba dejo de ejercitar la red por el camino que decia.');
+    }
+}
+
+// LA DIFERENCIA CON cambio_de_tema, que es lo que impide reabrir el bug del
+// 12-08: aquel SIGUE prohibido sin borrador previo.
+$h = [];
+$t = traductorArmadoFalso([sobreArmado('{"desenlace":"cambio_de_tema"}')], 'clave-falsa', $h);
+try {
+    $t->traducir(['puedes mostrarme los ultimos clientes facturados,'], [], vocabularioArmado(), '2026-08-13');
+    mal('cambio_de_tema volvio a aceptarse sin borrador previo: se reabrio el defecto del 12-08.');
+} catch (Throwable $e) {
+    ok('y cambio_de_tema SIGUE cerrado en el primer turno: los dos desenlaces no se fundieron.');
+}
+
+// EL PROMPT DEL PRIMER TURNO OFRECE es_consulta Y NO cambio_de_tema.
+$h = [];
+$t = traductorArmadoFalso([sobreArmado('{"desenlace":"es_consulta"}')], 'clave-falsa', $h);
+$t->traducir(['puedes mostrarme los ultimos clientes facturados,'], [], vocabularioArmado(), '2026-08-13');
+$cuerpoPrimero = (string) json_encode(json_decode((string) $h[0]['request']->getBody(), true), JSON_UNESCAPED_UNICODE);
+if (str_contains($cuerpoPrimero, 'es_consulta') && ! str_contains($cuerpoPrimero, 'cambio_de_tema')) {
+    ok('el prompt del primer turno ofrece es_consulta y NO cambio_de_tema: cada uno donde aplica.');
+} else {
+    mal('el prompt del primer turno no distingue los dos desenlaces.');
+}
+
 // Un desenlace inventado NO puede caer en "no entendida": tiene que verse.
 $h = [];
 $t = traductorArmadoFalso([sobreArmado('{"desenlace":"inventado"}')], 'clave-falsa', $h);

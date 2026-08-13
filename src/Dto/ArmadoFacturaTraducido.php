@@ -38,8 +38,22 @@ namespace Plantiflex\FacturacionCl\Dto;
  *                 tragaria cualquier pedido. El traductor ni lo ofrece ni lo
  *                 acepta en ese caso -- ver DeepSeekTraductorArmadoFactura.
  *
- *   noEntendida   No se entendio, o no es un pedido de factura ni una pregunta.
- *                 Lleva motivo, que se le muestra al usuario tal cual.
+ *   esConsulta    El mensaje SE ENTIENDE, pero no pide armar nada: es una
+ *                 pregunta sobre datos que ya existen. Se coló por la heuristica
+ *                 de ruteo, que mira si la frase menciona facturar. El panel lo
+ *                 manda al camino de consultas dentro de la MISMA peticion.
+ *
+ *                 ES LA RED DE SEGURIDAD DE LA HEURISTICA, y existe porque esa
+ *                 red se rompio sin que nadie lo notara. El diseño original
+ *                 aceptaba que la heuristica se equivocara porque el error se
+ *                 recuperaba solo via cambioDeTema. Al cerrar cambioDeTema para
+ *                 el primer turno -- correcto, arreglaba otro defecto -- el
+ *                 rescate desaparecio y un ruteo equivocado paso a ser terminal:
+ *                 "puedes mostrarme los ultimos clientes facturados" recibia
+ *                 "solo puedo ayudarte a preparar borradores de facturas".
+ *
+ *   noEntendida   No se entendio NINGUNA intencion: ni pedido ni pregunta. Lleva
+ *                 motivo, que se le muestra al usuario tal cual.
  *
  * NO HAY UN DESENLACE "IMPOSIBLE". En el traductor de consultas existe porque hay
  * preguntas que los datos no pueden responder ("que producto vendi mas"). Aqui no
@@ -66,6 +80,7 @@ final class ArmadoFacturaTraducido
     public const FALTAN_DATOS   = 'faltan_datos';
     public const BORRADOR_LISTO = 'borrador_listo';
     public const CAMBIO_DE_TEMA = 'cambio_de_tema';
+    public const ES_CONSULTA    = 'es_consulta';
     public const NO_ENTENDIDA   = 'no_entendida';
 
     /**
@@ -109,9 +124,35 @@ final class ArmadoFacturaTraducido
         return new self(self::CAMBIO_DE_TEMA, [], null, null);
     }
 
+    /**
+     * No pide armar nada: es una pregunta. Al camino de consultas.
+     *
+     * NO LLEVA TEXTO, igual que cambioDeTema y por el mismo motivo: el panel ya
+     * tiene la frase -- es la que acaba de recibir -- y hacerla viajar de vuelta
+     * daria dos copias de lo mismo, con la del modelo posiblemente reescrita.
+     */
+    public static function esConsulta(): self
+    {
+        return new self(self::ES_CONSULTA, [], null, null);
+    }
+
     public static function noEntendida(string $motivo): self
     {
         return new self(self::NO_ENTENDIDA, [], null, $motivo);
+    }
+
+    /**
+     * ¿Este turno lo tiene que atender el camino de consultas?
+     *
+     * DOS DESENLACES DISTINTOS CON LA MISMA CONSECUENCIA, y siguen separados a
+     * proposito: cambioDeTema solo existe con un borrador en curso -- y esa
+     * restriccion es la que arreglo el defecto del 12-08 --, mientras que
+     * esConsulta vale siempre. Fundirlos en uno obligaria a levantar esa guarda y
+     * reabriria aquel bug.
+     */
+    public function vaAConsultas(): bool
+    {
+        return $this->desenlace === self::CAMBIO_DE_TEMA || $this->desenlace === self::ES_CONSULTA;
     }
 
     /** ¿Hay algo que materializar? */

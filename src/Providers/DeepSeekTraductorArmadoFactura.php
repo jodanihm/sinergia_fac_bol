@@ -233,6 +233,15 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
         $desenlace = (string) ($dato['desenlace'] ?? '');
         $borrador  = is_array($dato['borrador'] ?? null) ? $dato['borrador'] : [];
 
+        // ES_CONSULTA NO LLEVA GUARDA DE BORRADOR PREVIO, y ahi esta la
+        // diferencia con cambio_de_tema. Aquel afirma "esto no continua lo que se
+        // venia armando", que en el primer turno es cierto SIEMPRE y por eso se
+        // cerro. Este afirma "esto es una pregunta, no un pedido de factura", que
+        // es una lectura del mensaje y no del estado: vale en cualquier turno.
+        if ($desenlace === ArmadoFacturaTraducido::ES_CONSULTA) {
+            return ArmadoFacturaTraducido::esConsulta();
+        }
+
         if ($desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA) {
             if (! $hayBorradorPrevio) {
                 throw TraduccionArmadoException::respuestaIlegible(
@@ -347,7 +356,16 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
                 . '{"desenlace":"cambio_de_tema"}';
         }
 
-        $formas[] = 'Si no entiendes el pedido, o no es sobre facturar:' . "\n"
+        // SIEMPRE DISPONIBLE, con borrador o sin el. Es la salida para los
+        // mensajes que llegan aqui por error: el sistema decide a que camino
+        // mandarlos mirando si la frase menciona facturar, y una PREGUNTA sobre
+        // facturas la menciona igual que un pedido.
+        $formas[] = 'Si el mensaje NO PIDE ARMAR NADA porque es una PREGUNTA sobre datos que ya' . "\n"
+            . '   existen -- "puedes mostrarme los ultimos clientes facturados", "cuanto facture",' . "\n"
+            . '   "dime quien me compro mas", "necesito ver lo facturado en julio" --:' . "\n"
+            . '{"desenlace":"es_consulta"}';
+
+        $formas[] = 'Si no entiendes NINGUNA intencion: ni un pedido de factura ni una pregunta:' . "\n"
             . '{"desenlace":"no_entendida","motivo":"explicacion breve y en español para el usuario"}';
 
         $opciones = '';
@@ -395,6 +413,11 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
               un aviso del sistema dice que ese dato no sirvio, la version nueva reemplaza
               a la vieja. Vale sobre todo para el nombre del cliente: un nombre que no se
               encontro NO se vuelve a mandar igual.
+            - "es_consulta" y "no_entendida" NO son lo mismo. Usa "es_consulta" cuando
+              entiendes perfectamente al usuario y lo que pide es MIRAR datos, no crear un
+              documento. Usa "no_entendida" solo cuando no logras entender que quiere.
+              Un mensaje que pide armar una factura NO es "es_consulta" aunque mencione
+              facturas: fijate en si pide CREAR algo o VER algo.
             - Prefiere preguntar antes que adivinar. Un dato inventado en una factura es
               un problema tributario, no una molestia. NUNCA pongas un item de relleno
               ("Servicio", cantidad 1, precio 0) para poder cerrar el borrador: si no

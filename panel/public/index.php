@@ -2627,11 +2627,25 @@ function chatTurnoDeArmado(
 
     $uso->registrarConsulta($cuentaId, $hoy);
 
-    // CAMBIO DE TEMA: el borrador NO se descarta. El usuario pregunto otra cosa,
-    // no dijo que se arrepentia. Se vuelve para que el turno lo atienda el camino
-    // de consultas, y lo que venia armando sigue donde estaba.
-    if ($r->desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA) {
-        chatDiag('sale-a-consultas', ['rama' => 'el traductor de armado dijo cambio_de_tema']);
+    // AL CAMINO DE CONSULTAS, por cualquiera de los dos desenlaces que significan
+    // "esto no es para mi". El borrador NO se descarta en ninguno de los dos: el
+    // usuario pregunto otra cosa, no dijo que se arrepentia.
+    //
+    // ES_CONSULTA ES LA RED DE SEGURIDAD DE LA HEURISTICA DE RUTEO, y esta aqui
+    // porque esa red se habia roto. El diseño original toleraba que
+    // chatPareceArmado() se equivocara porque el error se recuperaba solo:
+    // cambio_de_tema devolvia el turno al otro camino dentro de la MISMA
+    // peticion. Al cerrar cambio_de_tema para el primer turno -- correcto,
+    // arreglaba el defecto del 12-08 -- ese rescate desaparecio sin que nadie lo
+    // notara, y un ruteo equivocado paso a ser TERMINAL: "puedes mostrarme los
+    // ultimos clientes facturados" recibia "solo puedo ayudarte a preparar
+    // borradores de facturas".
+    //
+    // EL PRECIO ES UNA LLAMADA DE MAS cuando la heuristica falla: se pago la del
+    // armado y ahora se paga la de consultas. Es el mismo trade-off que se acepto
+    // al elegir la heuristica, y sigue siendo mejor que un callejon sin salida.
+    if ($r->vaAConsultas()) {
+        chatDiag('sale-a-consultas', ['rama' => 'el traductor de armado dijo ' . $r->desenlace]);
 
         return;
     }
