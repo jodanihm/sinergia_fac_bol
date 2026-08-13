@@ -1271,6 +1271,115 @@ if ($tMixto['estado'] === 'listo') {
     mal('con el nombre viejo ocupado, la correccion en razonSocial se ignora: ' . json_encode($tMixto));
 }
 
+// --- EL ALTA DE UN CLIENTE NUEVO (15-08-2026) ------------------------------
+//
+// El chat pidio los cuatro datos, Daniel los dio completos, y el chat volvio a
+// pedirlos. Tres veces. La rama de "no esta en el maestro" devolvia 'preguntar'
+// SIN MIRAR EL BORRADOR, y como el cliente no se crea hasta confirmar, el RUT
+// nuevo iba a seguir sin aparecer en todos los turnos. O sea que el alta desde el
+// chat NUNCA pudo terminar.
+echo "\n  EL ALTA DE UN CLIENTE NUEVO: con los cuatro datos, tiene que resolver\n";
+
+// Un RUT valido que NO esta en el maestro de esta cuenta.
+$RUT_NUEVO = '12345678-5';
+$pdo->prepare('DELETE FROM cliente WHERE cuenta_id = ? AND rut_cliente = ?')
+    ->execute([$cuentaId, $RUT_NUEVO]);
+
+// SIN LOS DATOS: pregunta, y ahora nombra SOLO lo que falta.
+$sinDatos = chatResolverCliente($cuentaId, ['rut' => $RUT_NUEVO]);
+printf("      sin datos      -> %s | %s\n", $sinDatos['estado'], mb_substr((string) $sinDatos['texto'], 0, 52));
+if ($sinDatos['estado'] === 'preguntar') {
+    ok('un RUT nuevo sin datos de alta sigue preguntando.');
+} else {
+    mal('un RUT nuevo sin datos deberia preguntar: ' . json_encode($sinDatos));
+}
+if (isset($sinDatos['avisoModelo']) && str_contains((string) $sinDatos['avisoModelo'], 'datos de alta')) {
+    ok('y deja aviso para el modelo: "' . (string) $sinDatos['avisoModelo'] . '"');
+} else {
+    mal('el alta NO deja aviso para el modelo: el bucle de las tres preguntas sigue abierto.');
+}
+
+// PARCIAL: nombra solo lo que falta, no los cuatro de nuevo.
+$parcial = chatResolverCliente($cuentaId, [
+    'rut' => $RUT_NUEVO, 'razonSocial' => 'NUEVA SPA', 'giro' => 'SERVICIOS',
+]);
+printf("      faltan 2 de 4  -> %s\n", mb_substr((string) $parcial['texto'], 0, 62));
+if ($parcial['estado'] === 'preguntar'
+    && str_contains((string) $parcial['texto'], 'direccion')
+    && str_contains((string) $parcial['texto'], 'comuna')
+    && ! str_contains((string) $parcial['texto'], 'giro')) {
+    ok('con dos datos dados, pide SOLO los dos que faltan: no repite los cuatro.');
+} else {
+    mal('vuelve a pedir todo en vez de lo que falta: ' . (string) $parcial['texto']);
+}
+
+// COMPLETO: resuelve. Es el turno que antes nunca llegaba.
+$completoAlta = chatResolverCliente($cuentaId, [
+    'rut' => $RUT_NUEVO, 'razonSocial' => 'NUEVA SPA', 'giro' => 'SERVICIOS',
+    'direccion' => 'CALLE 9', 'comuna' => 'VALDIVIA',
+]);
+printf("      los 4 datos    -> %s  nuevo=%s\n",
+    $completoAlta['estado'], ! empty($completoAlta['nuevo']) ? 'si' : 'no');
+if ($completoAlta['estado'] === 'listo') {
+    ok('con los cuatro datos RESUELVE: el alta puede llegar al resumen y confirmarse.');
+} else {
+    mal('con los cuatro datos sigue preguntando: el alta no puede terminar NUNCA. '
+        . (string) $completoAlta['texto']);
+}
+// LAS DOS MARCAS SE COMPRUEBAN POR SEPARADO, y no juntas en un solo if: tienen
+// consumidores distintos y pesan distinto.
+//
+//   cliente => null  la lee chatArmadoConfirmar() para decidir si CREA el
+//                    cliente. Si se pierde, el alta se rompe en silencio.
+//   nuevo => true    la lee chatResumenBorrador() para escribir "que se da de
+//                    alta". Si se pierde, solo se degrada el texto.
+//
+// Con un unico if, un fallo no decia cual de las dos falto.
+//
+// OJO CON EL ?? PARA COMPROBAR NULL, que es lo que rompio la version anterior:
+//     ($x['cliente'] ?? 'x') === null
+// nunca es cierto, porque ?? se dispara JUSTAMENTE con null y devuelve 'x'. Para
+// distinguir "esta y vale null" de "no esta" hay que usar array_key_exists().
+if (array_key_exists('cliente', $completoAlta) && $completoAlta['cliente'] === null) {
+    ok('viene con cliente=null: chatArmadoConfirmar() lo va a dar de alta en vez de reusar ficha.');
+} else {
+    mal('falta la marca cliente=null. El confirmador decide SOLO por ella: sin esta, el cliente '
+        . 'nuevo no se crea y la cotizacion queda apuntando a nadie. Vino: '
+        . json_encode($completoAlta['cliente'] ?? '(ausente)'));
+}
+if (! empty($completoAlta['nuevo'])) {
+    ok('y con nuevo=true: el resumen puede decir "que se da de alta" en vez de imprimir "?".');
+} else {
+    mal('falta la marca nuevo=true: el alta funciona igual, pero el resumen que el usuario '
+        . 'tiene que confirmar no dice a quien se esta dando de alta.');
+}
+
+// Y SE CREA DE VERDAD AL CONFIRMAR. Es la mitad que cierra el circulo.
+$antesCliAlta = (int) $pdo->query("SELECT COUNT(*) FROM cliente WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+$estadoAlta = [
+    'turnos'   => ['facturale a un cliente nuevo'],
+    'borrador' => [
+        'cliente'    => ['rut' => $RUT_NUEVO, 'razonSocial' => 'NUEVA SPA', 'giro' => 'SERVICIOS',
+                         'direccion' => 'CALLE 9', 'comuna' => 'VALDIVIA'],
+        'formaPago'  => 'CONTADO',
+        'documentos' => [['items' => [['nombre' => 'Servicio', 'cantidad' => 1, 'precioUnitario' => 5000]]]],
+    ],
+    'clientes' => [0 => null],   // null = nuevo, tal como lo deja el turno
+    'listo'    => true,
+];
+try {
+    $rAlta = chatArmadoConfirmar($pdo, $cuentaId, $estadoAlta);
+    $despuesCliAlta = (int) $pdo->query("SELECT COUNT(*) FROM cliente WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+    if ($despuesCliAlta === $antesCliAlta + 1 && $rAlta['clienteCreado']) {
+        ok('al confirmar, el cliente nuevo SE CREA en el maestro y queda su cotizacion.');
+    } else {
+        mal("clientes {$antesCliAlta}->{$despuesCliAlta}, clienteCreado="
+            . var_export($rAlta['clienteCreado'], true));
+    }
+} catch (Throwable $e) {
+    mal('confirmar con un cliente nuevo lanzo: ' . mb_substr($e->getMessage(), 0, 90));
+}
+
 // Un cliente INCOMPLETO no puede armar: la carga masiva ya lo trata como error de
 // fila porque el lote del motor es todo-o-nada.
 $pdo->prepare('INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, giro) VALUES (?, ?, ?, ?)')

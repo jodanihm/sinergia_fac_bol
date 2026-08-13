@@ -2318,18 +2318,65 @@ function chatResolverCliente(int $cuentaId, array $datos): array
         }
 
         if ($r['estado'] === 'no_encontrado') {
-            // NO EXISTE: se piden los cuatro datos del alta. No se crea todavia.
+            // =============================================================
+            // NO EXISTE EN EL MAESTRO: SE DA DE ALTA CON LO QUE TRAIGA EL
+            // BORRADOR, Y SOLO SE PREGUNTA LO QUE DE VERDAD FALTE.
+            // =============================================================
             //
-            // LA PREGUNTA LA HACE ESTE CODIGO Y NO EL MODELO, y al modelo no se le
-            // dice nada: la respuesta del usuario llega como un turno mas y el
-            // modelo la recoge sola. Contarle "este RUT no esta en tu maestro"
-            // seria mandarle un hecho del tenant, que es justo lo que la regla de
-            // privacidad no permite.
-            return ['estado' => 'preguntar', 'cliente' => null, 'rut' => $r['rut'], 'texto' => sprintf(
-                'El RUT %s no esta en tus clientes, asi que lo doy de alta. Necesito cuatro datos: '
-                . 'razon social, giro, direccion y comuna. Puedes darmelos en una sola linea.',
-                $r['rut']
-            )];
+            // DEFECTO MEDIDO EN PRODUCCION: el chat pidio los cuatro datos, Daniel
+            // los dio completos en una linea, y el chat volvio a pedirlos. Tres
+            // veces. Y no era el modelo: esta rama devolvia 'preguntar' SIN MIRAR
+            // EL BORRADOR, solo porque el RUT no estaba en el maestro. Como el
+            // cliente no se crea hasta confirmar, resolverClientePorRut() iba a
+            // decir 'no_encontrado' en todos los turnos, para siempre.
+            //
+            // O SEA QUE EL ALTA DESDE EL CHAT NUNCA PUDO TERMINAR: no habia
+            // ninguna salida hacia 'listo' para un RUT nuevo, asi que la pantalla
+            // no llegaba al resumen y chatArmadoConfirmar() -- que si sabe darlo
+            // de alta con validarCliente() + crear() -- no se ejecutaba jamas.
+            //
+            // AHORA SE MIRA QUE FALTA. Con los cuatro datos, esto responde 'listo'
+            // con cliente => null: esa marca es la que hace que el confirmador lo
+            // CREE en vez de reusar una ficha existente (ver chatArmadoConfirmar).
+            $alta = [
+                'razon social' => $razon !== '' ? $razon : $nombre,
+                'giro'         => trim((string) ($datos['giro'] ?? '')),
+                'direccion'    => trim((string) ($datos['direccion'] ?? '')),
+                'comuna'       => trim((string) ($datos['comuna'] ?? '')),
+            ];
+            $faltan = array_keys(array_filter($alta, static fn (string $v): bool => $v === ''));
+
+            if ($faltan === []) {
+                return ['estado' => 'listo', 'cliente' => null, 'rut' => $r['rut'], 'texto' => null,
+                        // Para el resumen, que no tiene ficha del maestro de donde
+                        // sacar el nombre: este cliente todavia no existe.
+                        'nuevo' => true, 'razonSocial' => $alta['razon social']];
+            }
+
+            // FALTA ALGO: se pregunta SOLO ESO, y el aviso viaja al modelo.
+            //
+            // Sin el aviso, el modelo no se entera de que el panel sigue esperando
+            // y -- fiel a la instruccion de conservar -- devuelve el mismo estado
+            // incompleto. Es el mismo bucle de "Plantiflex" y el del precio, por
+            // tercera vez y en un tercer sitio.
+            //
+            // EL AVISO NO LLEVA NADA DEL MAESTRO: dice que campos del alta faltan,
+            // que es un hecho sobre el borrador que el propio modelo escribio.
+            // El RUT lo tecleo el usuario. Ver TraductorArmadoFacturaInterface.
+            return ['estado' => 'preguntar', 'cliente' => null, 'rut' => $r['rut'],
+                'avisoModelo' => sprintf(
+                    'el cliente %s es nuevo y en el borrador faltan sus datos de alta: %s',
+                    $r['rut'],
+                    implode(', ', $faltan)
+                ),
+                'texto' => sprintf(
+                    'El RUT %s no esta en tus clientes, asi que lo doy de alta. Me falta%s %s. '
+                    . 'Puedes darmelo%s en una sola linea.',
+                    $r['rut'],
+                    count($faltan) === 1 ? '' : 'n',
+                    implode(', ', $faltan),
+                    count($faltan) === 1 ? '' : 's'
+                )];
         }
 
         return chatClienteEncontrado($r['cliente'], $r['rut']);
@@ -3010,8 +3057,18 @@ function chatTurnoDeArmado(
     foreach ($clientesPorDoc as $i => $c) {
         if ($c['estado'] !== 'listo') {
             $cliente = $c;
-            if (count($documentos) > 1 && $c['texto'] !== null) {
-                $cliente['texto'] = sprintf('De la factura %d: %s', $i + 1, (string) $c['texto']);
+            if (count($documentos) > 1) {
+                if ($c['texto'] !== null) {
+                    $cliente['texto'] = sprintf('De la factura %d: %s', $i + 1, (string) $c['texto']);
+                }
+                // EL AVISO TAMBIEN DICE DE QUE FACTURA ES. Sin esto, con dos
+                // documentos que tienen problema de cliente el modelo recibe
+                // "el nombre X no se encontro" y no sabe cual corregir -- los
+                // avisos de item si nombran la factura desde el 13-08, este no.
+                // Es lo que hizo falta dos intentos para corregir un nombre.
+                if (($c['avisoModelo'] ?? null) !== null) {
+                    $cliente['avisoModelo'] = sprintf('en la factura %d, %s', $i + 1, (string) $c['avisoModelo']);
+                }
             }
             break;
         }
@@ -3153,8 +3210,13 @@ function chatResumenBorrador(
 
     foreach ($documentos as $i => $d) {
         $c    = $clientesPorDoc[$i] ?? null;
-        $quien = sprintf('%s (%s)',
-            $c['cliente']['razon_social'] ?? '?', $c['rut'] ?? '?');
+        // EL NOMBRE SALE DE LA FICHA SI EXISTE, y del borrador si el cliente es
+        // NUEVO -- ahi no hay ficha todavia, y poner "?" en el resumen que el
+        // usuario tiene que confirmar seria pedirle que apruebe a ciegas.
+        $quien = sprintf('%s (%s)%s',
+            $c['cliente']['razon_social'] ?? $c['razonSocial'] ?? '?',
+            $c['rut'] ?? '?',
+            ! empty($c['nuevo']) ? ', que se da de alta' : '');
 
         $detalle = [];
         foreach ($d['items'] as $item) {
