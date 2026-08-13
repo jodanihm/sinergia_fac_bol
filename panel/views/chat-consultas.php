@@ -113,9 +113,7 @@ $sugerencias = [
    guardan su frase, que es lo que se relee al desplazarse hacia arriba. */
 ?>
 <?php foreach ($hilo as $i => $turno): ?>
-    <?php $esUltimo = $i === count($hilo) - 1; ?>
-    <div class="chat-turno chat-turno--<?= $turno['rol'] === 'usuario' ? 'usuario' : 'asistente'; ?>"
-         <?= $esUltimo ? 'id="ultimo"' : ''; ?>>
+    <div class="chat-turno chat-turno--<?= $turno['rol'] === 'usuario' ? 'usuario' : 'asistente'; ?>">
         <div class="chat-burbuja">
             <?= nl2br(htmlspecialchars((string) $turno['texto'])); ?>
         </div>
@@ -519,18 +517,13 @@ $sugerencias = [
         campo.focus();
     });
 
-    // SCROLL AL TURNO NUEVO. El ancla #ultimo de la URL ya lo hace sin
-    // JavaScript -- por eso el redirect la lleva --, pero el navegador la aplica
-    // ANTES de que terminen de cargar las tablas, y con una respuesta larga el
-    // turno queda fuera de pantalla otra vez. Esto lo reposiciona una vez que la
-    // pagina ya midio de verdad.
-    // Con el cuadro de escribir ABAJO, lo natural es dejar a la vista el final de
-    // la pagina: el ultimo turno y, debajo, el campo listo para seguir. Por eso
-    // 'end' y no 'center' -- centrar el turno dejaria el cuadro fuera de pantalla.
-    var ultimo = document.getElementById('ultimo');
-    if (ultimo) {
-        ultimo.scrollIntoView({ block: 'end' });
-    }
+    // SIN SCROLL AUTOMATICO, A PROPOSITO.
+    //
+    // Hubo un scrollIntoView() al ultimo turno, con su ancla #ultimo en el
+    // redirect. Se quito: las conversaciones de este chat son cortas y caben
+    // enteras en una pantalla, asi que saltar al final dejaba la pagina a medio
+    // camino sin ganar nada -- y escondia arriba el principio de la conversacion.
+    // La pagina carga como cualquier otra del panel y se lee desde el principio.
 })();
 </script>
 

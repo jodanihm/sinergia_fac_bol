@@ -1644,10 +1644,17 @@ if ($panel === '' || $user === '' || $pass === '') {
         } else {
             mal('la pantalla no trae burbujas de usuario y asistente.');
         }
-        if (str_contains($tras['cuerpo'], 'id="ultimo"')) {
-            ok('y el ultimo turno lleva el ancla #ultimo, que es a donde apunta el redirect.');
+        // EL ANCLA #ultimo YA NO EXISTE, y esto lo comprueba en vez de darlo por
+        // supuesto. Se quito junto con el scroll automatico: las conversaciones
+        // son cortas y caben enteras, asi que saltar al final dejaba la pagina a
+        // medio camino y escondia el principio. Si volviera a aparecer, es que
+        // alguien reintrodujo el salto sin querer.
+        if (! str_contains($tras['cuerpo'], 'id="ultimo"')
+            && ! str_contains($tras['cuerpo'], 'scrollIntoView')) {
+            ok('la pantalla carga entera, sin ancla ni scroll automatico.');
         } else {
-            mal('falta el ancla #ultimo: el navegador no tiene a donde saltar sin JavaScript.');
+            mal('volvio el salto al ultimo turno (ancla #ultimo o scrollIntoView): la pagina '
+                . 'deja de cargar desde el principio.');
         }
     }
     @unlink($cookies);

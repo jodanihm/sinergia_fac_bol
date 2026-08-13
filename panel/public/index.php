@@ -3312,8 +3312,12 @@ function handleChatPost(
     // al proveedor. Ahora el refresco recarga un GET, que no cuesta nada.
     //
     // El id de conversacion viaja en la URL para que cada pestaña vuelva A LA
-    // SUYA -- ver chatConversacionDelGet() --, y el ancla #ultimo deja el
-    // navegador en el turno recien agregado incluso sin JavaScript.
+    // SUYA -- ver chatConversacionDelGet().
+    //
+    // SIN ANCLA #ultimo: la llevaba, para dejar al navegador en el turno recien
+    // agregado. Se quito junto con el scroll automatico de la vista -- las
+    // conversaciones son cortas y caben enteras, asi que saltar al final dejaba la
+    // pagina a medio camino y escondia el principio.
     // =====================================================================
     $pintar = static function (?array $resultado, ?array $aviso, ?string $desenlace = null)
         use ($pregunta, $cuentaId, $hoy, $uso, $conversacionId): never {
@@ -3330,7 +3334,7 @@ function handleChatPost(
             (string) ($aviso['tipo'] ?? 'info'),
         );
 
-        redirigirPrg('/chat?c=' . $conversacionId . '#ultimo');
+        redirigirPrg('/chat?c=' . $conversacionId);
     };
 
     // MENSAJE VACIO: no ensucia el hilo con un turno en blanco. Se avisa por
