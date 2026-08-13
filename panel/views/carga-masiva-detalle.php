@@ -4,10 +4,12 @@
  *
  * Recibe (sin cambios): $lote, $notas, $navActivo.
  *
- *   $lote:  id, nombre_archivo, total_filas, filas_validas, filas_error, created_at
+ *   $lote:  id, nombre_archivo, total_filas, filas_validas, filas_error,
+ *           total_documentos, created_at
  *   $notas: id, identificador_externo, receptor_rut, receptor_razon_social,
- *           fecha_nota, monto_estimado, boleta_ref_folio, estado,
- *           error_mensaje, fila_original, resultado_documentos
+ *           fecha_nota, monto_estimado, boleta_ref_folio, forma_pago,
+ *           fecha_vencimiento, detalle, estado, error_mensaje, fila_original,
+ *           resultado_documentos, origenes (list<string>)
  *
  * No hay usuario en $lote (la consulta no lo trae), asi que no se muestra.
  *
@@ -149,6 +151,28 @@ foreach ($notas as $n) {
 <section aria-labelledby="titulo-notas">
     <h2 class="titulo-seccion" id="titulo-notas">Detalle de notas cargadas</h2>
 
+    <?php
+    /* POR QUE HAY MENOS FACTURAS QUE FILAS.
+       Sin esta nota, un archivo de 180 filas que produce 40 facturas se lee como
+       un error de carga. Se explica UNA sola vez y solo cuando de verdad hubo
+       agrupamiento -- si cada fila fue su propia factura, no hay nada que
+       aclarar.
+       total_documentos viene en 0 para los lotes anteriores a la migracion 041:
+       para ellos esta nota no aparece, que es lo correcto porque no se agrupo
+       nada. */
+    $documentos = (int) ($lote['total_documentos'] ?? 0);
+    ?>
+    <?php if ($documentos > 0 && $documentos < $validas): ?>
+        <p class="nota">
+            Las <strong><?= $validas; ?> filas validas</strong> del archivo produjeron
+            <strong><?= $documentos; ?> facturas</strong>: las filas de un mismo cliente se
+            juntaron en un solo documento con varias lineas. Dos filas del mismo cliente
+            quedan <em>separadas</em> cuando difieren en fecha, forma de pago, vencimiento o
+            boleta a anular &mdash; esas cuatro son condiciones del documento y no se pueden
+            mezclar en uno solo.
+        </p>
+    <?php endif; ?>
+
     <?php if ($notas === []): ?>
         <div class="estado-vacio">
             <h2>Este lote no tiene filas</h2>
@@ -188,7 +212,23 @@ foreach ($notas as $n) {
                         <tr<?= $esError ? ' class="tabla-datos__fila--inactiva"' : ''; ?>>
                             <td class="tabla-datos__num"><?= $i + 1; ?></td>
                             <td>
-                                <?= htmlspecialchars((string) ($n['identificador_externo'] ?? '')) ?: '&mdash;'; ?>
+                                <?php
+                                /* QUE FILAS DEL EXCEL FORMARON ESTA FACTURA.
+                                   Desde el agrupamiento por cliente, una nota puede
+                                   venir de VARIAS filas, y sin decirlo el usuario no
+                                   tendria como cuadrar su archivo con lo que ve. Los
+                                   origenes salen de nota_venta_origen; en los lotes
+                                   anteriores hay uno solo y se ve igual que antes. */
+                                $origenes = is_array($n['origenes'] ?? null) ? $n['origenes'] : [];
+                                ?>
+                                <?= htmlspecialchars((string) ($origenes[0] ?? $n['identificador_externo'] ?? '')) ?: '&mdash;'; ?>
+                                <?php if (count($origenes) > 1): ?>
+                                    <span class="tabla-datos__secundario">
+                                        + <?= count($origenes) - 1; ?>
+                                        fila<?= count($origenes) === 2 ? '' : 's'; ?> mas del mismo cliente:
+                                        <?= htmlspecialchars(implode(', ', array_slice($origenes, 1, 5))); ?><?= count($origenes) > 6 ? ', ...' : ''; ?>
+                                    </span>
+                                <?php endif; ?>
                                 <?php if (! empty($n['boleta_ref_folio'])): ?>
                                     <span class="tabla-datos__secundario">Anula boleta <?= (int) $n['boleta_ref_folio']; ?></span>
                                 <?php endif; ?>

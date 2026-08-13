@@ -5892,8 +5892,24 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
     } elseif (isset($externosVistos[$externo])) {
         $errores[] = 'identificador_externo duplicado en este archivo';
     } else {
-        $stmt = $pdo->prepare('SELECT 1 FROM nota_venta WHERE cuenta_id = :c AND identificador_externo = :e LIMIT 1');
-        $stmt->execute([':c' => $cuentaId, ':e' => $externo]);
+        // SE MIRAN LAS DOS TABLAS, y hace falta.
+        //
+        // nota_venta.identificador_externo guarda EL PRIMERO de cada grupo desde
+        // que las filas del mismo cliente se agrupan (migracion 041); los demas
+        // solo viven en nota_venta_origen. Preguntar por una sola dejaria pasar
+        // como nuevas las filas fusionadas de una carga anterior, y el choque
+        // aparecería recien dentro de la transaccion -- que es exactamente la
+        // degradacion que la tabla nueva vino a evitar.
+        //
+        // Las notas ANTERIORES a la 041 no tienen origenes, y por eso se sigue
+        // consultando nota_venta: para ellas es la unica que tiene el dato.
+        $stmt = $pdo->prepare(
+            'SELECT 1 FROM nota_venta WHERE cuenta_id = :c AND identificador_externo = :e '
+            . 'UNION ALL '
+            . 'SELECT 1 FROM nota_venta_origen WHERE cuenta_id = :c2 AND identificador_externo = :e2 '
+            . 'LIMIT 1'
+        );
+        $stmt->execute([':c' => $cuentaId, ':e' => $externo, ':c2' => $cuentaId, ':e2' => $externo]);
         if ($stmt->fetchColumn() !== false) {
             $errores[] = 'identificador_externo ya existe (esta nota ya se cargo en otro lote)';
         }
@@ -6108,11 +6124,11 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
     ];
 }
 
-function crearLoteCarga(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreArchivo, int $totalFilas, int $filasValidas, int $filasError, int $tipoDte = 33): int
+function crearLoteCarga(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreArchivo, int $totalFilas, int $filasValidas, int $filasError, int $tipoDte = 33, int $totalDocumentos = 0): int
 {
     $stmt = $pdo->prepare(
-        'INSERT INTO lote_carga (cuenta_id, usuario_id, nombre_archivo, total_filas, filas_validas, filas_error, tipo_dte) '
-        . 'VALUES (:cuenta_id, :usuario_id, :nombre, :total, :validas, :errores, :tipo)'
+        'INSERT INTO lote_carga (cuenta_id, usuario_id, nombre_archivo, total_filas, filas_validas, filas_error, tipo_dte, total_documentos) '
+        . 'VALUES (:cuenta_id, :usuario_id, :nombre, :total, :validas, :errores, :tipo, :docs)'
     );
     $stmt->execute([
         ':cuenta_id' => $cuentaId,
@@ -6122,6 +6138,8 @@ function crearLoteCarga(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreA
         ':validas'   => $filasValidas,
         ':errores'   => $filasError,
         ':tipo'      => $tipoDte,
+        // Desde el agrupamiento (migracion 041) ya no es igual a filas_validas.
+        ':docs'      => $totalDocumentos,
     ]);
 
     return (int) $pdo->lastInsertId();
@@ -6143,7 +6161,7 @@ function listarLotesCarga(PDO $pdo, int $cuentaId): array
 function obtenerLoteCarga(PDO $pdo, int $cuentaId, int $loteId): ?array
 {
     $stmt = $pdo->prepare(
-        'SELECT id, nombre_archivo, total_filas, filas_validas, filas_error, created_at '
+        'SELECT id, nombre_archivo, total_filas, filas_validas, filas_error, total_documentos, created_at '
         . 'FROM lote_carga WHERE id = :id AND cuenta_id = :c LIMIT 1'
     );
     $stmt->execute([':id' => $loteId, ':c' => $cuentaId]);
@@ -6157,15 +6175,124 @@ function listarNotasVentaDeLote(PDO $pdo, int $cuentaId, int $loteId): array
 {
     $stmt = $pdo->prepare(
         'SELECT id, identificador_externo, receptor_rut, receptor_razon_social, fecha_nota, monto_estimado, '
-        . 'boleta_ref_folio, estado, error_mensaje, fila_original, resultado_documentos '
+        . 'boleta_ref_folio, forma_pago, fecha_vencimiento, detalle, estado, error_mensaje, fila_original, '
+        . 'resultado_documentos '
         . 'FROM nota_venta WHERE cuenta_id = :c AND lote_carga_id = :lote ORDER BY id ASC'
     );
     $stmt->execute([':c' => $cuentaId, ':lote' => $loteId]);
+    $notas = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    // LOS ORIGENES, EN UNA SOLA CONSULTA y no una por nota: un lote puede traer
+    // cientos. Es el mismo criterio de buscarPorRuts() en el maestro de clientes.
+    $ids = array_column($notas, 'id');
+    $porNota = [];
+    if ($ids !== []) {
+        $marcas = implode(',', array_fill(0, count($ids), '?'));
+        $o = $pdo->prepare(
+            'SELECT nota_venta_id, identificador_externo FROM nota_venta_origen '
+            . "WHERE cuenta_id = ? AND nota_venta_id IN ({$marcas}) ORDER BY id ASC"
+        );
+        $o->execute([$cuentaId, ...$ids]);
+        foreach ($o->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+            $porNota[(int) $fila['nota_venta_id']][] = (string) $fila['identificador_externo'];
+        }
+    }
+    foreach ($notas as &$n) {
+        // Las notas anteriores a la migracion 041 no tienen origenes: se cae a su
+        // identificador de siempre, que para ellas es exacto -- una fila, una nota.
+        $n['origenes'] = $porNota[(int) $n['id']]
+            ?? (($n['identificador_externo'] ?? null) !== null ? [(string) $n['identificador_externo']] : []);
+    }
+    unset($n);
+
+    return $notas;
 }
 
-function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d): void
+/**
+ * Junta las filas VALIDAS que van a la misma factura.
+ *
+ * =========================================================================
+ * QUE SE JUNTA Y QUE NO
+ * =========================================================================
+ *
+ * Dos filas van a la misma factura si comparten CINCO cosas. El RUT es la
+ * obvia; las otras cuatro son CONDICIONES DEL DOCUMENTO -- no de la linea --,
+ * y un DTE solo puede llevar una de cada:
+ *
+ *   fecha_nota             el documento tiene UNA FchEmis
+ *   forma_pago             condicion tributaria; el SII lee el silencio como credito
+ *   fecha_vencimiento      atada a la forma de pago
+ *   folio_boleta_a_anular  cada uno genera su propia nota de credito
+ *
+ * SI DIFIEREN, NO SE JUNTAN -- y no se rechaza el archivo. Elegir una de las dos
+ * seria decidir por el usuario sobre campos tributarios, que es justo lo que las
+ * cuatro validaciones de pago vinieron a impedir; y rechazar el archivo entero
+ * castigaria doscientas filas por dos que discrepan.
+ *
+ * EL CASO FUNDACIONAL DE M4 QUEDA PROTEGIDO POR ESA MISMA CLAVE, y no por
+ * casualidad: el cliente de reservas anula UNA BOLETA POR RESERVA, asi que sus
+ * filas traen folio_boleta_a_anular distintos y no se juntan nunca. Si algun dia
+ * alguien quita ese campo de la clave, le fusiona las facturas a ese cliente sin
+ * que nadie se entere.
+ *
+ * LAS FILAS CON ERROR NO ENTRAN. Siguen siendo una nota de error por fila, que es
+ * lo que permite mostrarle al usuario que fila arreglar.
+ *
+ * @param list<array<string,mixed>> $items lo que devolvio validarFilaCargaMasiva()
+ *
+ * @return list<array{datos:array<string,mixed>, externos:list<string>, filas:list<int>}>
+ */
+function agruparFilasPorCliente(array $items): array
+{
+    $grupos = [];
+
+    foreach ($items as $i => $item) {
+        if ($item['status'] !== 'ok') {
+            continue;
+        }
+        $d = $item['datos'];
+
+        // El RUT ya viene normalizado por resolverClientePorRut().
+        $clave = implode('|', [
+            (string) ($d['cliente_resolucion']['rut'] ?? ''),
+            (string) ($d['fecha_nota'] ?? ''),
+            (string) ($d['forma_pago'] ?? ''),
+            (string) ($d['fecha_vencimiento'] ?? ''),
+            (string) ($d['boleta_ref_folio'] ?? ''),
+        ]);
+
+        if (! isset($grupos[$clave])) {
+            $grupos[$clave] = [
+                'datos'    => $d,
+                'externos' => [],
+                // +2: una por el encabezado y otra porque el Excel cuenta desde 1.
+                // Es el mismo calculo que usan los mensajes de error de arriba.
+                'filas'    => [],
+            ];
+        } else {
+            // LAS LINEAS SE ACUMULAN. detalle ya era una LISTA -- traia un
+            // elemento porque el Excel tiene una columna de producto por fila --,
+            // asi que esto no estira ningun formato: lo usa como estaba pensado.
+            $grupos[$clave]['datos']['detalle'] = array_merge(
+                $grupos[$clave]['datos']['detalle'],
+                $d['detalle']
+            );
+            // Y EL MONTO SE SUMA. Se calculaba por fila; con varias lineas, el de
+            // la primera seria una cifra que no corresponde a nada.
+            $grupos[$clave]['datos']['monto_estimado'] += $d['monto_estimado'];
+        }
+
+        $grupos[$clave]['externos'][] = (string) $d['identificador_externo'];
+        $grupos[$clave]['filas'][]    = $i + 2;
+    }
+
+    return array_values($grupos);
+}
+
+/**
+ * @param list<string> $externos identificadores de TODAS las filas del grupo
+ */
+function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d, array $externos = []): void
 {
     $stmt = $pdo->prepare(
         'INSERT INTO nota_venta '
@@ -6204,6 +6331,23 @@ function crearNotaVentaValida(PDO $pdo, int $cuentaId, int $loteId, array $d): v
         ':bref_folio' => $d['boleta_ref_folio'],
         ':bref_fecha' => $d['boleta_ref_fecha'],
     ]);
+
+    // LOS IDENTIFICADORES DE TODAS LAS FILAS DEL GRUPO (migracion 041).
+    //
+    // nota_venta.identificador_externo guarda el PRIMERO y conserva su UNIQUE;
+    // aqui van TODOS, con el UNIQUE que de verdad protege contra recargar el
+    // mismo Excel. Sin esto, las filas fusionadas cuyo identificador no quedo en
+    // ninguna parte volverian a pasar la validacion en una segunda carga.
+    //
+    // SE INSERTA DENTRO DE LA MISMA TRANSACCION del lote: una nota sin sus
+    // origenes seria una nota sin proteccion.
+    $notaId = (int) $pdo->lastInsertId();
+    $ins    = $pdo->prepare(
+        'INSERT INTO nota_venta_origen (cuenta_id, nota_venta_id, identificador_externo) VALUES (?, ?, ?)'
+    );
+    foreach ($externos !== [] ? $externos : [(string) $d['identificador_externo']] as $externo) {
+        $ins->execute([$cuentaId, $notaId, $externo]);
+    }
 }
 
 function crearNotaVentaError(PDO $pdo, int $cuentaId, int $loteId, array $filaOriginal, array $errores): void
@@ -6453,21 +6597,34 @@ function handleCargaMasivaPost(): void
     $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
     $totalErrores = count($items) - $totalValidas;
 
+    // --- AGRUPAMIENTO POR CLIENTE ---------------------------------------------
+    //
+    // Va AQUI, entre las dos pasadas que ya existian: la que valida fila por fila
+    // y la que escribe. validarFilaCargaMasiva() no se toca -- ahi es donde los
+    // errores pueden nombrar la fila --, y el guardado recibe grupos en vez de
+    // filas sueltas.
+    $grupos = agruparFilasPorCliente($items);
+    $totalDocumentos = count($grupos);
+
     $pdo->beginTransaction();
     try {
-        $loteId = crearLoteCarga($pdo, $cuentaId, $usuarioId, $archivo['name'], count($items), $totalValidas, $totalErrores, $tipoDte);
+        $loteId = crearLoteCarga($pdo, $cuentaId, $usuarioId, $archivo['name'], count($items), $totalValidas, $totalErrores, $tipoDte, $totalDocumentos);
 
         // RUT nuevo -> id de cliente ya creado EN ESTA MISMA carga (evita
         // crear el mismo cliente 2 veces si aparece en varias filas).
         $clienteIdPorRutNuevo = [];
 
+        // LAS FILAS CON ERROR, UNA POR UNA. No entran al agrupamiento: cada una
+        // conserva su fila_original para que el usuario sepa cual arreglar.
         foreach ($items as $item) {
             if ($item['status'] === 'error') {
                 crearNotaVentaError($pdo, $cuentaId, $loteId, $item['fila_original'], $item['errores']);
-                continue;
             }
+        }
 
-            $d   = $item['datos'];
+        // Y LAS VALIDAS, YA AGRUPADAS. Un grupo = una factura.
+        foreach ($grupos as $grupo) {
+            $d   = $grupo['datos'];
             $res = $d['cliente_resolucion'];
 
             if ($res['estado'] === 'no_encontrado') {
@@ -6536,7 +6693,7 @@ function handleCargaMasivaPost(): void
                 'boleta_ref_tipo'       => $d['boleta_ref_tipo'],
                 'boleta_ref_folio'      => $d['boleta_ref_folio'],
                 'boleta_ref_fecha'      => $d['boleta_ref_fecha'],
-            ]);
+            ], $grupo['externos']);
         }
 
         $pdo->commit();

@@ -548,6 +548,20 @@ const MIGRACIONES = [
              'columna' => 'chat_limite_diario', 'esperado_nulabilidad' => 'NO'],
         ],
     ],
+    [
+        // EL UNIQUE ES LA HUELLA QUE IMPORTA, no la tabla. Desde que las filas del
+        // mismo cliente se agrupan, nota_venta.identificador_externo guarda solo el
+        // PRIMERO de cada grupo: uk_nota_venta_origen es el que impide recargar el
+        // mismo Excel. Sin el, la tabla existiria y la proteccion no.
+        'id' => '041', 'archivo' => '041_nota_venta_origen.sql', 'nota' => 'CREATE (1 tabla) + ALTER',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'nota_venta_origen', 'tablas' => ['nota_venta_origen'], 'esperado' => 1],
+            ['tipo' => 'indice', 'desc' => 'uk_nota_venta_origen', 'tabla' => 'nota_venta_origen',
+             'indice' => 'uk_nota_venta_origen'],
+            ['tipo' => 'columnas', 'desc' => 'lote_carga.total_documentos', 'tabla' => 'lote_carga',
+             'columnas' => ['total_documentos'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
