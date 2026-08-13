@@ -2259,9 +2259,19 @@ a.stepper__contenido:hover { color: var(--color-primario); }
  *
  * NO SE TOCA font-size: la base ya lo pone en --txt-base (style.css:2071).
  * Repetirlo aqui haria creer que este campo lo cambia. */
+/* Ya no es un input de una linea sino un textarea: pierde el radio de pastilla
+   -- con dos lineas se ve deforme -- y gana un alto minimo y el ancho completo
+   que el navegador NO le da por defecto a un textarea. resize vertical: el
+   usuario puede agrandarlo, pero no descuadrar la columna a lo ancho. */
 .chat-pregunta {
-    border-radius: var(--radio-pill);
-    padding: var(--esp-1) var(--esp-4);
+    border-radius: var(--radio-lg);
+    padding: var(--esp-2) var(--esp-4);
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 3.2rem;
+    resize: vertical;
+    font: inherit;
+    line-height: 1.5;
 }
 .chat-pregunta:focus {
     border-color: var(--color-primario);
