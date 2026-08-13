@@ -48,9 +48,20 @@ $sugerencias = [
         <?= iconoSvg('ia', 28, 'chat-titulo__icono'); ?>
         <div>
             <h1>Asistente IA</h1>
+            <?php
+            /* LA SEGUNDA FRASE NO ES ADORNO. El asistente NO emite: prepara un
+               borrador que la persona confirma. Decirlo ANTES de que alguien
+               escriba nada evita la pregunta "¿esto ya facturo algo?", que es
+               justo la duda que aparece cuando una herramienta de IA toca
+               documentos tributarios.
+
+               Se solto el "con los mismos datos de tu panel" que decia antes: lo
+               dice la tarjeta lateral ("Usa los mismos datos y filtros de tu
+               panel") y repetirlo aqui alargaba la linea sin agregar nada. */
+            ?>
             <p class="dash-header__sub">
-                Preguntale al asistente sobre tu facturacion y recibe respuestas con los
-                mismos datos de tu panel.
+                Consulta tu facturacion y arma facturas conversando: una sola o varias a la
+                vez. Tu revisas y emites; el asistente solo prepara el borrador.
             </p>
         </div>
     </div>
