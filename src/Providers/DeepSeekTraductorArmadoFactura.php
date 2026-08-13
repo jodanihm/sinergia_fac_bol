@@ -392,29 +392,28 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             "cliente". El "cliente" de arriba es el POR DEFECTO: vale para todo documento
             que no traiga el suyo. Con un solo cliente para todo, basta el de arriba.
 
-            REGLA DE RUTEO -- ESTO ES LO MAS IMPORTANTE Y LO QUE MAS SE MALINTERPRETA:
-            Un DOCUMENTO no es lo mismo que un ITEM. Cuando el pedido menciona VARIAS
-            COSAS por separado -- por ejemplo "facturale a Perez el diseño y el hosting" --
-            se entiende POR DEFECTO como VARIAS FACTURAS DE UN ITEM CADA UNA. Cada
-            documento consume un folio, que es un recurso limitado, asi que esto cambia el
-            costo real para el usuario.
+            REGLA DE RUTEO -- ES LO QUE MAS SE MALINTERPRETA:
+            Un DOCUMENTO no es lo mismo que un ITEM. Lo que decide cuantos documentos hay
+            NO es cuantas cosas se enumeran, sino A CUANTOS CLIENTES se le factura.
 
-            PERO EL USUARIO MANDA SOBRE ESE DEFECTO. Si dice "en la misma factura", "en la
-            factura", "agregale", "el mismo documento", "los dos productos en una factura"
-            o cualquier cosa parecida, entonces es UN SOLO documento con VARIOS items en su
-            lista "items". Y si lo dice DESPUES de que ya armaste dos facturas, es una
-            CORRECCION: rehaz el borrador con un documento y dos items. No la ignores ni
-            respondas lo mismo de antes.
+              UN cliente  -> UN documento, con todos sus items en la lista "items".
+                             "hazme una factura para X por A, B y C" es UNA factura de tres
+                             items, no tres facturas. Tambien si dice "y"/"e"/"ademas".
+              VARIOS      -> UN documento por cliente. "2 facturas, una para A y otra
+                clientes      para B" son dos documentos, cada uno con SU "cliente".
 
-            Al reves tambien: si dice "en facturas separadas" o "una factura por cada uno",
-            son documentos distintos aunque hayas armado uno solo.
+            EL USUARIO MANDA SOBRE ESO, en las dos direcciones:
+              - Hacia separar: "en facturas separadas", "una factura por cada producto",
+                "3 facturas", "facturale 3 veces". Entonces son documentos distintos aunque
+                el cliente sea uno solo.
+              - Hacia juntar: "en la misma factura", "agregale", "todo en una". Y si lo dice
+                DESPUES de que ya armaste varias, es una CORRECCION: rehaz el borrador. No
+                la ignores ni respondas lo mismo de antes.
 
-            SI HAY DUDA DE VERDAD sobre lo que quiso decir, NO ASUMAS: usa "faltan_datos" y
-            preguntaselo en una linea, ofreciendo las dos lecturas. No es un paso de sobra:
-            es lo que le enseña al usuario como funciona el sistema.
+            Cada documento consume un folio, que es un recurso limitado.
 
-            CLIENTES DISTINTOS EN UN MISMO PEDIDO: "2 facturas, una para A y otra para B"
-            son dos documentos, cada uno con SU cliente dentro de su propio "cliente".
+            SI HAY DUDA DE VERDAD, NO ASUMAS: usa "faltan_datos" y preguntaselo en una
+            linea, ofreciendo las dos lecturas.
 
             Responde SIEMPRE un unico objeto JSON, sin texto alrededor, con una de estas
             {$cuantas} formas, y NINGUNA OTRA:

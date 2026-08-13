@@ -374,6 +374,17 @@ $casosRuteo = [
     // exactamente lo que paso con las 12 de arriba.
     ['quiero que me hagas una factura excenta para el cliente plantiflex por 1300 pesos', true],
 
+    // --- UN CLIENTE Y VARIOS ITEMS UNIDOS POR "Y"/"E" -------------------------
+    // La primera es la frase LITERAL del 15-08-2026: Daniel dijo "una factura"
+    // (singular, explicito) y el chat le creo TRES documentos, o sea tres folios.
+    // Esa clasificacion la decide el modelo, no esta funcion -- aqui solo se
+    // comprueba que estas frases entren al camino de armado, que es el requisito
+    // previo para que la regla nueva del prompt tenga oportunidad de aplicarse.
+    ['hazme una factura para easyagenda por arriendo de softaware por 25000 mas iva e inscripcion en el nic por 28000 mas iva e inicio proceso de certificacion en SII por 80mil pesos', true],
+    ['facturale a plantiflex el arriendo y el hosting', true],
+    ['hazme una factura para easyagenda por diseño, hosting y dominio', true],
+    ['emite una factura a comercial perez por consultoria y capacitacion', true],
+
     // Variantes con los errores de tipeo que aparecen de verdad. Ninguna toca la
     // raiz 'factur', que es lo unico que mira la regla -- por eso todas pasan, y
     // por eso este bloque demuestra que la ortografia NO era la causa.
@@ -631,6 +642,125 @@ if ($sinCliente !== null && str_contains($sinCliente, 'factura 2') && str_contai
     ok('un documento sin cliente lo dice nombrando la factura: ' . mb_substr($sinCliente, 0, 50));
 } else {
     mal('un documento sin cliente no se detecta o no dice cual: ' . json_encode($sinCliente));
+}
+
+// --- LA REGLA DE RUTEO POR CLIENTE, EN EL PROMPT (15-08-2026) --------------
+//
+// "hazme UNA factura para easyagenda por A e B e C" produjo TRES documentos. El
+// prompt decia que enumerar cosas por separado significa varias facturas, y su
+// lista de excepciones solo tenia frases CORRECTIVAS ("en la misma factura",
+// "agregale") que presuponen una factura ya armada. La regla paso a mirar
+// CUANTOS CLIENTES hay, que es un hecho estructural y no una redaccion.
+//
+// ESTE ARNES NO PUEDE COMPROBAR LA CLASIFICACION: la hace el modelo, y probarla
+// exigiria llamarlo de verdad. Lo que si comprueba es que la instruccion VIAJE
+// -- si alguien la borra o la reescribe, esto se pone rojo.
+echo "\n  LA REGLA DE RUTEO POR CLIENTE VIAJA EN EL PROMPT\n";
+
+$hRegla = [];
+$tRegla = traductorArmadoFalso([sobreArmado('{"desenlace":"es_consulta"}')], 'clave-falsa', $hRegla);
+$tRegla->traducir(['hazme una factura'], [], vocabularioArmado(), '2026-08-15');
+$promptRegla = (string) (json_decode((string) $hRegla[0]['request']->getBody(), true)['messages'][0]['content'] ?? '');
+
+$trozos = [
+    'A CUANTOS CLIENTES se le factura' => 'el eje de la decision',
+    'UN documento, con todos sus items' => 'un cliente, un documento',
+    'UN documento por cliente'          => 'varios clientes, varios documentos',
+    'Hacia separar'                     => 'el override hacia separar',
+    'Hacia juntar'                      => 'el override hacia juntar',
+];
+$faltantesRegla = [];
+foreach ($trozos as $trozo => $queEs) {
+    if (! str_contains($promptRegla, $trozo)) {
+        $faltantesRegla[] = $queEs;
+    }
+}
+if ($faltantesRegla === []) {
+    ok('las cinco partes de la regla estan en el prompt: el eje por cliente y los dos overrides.');
+} else {
+    mal('el prompt perdio partes de la regla de ruteo: ' . implode('; ', $faltantesRegla));
+}
+
+// Y LO QUE YA NO PUEDE DECIR: el default viejo, que es el que produjo el defecto.
+if (! str_contains($promptRegla, 'VARIAS FACTURAS DE UN ITEM CADA UNA')) {
+    ok('y ya NO dice que enumerar cosas signifique varias facturas: el default viejo se fue.');
+} else {
+    mal('el prompt sigue con el default viejo ("VARIAS FACTURAS DE UN ITEM CADA UNA"), que '
+        . 'contradice la regla nueva. Dos instrucciones opuestas en el mismo prompt.');
+}
+
+// --- UN DOCUMENTO DE TRES ITEMS, DE PUNTA A PUNTA --------------------------
+//
+// Es lo que la regla nueva tiene que producir con la frase de Daniel. La
+// clasificacion no se puede probar aqui, pero TODO LO QUE VIENE DESPUES si:
+// normalizacion, validacion, carril, y una cotizacion con TRES lineas.
+echo "\n  UN DOCUMENTO DE TRES ITEMS, HASTA LA BASE\n";
+
+$tresItems = [[
+    'items' => [
+        ['nombre' => 'Arriendo de software',            'cantidad' => 1, 'precioUnitario' => 25000],
+        ['nombre' => 'Inscripcion en el NIC',           'cantidad' => 1, 'precioUnitario' => 28000],
+        ['nombre' => 'Inicio proceso certificacion SII', 'cantidad' => 1, 'precioUnitario' => 80000],
+    ],
+]];
+
+$normTres = chatNormalizarDocumentos([
+    'cliente'    => ['rut' => '76192083-9'],
+    'documentos' => $tresItems,
+]);
+printf("      documentos=%d items=%d carril=%s\n",
+    count($normTres), count($normTres[0]['items']), chatCarrilDelBorrador($normTres));
+
+if (count($normTres) === 1 && count($normTres[0]['items']) === 3) {
+    ok('un documento con tres items se normaliza como UNO, no como tres.');
+} else {
+    mal('la normalizacion partio el documento: ' . count($normTres) . ' documentos.');
+}
+if (chatFaltaDelDocumento($normTres[0], 0, 1) === null) {
+    ok('y pasa la validacion completa: los tres items traen nombre, cantidad y precio.');
+} else {
+    mal('la validacion rechaza un documento de tres items completos: '
+        . (string) chatFaltaDelDocumento($normTres[0], 0, 1));
+}
+if (chatCarrilDelBorrador($normTres) === 'cotizacion') {
+    ok('su carril es la cotizacion, que prellena el formulario con las tres lineas.');
+} else {
+    mal('un documento de tres items no puede irse al Excel: una fila es una linea.');
+}
+
+// HASTA LA BASE. El cliente ya existe -- lo creo la verificacion 2 --, asi que se
+// pasa resuelto, que es lo que hace el panel.
+$clienteYaEsta = clienteRepo()->buscarPorRut($cuentaId, '76192083-9');
+if ($clienteYaEsta === null) {
+    mal('no se encontro el cliente sembrado: esta comprobacion no pudo correr.');
+} else {
+    $antesCotTres = (int) $pdo->query("SELECT COUNT(*) FROM cotizacion WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+    $rTres = chatArmadoConfirmar($pdo, $cuentaId, estadoDePrueba($tresItems, [0 => $clienteYaEsta]));
+    $despuesCotTres = (int) $pdo->query("SELECT COUNT(*) FROM cotizacion WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+
+    $lineasTres = (int) $pdo->query(
+        'SELECT COUNT(*) FROM cotizacion_linea WHERE cotizacion_id = ' . (int) $rTres['ids'][0]
+    )->fetchColumn();
+    printf("      cotizaciones creadas=%d  lineas de la cotizacion=%d\n",
+        $despuesCotTres - $antesCotTres, $lineasTres);
+
+    if (count($rTres['ids']) === 1 && $despuesCotTres - $antesCotTres === 1 && $lineasTres === 3) {
+        ok('confirmar creo UNA cotizacion con TRES lineas: un folio, no tres.');
+    } else {
+        mal(sprintf('se crearon %d cotizaciones con %d lineas: la frase de Daniel volveria a '
+            . 'gastar un folio por item.', $despuesCotTres - $antesCotTres, $lineasTres));
+    }
+
+    // Y LOS ORDENES SON 1..3, que es lo que la vista de emision usa para pintar
+    // las filas en el orden en que el usuario las dijo.
+    $ordenes = $pdo->query(
+        'SELECT orden FROM cotizacion_linea WHERE cotizacion_id = ' . (int) $rTres['ids'][0] . ' ORDER BY orden'
+    )->fetchAll(PDO::FETCH_COLUMN);
+    if (array_map('intval', $ordenes) === [1, 2, 3]) {
+        ok('y las lineas quedaron con orden 1, 2 y 3: el detalle conserva el orden dictado.');
+    } else {
+        mal('los ordenes de las lineas son ' . json_encode($ordenes) . ', no 1..3.');
+    }
 }
 
 // --- EL DETALLE FABRICADO (13-08-2026) -------------------------------------
