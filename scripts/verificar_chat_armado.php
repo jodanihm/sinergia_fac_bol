@@ -56,7 +56,19 @@ ini_set('memory_limit', '256M');
 $RAIZ = dirname(__DIR__);
 
 $fallos = 0;
-$avisos = 0;
+
+// EL CONTADOR NO SE LLAMA $avisos, Y ES DELIBERADO.
+//
+// "aviso" es hoy una palabra del DOMINIO -- avisosPanel, chatAvisosDelPanel(),
+// el aviso que el panel le manda al modelo --, asi que una variable con ese
+// nombre en cualquier bloque de este arnes tiene muchas papeletas de existir.
+// Y como correrArnes() declara `global $avisos` para el resumen, esa variable
+// "local" NO seria local: pisaria el contador. Ya paso -- el arnes murio con
+// "Cannot increment array" en la verificacion 8, a mil lineas de donde estaba
+// la causa.
+//
+// Renombrarlo es mas barato que acordarse de no usar la palabra.
+$avisosDelArnes = 0;
 
 /** La cuenta de siembra, para que la limpieza la encuentre desde donde sea. */
 $cuentaSembrada = null;
@@ -146,8 +158,8 @@ function mal(string $m): void
 }
 function aviso(string $m): void
 {
-    global $avisos;
-    $avisos++;
+    global $avisosDelArnes;
+    $avisosDelArnes++;
     echo "  [AVISO]   {$m}\n";
 }
 function morir(string $m): never
@@ -266,7 +278,7 @@ function estadoDePrueba(array $documentos, ?array $clienteExistente = null): arr
  */
 function correrArnes(): void
 {
-    global $RAIZ, $fallos, $avisos;
+    global $RAIZ, $fallos, $avisosDelArnes;
 
 // ===========================================================================
 // CARGA DEL FRONT CONTROLLER
@@ -561,6 +573,97 @@ if ($despuesCliD === $antesCliD && $despuesCotD === $antesCotD) {
 } else {
     mal(sprintf('quedaron restos: clientes %d->%d, cotizaciones %d->%d.',
         $antesCliD, $despuesCliD, $antesCotD, $despuesCotD));
+}
+
+// --- EL PRECIO QUE SE PREGUNTABA TRES VECES (13-08-2026) -------------------
+//
+// Daniel dio el precio del segundo item de tres formas distintas en tres turnos y
+// recibio SIEMPRE el mismo mensaje. La pregunta la hacia el panel y salia solo al
+// hilo, que no viaja: el modelo nunca supo que su documento estaba incompleto.
+// Es el bucle de "Plantiflex" otra vez, ahora en el detalle.
+echo "\n  EL PRECIO QUE SE PREGUNTABA TRES VECES: el aviso del item viaja al modelo\n";
+
+// TURNO 1: dos documentos, el segundo sin precio -- la forma exacta del caso.
+$dosDocs = [
+    ['item' => ['nombre' => 'Arriendo de software', 'cantidad' => 1, 'precioUnitario' => 80000]],
+    ['item' => ['nombre' => 'Proceso de certificacion ante SII', 'cantidad' => 1]],
+];
+$faltas = [];
+foreach ($dosDocs as $i => $doc) {
+    $f = chatFaltaDelDocumento($doc, $i, count($dosDocs));
+    if ($f !== null) {
+        $faltas[$i] = $f;
+    }
+}
+printf("      documentos con algo pendiente: %s\n", implode(', ', array_keys($faltas)) ?: 'ninguno');
+if (array_keys($faltas) === [1] && str_contains($faltas[1], 'factura 2')) {
+    ok('solo el segundo documento queda pendiente, y la pregunta lo NOMBRA: '
+        . mb_substr($faltas[1], 0, 60));
+} else {
+    mal('la validacion no aisla el documento incompleto: ' . json_encode($faltas));
+}
+
+// EL CABLEADO: esa pregunta tiene que entrar al canal que va al modelo.
+//
+// LA VARIABLE **NO** SE LLAMA $avisos, y no es capricho: correrArnes() declara
+// `global $fallos, $avisos` para el contador del resumen, asi que un $avisos
+// local aqui NO es local -- pisa el contador. Ya paso: el arnes murio con
+// "Cannot increment array" la siguiente vez que alguien llamo a aviso().
+$avisosParaModelo = chatAvisosDelPanel(['avisoModelo' => null], $faltas);
+if ($avisosParaModelo !== [] && str_contains($avisosParaModelo[0], 'factura 2')) {
+    ok('el aviso del item ENTRA al canal avisosPanel (antes no entraba nunca).');
+} else {
+    mal('el aviso del item no llega al canal: el modelo va a repetir el documento sin precio.');
+}
+
+// LOS DOS AVISOS A LA VEZ NO SE PISAN. Era la trampa de la version anterior: la
+// linea del cliente asignaba el arreglo entero y borraba lo que hubiera.
+$ambos = chatAvisosDelPanel(['avisoModelo' => 'el nombre "Plantiflex" no se encontro en el maestro de clientes'], $faltas);
+printf("      avisos con cliente sin resolver Y detalle incompleto: %d\n", count($ambos));
+if (count($ambos) === 2
+    && str_contains($ambos[0], 'Plantiflex')
+    && str_contains($ambos[1], 'factura 2')) {
+    ok('con las dos cosas pendientes viajan LOS DOS avisos: ninguno pisa al otro.');
+} else {
+    mal('un aviso borro al otro: ' . json_encode($ambos));
+}
+
+// TURNO 2: el aviso llega al prompt. Bytes reales, como en la verificacion 6.
+$hPrecio = [];
+$tPrecio = traductorArmadoFalso([sobreArmado('{"desenlace":"faltan_datos","pregunta":"¿cual?"}')],
+    'clave-falsa', $hPrecio);
+$tPrecio->traducir(
+    ['facturale a plantiflex el arriendo de software', 'agregale el proceso de certificacion ante SII'],
+    ['documentos' => $dosDocs],
+    vocabularioArmado(),
+    '2026-08-13',
+    $avisosParaModelo
+);
+$planoPrecio = (string) json_encode(
+    json_decode((string) $hPrecio[0]['request']->getBody(), true),
+    JSON_UNESCAPED_UNICODE
+);
+if (str_contains($planoPrecio, 'me falta el precio')) {
+    ok('turno 2: el aviso VIAJA en el prompt, asi que el modelo sabe que documento completar.');
+} else {
+    mal('el aviso no llego al prompt: el modelo seguira devolviendo el documento sin precio.');
+}
+
+// TURNO 3: el usuario dio el precio. Ni queda pendiente ni se repite el aviso.
+$dosDocsCompletos = $dosDocs;
+$dosDocsCompletos[1]['item']['precioUnitario'] = 80000;
+$faltas3 = [];
+foreach ($dosDocsCompletos as $i => $doc) {
+    $f = chatFaltaDelDocumento($doc, $i, count($dosDocsCompletos));
+    if ($f !== null) {
+        $faltas3[$i] = $f;
+    }
+}
+if ($faltas3 === [] && chatAvisosDelPanel(['avisoModelo' => null], $faltas3) === []) {
+    ok('turno 3: con el precio dado no queda pendiente NADA y el aviso NO se repite. '
+        . 'El bucle de las tres preguntas se cierra.');
+} else {
+    mal('turno 3: sigue habiendo pendientes con el precio ya dado: ' . json_encode($faltas3));
 }
 
 // --- LA TRANSACCION: si la cotizacion falla, el cliente NO queda huerfano ---
@@ -1552,7 +1655,7 @@ if ($panel === '' || $user === '' || $pass === '') {
 
 // ===========================================================================
 titulo('RESUMEN');
-printf("  fallos: %d\n  avisos: %d\n", $fallos, $avisos);
+printf("  fallos: %d\n  avisos: %d\n", $fallos, $avisosDelArnes);
 printf("\n  MEMORIA: pico %.1f MB (limite %s)\n",
     memory_get_peak_usage(true) / 1048576, ini_get('memory_limit'));
 

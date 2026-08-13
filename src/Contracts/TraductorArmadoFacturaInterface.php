@@ -60,10 +60,15 @@ use Plantiflex\FacturacionCl\Exceptions\TraduccionArmadoException;
  * que su nombre habia fallado, y el prompt le pide conservar lo entendido. El
  * bucle se cerraba solo.
  *
- * LO QUE PUEDE VIAJAR AQUI es un hecho sobre LA BUSQUEDA, no sobre el maestro:
- * "el nombre X no se encontro". X lo escribio el usuario y el texto ya lo leyo en
- * pantalla; no se agrega ni una fila, ni un RUT del maestro, ni cuantos clientes
- * hay, ni como se llaman los que si existen.
+ * LO QUE PUEDE VIAJAR AQUI son hechos sobre LO QUE EL PANEL NO PUDO RESOLVER con
+ * lo que el modelo mando. Hoy hay dos, y los dos ya se le mostraron al usuario:
+ *
+ *   - Sobre LA BUSQUEDA: "el nombre X no se encontro". X lo escribio el usuario;
+ *     no se agrega ni una fila, ni un RUT del maestro, ni cuantos clientes hay,
+ *     ni como se llaman los que si existen.
+ *   - Sobre EL PROPIO BORRADOR: "de la factura 2 falta el precio". Esto ni
+ *     siquiera roza el limite -- habla del objeto que escribio el modelo, no del
+ *     maestro.
  *
  * LO QUE NO PUEDE VIAJAR, y por eso se dice aqui: nada que el panel haya SACADO
  * del maestro. Si un dia se quiere avisar "ese cliente existe pero le falta el

@@ -2454,6 +2454,74 @@ function chatFaltaDelDocumento(array $doc, int $indice = 0, int $total = 1): ?st
 }
 
 /**
+ * Los avisos que el panel le manda al modelo para el turno siguiente.
+ *
+ * =========================================================================
+ * UN SOLO CANAL PARA LOS DOS CASOS, Y NINGUNO PISA AL OTRO
+ * =========================================================================
+ *
+ * DEFECTO QUE ARREGLA, medido en produccion: Daniel dio el precio de un item de
+ * tres formas distintas en tres turnos seguidos y recibio SIEMPRE el mismo
+ * mensaje -- "De la factura 2 (Proceso de certificacion ante SII), me falta el
+ * precio". La pregunta la hacia el panel y salia por $pintar hacia el hilo, que
+ * NO viaja al modelo. El modelo nunca supo que su documento estaba incompleto y,
+ * fiel a la instruccion de conservar lo entendido, lo devolvia igual.
+ *
+ * ES EL MISMO BUCLE QUE EL DE "Plantiflex", letra por letra. Aquel se resolvio
+ * abriendo este canal para la resolucion de cliente; la validacion de items llego
+ * despues y no se engancho.
+ *
+ * POR QUE EL MISMO ARREGLO Y NO OTRO: los dos avisos dicen lo mismo -- "el panel
+ * no pudo resolver esto con lo que mandaste". Una clave aparte obligaria a un
+ * segundo parametro, un segundo bloque en el prompt y un segundo vocabulario para
+ * el modelo, sobre una idea que es una sola.
+ *
+ * Y ES MAS SEGURO QUE EL PRIMERO en cuanto a privacidad: el aviso del item habla
+ * del borrador que el propio modelo escribio, no del maestro. Ni siquiera roza el
+ * limite que documenta TraductorArmadoFacturaInterface.
+ *
+ * -------------------------------------------------------------------------
+ * LOS DOS SE ACUMULAN, NO SE REEMPLAZAN. La version anterior hacia
+ *
+ *     $estado['avisosPanel'] = $cliente['avisoModelo'] !== null ? [...] : [];
+ *
+ * o sea que un cliente resuelto BORRABA lo que hubiera. Si algun turno tiene las
+ * dos cosas pendientes -- cliente sin resolver Y detalle incompleto --, el modelo
+ * recibe las dos y puede arreglar ambas de una vez, en vez de gastar una vuelta
+ * por cada una. El usuario, en cambio, sigue leyendo UNA sola pregunta: las
+ * ramas de mas abajo cortan en la primera, y amontonarle dos peticiones en la
+ * misma respuesta seria peor que preguntar dos veces.
+ *
+ * SE REEMPLAZA ENTERO EN CADA TURNO -- describe lo que ACABA de pasar. Si se
+ * apilaran entre turnos, el modelo seguiria leyendo que falta un precio mucho
+ * despues de haberlo dado.
+ *
+ * @param array{avisoModelo?:?string} $cliente lo que devolvio la resolucion
+ * @param array<int,string> $faltasPorDocumento indice => pregunta del panel
+ *
+ * @return list<string>
+ */
+function chatAvisosDelPanel(array $cliente, array $faltasPorDocumento): array
+{
+    $avisos = [];
+
+    if (isset($cliente['avisoModelo']) && $cliente['avisoModelo'] !== null) {
+        $avisos[] = (string) $cliente['avisoModelo'];
+    }
+
+    // SE REUSA LA MISMA FRASE QUE LEE EL USUARIO, y no se redacta una version
+    // "para el modelo". Es un solo hecho con un solo significado, y el prompt la
+    // presenta bajo un rotulo que ya dice de donde salio ("lo que el sistema
+    // comprobo"). Dos redacciones del mismo aviso serian dos cosas que mantener
+    // iguales a mano.
+    foreach ($faltasPorDocumento as $falta) {
+        $avisos[] = (string) $falta;
+    }
+
+    return $avisos;
+}
+
+/**
  * "Son 3 facturas, o sea 3 folios; tienes 120 disponibles."
  *
  * SE DICE SIEMPRE Y ANTES DE ARMAR, sin excepcion. Un documento consume un folio
@@ -2683,12 +2751,22 @@ function chatTurnoDeArmado(
     $cliente    = chatResolverClienteDelBorrador($cuentaId, $r->borrador);
     $documentos = chatDocumentosDelBorrador($r->borrador);
 
-    // EL AVISO SE REEMPLAZA ENTERO EN CADA TURNO, no se acumula: describe LO QUE
-    // ACABA DE PASAR. Si se apilaran, el modelo seguiria leyendo que un nombre
-    // fallo mucho despues de haberlo corregido, que es el mismo bucle al reves.
-    $estado['avisosPanel'] = isset($cliente['avisoModelo']) && $cliente['avisoModelo'] !== null
-        ? [(string) $cliente['avisoModelo']]
-        : [];
+    // LO QUE LE FALTA A CADA DOCUMENTO. Se calcula ANTES de cualquier rama que
+    // corte, por el mismo motivo que la resolucion del cliente: las ramas
+    // terminan en $pintar(), que no vuelve, y lo que quede despues no se ejecuta.
+    // Ese descuido fue el defecto del RUT; aqui no se repite.
+    $faltasPorDocumento = [];
+    foreach ($documentos as $i => $doc) {
+        $falta = chatFaltaDelDocumento(is_array($doc) ? $doc : [], $i, count($documentos));
+        if ($falta !== null) {
+            $faltasPorDocumento[$i] = $falta;
+        }
+    }
+
+    // LOS AVISOS PARA EL MODELO, los dos casos juntos y sin pisarse. Ver el
+    // docblock de chatAvisosDelPanel(): antes esta linea borraba el aviso del
+    // cliente cuando resolvia, y el del item no llegaba a escribirse nunca.
+    $estado['avisosPanel'] = chatAvisosDelPanel($cliente, $faltasPorDocumento);
 
     chatDiag('resolucion-cliente', [
         'desenlace'  => $r->desenlace,
@@ -2720,16 +2798,21 @@ function chatTurnoDeArmado(
 
     // HAY DOCUMENTOS, PERO ¿ESTAN COMPLETOS? Contar elementos no alcanzaba: un
     // documentos:[{}] contaba como uno y llegaba hasta la base convertido en un
-    // item inventado. Aqui se mira ADENTRO, y la pregunta la hace el panel
-    // nombrando lo que falta -- no la generica del modelo, que fue la que se
-    // salto el detalle entero.
-    foreach ($documentos as $i => $doc) {
-        $falta = chatFaltaDelDocumento(is_array($doc) ? $doc : [], $i, count($documentos));
-        if ($falta !== null) {
-            chatDiag('documento-incompleto', ['indice' => $i, 'falta' => $falta]);
-            chatArmadoGuardar($conversacionId, $estado);
-            $pintar(null, ['tipo' => 'info', 'texto' => $falta], 'armando');
-        }
+    // item inventado. La pregunta la hace el panel nombrando lo que falta -- no la
+    // generica del modelo, que fue la que se salto el detalle entero.
+    //
+    // AL USUARIO SE LE MUESTRA SOLO LA PRIMERA. Al modelo le fueron TODAS, en
+    // $estado['avisosPanel'], para que pueda completar de una vez lo que falte en
+    // varios documentos.
+    if ($faltasPorDocumento !== []) {
+        $primerIndice = array_key_first($faltasPorDocumento);
+        chatDiag('documento-incompleto', [
+            'indice'    => $primerIndice,
+            'falta'     => $faltasPorDocumento[$primerIndice],
+            'pendientes' => count($faltasPorDocumento),
+        ]);
+        chatArmadoGuardar($conversacionId, $estado);
+        $pintar(null, ['tipo' => 'info', 'texto' => $faltasPorDocumento[$primerIndice]], 'armando');
     }
 
     // CLIENTE RESUELTO Y AL MENOS UN DOCUMENTO **VALIDO**: hay borrador de verdad,
