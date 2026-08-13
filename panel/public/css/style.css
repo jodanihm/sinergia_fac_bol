@@ -2231,14 +2231,27 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 }
 .chat-bienvenida h2 { margin-top: 0; }
 .chat-bienvenida p { margin-bottom: 0; color: var(--color-texto-medio); }
-/* EL AVATAR PASA A BLANCO, y no es estetica: su fondo era
-   --color-primario-suave, o sea el mismo que ahora tiene la tarjeta. De haberlo
-   dejado, el avatar se habria disuelto en ella. */
+/* EL AVATAR ES UNA IMAGEN, NO UN ICONO.
+   Tenia fondo blanco y radio porque era un SVG monocromo que se disolvia sobre
+   el celeste de la tarjeta. El PNG trae su propia transparencia y contraste, asi
+   que ese recuadro sobra: sin el se apoya directo sobre --color-primario-suave,
+   que es el celeste de la referencia de marca.
+   height:auto para que no se deforme si alguien cambia el ancho. */
 .chat-bienvenida__avatar {
-    flex: 0 0 auto; color: var(--color-primario);
-    background: var(--color-superficie);
-    border-radius: var(--radio-lg); padding: var(--esp-2);
-    box-sizing: content-box;
+    flex: 0 0 auto;
+    width: 112px;
+    height: auto;
+    align-self: center;
+}
+
+/* "SinergIA" dentro del saludo. Reusa el primario del panel: la referencia lo
+   destaca en azul y ese azul ya existe, no hace falta declarar otro. */
+.chat-bienvenida__marca { color: var(--color-primario); }
+
+/* En pantallas angostas el mascote se achica en vez de comerse la fila: con 112
+   px fijos, el saludo quedaba en dos palabras por linea. */
+@media (max-width: 520px) {
+    .chat-bienvenida__avatar { width: 72px; }
 }
 
 /* --- El campo ------------------------------------------------------------ */

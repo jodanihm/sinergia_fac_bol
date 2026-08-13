@@ -92,12 +92,15 @@ const ICONOS = [
     'ia' => '<path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6z"/>'
         . '<path d="M18.5 14.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/>'
         . '<path d="M5 15l.6 1.6L7.2 17l-1.6.6L5 19.2l-.6-1.6L2.8 17l1.6-.4z"/>',
-    // El avatar del asistente. Un robot y no una cara humana: lo que contesta es
-    // un programa, y dibujarlo como persona seria decir otra cosa.
-    'robot' => '<rect x="4" y="8" width="16" height="12" rx="2"/>'
-        . '<path d="M12 8V4"/><circle cx="12" cy="3" r="1"/>'
-        . '<line x1="9" y1="13" x2="9" y2="14"/><line x1="15" y1="13" x2="15" y2="14"/>'
-        . '<path d="M9.5 17h5"/><path d="M2 12v3"/><path d="M22 12v3"/>',
+    // 'robot' SE QUITO: era el avatar de la tarjeta de bienvenida del chat y su
+    // unico uso. Ahi va ahora la ilustracion de marca (/img/sinergin.png), que a
+    // 112 px dice lo que un SVG monocromo de 34 no podia. El motivo por el que
+    // era un robot y no una cara humana -- lo que contesta es un programa -- lo
+    // cumple igual el mascote.
+    //
+    // Se borra en vez de dejarlo "por si acaso": iconoSvg() devuelve cadena vacia
+    // ante un id desconocido, asi que un icono muerto no molesta a nadie... y por
+    // eso mismo se queda para siempre si no se saca al quedarse sin usuarios.
     'escudo' => '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'
         . '<polyline points="9 12 11 14 15 10"/>',
     'enviar' => '<line x1="22" y1="2" x2="11" y2="13"/>'

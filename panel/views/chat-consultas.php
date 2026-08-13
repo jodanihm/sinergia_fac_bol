@@ -96,9 +96,39 @@ $sugerencias = [
         ?>
         <?php if ($hilo === []): ?>
         <section class="tarjeta chat-bienvenida">
-            <?= iconoSvg('robot', 34, 'chat-bienvenida__avatar'); ?>
+            <?php
+            /* AQUI SI VA UNA IMAGEN Y NO iconoSvg(), a diferencia del icono del
+               titulo. Son dos problemas distintos:
+
+                 - El del titulo mide 28 px y tiene que heredar el color del
+                   contexto (iconoSvg pinta con currentColor). Ahi sigue el SVG.
+                 - Esto es una ILUSTRACION DE MARCA con degradados y sombras, a
+                   112 px. Vectorizar un render 3D daria un archivo mas pesado que
+                   el PNG y peor dibujado, por horas de trabajo.
+
+               El patron ya existe en el panel: login.php usa <img src="/img/...">.
+
+               alt="" A PROPOSITO: es decorativa. El <h2> de al lado ya dice quien
+               es, y un alt que repita "Asistente IA" se lo haria leer dos veces a
+               un lector de pantalla.
+
+               width/height EN EL TAG ademas del CSS: reservan el espacio antes de
+               que la imagen cargue, y sin eso la tarjeta pega un salto al
+               aparecer. La imagen ES cuadrada (1254x1254 el original, 240x240 la
+               copia), asi que van iguales; el par exacto lo imprime
+               scripts/optimizar_imagen.php al generarla, que es de donde salio
+               este.
+
+               APUNTA A LA COPIA DE 240 px, NO AL ORIGINAL. sinergin.png pesa
+               1,16 MB y se descargaba entero para pintar algo de 112 px. El
+               original se queda en el repositorio como FUENTE de cualquier tamaño
+               futuro; lo que se sirve es la copia. 240 = el doble del tamaño de
+               despliegue, para que no se vea borroso en pantallas de densidad 2x. */
+            ?>
+            <img src="/img/sinergin-240.png" alt="" width="112" height="112" class="chat-bienvenida__avatar">
             <div>
-                <h2>Hola, soy tu Asistente IA de SinergIA</h2>
+                <?php /* "SinergIA" resaltado, como en la referencia de marca. */ ?>
+                <h2>Hola, soy tu Asistente IA de <span class="chat-bienvenida__marca">SinergIA</span></h2>
                 <p>
                     Estoy aqui para ayudarte a entender tu facturacion. Hazme preguntas sobre
                     tus ventas, clientes, documentos y mas.
