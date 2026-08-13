@@ -342,10 +342,10 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             'Si falta algun dato para armar el borrador (lo mas frecuente):' . "\n"
             . '{"desenlace":"faltan_datos","pregunta":"lo que hay que preguntarle, en una o dos lineas y en español","borrador":{...lo que ya entendiste hasta ahora...}}',
 
-            'Si ya tienes TODO -- y "todo" quiere decir: el cliente, MAS al menos un item' . "\n"
-            . '   con su nombre, su cantidad y su precio. Un borrador sin detalle NO esta listo,' . "\n"
-            . '   aunque sepas a quien facturarle: preguntalo con "faltan_datos".' . "\n"
-            . '{"desenlace":"borrador_listo","borrador":{"cliente":{"rut":"...","nombre":"...","razonSocial":"...","giro":"...","direccion":"...","comuna":"..."},"formaPago":"...","documentos":[{"item":{"nombre":"...","cantidad":1,"precioUnitario":10000,"exento":false}}]}}',
+            'Si ya tienes TODO -- y "todo" quiere decir: para CADA documento, su cliente MAS' . "\n"
+            . '   al menos un item con nombre, cantidad y precio. Un borrador sin detalle NO esta' . "\n"
+            . '   listo, aunque sepas a quien facturarle: preguntalo con "faltan_datos".' . "\n"
+            . '{"desenlace":"borrador_listo","borrador":{"cliente":{"rut":"...","nombre":"...","razonSocial":"...","giro":"...","direccion":"...","comuna":"..."},"formaPago":"...","documentos":[{"items":[{"nombre":"...","cantidad":1,"precioUnitario":10000,"exento":false}]}]}}',
         ];
 
         // SOLO CON ALGO EN CURSO. En el primer turno no hay nada que abandonar, y
@@ -386,17 +386,35 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             OPCIONES VALIDAS (no uses ninguna otra):
             {$vocabulario->comoTexto()}
 
+            LA FORMA DEL BORRADOR:
+            "documentos" es una lista, y CADA DOCUMENTO ES UNA FACTURA. Cada uno lleva
+            "items" (una LISTA, aunque sea de uno solo) y, si hace falta, su propio
+            "cliente". El "cliente" de arriba es el POR DEFECTO: vale para todo documento
+            que no traiga el suyo. Con un solo cliente para todo, basta el de arriba.
+
             REGLA DE RUTEO -- ESTO ES LO MAS IMPORTANTE Y LO QUE MAS SE MALINTERPRETA:
             Un DOCUMENTO no es lo mismo que un ITEM. Cuando el pedido menciona VARIAS
             COSAS por separado -- por ejemplo "facturale a Perez el diseño y el hosting" --
-            se entiende por defecto como VARIAS FACTURAS DE UN ITEM CADA UNA, no como una
-            factura con varios items. Cada documento consume un folio, que es un recurso
-            limitado, asi que esto cambia el costo real para el usuario.
-            PERO SI HAY DUDA DE VERDAD sobre lo que quiso decir, NO ASUMAS: usa
-            "faltan_datos" y preguntaselo en una linea, ofreciendo las dos lecturas. No es
-            un paso de sobra: es lo que le enseña al usuario como funciona el sistema.
+            se entiende POR DEFECTO como VARIAS FACTURAS DE UN ITEM CADA UNA. Cada
+            documento consume un folio, que es un recurso limitado, asi que esto cambia el
+            costo real para el usuario.
 
-            Cuando el pedido produce VARIOS documentos, cada uno lleva EXACTAMENTE UN item.
+            PERO EL USUARIO MANDA SOBRE ESE DEFECTO. Si dice "en la misma factura", "en la
+            factura", "agregale", "el mismo documento", "los dos productos en una factura"
+            o cualquier cosa parecida, entonces es UN SOLO documento con VARIOS items en su
+            lista "items". Y si lo dice DESPUES de que ya armaste dos facturas, es una
+            CORRECCION: rehaz el borrador con un documento y dos items. No la ignores ni
+            respondas lo mismo de antes.
+
+            Al reves tambien: si dice "en facturas separadas" o "una factura por cada uno",
+            son documentos distintos aunque hayas armado uno solo.
+
+            SI HAY DUDA DE VERDAD sobre lo que quiso decir, NO ASUMAS: usa "faltan_datos" y
+            preguntaselo en una linea, ofreciendo las dos lecturas. No es un paso de sobra:
+            es lo que le enseña al usuario como funciona el sistema.
+
+            CLIENTES DISTINTOS EN UN MISMO PEDIDO: "2 facturas, una para A y otra para B"
+            son dos documentos, cada uno con SU cliente dentro de su propio "cliente".
 
             Responde SIEMPRE un unico objeto JSON, sin texto alrededor, con una de estas
             {$cuantas} formas, y NINGUNA OTRA:
