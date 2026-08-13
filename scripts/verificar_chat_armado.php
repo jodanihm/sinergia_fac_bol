@@ -203,6 +203,63 @@ function limpiarSiembra(): void
     }
 }
 
+// =============================================================================
+// AYUDANTES DE LAS VERIFICACIONES -- AL NIVEL DEL ARCHIVO, Y NO DENTRO DE
+// correrArnes(). ESTO NO ES ESTILO: ES LO QUE HACE QUE EXISTAN.
+//
+// PHP declara las funciones de nivel superior AL COMPILAR, antes de ejecutar la
+// primera linea, y por eso se pueden usar mas arriba de donde estan escritas.
+// Las declaradas DENTRO de otra funcion no: existen recien cuando esa linea se
+// ejecuta.
+//
+// Como todo el arnes vive dentro de correrArnes() -- hace falta para correr en el
+// shutdown, ver el BOOTSTRAP --, estas tres estaban quedando "declaradas" en
+// mitad del recorrido, y una verificacion que las usara ANTES moria con
+// "Call to undefined function". Paso exactamente eso con traductorArmadoFalso()
+// al agregar los tres turnos de Daniel a la verificacion 5: la funcion se
+// declaraba en la 6.
+//
+// Sacandolas aqui, el orden de las verificaciones deja de importar.
+// =============================================================================
+
+/** Un traductor de armado con respuestas prefabricadas, y su historial de peticiones. */
+function traductorArmadoFalso(array $respuestas, string $clave, array &$historial): DeepSeekTraductorArmadoFactura
+{
+    $stack = HandlerStack::create(new MockHandler($respuestas));
+    $stack->push(Middleware::history($historial));
+
+    return new DeepSeekTraductorArmadoFactura(new Client(['handler' => $stack, 'http_errors' => false]), $clave);
+}
+
+/** El sobre que devuelve DeepSeek, con el JSON del modelo dentro. */
+function sobreArmado(string $contenido): Response
+{
+    return new Response(200, [], (string) json_encode([
+        'choices' => [['message' => ['content' => $contenido]]],
+    ]));
+}
+
+/** El estado tal como lo deja chatTurnoDeArmado() antes de confirmar. */
+function estadoDePrueba(array $documentos, ?array $clienteExistente = null): array
+{
+    return [
+        'turnos'   => ['facturale a mi cliente'],
+        'borrador' => [
+            'cliente' => [
+                'rut'         => '76192083-9',
+                'razonSocial' => 'CLIENTE DE ARNES SPA',
+                'giro'        => 'SERVICIOS DE PRUEBA',
+                'direccion'   => 'CALLE FALSA 123',
+                'comuna'      => 'VALDIVIA',
+            ],
+            'formaPago'   => 'CONTADO',
+            'documentos'  => $documentos,
+        ],
+        'cliente' => $clienteExistente,
+        'listo'   => true,
+    ];
+}
+
 /**
  * TODO EL ARNES. Corre en el shutdown, despues del exit del router -- ver el
  * bloque BOOTSTRAP de arriba.
@@ -387,27 +444,6 @@ if ($limite >= 60) {
 // VERIFICACION 2 - LA TRANSACCION CREA CLIENTE + N COTIZACIONES + LINEAS
 // ===========================================================================
 titulo('VERIFICACION 2 - confirmar crea todo junto, y una cotizacion POR DOCUMENTO');
-
-/** El estado tal como lo deja chatTurnoDeArmado() antes de confirmar. */
-function estadoDePrueba(array $documentos, ?array $clienteExistente = null): array
-{
-    return [
-        'turnos'   => ['facturale a mi cliente'],
-        'borrador' => [
-            'cliente' => [
-                'rut'         => '76192083-9',
-                'razonSocial' => 'CLIENTE DE ARNES SPA',
-                'giro'        => 'SERVICIOS DE PRUEBA',
-                'direccion'   => 'CALLE FALSA 123',
-                'comuna'      => 'VALDIVIA',
-            ],
-            'formaPago'   => 'CONTADO',
-            'documentos'  => $documentos,
-        ],
-        'cliente' => $clienteExistente,
-        'listo'   => true,
-    ];
-}
 
 $tresDocs = [
     ['item' => ['nombre' => 'Diseño web',  'cantidad' => 1, 'precioUnitario' => 250000, 'exento' => false]],
@@ -724,6 +760,86 @@ if ($ini === false || $fin === false) {
     }
 }
 
+// --- LOS TRES TURNOS DE DANIEL (12-08-2026) --------------------------------
+//
+// Escribio "cliente plantiflex", no existia, y el panel se lo dijo. Corrigio con
+// "el nombre de fantasia es plantiflex, es plantillas ortopedicas" y recibio EL
+// MISMO MENSAJE. Lo intento una tercera vez y otra vez lo mismo.
+//
+// La causa no era el buscador: era que el aviso del panel iba al hilo -- que no
+// viaja -- asi que el modelo nunca supo que su nombre habia fallado, y el prompt
+// le pide conservar lo entendido. Se reproduce el ciclo entero.
+echo "\n  LOS TRES TURNOS DE DANIEL: nombre que no existe, correccion, y busqueda nueva\n";
+
+// El cliente que SI existe con el nombre corregido. Sin el, el turno 3 no podria
+// distinguir "busco el nombre nuevo" de "sigue sin encontrar nada".
+$pdo->prepare('INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, giro, direccion, comuna) '
+    . 'VALUES (?, ?, ?, ?, ?, ?)')
+    ->execute([$cuentaId, '12345678-5', 'PLANTILLAS ORTOPEDICAS SPA', 'ORTOPEDIA', 'CALLE 9', 'VALDIVIA']);
+
+// TURNO 1: el modelo trae el nombre de fantasia, que no existe en el maestro.
+$t1 = chatResolverClienteDelBorrador($cuentaId, ['cliente' => ['nombre' => 'Plantiflex']]);
+printf("      turno 1 -> %s | %s\n", $t1['estado'], mb_substr((string) $t1['texto'], 0, 50));
+if ($t1['estado'] === 'preguntar' && str_contains((string) $t1['texto'], 'No encontre')) {
+    ok('turno 1: "Plantiflex" no se encuentra y el panel lo dice.');
+} else {
+    mal('turno 1 no reprodujo el punto de partida: ' . json_encode($t1));
+}
+
+// LO QUE ANTES NO EXISTIA: un aviso para el modelo.
+if (isset($t1['avisoModelo']) && str_contains((string) $t1['avisoModelo'], 'Plantiflex')) {
+    ok('y deja un aviso para el modelo: "' . (string) $t1['avisoModelo'] . '"');
+} else {
+    mal('el panel NO dejo aviso para el modelo: el bucle del nombre sigue abierto.');
+}
+
+// EL AVISO LLEGA AL PROMPT. Se miran los bytes reales, como en la verificacion 6.
+$hAviso = [];
+$tAviso = traductorArmadoFalso([sobreArmado('{"desenlace":"faltan_datos","pregunta":"¿cual?"}')],
+    'clave-falsa', $hAviso);
+$tAviso->traducir(
+    ['cliente plantiflex', 'el nombre de fantasia es plantiflex, es plantillas ortopedicas'],
+    ['cliente' => ['nombre' => 'Plantiflex']],
+    vocabularioArmado(),
+    '2026-08-12',
+    [(string) $t1['avisoModelo']]
+);
+$cuerpoAviso = (string) $hAviso[0]['request']->getBody();
+$planoAviso  = (string) json_encode(json_decode($cuerpoAviso, true), JSON_UNESCAPED_UNICODE);
+if (str_contains($planoAviso, 'no se encontro en el maestro de clientes')) {
+    ok('turno 2: el aviso VIAJA en el prompt, asi que el modelo puede corregir el nombre.');
+} else {
+    mal('el aviso no llego al prompt: el modelo seguira repitiendo el nombre viejo.');
+}
+// Y NADA MAS DEL MAESTRO SE CUELA CON EL. El aviso nombra el termino buscado y ya.
+foreach (['PLANTILLAS ORTOPEDICAS SPA', '12345678-5', 'CLIENTE DE ARNES SPA'] as $noDebe) {
+    if (str_contains($planoAviso, $noDebe)) {
+        mal('el aviso arrastro datos del maestro al proveedor: ' . $noDebe);
+    }
+}
+ok('y el aviso NO arrastro nada del maestro: ni razon social, ni RUT, ni otros clientes.');
+
+// TURNO 3: el modelo ya corrigio el nombre. Se busca el NUEVO, no el viejo.
+$t3 = chatResolverClienteDelBorrador($cuentaId, ['cliente' => ['nombre' => 'plantillas ortopedicas']]);
+printf("      turno 3 -> %s | %s\n", $t3['estado'], mb_substr((string) $t3['texto'], 0, 60));
+if ($t3['estado'] === 'listo') {
+    ok('turno 3: con el nombre corregido, el cliente SE ENCUENTRA. El bucle se cierra.');
+} else {
+    mal('turno 3: el nombre corregido tampoco resuelve: ' . json_encode($t3));
+}
+
+// EL AGRAVANTE: la correccion en 'razonSocial' con 'nombre' ocupado por el viejo.
+// Antes esto no se miraba y la busqueda repetia el termino que ya habia fallado.
+$tMixto = chatResolverClienteDelBorrador($cuentaId, [
+    'cliente' => ['nombre' => 'Plantiflex', 'razonSocial' => 'plantillas ortopedicas'],
+]);
+printf("      nombre viejo + razonSocial corregida -> %s\n", $tMixto['estado']);
+if ($tMixto['estado'] === 'listo') {
+    ok('si el nombre no da nada, se reintenta con la razon social: la correccion no se pierde.');
+} else {
+    mal('con el nombre viejo ocupado, la correccion en razonSocial se ignora: ' . json_encode($tMixto));
+}
+
 // Un cliente INCOMPLETO no puede armar: la carga masiva ya lo trata como error de
 // fila porque el lote del motor es todo-o-nada.
 $pdo->prepare('INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, giro) VALUES (?, ?, ?, ?)')
@@ -739,20 +855,6 @@ if ($r5['estado'] === 'preguntar' && str_contains((string) $r5['texto'], 'falta'
 // VERIFICACION 6 - EL TRADUCTOR DE ARMADO, SIN GASTAR NADA
 // ===========================================================================
 titulo('VERIFICACION 6 - los cuatro desenlaces del traductor de armado');
-
-function traductorArmadoFalso(array $respuestas, string $clave, array &$historial): DeepSeekTraductorArmadoFactura
-{
-    $stack = HandlerStack::create(new MockHandler($respuestas));
-    $stack->push(Middleware::history($historial));
-
-    return new DeepSeekTraductorArmadoFactura(new Client(['handler' => $stack, 'http_errors' => false]), $clave);
-}
-function sobreArmado(string $contenido): Response
-{
-    return new Response(200, [], (string) json_encode([
-        'choices' => [['message' => ['content' => $contenido]]],
-    ]));
-}
 
 // El CUARTO elemento es el borrador previo. cambio_de_tema necesita uno: desde el
 // arreglo del defecto del 12-08-2026 ese desenlace no existe en el primer turno.
@@ -1099,6 +1201,100 @@ if ($caida !== str_repeat('f', 32)) {
     mal('el GET acepto un identificador que la sesion no conoce.');
 }
 unset($_GET['c']);
+
+// --- LA HIPOTESIS DEL RELOAD EN BLANCO -------------------------------------
+//
+// SE MIDE, NO SE SUPONE. Hay un reporte de que un F5 deja la conversacion vacia
+// con el ?c correcto y la sesion viva. La sospecha es el tope de conversaciones:
+// descarta primero las que NO tienen 'turnos', y una conversacion de puras
+// CONSULTAS es exactamente eso -- tiene hilo y no tiene turnos. Si se descarta,
+// su ?c queda en la barra del navegador apuntando a algo que la sesion ya no
+// conoce, y el GET estrena una conversacion vacia.
+//
+// SALIO EN ROJO Y ERA LA CAUSA. El criterio de descarte miraba solo 'turnos', asi
+// que una conversacion de consultas -- hilo si, turnos no -- se consideraba
+// prescindible. Ahora se descarta solo lo que no tiene NI hilo NI turnos, y este
+// bloque queda como el guardian de que no vuelva a pasar.
+echo "\n  ¿EL TOPE DE CONVERSACIONES SE COME LOS HILOS DE CONSULTA?\n";
+
+// -----------------------------------------------------------------------------
+// LA PRIMERA VERSION DE ESTA PRUEBA EXIGIA UN IMPOSIBLE, y conviene que quede
+// escrito porque parecia una regresion y no lo era.
+//
+// Creaba CUATRO conversaciones CON HILO contra un tope de TRES, y despues exigia
+// que la primera sobreviviera. Con el tope en 3 y cuatro conversaciones que
+// TODAS tienen contenido, alguna tiene que caer: el bucle de descarte no termina
+// hasta bajar del tope. El criterio nuevo elige BIEN a quien sacrificar -- las
+// vacias primero -- pero no puede evitar que se sacrifique a alguien.
+//
+// EL CASO REAL ERA OTRO, y es el que se prueba ahora: UNA conversacion con hilo y
+// varias vacias recien estrenadas. Eso es lo que producia el defecto -- cada GET
+// a /chat estrenaba una conversacion, y con el criterio viejo esas vacias
+// desplazaban al hilo de consulta por no tener 'turnos'.
+// -----------------------------------------------------------------------------
+
+// CASO REAL: un hilo de consulta rodeado de conversaciones recien abiertas.
+$_SESSION[CHAT_ARMADO_SESION] = [];
+$conHilo = chatConversacionRegistrar(chatConversacionNueva());
+chatHiloAgregar($conHilo, 'usuario', 'cuanto vendi en julio');
+chatHiloAgregar($conHilo, 'asistente', 'monto total, en total');
+
+for ($i = 1; $i <= CHAT_ARMADO_MAX_CONVERSACIONES + 2; $i++) {
+    chatConversacionRegistrar(chatConversacionNueva());   // vacias, como un GET a /chat
+}
+printf("      conversaciones en sesion: %d (tope %d)\n",
+    count($_SESSION[CHAT_ARMADO_SESION]), CHAT_ARMADO_MAX_CONVERSACIONES);
+printf("      ¿sobrevive el hilo de consulta?: %s\n",
+    isset($_SESSION[CHAT_ARMADO_SESION][$conHilo]) ? 'si' : 'NO');
+
+if (isset($_SESSION[CHAT_ARMADO_SESION][$conHilo])) {
+    ok('un hilo de consulta sobrevive a CINCO conversaciones vacias: las vacias caen primero. '
+        . 'Es el caso que producia la pantalla en blanco tras un F5.');
+} else {
+    mal('REGRESION del reload en blanco: el tope volvio a descartar un hilo de CONSULTA por '
+        . 'delante de conversaciones vacias. Su ?c queda apuntando a algo que la sesion ya no '
+        . 'conoce, el GET estrena una vacia, y el usuario ve la pantalla sin burbujas.');
+}
+
+// EL LIMITE DECLARADO: mas conversaciones CON CONTENIDO que el tope. Aqui si cae
+// una, y es la mas antigua. No es un defecto -- es lo que significa tener tope --
+// pero se prueba para que sea una decision visible y no una sorpresa.
+$_SESSION[CHAT_ARMADO_SESION] = [];
+$conContenido = [];
+for ($i = 1; $i <= CHAT_ARMADO_MAX_CONVERSACIONES + 1; $i++) {
+    $c = chatConversacionRegistrar(chatConversacionNueva());
+    chatHiloAgregar($c, 'usuario', "consulta {$i}");
+    $conContenido[] = $c;
+}
+$masVieja = $conContenido[0];
+$ultima   = $conContenido[count($conContenido) - 1];
+printf("      con %d conversaciones CON hilo y tope %d: quedan %d\n",
+    count($conContenido), CHAT_ARMADO_MAX_CONVERSACIONES, count($_SESSION[CHAT_ARMADO_SESION]));
+
+if (count($_SESSION[CHAT_ARMADO_SESION]) === CHAT_ARMADO_MAX_CONVERSACIONES
+    && ! isset($_SESSION[CHAT_ARMADO_SESION][$masVieja])
+    && isset($_SESSION[CHAT_ARMADO_SESION][$ultima])) {
+    ok('cuando TODAS tienen contenido cae la mas antigua y sobrevive la ultima: el tope se '
+        . 'respeta y lo que se pierde es lo mas viejo, no lo que el usuario esta usando.');
+} else {
+    mal('con todas llenas, el descarte no se comporto como se declara: quedaron '
+        . count($_SESSION[CHAT_ARMADO_SESION]) . ' conversaciones.');
+}
+
+// LA OTRA MITAD: lo genuinamente vacio SI se tiene que poder descartar, o el tope
+// no serviria de nada y $_SESSION creceria sin techo.
+$_SESSION[CHAT_ARMADO_SESION] = [];
+$vacias = [];
+for ($i = 1; $i <= CHAT_ARMADO_MAX_CONVERSACIONES + 2; $i++) {
+    $vacias[] = chatConversacionRegistrar(chatConversacionNueva());
+}
+printf("      tras registrar %d conversaciones vacias quedan %d (tope %d)\n",
+    count($vacias), count($_SESSION[CHAT_ARMADO_SESION]), CHAT_ARMADO_MAX_CONVERSACIONES);
+if (count($_SESSION[CHAT_ARMADO_SESION]) <= CHAT_ARMADO_MAX_CONVERSACIONES) {
+    ok('las conversaciones sin hilo ni turnos SI se descartan: el tope sigue acotando la sesion.');
+} else {
+    mal('el tope dejo de descartar: $_SESSION puede crecer sin techo.');
+}
 
 // ===========================================================================
 // VERIFICACION 8 - POR HTTP

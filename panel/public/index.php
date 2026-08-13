@@ -1763,14 +1763,28 @@ function chatConversacionRegistrar(string $id): string
     // propio arreglo: la primera clave es la mas vieja. Ordenar por 'creada' seria
     // peor -- dos conversaciones del mismo segundo quedarian en orden arbitrario.
     while (count($_SESSION[CHAT_ARMADO_SESION]) > CHAT_ARMADO_MAX_CONVERSACIONES) {
-        // "PRESCINDIBLE" ES LA QUE NO TIENE UN ARMADO EN CURSO, y se mira 'turnos'
-        // y no el estado entero: desde que existe el hilo visible, una
-        // conversacion de puras consultas TAMBIEN tiene estado, y mirar el estado
-        // completo haria que cuatro pestañas de consulta se llevaran por delante
-        // el armado que si estaba a medias.
+        // "PRESCINDIBLE" ES LA QUE NO TIENE NADA: ni hilo ni turnos.
+        //
+        // ESTE CRITERIO ESTUVO MAL DOS VECES, y la segunda costo un defecto real:
+        //
+        //   1. Mirar el estado ENTERO. Fallaba al reves: desde que existe el hilo,
+        //      una conversacion de consultas tiene estado, y cuatro pestañas de
+        //      consulta se llevaban por delante el armado que si estaba a medias.
+        //   2. Mirar solo 'turnos'. Protegia el armado, pero dejaba desprotegida
+        //      cualquier conversacion de CONSULTAS -- que tiene hilo y no tiene
+        //      turnos. Al descartarse, su ?c quedaba en la barra del navegador
+        //      apuntando a algo que la sesion ya no conocia: el GET estrenaba una
+        //      conversacion vacia y el usuario veia la pantalla SIN BURBUJAS tras
+        //      un F5, con la sesion perfectamente viva. Reportado con captura.
+        //
+        // LA PREGUNTA CORRECTA NO ERA "¿es un armado en curso?" sino "¿hay algo
+        // que el usuario perderia?". Un hilo con turnos es contenido aunque nadie
+        // este armando nada.
         $victima = null;
         foreach ($_SESSION[CHAT_ARMADO_SESION] as $clave => $entrada) {
-            if (($entrada['estado']['turnos'] ?? []) === [] && $clave !== $id) {
+            $sinTurnos = ($entrada['estado']['turnos'] ?? []) === [];
+            $sinHilo   = ($entrada['estado']['hilo'] ?? []) === [];
+            if ($sinTurnos && $sinHilo && $clave !== $id) {
                 $victima = $clave;
                 break;
             }
@@ -2204,8 +2218,9 @@ function chatResolverClienteDelBorrador(int $cuentaId, array $borrador): array
     // "nombre":"" y ?? lo daria por bueno, dejando sin usar la razon social que si
     // venia. El vacio se descarta mirandolo, no coalesciendolo.
     $nombre = trim((string) ($datos['nombre'] ?? ''));
+    $razon  = trim((string) ($datos['razonSocial'] ?? ''));
     if ($nombre === '') {
-        $nombre = trim((string) ($datos['razonSocial'] ?? ''));
+        $nombre = $razon;
     }
 
     if ($rut === '' && $nombre === '') {
@@ -2250,12 +2265,39 @@ function chatResolverClienteDelBorrador(int $cuentaId, array $borrador): array
     // distinto sobre la misma ficha.
     $candidatos = clienteRepo()->listar($cuentaId, $nombre, false, CHAT_ARMADO_CANDIDATOS, 0);
 
+    // SEGUNDO INTENTO CON LA RAZON SOCIAL, y solo si el primero no dio NADA.
+    //
+    // El modelo puede dejar en 'nombre' el nombre de fantasia que ya fallo y meter
+    // la correccion del usuario en 'razonSocial'. Antes eso quedaba sin mirar --
+    // el fallback solo actuaba con 'nombre' vacio -- y la busqueda repetia el
+    // termino viejo. Se reintenta SOLO con cero candidatos: asi no puede
+    // contradecir una busqueda que si encontro algo.
+    $usado = $nombre;
+    if ($candidatos === [] && $razon !== '' && $razon !== $nombre) {
+        $candidatos = clienteRepo()->listar($cuentaId, $razon, false, CHAT_ARMADO_CANDIDATOS, 0);
+        if ($candidatos !== []) {
+            $usado = $razon;
+        }
+    }
+
     if ($candidatos === []) {
-        return ['estado' => 'preguntar', 'cliente' => null, 'rut' => null, 'texto' => sprintf(
-            'No encontre ningun cliente que se llame "%s". Si es nuevo, pasame su RUT y lo damos '
-            . 'de alta; si ya existe, prueba con otra parte del nombre.',
-            mb_substr($nombre, 0, 60)
-        )];
+        // EL AVISO PARA EL MODELO, que es lo que rompe el bucle del nombre.
+        //
+        // Viaja en el turno siguiente y dice UN HECHO SOBRE LA BUSQUEDA: que ese
+        // nombre -- escrito por el propio usuario y ya mostrado en pantalla -- no
+        // dio resultados. NO lleva nada del maestro: ni cuantos clientes hay, ni
+        // como se llaman los que si existen, ni un solo RUT. Ver la nota de
+        // privacidad de TraductorArmadoFacturaInterface.
+        return ['estado' => 'preguntar', 'cliente' => null, 'rut' => null,
+            'avisoModelo' => sprintf(
+                'el nombre "%s" no se encontro en el maestro de clientes',
+                mb_substr($usado, 0, 60)
+            ),
+            'texto' => sprintf(
+                'No encontre ningun cliente que se llame "%s". Si es nuevo, pasame su RUT y lo damos '
+                . 'de alta; si ya existe, prueba con otra parte del nombre.',
+                mb_substr($usado, 0, 60)
+            )];
     }
 
     if (count($candidatos) === 1) {
@@ -2271,6 +2313,8 @@ function chatResolverClienteDelBorrador(int $cuentaId, array $borrador): array
 
         return $resuelto;
     }
+
+    $nombre = $usado;   // a partir de aqui, el termino que de verdad encontro algo
 
     if (count($candidatos) >= CHAT_ARMADO_CANDIDATOS) {
         // El sexto no se muestra: esta ahi para saber que hay mas. Una lista larga
@@ -2476,7 +2520,11 @@ function chatTurnoDeArmado(
             $turnos,
             is_array($estado['borrador'] ?? null) ? $estado['borrador'] : [],
             vocabularioArmado(),
-            $hoy
+            $hoy,
+            // LO QUE EL PANEL YA LE DIJO AL USUARIO EN EL TURNO ANTERIOR. Sin
+            // esto, el modelo no se entera de que su nombre de cliente fallo y lo
+            // repite para siempre -- pasaba, tres veces seguidas.
+            is_array($estado['avisosPanel'] ?? null) ? $estado['avisosPanel'] : [],
         );
     } catch (TraduccionPreguntaException $e) {
         // Un mismo catch para los dos traductores: TraduccionArmadoException
@@ -2544,6 +2592,13 @@ function chatTurnoDeArmado(
     // =====================================================================
     $cliente    = chatResolverClienteDelBorrador($cuentaId, $r->borrador);
     $documentos = chatDocumentosDelBorrador($r->borrador);
+
+    // EL AVISO SE REEMPLAZA ENTERO EN CADA TURNO, no se acumula: describe LO QUE
+    // ACABA DE PASAR. Si se apilaran, el modelo seguiria leyendo que un nombre
+    // fallo mucho despues de haberlo corregido, que es el mismo bucle al reves.
+    $estado['avisosPanel'] = isset($cliente['avisoModelo']) && $cliente['avisoModelo'] !== null
+        ? [(string) $cliente['avisoModelo']]
+        : [];
 
     chatDiag('resolucion-cliente', [
         'desenlace'  => $r->desenlace,
@@ -2963,6 +3018,22 @@ function handleChatGet(): void
     $hoy      = date('Y-m-d');
 
     $conversacionId = chatConversacionDelGet();
+
+    // DIAGNOSTICO: por que esta pantalla pinta lo que pinta.
+    //
+    // TEMPORAL, y con un motivo concreto: hay un reporte de que un F5 del
+    // navegador deja la conversacion en blanco AUNQUE la URL trae el ?c correcto
+    // y la sesion sigue viva (el usuario no fue expulsado al login). Ninguna
+    // prueba reproduce eso todavia, asi que hay que ver el estado real en el
+    // momento en que ocurre. Se apaga con CHAT_ARMADO_DIAGNOSTICO.
+    $pedidaCruda = (string) ($_GET['c'] ?? '');
+    chatDiag('get-chat', [
+        'cPedido'        => mb_substr($pedidaCruda, 0, 8),
+        'cReconocido'    => $pedidaCruda !== '' && isset($_SESSION[CHAT_ARMADO_SESION][$pedidaCruda]),
+        'cUsado'         => mb_substr($conversacionId, 0, 8),
+        'conversaciones' => count($_SESSION[CHAT_ARMADO_SESION] ?? []),
+        'turnosEnHilo'   => count(chatHiloDe($conversacionId)),
+    ]);
 
     $uso = chatUsoRepo();
     vista('chat-consultas', [

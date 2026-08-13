@@ -99,6 +99,7 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
         array $borradorPrevio,
         VocabularioArmadoFactura $vocabulario,
         string $hoy,
+        array $avisosDelPanel = [],
     ): ArmadoFacturaTraducido {
         if ($this->clave === '') {
             throw TraduccionArmadoException::sinClave(self::ENV_CLAVE);
@@ -121,7 +122,7 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
 
         $mensajes = [[
             'role'    => 'system',
-            'content' => $this->instrucciones($vocabulario, $hoy, $hayBorradorPrevio),
+            'content' => $this->instrucciones($vocabulario, $hoy, $hayBorradorPrevio, $avisosDelPanel),
         ]];
 
         // EL BORRADOR PREVIO VA COMO MENSAJE DEL ASISTENTE, que es lo que fue: lo
@@ -309,7 +310,25 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
         VocabularioArmadoFactura $vocabulario,
         string $hoy,
         bool $hayBorradorPrevio,
+        array $avisosDelPanel = [],
     ): string {
+        // LOS AVISOS DEL PANEL, SI LOS HAY. Van al final del prompt y con un
+        // rotulo que dice de donde salen: el modelo tiene que poder distinguir
+        // "esto lo comprobo el sistema" de "esto lo dijo el usuario".
+        $bloqueAvisos = '';
+        foreach ($avisosDelPanel as $a) {
+            $a = trim((string) $a);
+            if ($a !== '') {
+                $bloqueAvisos .= "- {$a}\n";
+            }
+        }
+        $bloqueAvisos = $bloqueAvisos === ''
+            ? ''
+            : "\n\nLO QUE EL SISTEMA COMPROBO SOBRE TU RESPUESTA ANTERIOR (esto NO lo dijo el\n"
+              . "usuario: lo verifico el sistema contra los datos de la empresa):\n"
+              . rtrim($bloqueAvisos)
+              . "\nESTOS AVISOS MANDAN sobre lo que traias en el borrador. Si uno dice que un dato\n"
+              . "no sirvio, CORRIGELO con lo que el usuario haya escrito despues; no lo repitas.";
         $formas = [
             'Si falta algun dato para armar el borrador (lo mas frecuente):' . "\n"
             . '{"desenlace":"faltan_datos","pregunta":"lo que hay que preguntarle, en una o dos lineas y en español","borrador":{...lo que ya entendiste hasta ahora...}}',
@@ -368,14 +387,17 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             - Del cliente basta con el RUT si el usuario lo da: el sistema busca el resto.
               Pide nombre, giro, direccion y comuna SOLO si el usuario dice que el cliente
               es nuevo o si el sistema te lo pide en un turno posterior.
-            - En "borrador" conserva SIEMPRE lo que ya habias entendido en turnos
-              anteriores, aunque el mensaje de ahora solo agregue un dato. Si lo omites,
-              se pierde.
+            - En "borrador" conserva lo que ya habias entendido en turnos anteriores,
+              aunque el mensaje de ahora solo agregue un dato: si lo omites, se pierde.
+              PERO CONSERVAR NO ES REPETIR A CIEGAS. Si el usuario corrige un dato, o si
+              un aviso del sistema dice que ese dato no sirvio, la version nueva reemplaza
+              a la vieja. Vale sobre todo para el nombre del cliente: un nombre que no se
+              encontro NO se vuelve a mandar igual.
             - Prefiere preguntar antes que adivinar. Un dato inventado en una factura es
               un problema tributario, no una molestia.
             - No agregues claves que no esten en las formas de arriba.
             - La pregunta y el motivo se le muestran al usuario tal cual: escribelos claros,
-              sin jerga tecnica y sin nombrar columnas, tablas ni claves de este JSON.
+              sin jerga tecnica y sin nombrar columnas, tablas ni claves de este JSON.{$bloqueAvisos}
             TXT;
     }
 }
