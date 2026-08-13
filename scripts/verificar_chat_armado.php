@@ -1280,6 +1280,40 @@ foreach ($frasesMalRuteadas as $frase) {
     }
 }
 
+// --- UN ARMADO NUEVO SOBRE UN BORRADOR VIEJO (14-08-2026) ------------------
+//
+// El caso de Daniel, en la pieza que se puede ejercitar sin el handler: con un
+// borrador previo, el modelo dice cambio_de_tema -- correcto, el mensaje no lo
+// continua -- y ANTES eso mandaba el turno a consultas. Ahora la heuristica
+// decide, y una frase de armado abre conversacion nueva en vez de irse.
+echo "\n  UN ARMADO NUEVO SOBRE UN BORRADOR VIEJO\n";
+
+$mensajeNuevo = 'quiero que me hagas una factura para easyagenda con producto inscripcion en nic por 25mil pesos';
+
+$h = [];
+$t = traductorArmadoFalso([sobreArmado('{"desenlace":"cambio_de_tema"}')], 'clave-falsa', $h);
+$res = $t->traducir([$mensajeNuevo], ['cliente' => ['rut' => '76192083-9']], vocabularioArmado(), '2026-08-14');
+
+printf("      desenlace del modelo: %s   heuristica sobre el mensaje: %s\n",
+    $res->desenlace, chatPareceArmado($mensajeNuevo) ? 'armado' : 'consulta');
+
+if ($res->desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA) {
+    ok('con borrador previo, cambio_de_tema sigue siendo un desenlace valido.');
+} else {
+    mal('cambio_de_tema dejo de aceptarse con borrador previo: se rompio el caso que existe.');
+}
+
+// LA PIEZA QUE DECIDE. Si la heuristica dijera "consulta" sobre esta frase, el
+// arreglo del panel no se dispararia y el turno se iria a consultas igual que
+// antes -- por eso se comprueba aqui y no se da por hecho.
+if (chatPareceArmado($mensajeNuevo)) {
+    ok('y la heuristica reconoce el mensaje como armado: el panel abre conversacion nueva '
+        . 'en vez de mandarlo a consultas.');
+} else {
+    mal('la heuristica NO reconoce "' . mb_substr($mensajeNuevo, 0, 40) . '..." como armado: '
+        . 'con cambio_de_tema encima, el turno se va a consultas y vuelve la regresion.');
+}
+
 // LA DIFERENCIA CON cambio_de_tema, que es lo que impide reabrir el bug del
 // 12-08: aquel SIGUE prohibido sin borrador previo.
 $h = [];
@@ -1569,6 +1603,67 @@ if ($caida !== str_repeat('f', 32)) {
     mal('el GET acepto un identificador que la sesion no conoce.');
 }
 unset($_GET['c']);
+
+// --- LA CONVERSACION MUERTA QUE RESUCITA (14-08-2026) ----------------------
+//
+// Daniel completo un armado entero, fue a facturacion masiva, emitio, volvio al
+// chat y escribio un pedido nuevo clarisimo. Recibio el mensaje del asistente de
+// CONSULTAS. La cadena: /chat sin ?c resucito una conversacion VIEJA con
+// borrador, eso puso $enCurso en true, la heuristica NI SE CONSULTO, y el modelo
+// -- viendo un borrador de otra cosa -- dijo cambio_de_tema con razon.
+echo "\n  LA CONVERSACION MUERTA QUE RESUCITA\n";
+
+$_SESSION[CHAT_ARMADO_SESION] = [];
+
+// Una conversacion vieja, con hilo, fuera de vigencia.
+//
+// Se la envejece DESPUES de agregarle el hilo: chatHiloAgregar() pasa por
+// chatArmadoGuardar(), que refresca 'tocada'. Envejecerla antes no serviria de
+// nada -- es el mismo orden que hay que respetar en cualquier prueba de este
+// campo.
+$vieja = chatConversacionRegistrar(chatConversacionNueva());
+chatHiloAgregar($vieja, 'usuario', 'facturale algo a alguien');
+$_SESSION[CHAT_ARMADO_SESION][$vieja]['tocada'] = microtime(true) - (CHAT_HILO_VIGENCIA_SEGUNDOS + 60);
+
+if (chatConversacionConHilo() === null) {
+    ok('una conversacion fuera de vigencia NO se resucita: media hora despues ya no es '
+        . '"lo que estabas conversando".');
+} else {
+    mal('se resucito una conversacion vencida: la pantalla muestra como actual algo de otro rato.');
+}
+
+// Y una reciente SI, aunque sea de puras consultas -- es el caso del F5 en
+// blanco, que este criterio no puede volver a romper.
+$reciente = chatConversacionRegistrar(chatConversacionNueva());
+chatHiloAgregar($reciente, 'usuario', 'cuanto vendi en julio');
+chatHiloAgregar($reciente, 'asistente', 'monto total');
+if (chatConversacionConHilo() === $reciente) {
+    ok('una conversacion de PURAS CONSULTAS reciente si se muestra: el F5 en blanco sigue arreglado.');
+} else {
+    mal('no se encontro la conversacion reciente: se rompio el arreglo del F5.');
+}
+
+// SE ELIGE POR 'tocada', NO POR ORDEN DE REGISTRO.
+//
+// $vieja se registro PRIMERO y encima estaba vencida; se la toca ahora y tiene
+// que ganarle a $reciente, que esta despues en el arreglo. Si el desempate
+// volviera a caer en el orden de registro, aqui ganaria $reciente.
+//
+// NO SE TOCA 'tocada' A MANO: se agrega un turno, que es lo que hace un usuario.
+// Ponerlo a mano probaria la comparacion pero no que el guardado la actualice.
+chatHiloAgregar($vieja, 'usuario', 'sigo aca');
+printf("      tocada(vieja)=%.4f  tocada(reciente)=%.4f\n",
+    (float) $_SESSION[CHAT_ARMADO_SESION][$vieja]['tocada'],
+    (float) $_SESSION[CHAT_ARMADO_SESION][$reciente]['tocada']);
+
+if (chatConversacionConHilo() === $vieja) {
+    ok('gana la ULTIMA TOCADA, no la ultima registrada: volver a una conversacion la trae de vuelta '
+        . '-- y de paso la saca del vencimiento.');
+} else {
+    mal('se elige por orden de registro: una conversacion usada recien pierde contra otra muerta. '
+        . 'Si las dos marcas de arriba son iguales, es que "tocada" no distingue dentro del mismo '
+        . 'segundo y el desempate volvio al orden del arreglo.');
+}
 
 // --- LA HIPOTESIS DEL RELOAD EN BLANCO -------------------------------------
 //

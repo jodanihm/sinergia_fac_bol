@@ -1750,7 +1750,14 @@ function chatConversacionRegistrar(string $id): string
         $_SESSION[CHAT_ARMADO_SESION] = [];
     }
     if (! isset($_SESSION[CHAT_ARMADO_SESION][$id])) {
-        $_SESSION[CHAT_ARMADO_SESION][$id] = ['creada' => time(), 'estado' => []];
+        // 'tocada' con microtime por el mismo motivo que en chatArmadoGuardar():
+        // dos conversaciones abiertas en el mismo segundo tienen que poder
+        // ordenarse entre si.
+        $_SESSION[CHAT_ARMADO_SESION][$id] = [
+            'creada' => time(),
+            'tocada' => microtime(true),
+            'estado' => [],
+        ];
     }
 
     // EL TOPE DESCARTA PRIMERO LAS CONVERSACIONES VACIAS, y solo despues las
@@ -1840,6 +1847,18 @@ function chatArmadoGuardar(string $id, array $estado): void
 {
     chatConversacionRegistrar($id);
     $_SESSION[CHAT_ARMADO_SESION][$id]['estado'] = $estado;
+
+    // 'tocada' es lo que distingue la conversacion en la que se esta trabajando
+    // de las que quedaron por ahi. 'creada' no sirve para eso: una conversacion
+    // larga es vieja de nacimiento.
+    //
+    // MICROTIME Y NO time(), Y NO ES PRECIOSISMO. Con segundos enteros, dos
+    // conversaciones tocadas en el MISMO segundo quedan empatadas, y el desempate
+    // lo termina resolviendo el orden del arreglo -- o sea el orden de REGISTRO,
+    // que es justo lo que esta funcion vino a dejar de usar. Con empate, "la
+    // ultima usada" volvia a ser "la ultima registrada" y una conversacion recien
+    // tocada perdia contra una muerta.
+    $_SESSION[CHAT_ARMADO_SESION][$id]['tocada'] = microtime(true);
 }
 
 /** Cierra una conversacion: se confirmo, se descarto, o ya no hace falta. */
@@ -1919,7 +1938,35 @@ function chatHiloDe(string $id): array
 }
 
 /**
+ * Cuanto vale una conversacion como "la actual" para una pantalla sin ?c.
+ *
+ * MEDIA HORA, Y EL NUMERO SALE DE LA PROPIA SESION. El recolector de PHP se lleva
+ * una sesion inactiva a los 1440 s por defecto, asi que una conversacion mas
+ * vieja que eso solo puede existir en una sesion que siguio viva por OTRA
+ * actividad -- el usuario estuvo en facturacion masiva, en maestros, donde sea.
+ * Presentarle eso como "lo que estabas conversando" es mentirle.
+ *
+ * NO ES EL ARREGLO DE LA REGRESION DEL 14-08, y conviene no confundirlo: la
+ * conversacion que resucito ahi tenia minutos, no horas. Lo que la desactiva es
+ * el otro arreglo, el de cambio_de_tema. Esto acota un problema distinto y real:
+ * que una sesion de horas muestre como actual algo de otra sesion de trabajo.
+ */
+const CHAT_HILO_VIGENCIA_SEGUNDOS = 1800;
+
+/**
  * La ultima conversacion que TIENE ALGO QUE MOSTRAR, o null.
+ *
+ * DOS CAMBIOS SOBRE LA PRIMERA VERSION, los dos por el mismo motivo -- decia
+ * "la ultima" y no lo era:
+ *
+ *   - SE ELIGE POR 'tocada', NO POR ORDEN DE REGISTRO. El arreglo de $_SESSION
+ *     esta en orden de REGISTRO, asi que una conversacion abierta antes pero
+ *     usada despues quedaba atras y perdia contra otra mas nueva pero muerta.
+ *   - SE DESCARTA LO QUE ESTA FUERA DE VIGENCIA. Ver la constante de arriba.
+ *
+ * NO SE FILTRA POR "tiene armado en curso": esta funcion tambien sirve para una
+ * conversacion de PURAS CONSULTAS -- hilo si, turnos no --, que es el caso del
+ * F5 en blanco. Exigir un borrador la volveria a romper.
  *
  * =========================================================================
  * POR QUE NO SIRVE chatBorradorPendiente() PARA ESTO, aunque lo parezca
@@ -1945,14 +1992,31 @@ function chatHiloDe(string $id): array
  */
 function chatConversacionConHilo(): ?string
 {
-    $ultima = null;
+    $mejor = null;
+    $mejorTocada = 0;
+
     foreach ($_SESSION[CHAT_ARMADO_SESION] ?? [] as $id => $entrada) {
-        if (is_array($entrada['estado']['hilo'] ?? null) && $entrada['estado']['hilo'] !== []) {
-            $ultima = (string) $id;
+        if (! is_array($entrada['estado']['hilo'] ?? null) || $entrada['estado']['hilo'] === []) {
+            continue;
+        }
+        // FLOAT, NO int: 'tocada' se guarda con microtime() para que dos
+        // conversaciones del mismo segundo no empaten. Castearlo a entero aqui
+        // tiraria la parte que las distingue y devolveria el empate -- que se
+        // resolvia por orden de registro, que es lo que esta funcion no quiere.
+        // El ?? cubre las entradas de sesiones anteriores al cambio.
+        $tocada = (float) ($entrada['tocada'] ?? $entrada['creada'] ?? 0);
+
+        // FUERA DE VIGENCIA: no se resucita. Ver la nota de abajo.
+        if (microtime(true) - $tocada > CHAT_HILO_VIGENCIA_SEGUNDOS) {
+            continue;
+        }
+        if ($tocada >= $mejorTocada) {
+            $mejorTocada = $tocada;
+            $mejor       = (string) $id;
         }
     }
 
-    return $ultima;
+    return $mejor;
 }
 
 /**
@@ -2645,12 +2709,13 @@ function chatDeclararFolios(PDO $pdo, string $rutEmisor, int $cuantos): string
  */
 function chatTurnoDeArmado(
     int $cuentaId,
-    string $conversacionId,
+    string &$conversacionId,
     string $pregunta,
     string $hoy,
     MySqlChatUsoRepository $uso,
     ?TraductorArmadoFacturaInterface $traductor,
     callable $pintar,
+    bool $esReintento = false,
 ): void {
     // LA PUERTA, CERRADA HASTA QUE EXISTA EL OTRO LADO.
     //
@@ -2793,7 +2858,96 @@ function chatTurnoDeArmado(
     // armado y ahora se paga la de consultas. Es el mismo trade-off que se acepto
     // al elegir la heuristica, y sigue siendo mejor que un callejon sin salida.
     if ($r->vaAConsultas()) {
-        chatDiag('sale-a-consultas', ['rama' => 'el traductor de armado dijo ' . $r->desenlace]);
+        // DIAGNOSTICO DE LA REGRESION DEL 14-08-2026.
+        //
+        // Daniel escribio un pedido de armado clarisimo -- "quiero que me hagas
+        // una factura para easyagenda con producto inscripcion en nic por 25mil"
+        // -- y recibio el mensaje del asistente de CONSULTAS. La sospecha es el
+        // defecto viejo que quedo identificado y sin arreglar: con un borrador
+        // previo en sesion, un mensaje que no lo continua cae a cambio_de_tema y
+        // se va a consultas, aunque sea un armado NUEVO.
+        //
+        // ESTE VOLCADO ES PARA CONFIRMARLO CON EVIDENCIA, no por lectura. Lo que
+        // hay que mirar en el log cuando se reproduzca:
+        //
+        //   desenlace=cambio_de_tema + borradorPrevioDocs>0  -> es el defecto
+        //     viejo: habia un borrador de otra cosa y el modelo dijo, con razon,
+        //     que este mensaje no lo continuaba. Nadie pregunto si era un armado
+        //     nuevo.
+        //   desenlace=es_consulta                            -> el modelo leyo
+        //     mal el mensaje; el problema esta en el prompt, no en el estado.
+        //   yaConfirmado=true                                -> la conversacion
+        //     sobrevivio a un confirmar, y habria que mirar chatArmadoOlvidar().
+        //
+        // TEMPORAL: se va con CHAT_ARMADO_DIAGNOSTICO cuando la causa este cerrada.
+        $borradorPrevio = is_array($estado['borrador'] ?? null) ? $estado['borrador'] : [];
+        chatDiag('sale-a-consultas', [
+            'rama'                => 'el traductor de armado dijo ' . $r->desenlace,
+            'desenlace'           => $r->desenlace,
+            'mensaje'             => mb_substr($pregunta, 0, 120),
+            'pareceArmado'        => chatPareceArmado($pregunta),
+            'enCurso'             => $enCurso,
+            'turnosPrevios'       => count(is_array($estado['turnos'] ?? null) ? $estado['turnos'] : []),
+            'borradorPrevioDocs'  => count(chatNormalizarDocumentos($borradorPrevio)),
+            'borradorPrevio'      => mb_substr((string) json_encode($borradorPrevio, JSON_UNESCAPED_UNICODE), 0, 300),
+            // 'listo' lo pone el turno que llego al resumen. Si sigue puesto
+            // DESPUES de confirmar, la conversacion no se limpio.
+            'yaConfirmado'        => ! empty($estado['listo']),
+            'conversacionId'      => mb_substr($conversacionId, 0, 8),
+            'conversacionesEnSesion' => count($_SESSION[CHAT_ARMADO_SESION] ?? []),
+        ]);
+
+        // =================================================================
+        // "NO CONTINUA LO QUE SE VENIA ARMANDO" NO QUIERE DECIR "ES UNA CONSULTA"
+        // =================================================================
+        //
+        // TAMBIEN PUEDE SER UN ARMADO NUEVO, y eso fue la regresion del 14-08:
+        // con un borrador viejo resucitado en sesion, "quiero que me hagas una
+        // factura para easyagenda con producto inscripcion en nic por 25mil"
+        // recibio el mensaje del asistente de CONSULTAS. La cadena era: hay
+        // conversacion en curso -> la heuristica NI SE CONSULTA -> el modelo ve un
+        // borrador de otra cosa -> dice cambio_de_tema, con razon -> a consultas.
+        //
+        // AQUI SE LE PREGUNTA A LA HEURISTICA LO QUE ANTES NO SE LE PREGUNTO. Es
+        // el unico punto del flujo donde tiene sentido: ya sabemos que el mensaje
+        // no continua nada, asi que la duda "¿consulta o armado?" vuelve a ser la
+        // del primer turno, que es justo para la que la heuristica existe.
+        //
+        // SOLO PARA cambio_de_tema. Con es_consulta el modelo AFIRMO que es una
+        // pregunta, y eso pesa mas que una heuristica de tres lineas.
+        //
+        // LA CONVERSACION VIEJA NO SE PIERDE: se queda con su borrador y sus
+        // turnos, o sea que su banda de "borrador a medias" la sigue mostrando y
+        // se puede confirmar o descartar. Lo que se lleva la nueva es el HILO
+        // VISIBLE, para que la pantalla no se quede en blanco justo cuando el
+        // usuario acaba de escribir.
+        if (! $esReintento
+            && $r->desenlace === ArmadoFacturaTraducido::CAMBIO_DE_TEMA
+            && chatPareceArmado($pregunta)) {
+            $hiloVisible = chatHiloDe($conversacionId);
+
+            $estadoViejo = $estado;
+            unset($estadoViejo['hilo']);
+            chatArmadoGuardar($conversacionId, $estadoViejo);
+
+            $conversacionId = chatConversacionRegistrar(chatConversacionNueva());
+            chatArmadoGuardar($conversacionId, ['hilo' => $hiloVisible]);
+
+            chatDiag('armado-nuevo', [
+                'motivo'  => 'cambio_de_tema pero la frase parece un armado: se abre conversacion nueva',
+                'nueva'   => mb_substr($conversacionId, 0, 8),
+                'mensaje' => mb_substr($pregunta, 0, 120),
+            ]);
+
+            // UNA SOLA VEZ ($esReintento): con el borrador previo ya vacio, el
+            // interprete NO acepta cambio_de_tema -- lanza --, asi que esta
+            // llamada no puede volver a caer aqui. El flag es cinturon y
+            // tirantes, para que una recursion no dependa de una regla que vive
+            // en otra clase.
+            chatTurnoDeArmado($cuentaId, $conversacionId, $pregunta, $hoy, $uso, $traductor, $pintar, true);
+
+            return;
+        }
 
         return;
     }
@@ -3511,8 +3665,15 @@ function handleChatPost(
     // conversaciones son cortas y caben enteras, asi que saltar al final dejaba la
     // pagina a medio camino y escondia el principio.
     // =====================================================================
+    // $conversacionId VA POR REFERENCIA, y no es un detalle de estilo.
+    //
+    // chatTurnoDeArmado() puede MUDAR el turno a una conversacion nueva -- cuando
+    // el mensaje no continua el borrador viejo pero si parece un armado --, y el
+    // redirect tiene que llevar el id NUEVO. Capturado por valor, la pantalla
+    // volveria a la conversacion vieja y el turno recien escrito no aparecetria
+    // por ningun lado.
     $pintar = static function (?array $resultado, ?array $aviso, ?string $desenlace = null)
-        use ($pregunta, $cuentaId, $hoy, $uso, $conversacionId): never {
+        use ($pregunta, $cuentaId, $hoy, $uso, &$conversacionId): never {
         if ($desenlace !== null) {
             $uso->registrarPregunta($cuentaId, Auth::usuarioId(), $pregunta, $desenlace);
         }

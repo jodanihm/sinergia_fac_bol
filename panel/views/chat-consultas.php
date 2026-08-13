@@ -366,10 +366,20 @@ $sugerencias = [
                        value="<?= htmlspecialchars((string) ($conversacionId ?? '')); ?>">
                 <div class="form-campo">
                     <label for="pregunta"><?= $hilo === [] ? 'Tu pregunta' : 'Sigue la conversacion'; ?></label>
-                    <input type="text" name="pregunta" id="pregunta" class="chat-pregunta"
-                           maxlength="<?= $maxPregunta; ?>"
-                           value="<?= htmlspecialchars((string) $pregunta); ?>"
-                           placeholder="cuanto le vendi a cada cliente en los ultimos 6 meses" autofocus>
+                    <?php
+                    /* TEXTAREA Y NO input: un pedido de factura con varios items
+                       no cabe comodo en una linea, y el usuario terminaba
+                       escribiendo sin ver lo que llevaba escrito.
+
+                       EL VALOR VA COMO CONTENIDO, no en un atributo value -- un
+                       textarea no tiene value --, y sin un salto de linea despues
+                       de la etiqueta de apertura: el navegador se come el primero
+                       y cualquier otro quedaria dentro del texto. */
+                    ?>
+                    <textarea name="pregunta" id="pregunta" class="chat-pregunta"
+                              maxlength="<?= $maxPregunta; ?>" rows="2"
+                              placeholder="cuanto le vendi a cada cliente en los ultimos 6 meses"
+                              autofocus><?= htmlspecialchars((string) $pregunta); ?></textarea>
                     <?php /* El contador se rellena por JS; sin JS queda el maximo, que sigue siendo cierto. */ ?>
                     <small class="chat-contador" id="chat-contador" aria-live="polite">
                         <?= mb_strlen((string) $pregunta); ?>/<?= $maxPregunta; ?>
@@ -506,6 +516,21 @@ $sugerencias = [
         contador.textContent = campo.value.length + '/' + MAX;
     }
     campo.addEventListener('input', actualizar);
+
+    // ENTER ENVIA, SHIFT+ENTER HACE SALTO DE LINEA.
+    //
+    // Con el <input type="text"> de antes, Enter enviaba porque lo hace el
+    // navegador. Un <textarea> no: ahi Enter escribe un salto. Sin esto, el
+    // cambio a multilinea se habria llevado por delante la forma de enviar que
+    // todo el mundo usa en un chat, y nadie lo habria atribuido al textarea.
+    campo.addEventListener('keydown', function (e) {
+        if (e.key !== 'Enter' || e.shiftKey) { return; }
+        e.preventDefault();
+        // requestSubmit() y no submit(): dispara la validacion del formulario y
+        // el evento submit, igual que apretar el boton. submit() se los salta.
+        var form = document.getElementById('form-chat');
+        if (form.requestSubmit) { form.requestSubmit(); } else { form.submit(); }
+    });
 
     // Los chips y la actividad reciente RELLENAN el campo y le dan el foco.
     // NUNCA envian: cada pregunta cuesta dinero y un clic no puede gastarlo.
