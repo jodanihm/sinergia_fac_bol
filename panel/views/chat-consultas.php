@@ -75,47 +75,6 @@ $sugerencias = [
     </div>
 <?php endif; ?>
 
-<?php
-/* EL AVISO DE BORRADOR A MEDIAS.
- *
- * VA ARRIBA DE TODO Y EN TODAS LAS VUELTAS. Lo que se esta armando vive en la
- * sesion y no en la base: si el usuario lo olvida, se pierde sin dejar rastro y
- * sin que nadie se entere. El aviso es lo unico que lo hace visible.
- *
- * LAS DOS ACCIONES SON POST, no enlaces: una crea filas y la otra descarta
- * trabajo, y ninguna de las dos puede ocurrir porque un navegador precargue un
- * enlace. Por eso llevan csrfInput(), que el router valida para todo POST. */
-?>
-<?php if (! empty($pendiente)): ?>
-    <div class="alerta alerta--advertencia chat-pendiente" role="status">
-        <div>
-            <strong>Tienes un borrador a medias.</strong>
-            <?php if ($pendiente['listo'] && $pendiente['documentos'] > 0): ?>
-                <?= (int) $pendiente['documentos']; ?>
-                factura<?= $pendiente['documentos'] === 1 ? '' : 's'; ?>
-                lista<?= $pendiente['documentos'] === 1 ? '' : 's'; ?> para confirmar.
-                Todavia no se ha creado nada.
-            <?php else: ?>
-                La conversacion quedo sin terminar. Sigue escribiendo para completarla.
-            <?php endif; ?>
-        </div>
-        <div class="acciones-grupo">
-            <?php if ($pendiente['listo'] && $pendiente['documentos'] > 0): ?>
-                <form method="post" action="/chat/confirmar">
-                    <?= csrfInput(); ?>
-                    <input type="hidden" name="conversacion_id" value="<?= htmlspecialchars((string) $pendiente['id']); ?>">
-                    <button type="submit" class="boton-principal">Confirmar y crear</button>
-                </form>
-            <?php endif; ?>
-            <form method="post" action="/chat/descartar">
-                <?= csrfInput(); ?>
-                <input type="hidden" name="conversacion_id" value="<?= htmlspecialchars((string) $pendiente['id']); ?>">
-                <button type="submit" class="boton-texto">Descartar</button>
-            </form>
-        </div>
-    </div>
-<?php endif; ?>
-
 <div class="chat-layout">
     <div class="chat-principal">
 
@@ -327,6 +286,58 @@ $sugerencias = [
     </section>
     <?php endif; ?>
 <?php endforeach; ?>
+
+        <?php
+        /* EL AVISO DE BORRADOR A MEDIAS, Y SU BOTON DE CONFIRMAR.
+         *
+         * ESTABA ARRIBA DE LA PAGINA, y ahi funcionaba mientras el cuadro de
+         * escribir tambien estaba arriba. Al bajar el redactor y hacer crecer el
+         * hilo, el boton se quedo donde estaba: el scroll automatico deja al
+         * usuario mirando el final de la conversacion, con la accion mas
+         * importante fuera de pantalla. Hubo que buscarla desplazandose.
+         *
+         * AHORA VA PEGADO AL REDACTOR, que es donde el usuario esta mirando y
+         * escribiendo. Sin position:fixed: en el movil pelea con el teclado
+         * virtual y termina tapando justo el campo.
+         *
+         * NO SE DUPLICA ARRIBA Y ABAJO. Dos botones "Confirmar y crear" en la
+         * misma pantalla son una invitacion a confirmar dos veces, y confirmar
+         * crea cliente, cotizaciones y correlativos. El flash del Excel SI se
+         * queda arriba: es el resultado de algo ya hecho, no una accion pendiente.
+         *
+         * LAS DOS ACCIONES SON POST, no enlaces: una crea filas y la otra descarta
+         * trabajo, y ninguna puede ocurrir porque un navegador precargue un
+         * enlace. Por eso llevan csrfInput(), que el router valida para todo POST. */
+        ?>
+        <?php if (! empty($pendiente)): ?>
+            <div class="alerta alerta--advertencia chat-pendiente" role="status">
+                <div>
+                    <strong>Tienes un borrador a medias.</strong>
+                    <?php if ($pendiente['listo'] && $pendiente['documentos'] > 0): ?>
+                        <?= (int) $pendiente['documentos']; ?>
+                        factura<?= $pendiente['documentos'] === 1 ? '' : 's'; ?>
+                        lista<?= $pendiente['documentos'] === 1 ? '' : 's'; ?> para confirmar.
+                        Todavia no se ha creado nada.
+                    <?php else: ?>
+                        La conversacion quedo sin terminar. Sigue escribiendo para completarla.
+                    <?php endif; ?>
+                </div>
+                <div class="acciones-grupo">
+                    <?php if ($pendiente['listo'] && $pendiente['documentos'] > 0): ?>
+                        <form method="post" action="/chat/confirmar">
+                            <?= csrfInput(); ?>
+                            <input type="hidden" name="conversacion_id" value="<?= htmlspecialchars((string) $pendiente['id']); ?>">
+                            <button type="submit" class="boton-principal">Confirmar y crear</button>
+                        </form>
+                    <?php endif; ?>
+                    <form method="post" action="/chat/descartar">
+                        <?= csrfInput(); ?>
+                        <input type="hidden" name="conversacion_id" value="<?= htmlspecialchars((string) $pendiente['id']); ?>">
+                        <button type="submit" class="boton-texto">Descartar</button>
+                    </form>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <?php
         /* ==============================================================

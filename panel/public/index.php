@@ -2388,6 +2388,72 @@ function chatDocumentosDelBorrador(array $borrador): array
 }
 
 /**
+ * Que le falta a UN documento para poder facturarse, o null si esta completo.
+ *
+ * =========================================================================
+ * ESTO EXISTE PORQUE EL SISTEMA LLEGO A FABRICAR UN ITEM
+ * =========================================================================
+ *
+ * DEFECTO MEDIDO: se llego al formulario de emision con el cliente completo y sin
+ * el detalle, y la conversacion NUNCA pregunto por el. Tres capas fallaban
+ * abiertas a la vez:
+ *
+ *   - El traductor solo comprobaba que el borrador no fuera un arreglo vacio, asi
+ *     que uno con cliente y sin documentos pasaba como "listo".
+ *   - chatDocumentosDelBorrador() cuenta elementos y no mira adentro: un
+ *     documentos:[{}] contaba como un documento y salvaba la guarda del panel.
+ *   - chatArmadoConfirmar() rellenaba lo que faltaba con 'Servicio', 1 y 0. O
+ *     sea que INVENTABA un item y lo escribia en la base.
+ *
+ * EL PANEL VALIDA, NO EL TRADUCTOR, y es a proposito: el interprete tiene escrito
+ * que no valida -- validar alli crearia dos validadores capaces de discrepar, y el
+ * resultado dependeria de cual dejo pasar que. Mismo criterio que las perillas de
+ * las consultas.
+ *
+ * QUE SE EXIGE, Y QUE NO:
+ *   nombre    no vacio. Sin el, la linea del DTE no dice que se vendio.
+ *   cantidad  presente y mayor que cero.
+ *   precio    PRESENTE. No se exige mayor que cero: un precio 0 puede ser
+ *             deliberado -- 'SIN COSTO' es una forma de pago valida del SII --
+ *             y rechazarlo seria decidir por el usuario. Lo que ya no puede es
+ *             FALTAR y aparecer como cero sin que nadie lo haya dicho, que es
+ *             exactamente lo que pasaba.
+ *
+ * @param array<string,mixed> $doc
+ *
+ * @return string|null la pregunta que hay que hacerle al usuario, nombrando lo
+ *                     que falta; null si el documento esta completo
+ */
+function chatFaltaDelDocumento(array $doc, int $indice = 0, int $total = 1): ?string
+{
+    $item = is_array($doc['item'] ?? null) ? $doc['item'] : [];
+
+    $faltan = [];
+    if (trim((string) ($item['nombre'] ?? '')) === '') {
+        $faltan[] = 'que le estas facturando';
+    }
+    if (! isset($item['cantidad']) || ! is_numeric($item['cantidad']) || (float) $item['cantidad'] <= 0) {
+        $faltan[] = 'la cantidad';
+    }
+    if (! array_key_exists('precioUnitario', $item) || ! is_numeric($item['precioUnitario'])) {
+        $faltan[] = 'el precio';
+    }
+
+    if ($faltan === []) {
+        return null;
+    }
+
+    // SE NOMBRA CUAL DE LAS FACTURAS cuando hay varias: "me falta el precio" con
+    // tres documentos en el aire no le dice al usuario donde mirar.
+    $donde = $total > 1
+        ? sprintf('De la factura %d%s, ', $indice + 1,
+            trim((string) ($item['nombre'] ?? '')) !== '' ? ' (' . trim((string) $item['nombre']) . ')' : '')
+        : '';
+
+    return $donde . 'me falta ' . implode(' y ', $faltan) . '. ¿Me lo dices?';
+}
+
+/**
  * "Son 3 facturas, o sea 3 folios; tienes 120 disponibles."
  *
  * SE DICE SIEMPRE Y ANTES DE ARMAR, sin excepcion. Un documento consume un folio
@@ -2547,6 +2613,16 @@ function chatTurnoDeArmado(
         'pregunta'   => mb_substr((string) $r->pregunta, 0, 120),
         'motivo'     => mb_substr((string) $r->motivo, 0, 120),
         'documentos' => count(chatDocumentosDelBorrador($r->borrador)),
+        // EL CONTENIDO DE LOS ITEMS, no solo cuantos hay. Contar no alcanzo para
+        // diagnosticar el caso del detalle vacio: un documentos:[{}] cuenta uno
+        // igual que uno completo, y el log decia "documentos: 1" en los dos.
+        'items'      => mb_substr((string) json_encode(
+            array_map(
+                static fn ($d): mixed => is_array($d) ? ($d['item'] ?? null) : null,
+                chatDocumentosDelBorrador($r->borrador)
+            ),
+            JSON_UNESCAPED_UNICODE
+        ), 0, 300),
     ]);
 
     $uso->registrarConsulta($cuentaId, $hoy);
@@ -2628,9 +2704,27 @@ function chatTurnoDeArmado(
             : '¿Que le facturo? Dime el detalle y el monto.'], 'armando');
     }
 
-    // CLIENTE RESUELTO Y AL MENOS UN DOCUMENTO: hay borrador, aunque el modelo lo
-    // haya marcado como incompleto. Se sigue al resumen en vez de devolverle otra
-    // pregunta al usuario -- que fue justo lo que le paso a Daniel.
+    // HAY DOCUMENTOS, PERO ¿ESTAN COMPLETOS? Contar elementos no alcanzaba: un
+    // documentos:[{}] contaba como uno y llegaba hasta la base convertido en un
+    // item inventado. Aqui se mira ADENTRO, y la pregunta la hace el panel
+    // nombrando lo que falta -- no la generica del modelo, que fue la que se
+    // salto el detalle entero.
+    foreach ($documentos as $i => $doc) {
+        $falta = chatFaltaDelDocumento(is_array($doc) ? $doc : [], $i, count($documentos));
+        if ($falta !== null) {
+            chatDiag('documento-incompleto', ['indice' => $i, 'falta' => $falta]);
+            chatArmadoGuardar($conversacionId, $estado);
+            $pintar(null, ['tipo' => 'info', 'texto' => $falta], 'armando');
+        }
+    }
+
+    // CLIENTE RESUELTO Y AL MENOS UN DOCUMENTO **VALIDO**: hay borrador de verdad,
+    // aunque el modelo lo haya marcado como incompleto. Se sigue al resumen en vez
+    // de devolverle otra pregunta al usuario.
+    //
+    // EL "VALIDO" ES LO QUE FALTABA. La version anterior decia solo "al menos un
+    // documento", y con eso un placeholder del modelo se saltaba la pregunta por
+    // el detalle y llegaba al resumen como si estuviera completo.
 
     // EL CARRIL SALE DE CUANTOS DOCUMENTOS SON, no de cuantos clientes. Tres
     // facturas al MISMO cliente son tres documentos y van por el Excel igual: la
@@ -2753,6 +2847,27 @@ function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
         throw new RuntimeException('el borrador no tiene ningun documento.');
     }
 
+    // LA ULTIMA RED, Y AQUI SE LANZA EN VEZ DE RELLENAR.
+    //
+    // Antes esta funcion completaba lo que faltara con 'Servicio', cantidad 1 y
+    // precio 0. O sea que INVENTABA un item y lo escribia en la base -- en un
+    // sistema cuyo diseño entero repite que un dato inventado en una factura es
+    // un problema tributario, no una molestia.
+    //
+    // Ya no rellena nada. Si algo falta a esta altura es que la validacion de mas
+    // arriba tiene un hueco, y eso hay que verlo, no taparlo con un valor
+    // plausible. La transaccion todavia no empezo: no queda nada a medias.
+    foreach ($documentos as $i => $doc) {
+        $falta = chatFaltaDelDocumento(is_array($doc) ? $doc : [], $i, count($documentos));
+        if ($falta !== null) {
+            throw new RuntimeException(sprintf(
+                'el documento %d del borrador esta incompleto (%s). No se creo nada.',
+                $i + 1,
+                $falta
+            ));
+        }
+    }
+
     $datosCliente = is_array($borrador['cliente'] ?? null) ? $borrador['cliente'] : [];
     $yaExiste     = is_array($estado['cliente'] ?? null) ? $estado['cliente'] : null;
     $hoy          = date('Y-m-d');
@@ -2804,11 +2919,14 @@ function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
             ], [[
                 'orden'           => 1,
                 'producto_id'     => null,
-                'nombre'          => trim((string) ($item['nombre'] ?? 'Servicio')),
+                // SIN DEFAULTS: chatFaltaDelDocumento() ya garantizo que los tres
+                // vienen. Un ?? aqui volveria a abrir la puerta que este cambio
+                // cerro -- y lo haria en silencio, que es lo peor.
+                'nombre'          => trim((string) $item['nombre']),
                 'descripcion'     => '',
                 'unidad'          => '',
-                'cantidad'        => (float) ($item['cantidad'] ?? 1),
-                'precio_unitario' => (float) ($item['precioUnitario'] ?? 0),
+                'cantidad'        => (float) $item['cantidad'],
+                'precio_unitario' => (float) $item['precioUnitario'],
                 'descuento_pct'   => 0,
                 'exento'          => ! empty($item['exento']),
             ]]);

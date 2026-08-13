@@ -333,7 +333,9 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
             'Si falta algun dato para armar el borrador (lo mas frecuente):' . "\n"
             . '{"desenlace":"faltan_datos","pregunta":"lo que hay que preguntarle, en una o dos lineas y en español","borrador":{...lo que ya entendiste hasta ahora...}}',
 
-            'Si ya tienes todo:' . "\n"
+            'Si ya tienes TODO -- y "todo" quiere decir: el cliente, MAS al menos un item' . "\n"
+            . '   con su nombre, su cantidad y su precio. Un borrador sin detalle NO esta listo,' . "\n"
+            . '   aunque sepas a quien facturarle: preguntalo con "faltan_datos".' . "\n"
             . '{"desenlace":"borrador_listo","borrador":{"cliente":{"rut":"...","nombre":"...","razonSocial":"...","giro":"...","direccion":"...","comuna":"..."},"formaPago":"...","documentos":[{"item":{"nombre":"...","cantidad":1,"precioUnitario":10000,"exento":false}}]}}',
         ];
 
@@ -394,7 +396,9 @@ final class DeepSeekTraductorArmadoFactura implements TraductorArmadoFacturaInte
               a la vieja. Vale sobre todo para el nombre del cliente: un nombre que no se
               encontro NO se vuelve a mandar igual.
             - Prefiere preguntar antes que adivinar. Un dato inventado en una factura es
-              un problema tributario, no una molestia.
+              un problema tributario, no una molestia. NUNCA pongas un item de relleno
+              ("Servicio", cantidad 1, precio 0) para poder cerrar el borrador: si no
+              sabes que se factura o a que precio, PREGUNTALO.
             - No agregues claves que no esten en las formas de arriba.
             - La pregunta y el motivo se le muestran al usuario tal cual: escribelos claros,
               sin jerga tecnica y sin nombrar columnas, tablas ni claves de este JSON.{$bloqueAvisos}

@@ -502,6 +502,67 @@ if ($numerosOrdenados === range($numerosOrdenados[0], $numerosOrdenados[0] + 2))
     mal('los correlativos no son consecutivos: ' . implode(', ', $r['numeros']));
 }
 
+// --- EL DETALLE FABRICADO (13-08-2026) -------------------------------------
+//
+// Se llego al formulario de emision con el cliente completo y SIN detalle, y la
+// conversacion nunca pregunto por el. Tres capas fallaban abiertas: el traductor
+// solo miraba que el borrador no fuera vacio, chatDocumentosDelBorrador() contaba
+// elementos sin mirar adentro, y chatArmadoConfirmar() rellenaba lo que faltara
+// con 'Servicio', 1 y 0 -- o sea que INVENTABA un item y lo escribia en la base.
+echo "\n  EL DETALLE FABRICADO: un documento sin item no puede pasar\n";
+
+$degenerados = [
+    'documento vacio {}'            => [[]],
+    'item vacio {"item":{}}'        => [['item' => []]],
+    'solo nombre, sin cantidad ni precio' => [['item' => ['nombre' => 'Arriendo de software']]],
+    'nombre y cantidad, sin precio' => [['item' => ['nombre' => 'Arriendo', 'cantidad' => 1]]],
+    'cantidad cero'                 => [['item' => ['nombre' => 'Arriendo', 'cantidad' => 0, 'precioUnitario' => 1300]]],
+];
+foreach ($degenerados as $queEs => $docs) {
+    $falta = chatFaltaDelDocumento(is_array($docs[0]) ? $docs[0] : [], 0, 1);
+    printf("      %-38s -> %s\n", $queEs, $falta === null ? 'PASA (mal)' : mb_substr($falta, 0, 44));
+    if ($falta !== null) {
+        ok("'{$queEs}' se detecta como incompleto y el chat pregunta por lo que falta.");
+    } else {
+        mal("'{$queEs}' se dio por completo: puede llegar a la base como un item inventado.");
+    }
+}
+
+// Y UNO COMPLETO TIENE QUE PASAR, o la validacion seria un muro y no un filtro.
+$completo = ['item' => ['nombre' => 'Arriendo de software', 'cantidad' => 1, 'precioUnitario' => 1300]];
+if (chatFaltaDelDocumento($completo, 0, 1) === null) {
+    ok('un documento con nombre, cantidad y precio SI pasa.');
+} else {
+    mal('un documento completo se rechaza: la validacion bloquea el camino bueno.');
+}
+
+// EL PRECIO CERO SE ACEPTA A PROPOSITO: 'SIN COSTO' es forma de pago valida del
+// SII. Lo que no puede es FALTAR y aparecer como cero sin que nadie lo dijera.
+$gratis = ['item' => ['nombre' => 'Muestra sin costo', 'cantidad' => 1, 'precioUnitario' => 0]];
+if (chatFaltaDelDocumento($gratis, 0, 1) === null) {
+    ok('un precio 0 EXPLICITO se acepta: no se decide por el usuario que no puede regalar algo.');
+} else {
+    mal('se rechaza un precio 0 declarado: eso es decidir por el usuario.');
+}
+
+// LA ULTIMA RED: confirmar con un documento incompleto LANZA y no escribe nada.
+$antesCliD = (int) $pdo->query("SELECT COUNT(*) FROM cliente WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+$antesCotD = (int) $pdo->query("SELECT COUNT(*) FROM cotizacion WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+try {
+    chatArmadoConfirmar($pdo, $cuentaId, estadoDePrueba([['item' => ['nombre' => 'Arriendo']]]));
+    mal('confirmar con un documento SIN cantidad ni precio NO lanzo: se escribio un item inventado.');
+} catch (Throwable $e) {
+    ok('confirmar un documento incompleto lanza: ' . mb_substr($e->getMessage(), 0, 80));
+}
+$despuesCliD = (int) $pdo->query("SELECT COUNT(*) FROM cliente WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+$despuesCotD = (int) $pdo->query("SELECT COUNT(*) FROM cotizacion WHERE cuenta_id = {$cuentaId}")->fetchColumn();
+if ($despuesCliD === $antesCliD && $despuesCotD === $antesCotD) {
+    ok('y no escribio NADA: la validacion corre antes de abrir la transaccion.');
+} else {
+    mal(sprintf('quedaron restos: clientes %d->%d, cotizaciones %d->%d.',
+        $antesCliD, $despuesCliD, $antesCotD, $despuesCotD));
+}
+
 // --- LA TRANSACCION: si la cotizacion falla, el cliente NO queda huerfano ---
 //
 // Se fuerza el fallo con un documento cuyo precio no es un numero valido para la
