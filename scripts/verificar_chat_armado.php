@@ -251,8 +251,13 @@ function sobreArmado(string $contenido): Response
     ]));
 }
 
-/** El estado tal como lo deja chatTurnoDeArmado() antes de confirmar. */
-function estadoDePrueba(array $documentos, ?array $clienteExistente = null): array
+/**
+ * El estado tal como lo deja chatTurnoDeArmado() antes de confirmar.
+ *
+ * $clientesPorDoc es lo que el panel resolvio, por indice de documento. Vacio
+ * significa "ninguno estaba en el maestro": chatArmadoConfirmar() los da de alta.
+ */
+function estadoDePrueba(array $documentos, array $clientesPorDoc = []): array
 {
     return [
         'turnos'   => ['facturale a mi cliente'],
@@ -267,8 +272,8 @@ function estadoDePrueba(array $documentos, ?array $clienteExistente = null): arr
             'formaPago'   => 'CONTADO',
             'documentos'  => $documentos,
         ],
-        'cliente' => $clienteExistente,
-        'listo'   => true,
+        'clientes' => $clientesPorDoc,
+        'listo'    => true,
     ];
 }
 
@@ -309,7 +314,9 @@ if ($ruido === '404 - ruta no encontrada' || $ruido === '') {
 printf("  sesion: %s\n", session_status() === PHP_SESSION_ACTIVE ? 'activa' : 'NO ACTIVA');
 
 foreach (['chatPareceArmado', 'chatArmadoConfirmar', 'chatArmadoExcel', 'chatBorradorPendiente',
-          'chatResolverClienteDelBorrador', 'chatDeclararFolios', 'vocabularioArmado'] as $f) {
+          'chatResolverClienteDelBorrador', 'chatResolverCliente', 'chatDeclararFolios',
+          'vocabularioArmado', 'chatNormalizarDocumentos', 'chatCarrilDelBorrador',
+          'chatFaltaDelDocumento', 'chatAvisosDelPanel'] as $f) {
     if (! function_exists($f)) {
         morir("no se cargo {$f}(): index.php cambio de forma. ARNES SIN CORRER.");
     }
@@ -514,6 +521,118 @@ if ($numerosOrdenados === range($numerosOrdenados[0], $numerosOrdenados[0] + 2))
     mal('los correlativos no son consecutivos: ' . implode(', ', $r['numeros']));
 }
 
+// --- LA FORMA UNIFICADA DEL BORRADOR (14-08-2026) --------------------------
+//
+// DOS CASOS REALES QUE NO CABIAN EN LA FORMA VIEJA:
+//
+//   1. "Agrega otro producto a la misma factura" creaba una SEGUNDA factura. El
+//      documento tenia 'item' en singular: un documento con dos items no se podia
+//      ni escribir. Y cuando Daniel corrigio explicitamente -- "no quiero una
+//      segunda factura, quiero los 2 productos en una" -- recibio el mismo
+//      mensaje otra vez.
+//   2. "2 facturas, una para easyagenda y otra para plantillas ortopedicas"
+//      dejaba al chat preguntando "¿a que cliente le facturo?" en bucle: el
+//      cliente vivia al nivel del BORRADOR, uno para todos los documentos.
+//
+// Los dos son el mismo defecto de raiz -- la forma era demasiado rigida -- y por
+// eso se arreglan juntos y se prueban juntos.
+echo "\n  LA FORMA UNIFICADA: varios items por documento y un cliente por documento\n";
+
+// UN DOCUMENTO CON DOS ITEMS. Es lo que Daniel pidio y lo que antes no existia.
+$unaConDos = chatNormalizarDocumentos([
+    'cliente'    => ['rut' => '76192083-9'],
+    'documentos' => [[
+        'items' => [
+            ['nombre' => 'Arriendo de software', 'cantidad' => 1, 'precioUnitario' => 80000],
+            ['nombre' => 'Proceso de certificacion ante SII', 'cantidad' => 1, 'precioUnitario' => 80000],
+        ],
+    ]],
+]);
+printf("      1 documento con 2 items -> documentos=%d items=%d carril=%s\n",
+    count($unaConDos), count($unaConDos[0]['items'] ?? []), chatCarrilDelBorrador($unaConDos));
+if (count($unaConDos) === 1 && count($unaConDos[0]['items']) === 2) {
+    ok('"agrega otro producto a la MISMA factura" cabe: UN documento con DOS items.');
+} else {
+    mal('la forma nueva no admite dos items en un documento.');
+}
+if (chatCarrilDelBorrador($unaConDos) === 'cotizacion') {
+    ok('y su carril es la cotizacion, que ya sabe pintar N lineas en el formulario.');
+} else {
+    mal('un documento con dos items no deberia irse al Excel: una fila es una linea.');
+}
+
+// LA FORMA VIEJA SIGUE ENTRANDO. Las conversaciones vivas en sesion tienen
+// borradores con 'item' singular; si se perdieran, el usuario se quedaria sin
+// detalle sin entender por que.
+$vieja = chatNormalizarDocumentos([
+    'cliente'    => ['rut' => '76192083-9'],
+    'documentos' => [['item' => ['nombre' => 'Arriendo', 'cantidad' => 1, 'precioUnitario' => 1000]]],
+]);
+if (count($vieja) === 1 && count($vieja[0]['items']) === 1) {
+    ok('un borrador con "item" en singular se sigue leyendo: las conversaciones vivas no se rompen.');
+} else {
+    mal('la forma vieja dejo de leerse: los borradores en curso pierden el detalle al desplegar.');
+}
+
+// DOS CLIENTES DISTINTOS. Cada documento con el suyo, y el de arriba como defecto.
+$dosClientes = chatNormalizarDocumentos([
+    'cliente'    => ['rut' => '76192083-9'],                     // por defecto
+    'documentos' => [
+        ['cliente' => ['nombre' => 'easyagenda spa'], 'items' => [['nombre' => 'Plan', 'cantidad' => 1, 'precioUnitario' => 50000]]],
+        ['items' => [['nombre' => 'Plantillas', 'cantidad' => 1, 'precioUnitario' => 30000]]],
+    ],
+]);
+printf("      2 documentos -> cliente[0]=%s  cliente[1]=%s\n",
+    $dosClientes[0]['cliente']['nombre'] ?? '?', $dosClientes[1]['cliente']['rut'] ?? '?');
+if (($dosClientes[0]['cliente']['nombre'] ?? '') === 'easyagenda spa'
+    && ($dosClientes[1]['cliente']['rut'] ?? '') === '76192083-9') {
+    ok('cada documento lleva SU cliente, y el que no trae uno hereda el del borrador.');
+} else {
+    mal('el cliente por documento no se resuelve: ' . json_encode(array_column($dosClientes, 'cliente')));
+}
+if (chatCarrilDelBorrador($dosClientes) === 'excel') {
+    ok('dos documentos de un item van al Excel, que YA soporta un receptor por fila.');
+} else {
+    mal('dos documentos de un item deberian ir al Excel.');
+}
+
+// EL CASO QUE NO TIENE CARRIL: varios documentos y alguno con varios items.
+$nPorN = chatNormalizarDocumentos(['documentos' => [
+    ['cliente' => ['rut' => '76192083-9'], 'items' => [['nombre' => 'a', 'cantidad' => 1, 'precioUnitario' => 1], ['nombre' => 'b', 'cantidad' => 1, 'precioUnitario' => 1]]],
+    ['cliente' => ['rut' => '12345678-5'], 'items' => [['nombre' => 'c', 'cantidad' => 1, 'precioUnitario' => 1]]],
+]]);
+if (chatCarrilDelBorrador($nPorN) === 'varias') {
+    ok('N clientes x N items se reconoce como carril propio ("varias"), no se cuela al Excel.');
+} else {
+    mal('N clientes x N items se estaria mandando a un carril que no lo puede expresar.');
+}
+
+// LA FALTA SE NOMBRA POR FACTURA Y POR ITEM.
+$faltaEnSegundo = chatFaltaDelDocumento(
+    ['cliente' => ['rut' => '76192083-9'], 'items' => [
+        ['nombre' => 'Arriendo', 'cantidad' => 1, 'precioUnitario' => 80000],
+        ['nombre' => 'Certificacion', 'cantidad' => 1],
+    ]],
+    1, 2
+);
+printf("      falta en el 2do item de la 2da factura -> %s\n", mb_substr((string) $faltaEnSegundo, 0, 60));
+if ($faltaEnSegundo !== null
+    && str_contains($faltaEnSegundo, 'factura 2')
+    && str_contains($faltaEnSegundo, 'item 2')) {
+    ok('la pregunta nombra la factura Y el item: con dos de dos, "falta el precio" no bastaba.');
+} else {
+    mal('la pregunta no ubica lo que falta: ' . json_encode($faltaEnSegundo));
+}
+
+// Y UN DOCUMENTO SIN CLIENTE lo dice nombrando cual, en vez del "¿a que cliente
+// le facturo?" a secas que dejaba el bucle de easyagenda.
+$sinCliente = chatFaltaDelDocumento(['cliente' => [], 'items' => [['nombre' => 'x', 'cantidad' => 1, 'precioUnitario' => 1]]], 1, 2);
+if ($sinCliente !== null && str_contains($sinCliente, 'factura 2') && str_contains($sinCliente, 'quien')) {
+    ok('un documento sin cliente lo dice nombrando la factura: ' . mb_substr($sinCliente, 0, 50));
+} else {
+    mal('un documento sin cliente no se detecta o no dice cual: ' . json_encode($sinCliente));
+}
+
 // --- EL DETALLE FABRICADO (13-08-2026) -------------------------------------
 //
 // Se llego al formulario de emision con el cliente completo y SIN detalle, y la
@@ -523,15 +642,19 @@ if ($numerosOrdenados === range($numerosOrdenados[0], $numerosOrdenados[0] + 2))
 // con 'Servicio', 1 y 0 -- o sea que INVENTABA un item y lo escribia en la base.
 echo "\n  EL DETALLE FABRICADO: un documento sin item no puede pasar\n";
 
+// Se pasan por el normalizador, que es lo que recibe la validacion en produccion.
+$cli = ['rut' => '76192083-9'];
 $degenerados = [
-    'documento vacio {}'            => [[]],
-    'item vacio {"item":{}}'        => [['item' => []]],
-    'solo nombre, sin cantidad ni precio' => [['item' => ['nombre' => 'Arriendo de software']]],
-    'nombre y cantidad, sin precio' => [['item' => ['nombre' => 'Arriendo', 'cantidad' => 1]]],
-    'cantidad cero'                 => [['item' => ['nombre' => 'Arriendo', 'cantidad' => 0, 'precioUnitario' => 1300]]],
+    'documento vacio {}'                  => [],
+    'item vacio {"item":{}}'              => ['item' => []],
+    'solo nombre, sin cantidad ni precio' => ['item' => ['nombre' => 'Arriendo de software']],
+    'nombre y cantidad, sin precio'       => ['item' => ['nombre' => 'Arriendo', 'cantidad' => 1]],
+    'cantidad cero'                       => ['item' => ['nombre' => 'Arriendo', 'cantidad' => 0, 'precioUnitario' => 1300]],
+    'items vacio {"items":[]}'            => ['items' => []],
 ];
-foreach ($degenerados as $queEs => $docs) {
-    $falta = chatFaltaDelDocumento(is_array($docs[0]) ? $docs[0] : [], 0, 1);
+foreach ($degenerados as $queEs => $doc) {
+    $normalizado = chatNormalizarDocumentos(['cliente' => $cli, 'documentos' => [$doc]])[0];
+    $falta = chatFaltaDelDocumento($normalizado, 0, 1);
     printf("      %-38s -> %s\n", $queEs, $falta === null ? 'PASA (mal)' : mb_substr($falta, 0, 44));
     if ($falta !== null) {
         ok("'{$queEs}' se detecta como incompleto y el chat pregunta por lo que falta.");
@@ -541,7 +664,7 @@ foreach ($degenerados as $queEs => $docs) {
 }
 
 // Y UNO COMPLETO TIENE QUE PASAR, o la validacion seria un muro y no un filtro.
-$completo = ['item' => ['nombre' => 'Arriendo de software', 'cantidad' => 1, 'precioUnitario' => 1300]];
+$completo = ['cliente' => $cli, 'items' => [['nombre' => 'Arriendo de software', 'cantidad' => 1, 'precioUnitario' => 1300]]];
 if (chatFaltaDelDocumento($completo, 0, 1) === null) {
     ok('un documento con nombre, cantidad y precio SI pasa.');
 } else {
@@ -550,7 +673,7 @@ if (chatFaltaDelDocumento($completo, 0, 1) === null) {
 
 // EL PRECIO CERO SE ACEPTA A PROPOSITO: 'SIN COSTO' es forma de pago valida del
 // SII. Lo que no puede es FALTAR y aparecer como cero sin que nadie lo dijera.
-$gratis = ['item' => ['nombre' => 'Muestra sin costo', 'cantidad' => 1, 'precioUnitario' => 0]];
+$gratis = ['cliente' => $cli, 'items' => [['nombre' => 'Muestra sin costo', 'cantidad' => 1, 'precioUnitario' => 0]]];
 if (chatFaltaDelDocumento($gratis, 0, 1) === null) {
     ok('un precio 0 EXPLICITO se acepta: no se decide por el usuario que no puede regalar algo.');
 } else {
@@ -588,9 +711,10 @@ $dosDocs = [
     ['item' => ['nombre' => 'Arriendo de software', 'cantidad' => 1, 'precioUnitario' => 80000]],
     ['item' => ['nombre' => 'Proceso de certificacion ante SII', 'cantidad' => 1]],
 ];
+$dosDocsNorm = chatNormalizarDocumentos(['cliente' => ['rut' => '76192083-9'], 'documentos' => $dosDocs]);
 $faltas = [];
-foreach ($dosDocs as $i => $doc) {
-    $f = chatFaltaDelDocumento($doc, $i, count($dosDocs));
+foreach ($dosDocsNorm as $i => $doc) {
+    $f = chatFaltaDelDocumento($doc, $i, count($dosDocsNorm));
     if ($f !== null) {
         $faltas[$i] = $f;
     }
@@ -639,22 +763,35 @@ $tPrecio->traducir(
     '2026-08-13',
     $avisosParaModelo
 );
-$planoPrecio = (string) json_encode(
-    json_decode((string) $hPrecio[0]['request']->getBody(), true),
-    JSON_UNESCAPED_UNICODE
-);
-if (str_contains($planoPrecio, 'me falta el precio')) {
-    ok('turno 2: el aviso VIAJA en el prompt, asi que el modelo sabe que documento completar.');
+// SE BUSCA EL AVISO EXACTO QUE SE METIO EN EL CANAL, dentro del prompt de sistema
+// YA DECODIFICADO. Dos motivos, los dos aprendidos rompiendo esta misma prueba:
+//
+//   - CONTRA EL TEXTO, NO CONTRA UNA FRASE ESCRITA A MANO. La version anterior
+//     buscaba el literal "me falta el precio" y se puso roja en cuanto la
+//     pregunta gano precision ("me falta de \"Proceso de certificacion\" el
+//     precio"). El cableado estaba perfecto; lo que estaba viejo era la
+//     expectativa. Comparando contra $avisosParaModelo[0], la prueba sigue
+//     valiendo cualquiera sea la redaccion.
+//   - DENTRO DEL MENSAJE DECODIFICADO, no del JSON re-serializado. El aviso trae
+//     comillas alrededor del nombre del item, y en el JSON viajan como \" -- una
+//     busqueda sobre el texto serializado no las encontraria nunca.
+$cuerpoPrecio = json_decode((string) $hPrecio[0]['request']->getBody(), true);
+$promptSistema = (string) ($cuerpoPrecio['messages'][0]['content'] ?? '');
+if ($avisosParaModelo !== [] && str_contains($promptSistema, $avisosParaModelo[0])) {
+    ok('turno 2: el aviso VIAJA en el prompt, tal cual se metio en el canal, asi que el '
+        . 'modelo sabe que documento completar.');
 } else {
-    mal('el aviso no llego al prompt: el modelo seguira devolviendo el documento sin precio.');
+    mal('el aviso no llego al prompt de sistema: el modelo seguira devolviendo el documento '
+        . 'sin precio. Se buscaba: ' . mb_substr((string) ($avisosParaModelo[0] ?? ''), 0, 70));
 }
 
 // TURNO 3: el usuario dio el precio. Ni queda pendiente ni se repite el aviso.
 $dosDocsCompletos = $dosDocs;
 $dosDocsCompletos[1]['item']['precioUnitario'] = 80000;
+$dosCompletosNorm = chatNormalizarDocumentos(['cliente' => ['rut' => '76192083-9'], 'documentos' => $dosDocsCompletos]);
 $faltas3 = [];
-foreach ($dosDocsCompletos as $i => $doc) {
-    $f = chatFaltaDelDocumento($doc, $i, count($dosDocsCompletos));
+foreach ($dosCompletosNorm as $i => $doc) {
+    $f = chatFaltaDelDocumento($doc, $i, count($dosCompletosNorm));
     if ($f !== null) {
         $faltas3[$i] = $f;
     }

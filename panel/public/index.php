@@ -1981,7 +1981,7 @@ function chatBorradorPendiente(): ?array
         $pendiente = [
             'id'         => (string) $id,
             'listo'      => ! empty($estado['listo']),
-            'documentos' => count(chatDocumentosDelBorrador($borrador)),
+            'documentos' => count(chatNormalizarDocumentos($borrador)),
         ];
     }
 
@@ -2211,8 +2211,22 @@ function chatPareceArmado(string $texto): bool
  */
 function chatResolverClienteDelBorrador(int $cuentaId, array $borrador): array
 {
-    $datos = is_array($borrador['cliente'] ?? null) ? $borrador['cliente'] : [];
-    $rut   = trim((string) ($datos['rut'] ?? ''));
+    // ENVOLTORIO DEL DEFECTO DEL BORRADOR. Desde que cada documento puede traer
+    // su propio cliente, lo que resuelve de verdad es chatResolverCliente(); esto
+    // queda para el cliente "por defecto" del borrador entero.
+    return chatResolverCliente($cuentaId, is_array($borrador['cliente'] ?? null) ? $borrador['cliente'] : []);
+}
+
+/**
+ * Resuelve UN cliente contra el maestro. Ver el docblock de arriba.
+ *
+ * @param array<string,mixed> $datos el bloque 'cliente' de un documento o del borrador
+ *
+ * @return array{estado:string, texto:?string, cliente:?array<string,mixed>, rut:?string, avisoModelo?:?string}
+ */
+function chatResolverCliente(int $cuentaId, array $datos): array
+{
+    $rut = trim((string) ($datos['rut'] ?? ''));
 
     // Los dos se miran por separado y no con ?? encadenado: el modelo puede mandar
     // "nombre":"" y ?? lo daria por bueno, dejando sin usar la razon social que si
@@ -2369,22 +2383,66 @@ function chatClienteEncontrado(array $cliente, string $rut): array
 }
 
 /**
- * Los documentos que salen del borrador, ya acotados.
+ * Los documentos del borrador, EN UNA SOLA FORMA y ya acotados.
  *
- * UN DOCUMENTO POR ITEM, que es la decision tomada: un pedido que menciona dos
- * cosas produce dos facturas de una linea cada una. Eso NO es una limitacion
- * inventada aqui -- es la forma del carril del Excel, donde una fila es un
- * documento de una sola linea y no hay manera de expresar otra cosa.
+ * =========================================================================
+ * EL UNICO SITIO QUE SABE COMO VIENE EL BORRADOR
+ * =========================================================================
+ *
+ * Antes la forma estaba repartida en cinco funciones, cada una leyendo
+ * $doc['item'] y $borrador['cliente'] por su cuenta. Eso costo dos defectos:
+ *
+ *   - "Agrega otro producto a la MISMA factura" creaba una segunda factura. El
+ *     borrador no tenia como expresar un documento con varios items: la clave
+ *     era 'item', en singular, y nadie leia una lista.
+ *   - "2 facturas, una para easyagenda y otra para plantillas ortopedicas"
+ *     dejaba al chat preguntando "¿a que cliente le facturo?" en bucle. El
+ *     cliente vivia al nivel del BORRADOR, uno para todos los documentos.
+ *
+ * Ahora la forma se lee AQUI y nada mas, y el resto consume documentos ya
+ * normalizados: ['cliente' => [...], 'items' => [...]].
+ *
+ * -------------------------------------------------------------------------
+ * EL CLIENTE: POR DEFECTO ARRIBA, CON OVERRIDE POR DOCUMENTO
+ *
+ * El caso comun es una sola persona a quien facturarle, y obligar a repetirla en
+ * cada documento haria el borrador mas largo y al modelo mas propenso a
+ * contradecirse. Asi que $borrador['cliente'] sigue valiendo como defecto, y un
+ * documento puede traer el suyo para ganarle.
+ *
+ * SE ACEPTA 'item' EN SINGULAR ademas de 'items'. No es indulgencia con el
+ * modelo: es que las conversaciones que ya estan vivas en sesion tienen
+ * borradores con la forma vieja, y al desplegar esto se quedarian sin detalle sin
+ * que nadie entienda por que.
  *
  * @param array<string,mixed> $borrador
  *
- * @return list<array<string,mixed>>
+ * @return list<array{cliente:array<string,mixed>, items:list<array<string,mixed>>}>
  */
-function chatDocumentosDelBorrador(array $borrador): array
+function chatNormalizarDocumentos(array $borrador): array
 {
-    $docs = is_array($borrador['documentos'] ?? null) ? array_values($borrador['documentos']) : [];
+    $clientePorDefecto = is_array($borrador['cliente'] ?? null) ? $borrador['cliente'] : [];
+    $crudos = is_array($borrador['documentos'] ?? null) ? array_values($borrador['documentos']) : [];
 
-    return array_slice($docs, 0, CHAT_ARMADO_MAX_DOCUMENTOS);
+    $normalizados = [];
+    foreach (array_slice($crudos, 0, CHAT_ARMADO_MAX_DOCUMENTOS) as $doc) {
+        $doc = is_array($doc) ? $doc : [];
+
+        $items = [];
+        if (is_array($doc['items'] ?? null)) {
+            $items = array_values(array_filter($doc['items'], 'is_array'));
+        } elseif (is_array($doc['item'] ?? null)) {
+            $items = [$doc['item']];   // forma vieja, ver el docblock
+        }
+
+        $cliente = is_array($doc['cliente'] ?? null) && $doc['cliente'] !== []
+            ? $doc['cliente']
+            : $clientePorDefecto;
+
+        $normalizados[] = ['cliente' => $cliente, 'items' => $items];
+    }
+
+    return $normalizados;
 }
 
 /**
@@ -2426,31 +2484,54 @@ function chatDocumentosDelBorrador(array $borrador): array
  */
 function chatFaltaDelDocumento(array $doc, int $indice = 0, int $total = 1): ?string
 {
-    $item = is_array($doc['item'] ?? null) ? $doc['item'] : [];
+    // RECIBE UN DOCUMENTO YA NORMALIZADO (ver chatNormalizarDocumentos): cliente
+    // resuelto contra el defecto del borrador, e items siempre en lista.
+    $items = is_array($doc['items'] ?? null) ? array_values($doc['items']) : [];
+    $cli   = is_array($doc['cliente'] ?? null) ? $doc['cliente'] : [];
 
-    $faltan = [];
-    if (trim((string) ($item['nombre'] ?? '')) === '') {
-        $faltan[] = 'que le estas facturando';
-    }
-    if (! isset($item['cantidad']) || ! is_numeric($item['cantidad']) || (float) $item['cantidad'] <= 0) {
-        $faltan[] = 'la cantidad';
-    }
-    if (! array_key_exists('precioUnitario', $item) || ! is_numeric($item['precioUnitario'])) {
-        $faltan[] = 'el precio';
+    $donde = $total > 1 ? sprintf('De la factura %d, ', $indice + 1) : '';
+
+    // EL CLIENTE SE MIRA AQUI, y es nuevo. Con un cliente por documento, un
+    // borrador puede tener el de la factura 1 y no el de la 2 -- y antes eso
+    // terminaba en "¿a que cliente le facturo?" a secas, sin decir de cual, en
+    // bucle. Solo se comprueba que el borrador DIGA quien es; buscarlo en el
+    // maestro es de chatResolverCliente().
+    if (trim((string) ($cli['rut'] ?? '')) === ''
+        && trim((string) ($cli['nombre'] ?? '')) === ''
+        && trim((string) ($cli['razonSocial'] ?? '')) === '') {
+        return $donde . 'me falta a quien le facturo. ¿Me das su RUT o su nombre?';
     }
 
-    if ($faltan === []) {
-        return null;
+    if ($items === []) {
+        return $donde . 'me falta que le estas facturando. ¿Me lo dices?';
     }
 
-    // SE NOMBRA CUAL DE LAS FACTURAS cuando hay varias: "me falta el precio" con
-    // tres documentos en el aire no le dice al usuario donde mirar.
-    $donde = $total > 1
-        ? sprintf('De la factura %d%s, ', $indice + 1,
-            trim((string) ($item['nombre'] ?? '')) !== '' ? ' (' . trim((string) $item['nombre']) . ')' : '')
-        : '';
+    foreach ($items as $n => $item) {
+        $faltan = [];
+        if (trim((string) ($item['nombre'] ?? '')) === '') {
+            $faltan[] = 'que le estas facturando';
+        }
+        if (! isset($item['cantidad']) || ! is_numeric($item['cantidad']) || (float) $item['cantidad'] <= 0) {
+            $faltan[] = 'la cantidad';
+        }
+        if (! array_key_exists('precioUnitario', $item) || ! is_numeric($item['precioUnitario'])) {
+            $faltan[] = 'el precio';
+        }
+        if ($faltan === []) {
+            continue;
+        }
 
-    return $donde . 'me falta ' . implode(' y ', $faltan) . '. ¿Me lo dices?';
+        // SE NOMBRA QUE FACTURA Y QUE ITEM. Con dos documentos de dos items cada
+        // uno, "me falta el precio" no le dice a nadie donde mirar.
+        $cual = trim((string) ($item['nombre'] ?? ''));
+        $deQue = count($items) > 1
+            ? sprintf('del item %d%s ', $n + 1, $cual !== '' ? ' (' . $cual . ')' : '')
+            : ($cual !== '' ? 'de "' . $cual . '" ' : '');
+
+        return $donde . 'me falta ' . $deQue . implode(' y ', $faltan) . '. ¿Me lo dices?';
+    }
+
+    return null;
 }
 
 /**
@@ -2680,17 +2761,16 @@ function chatTurnoDeArmado(
         'desenlace'  => $r->desenlace,
         'pregunta'   => mb_substr((string) $r->pregunta, 0, 120),
         'motivo'     => mb_substr((string) $r->motivo, 0, 120),
-        'documentos' => count(chatDocumentosDelBorrador($r->borrador)),
-        // EL CONTENIDO DE LOS ITEMS, no solo cuantos hay. Contar no alcanzo para
-        // diagnosticar el caso del detalle vacio: un documentos:[{}] cuenta uno
-        // igual que uno completo, y el log decia "documentos: 1" en los dos.
-        'items'      => mb_substr((string) json_encode(
-            array_map(
-                static fn ($d): mixed => is_array($d) ? ($d['item'] ?? null) : null,
-                chatDocumentosDelBorrador($r->borrador)
-            ),
+        'documentos' => count(chatNormalizarDocumentos($r->borrador)),
+        // EL CONTENIDO, no solo cuantos hay. Contar no alcanzo para diagnosticar
+        // el caso del detalle vacio: un documentos:[{}] cuenta uno igual que uno
+        // completo, y el log decia "documentos: 1" en los dos. Ahora va tambien el
+        // cliente de cada documento, que es lo que faltaba para el caso de dos
+        // clientes distintos.
+        'contenido'  => mb_substr((string) json_encode(
+            chatNormalizarDocumentos($r->borrador),
             JSON_UNESCAPED_UNICODE
-        ), 0, 300),
+        ), 0, 400),
     ]);
 
     $uso->registrarConsulta($cuentaId, $hoy);
@@ -2748,8 +2828,40 @@ function chatTurnoDeArmado(
     //  que el panel averigua MANDA sobre lo que el modelo iba a preguntar,
     //  porque el panel sabe algo que el modelo no.
     // =====================================================================
-    $cliente    = chatResolverClienteDelBorrador($cuentaId, $r->borrador);
-    $documentos = chatDocumentosDelBorrador($r->borrador);
+    $documentos = chatNormalizarDocumentos($r->borrador);
+
+    // UN CLIENTE POR DOCUMENTO. La resolucion se hace una vez por documento y no
+    // una vez por borrador: "2 facturas, una para easyagenda y otra para
+    // plantillas ortopedicas" son dos clientes distintos, y con uno solo el chat
+    // se quedaba preguntando "¿a que cliente le facturo?" en bucle.
+    //
+    // SE CACHEA POR RUT dentro del turno: dos documentos al mismo cliente no
+    // pueden costar dos consultas al maestro ni dar respuestas distintas.
+    $clientesPorDoc = [];
+    $cachePorClave  = [];
+    foreach ($documentos as $i => $doc) {
+        $clave = trim((string) ($doc['cliente']['rut'] ?? ''))
+            . '|' . trim((string) ($doc['cliente']['nombre'] ?? ''))
+            . '|' . trim((string) ($doc['cliente']['razonSocial'] ?? ''));
+        $cachePorClave[$clave] ??= chatResolverCliente($cuentaId, $doc['cliente']);
+        $clientesPorDoc[$i] = $cachePorClave[$clave];
+    }
+
+    // EL PRIMERO QUE NO SE PUDO RESOLVER es el que se le pregunta al usuario. Si
+    // no hay documentos todavia, se resuelve el cliente por defecto del borrador,
+    // que es lo que permite ir pidiendo el cliente antes de saber que se factura.
+    $cliente = $documentos === []
+        ? chatResolverClienteDelBorrador($cuentaId, $r->borrador)
+        : ($clientesPorDoc[0] ?? ['estado' => 'listo', 'cliente' => null, 'rut' => null, 'texto' => null]);
+    foreach ($clientesPorDoc as $i => $c) {
+        if ($c['estado'] !== 'listo') {
+            $cliente = $c;
+            if (count($documentos) > 1 && $c['texto'] !== null) {
+                $cliente['texto'] = sprintf('De la factura %d: %s', $i + 1, (string) $c['texto']);
+            }
+            break;
+        }
+    }
 
     // LO QUE LE FALTA A CADA DOCUMENTO. Se calcula ANTES de cualquier rama que
     // corte, por el mismo motivo que la resolucion del cliente: las ramas
@@ -2823,20 +2935,43 @@ function chatTurnoDeArmado(
     // documento", y con eso un placeholder del modelo se saltaba la pregunta por
     // el detalle y llegaba al resumen como si estuviera completo.
 
-    // EL CARRIL SALE DE CUANTOS DOCUMENTOS SON, no de cuantos clientes. Tres
-    // facturas al MISMO cliente son tres documentos y van por el Excel igual: la
-    // carga masiva nunca junta filas del mismo RUT, y una cotizacion de tres
-    // lineas produciria una sola factura, que es lo contrario de lo pedido.
-    $carril = count($documentos) === 1 ? 'cotizacion' : 'excel';
+    $carril = chatCarrilDelBorrador($documentos);
 
-    $estado['cliente'] = $cliente['cliente'];   // NO viaja al modelo. Nunca.
-    $estado['carril']  = $carril;
-    $estado['listo']   = true;
+    // LOS CLIENTES RESUELTOS, uno por documento. NO viajan al modelo. Nunca.
+    $estado['clientes'] = array_map(static fn (array $c): ?array => $c['cliente'], $clientesPorDoc);
+    $estado['carril']   = $carril;
+    $estado['listo']    = true;
     chatArmadoGuardar($conversacionId, $estado);
 
     $pintar(null, ['tipo' => 'info', 'texto' => chatResumenBorrador(
-        $pdo, (string) $prod['rut'], $cliente, $documentos, $r->borrador, $carril, $cliente['texto']
+        $pdo, (string) $prod['rut'], $clientesPorDoc, $documentos, $r->borrador, $carril
     )], 'armando');
+}
+
+/**
+ * Por donde va a salir este borrador.
+ *
+ *   cotizacion  UN documento -- con los items que sea. Prellena el formulario de
+ *               emision, que ya sabe pintar N lineas.
+ *   excel       VARIOS documentos, todos de UN item. Es lo unico que el Excel de
+ *               la carga masiva puede expresar: una fila es una linea.
+ *   varias      VARIOS documentos y alguno con MAS de un item. No cabe en el
+ *               Excel y /facturar solo atiende uno. Necesita su propia pantalla.
+ *
+ * @param list<array{cliente:array<string,mixed>, items:list<array<string,mixed>>}> $documentos
+ */
+function chatCarrilDelBorrador(array $documentos): string
+{
+    if (count($documentos) === 1) {
+        return 'cotizacion';
+    }
+    foreach ($documentos as $doc) {
+        if (count($doc['items']) > 1) {
+            return 'varias';
+        }
+    }
+
+    return 'excel';
 }
 
 /**
@@ -2845,37 +2980,40 @@ function chatTurnoDeArmado(
  * Dice, en este orden: a quien, que, con que forma de pago, cuantos folios cuesta
  * y por donde va a salir. Los folios NUNCA se omiten -- ver chatDeclararFolios().
  *
- * @param array{estado:string, texto:?string, cliente:?array<string,mixed>, rut:?string} $cliente
- * @param list<array<string,mixed>> $documentos
+ * EL CLIENTE VA POR DOCUMENTO, no una vez arriba: con dos facturas a dos clientes
+ * distintos, un unico "Cliente: X" seria falso para la mitad del borrador.
+ *
+ * @param array<int,array{estado:string, texto:?string, cliente:?array<string,mixed>, rut:?string}> $clientesPorDoc
+ * @param list<array{cliente:array<string,mixed>, items:list<array<string,mixed>>}> $documentos
  * @param array<string,mixed> $borrador
  */
 function chatResumenBorrador(
     PDO $pdo,
     string $rutEmisor,
-    array $cliente,
+    array $clientesPorDoc,
     array $documentos,
     array $borrador,
     string $carril,
-    ?string $notaCliente,
 ): string {
     $lineas = [];
-    if ($notaCliente !== null && trim($notaCliente) !== '') {
-        $lineas[] = trim($notaCliente);
-    }
-
-    $lineas[] = sprintf('Cliente: %s (%s).',
-        $cliente['cliente']['razon_social'] ?? '?', $cliente['rut'] ?? '?');
 
     foreach ($documentos as $i => $d) {
-        $item = is_array($d['item'] ?? null) ? $d['item'] : [];
-        $lineas[] = sprintf(
-            'Factura %d: %s, %s x $%s%s.',
-            $i + 1,
-            trim((string) ($item['nombre'] ?? 'sin detalle')),
-            rtrim(rtrim(number_format((float) ($item['cantidad'] ?? 1), 4, ',', '.'), '0'), ','),
-            number_format((float) ($item['precioUnitario'] ?? 0), 0, ',', '.'),
-            ! empty($item['exento']) ? ' (exento)' : '',
-        );
+        $c    = $clientesPorDoc[$i] ?? null;
+        $quien = sprintf('%s (%s)',
+            $c['cliente']['razon_social'] ?? '?', $c['rut'] ?? '?');
+
+        $detalle = [];
+        foreach ($d['items'] as $item) {
+            $detalle[] = sprintf(
+                '%s, %s x $%s%s',
+                trim((string) ($item['nombre'] ?? 'sin detalle')),
+                rtrim(rtrim(number_format((float) ($item['cantidad'] ?? 1), 4, ',', '.'), '0'), ','),
+                number_format((float) ($item['precioUnitario'] ?? 0), 0, ',', '.'),
+                ! empty($item['exento']) ? ' (exento)' : '',
+            );
+        }
+
+        $lineas[] = sprintf('Factura %d para %s: %s.', $i + 1, $quien, implode('; ', $detalle));
     }
 
     // LA FORMA DE PAGO SE NOMBRA SIEMPRE, incluso cuando es la asumida. Es una
@@ -2888,9 +3026,15 @@ function chatResumenBorrador(
 
     $lineas[] = chatDeclararFolios($pdo, $rutEmisor, count($documentos));
 
-    $lineas[] = $carril === 'cotizacion'
-        ? 'Va a quedar cargado en el formulario de emision para que lo revises y emitas tu.'
-        : 'Como son varias, van a salir en un Excel para la carga masiva, que despues emites desde ahi.';
+    $lineas[] = match ($carril) {
+        'cotizacion' => 'Va a quedar cargado en el formulario de emision para que lo revises y emitas tu.',
+        'excel'      => 'Como son varias, van a salir en un Excel para la carga masiva, que despues emites desde ahi.',
+        // VARIAS FACTURAS Y ALGUNA CON MAS DE UN ITEM: no cabe en el Excel -- una
+        // fila es una linea -- ni en /facturar, que atiende un documento. Se
+        // crean igual y se listan para facturarlas de a una.
+        default      => 'Como son varias y alguna lleva mas de un item, no caben en el Excel: '
+                        . 'van a quedar como cotizaciones para que las factures de a una.',
+    };
 
     return implode(' ', $lineas);
 }
@@ -2939,7 +3083,7 @@ const CHAT_ARMADO_EXCEL_SESION = 'chat_armado_excel';
 function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
 {
     $borrador   = is_array($estado['borrador'] ?? null) ? $estado['borrador'] : [];
-    $documentos = chatDocumentosDelBorrador($borrador);
+    $documentos = chatNormalizarDocumentos($borrador);
     if ($documentos === []) {
         throw new RuntimeException('el borrador no tiene ningun documento.');
     }
@@ -2965,46 +3109,88 @@ function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
         }
     }
 
-    $datosCliente = is_array($borrador['cliente'] ?? null) ? $borrador['cliente'] : [];
-    $yaExiste     = is_array($estado['cliente'] ?? null) ? $estado['cliente'] : null;
-    $hoy          = date('Y-m-d');
+    // LOS CLIENTES QUE EL PANEL YA RESOLVIO, por indice de documento. Lo que no
+    // este aqui es un cliente nuevo y se da de alta mas abajo.
+    $resueltos = is_array($estado['clientes'] ?? null) ? $estado['clientes'] : [];
+    $hoy       = date('Y-m-d');
 
     $pdo->beginTransaction();
     try {
-        $clienteCreado = false;
-        if ($yaExiste !== null) {
-            $cliente = $yaExiste;
-        } else {
-            // ALTA CON LAS MISMAS PIEZAS QUE EL ABM, no con un INSERT propio:
-            // validarCliente() normaliza el RUT y decide que es obligatorio, y
-            // crear() traduce el errno 1062 a ClienteDuplicadoException. Dos
-            // validadores para la misma tabla terminan discrepando.
-            [$datos, $errores] = validarCliente([
-                'rut_cliente'  => (string) ($datosCliente['rut'] ?? ''),
-                'razon_social' => (string) ($datosCliente['razonSocial'] ?? $datosCliente['nombre'] ?? ''),
-                'giro'         => (string) ($datosCliente['giro'] ?? ''),
-                'direccion'    => (string) ($datosCliente['direccion'] ?? ''),
-                'comuna'       => (string) ($datosCliente['comuna'] ?? ''),
-                'email'        => (string) ($datosCliente['email'] ?? ''),
-            ]);
-            if ($errores !== []) {
-                throw new RuntimeException('el cliente no se puede dar de alta: ' . implode(' ', $errores));
-            }
-
-            $id      = clienteRepo()->crear($cuentaId, $datos);
-            $cliente = ['id' => $id] + $datos + ['razon_social' => $datos['razon_social']];
-            $clienteCreado = true;
-        }
+        // DEDUPE POR RUT, con el mismo patron que $clienteIdPorRutNuevo de la
+        // carga masiva: dos documentos al mismo cliente nuevo NO pueden intentar
+        // crearlo dos veces -- el segundo chocaria contra uk_cliente_rut y tumbaria
+        // la transaccion entera.
+        $porRut  = [];
+        $creados = 0;
 
         $ids = $numeros = [];
-        foreach ($documentos as $doc) {
-            $item = is_array($doc['item'] ?? null) ? $doc['item'] : [];
+        foreach ($documentos as $i => $doc) {
+            $datosCliente = is_array($doc['cliente'] ?? null) ? $doc['cliente'] : [];
+            $rutCrudo     = (string) ($datosCliente['rut'] ?? '');
+            $rutNorm      = Rut::normalizar($rutCrudo);
+
+            $cliente = is_array($resueltos[$i] ?? null) ? $resueltos[$i] : null;
+
+            if ($cliente === null && $rutNorm !== '' && isset($porRut[$rutNorm])) {
+                $cliente = $porRut[$rutNorm];   // creado por un documento anterior
+            }
+
+            if ($cliente === null) {
+                // ALTA CON LAS MISMAS PIEZAS QUE EL ABM, no con un INSERT propio:
+                // validarCliente() normaliza el RUT y decide que es obligatorio, y
+                // crear() traduce el errno 1062 a ClienteDuplicadoException. Dos
+                // validadores para la misma tabla terminan discrepando.
+                [$datos, $errores] = validarCliente([
+                    'rut_cliente'  => $rutCrudo,
+                    'razon_social' => (string) ($datosCliente['razonSocial'] ?? $datosCliente['nombre'] ?? ''),
+                    'giro'         => (string) ($datosCliente['giro'] ?? ''),
+                    'direccion'    => (string) ($datosCliente['direccion'] ?? ''),
+                    'comuna'       => (string) ($datosCliente['comuna'] ?? ''),
+                    'email'        => (string) ($datosCliente['email'] ?? ''),
+                ]);
+                if ($errores !== []) {
+                    throw new RuntimeException(sprintf(
+                        'el cliente de la factura %d no se puede dar de alta: %s',
+                        $i + 1,
+                        implode(' ', $errores)
+                    ));
+                }
+
+                $id      = clienteRepo()->crear($cuentaId, $datos);
+                $cliente = ['id' => $id] + $datos;
+                $creados++;
+            }
+
+            $rutFicha = (string) ($cliente['rut_cliente'] ?? $rutNorm);
+            if ($rutFicha !== '') {
+                $porRut[$rutFicha] = $cliente;
+            }
+
+            // LAS LINEAS, UNA POR ITEM. Antes era siempre una: por eso "agrega
+            // otro producto a la misma factura" terminaba en una segunda factura.
+            $lineas = [];
+            foreach ($doc['items'] as $n => $item) {
+                $lineas[] = [
+                    'orden'           => $n + 1,
+                    'producto_id'     => null,
+                    // SIN DEFAULTS: chatFaltaDelDocumento() ya garantizo que los
+                    // tres vienen. Un ?? aqui volveria a abrir la puerta que ese
+                    // cambio cerro -- y lo haria en silencio, que es lo peor.
+                    'nombre'          => trim((string) $item['nombre']),
+                    'descripcion'     => '',
+                    'unidad'          => '',
+                    'cantidad'        => (float) $item['cantidad'],
+                    'precio_unitario' => (float) $item['precioUnitario'],
+                    'descuento_pct'   => 0,
+                    'exento'          => ! empty($item['exento']),
+                ];
+            }
 
             [$idCot, $numero] = cotizacionRepo()->crear($cuentaId, [
                 'cliente_id'            => (int) ($cliente['id'] ?? 0) ?: null,
                 // LOS DATOS DEL RECEPTOR VAN CONGELADOS, que es lo que la tabla
                 // pide: la ficha puede cambiar despues y este documento no.
-                'receptor_rut'          => (string) ($cliente['rut_cliente'] ?? $datos['rut_cliente'] ?? ''),
+                'receptor_rut'          => $rutFicha,
                 'receptor_razon_social' => (string) ($cliente['razon_social'] ?? ''),
                 'receptor_giro'         => (string) ($cliente['giro'] ?? ''),
                 'receptor_direccion'    => (string) ($cliente['direccion'] ?? ''),
@@ -3013,20 +3199,7 @@ function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
                 'fecha'                 => $hoy,
                 'valida_hasta'          => null,
                 'notas'                 => 'Armada con el Asistente IA.',
-            ], [[
-                'orden'           => 1,
-                'producto_id'     => null,
-                // SIN DEFAULTS: chatFaltaDelDocumento() ya garantizo que los tres
-                // vienen. Un ?? aqui volveria a abrir la puerta que este cambio
-                // cerro -- y lo haria en silencio, que es lo peor.
-                'nombre'          => trim((string) $item['nombre']),
-                'descripcion'     => '',
-                'unidad'          => '',
-                'cantidad'        => (float) $item['cantidad'],
-                'precio_unitario' => (float) $item['precioUnitario'],
-                'descuento_pct'   => 0,
-                'exento'          => ! empty($item['exento']),
-            ]]);
+            ], $lineas);
 
             $ids[]     = $idCot;
             $numeros[] = $numero;
@@ -3034,7 +3207,7 @@ function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
 
         $pdo->commit();
 
-        return ['ids' => $ids, 'numeros' => $numeros, 'clienteCreado' => $clienteCreado];
+        return ['ids' => $ids, 'numeros' => $numeros, 'clienteCreado' => $creados > 0];
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
@@ -3149,9 +3322,28 @@ function handleChatConfirmarPost(): void
         redirigirPrg('/ventas/cotizaciones/' . $r['ids'][0] . '/facturar');
     }
 
-    // VARIOS: el Excel de la carga masiva. Los id quedan en la sesion y NO en la
-    // URL -- es el mismo criterio con el que la conversion de cotizacion evita
-    // que el contenido termine en el log de accesos del servidor.
+    // VARIAS FACTURAS Y ALGUNA CON MAS DE UN ITEM: no hay carril. El Excel no lo
+    // puede expresar -- una fila es una linea -- y /facturar atiende un documento.
+    //
+    // PROVISORIO Y ESTA DICHO: las cotizaciones YA ESTAN CREADAS y son correctas;
+    // lo unico que falta es la pantalla que las liste para facturarlas de a una,
+    // que es la pieza siguiente. Hasta entonces se manda al listado de
+    // cotizaciones QUE YA EXISTE, con los numeros en el mensaje. No se inventa una
+    // pantalla a medias ni se deja al usuario sin saber que paso.
+    if (($estado['carril'] ?? '') === 'varias') {
+        flashSet('exito', sprintf(
+            '%d cotizaciones creadas (N° %s)%s. Como cada una lleva mas de un item, no caben en el '
+            . 'Excel de la carga masiva: entra a cada una y usa "Facturar".',
+            count($r['ids']),
+            implode(', ', $r['numeros']),
+            $r['clienteCreado'] ? ', con sus clientes dados de alta' : ''
+        ));
+        redirigirPrg('/ventas/cotizaciones');
+    }
+
+    // VARIOS DE UN ITEM: el Excel de la carga masiva. Los id quedan en la sesion y
+    // NO en la URL -- es el mismo criterio con el que la conversion de cotizacion
+    // evita que el contenido termine en el log de accesos del servidor.
     $_SESSION[CHAT_ARMADO_EXCEL_SESION] = $r['ids'];
     flashSet('exito', sprintf(
         '%d cotizaciones creadas (N° %s)%s. Baja el Excel y subelo en Ventas > Carga masiva de '
