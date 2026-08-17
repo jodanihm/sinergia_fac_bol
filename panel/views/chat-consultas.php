@@ -114,18 +114,42 @@ $sugerencias = [
 
                width/height EN EL TAG ademas del CSS: reservan el espacio antes de
                que la imagen cargue, y sin eso la tarjeta pega un salto al
-               aparecer. La imagen ES cuadrada (1254x1254 el original, 240x240 la
-               copia), asi que van iguales; el par exacto lo imprime
-               scripts/optimizar_imagen.php al generarla, que es de donde salio
-               este.
+               aparecer. EL PAR TIENE QUE LLEVAR LA PROPORCION DEL ARCHIVO, y por
+               eso no va escrito a mano: si el arte cambia por uno de otra forma,
+               un par viejo vuelve a producir el salto. Sale de getimagesize().
 
-               APUNTA A LA COPIA DE 240 px, NO AL ORIGINAL. sinergin.png pesa
-               1,16 MB y se descargaba entero para pintar algo de 112 px. El
-               original se queda en el repositorio como FUENTE de cualquier tamaño
-               futuro; lo que se sirve es la copia. 240 = el doble del tamaño de
+               APUNTA A LA COPIA DE 240 px, NO AL ORIGINAL. sinergin.png pesa mas
+               de un megabyte y se descargaba entero para pintar algo de 112 px.
+               El original se queda en el repositorio como FUENTE de cualquier
+               tamaño futuro; lo que se sirve es la copia, que genera
+               scripts/optimizar_imagen.php. 240 = el doble del tamaño de
                despliegue, para que no se vea borroso en pantallas de densidad 2x. */
+
+            $mascotaRuta = __DIR__ . '/../public/img/sinergin-240.png';
+
+            // ?v= CON LA FECHA DEL ARCHIVO. El nombre no cambia cuando se cambia
+            // el arte, asi que sin esto un navegador que ya tenga guardada la
+            // copia anterior sigue mostrando el mascote viejo despues del
+            // despliegue. Mismo criterio que /css/style.css en partials/header.php
+            // y que /img/fondo.jpg en login.php.
+            $mascotaVersion = @filemtime($mascotaRuta);
+            $mascotaSrc     = '/img/sinergin-240.png'
+                . ($mascotaVersion ? '?v=' . $mascotaVersion : '');
+
+            // El alto se calcula desde la proporcion real para el ancho de
+            // despliegue. Si el archivo no se puede leer se omiten los dos
+            // atributos: sin ellos hay salto al cargar, pero con un par inventado
+            // el salto seria peor.
+            $mascotaTam = @getimagesize($mascotaRuta);
+            $mascotaAtr = '';
+            if (is_array($mascotaTam) && $mascotaTam[0] > 0) {
+                $mascotaAtr = sprintf(
+                    ' width="112" height="%d"',
+                    (int) round(112 * $mascotaTam[1] / $mascotaTam[0]),
+                );
+            }
             ?>
-            <img src="/img/sinergin-240.png" alt="" width="112" height="112" class="chat-bienvenida__avatar">
+            <img src="<?= htmlspecialchars($mascotaSrc, ENT_QUOTES, 'UTF-8') ?>" alt=""<?= $mascotaAtr ?> class="chat-bienvenida__avatar">
             <div>
                 <?php /* "SinergIA" resaltado, como en la referencia de marca. */ ?>
                 <h2>Hola, soy tu Asistente IA de <span class="chat-bienvenida__marca">SinergIA</span></h2>
