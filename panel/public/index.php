@@ -8993,8 +8993,24 @@ if ($metodo === 'POST' && sesionEsDemo()) {
     cortarPorDemo();
 }
 
+// La raiz es la LANDING PUBLICA, no un redirect a /login. Antes / rebotaba a
+// /login y la unica cara del sitio para quien todavia no es cliente era un
+// formulario de credenciales.
+//
+// Quien YA tiene sesion sigue yendo a /panel, igual que antes: entrar al sitio
+// y encontrarse la pagina de ventas en vez del panel seria un paso de mas en
+// cada visita. Por eso la decision se toma aca y no en nginx, que no puede
+// mirar la sesion.
+//
+// SE SIRVE EN /, no con un redirect a /landing: la raiz es la URL canonica de
+// una landing, y un rebote extra la penaliza en velocidad y en indexacion. La
+// vista vive en views/ -- fuera del docroot -- justamente para que no exista
+// tambien como /landing.php y quede el mismo contenido en dos URLs.
 if ($metodo === 'GET' && $ruta === '/') {
-    redirigir(Auth::autenticado() ? '/panel' : '/login');
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+    vista('landing');
 }
 
 if ($metodo === 'GET' && $ruta === '/registro') {
