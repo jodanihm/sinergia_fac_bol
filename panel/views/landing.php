@@ -85,7 +85,7 @@ $cssHref    = '/css/landing.css' . ($cssVersion ? '?v=' . $cssVersion : '');
     </div>
     <div class="blueprint" style="flex:1 1 420px;min-width:300px;max-width:560px">
       <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-      <img width="1733" height="868" src="/img/landing/panel-gestion.png" alt="Panel de gestión de SinergIA con ventas, IVA y folios disponibles" style="width:100%;display:block">
+      <img width="1733" height="868" src="/img/landing/panel-gestion.png" alt="Panel de gestión de SinergIA con ventas, IVA y folios disponibles" style="width:100%;height:auto;display:block">
     </div>
   </section>
 
@@ -148,7 +148,7 @@ $cssHref    = '/css/landing.css' . ($cssVersion ? '?v=' . $cssVersion : '');
     <div style="display:flex;flex-wrap:wrap-reverse;align-items:center;gap:clamp(28px,5vw,56px)">
       <div class="blueprint" style="flex:1 1 420px;min-width:300px;max-width:560px">
         <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-        <img loading="lazy" decoding="async" width="1862" height="902" src="/img/landing/panel-emision.png" alt="Panel de emisión con el listado de documentos, folio, receptor, montos y estado ante el SII" style="width:100%;display:block">
+        <img loading="lazy" decoding="async" width="1862" height="902" src="/img/landing/panel-emision.png" alt="Panel de emisión con el listado de documentos, folio, receptor, montos y estado ante el SII" style="width:100%;height:auto;display:block">
       </div>
       <div style="flex:1 1 380px;min-width:300px">
         <h3 style="font-size:24px;text-transform:uppercase;margin:0 0 14px">Sabes en qué está cada documento</h3>
@@ -175,7 +175,7 @@ $cssHref    = '/css/landing.css' . ($cssVersion ? '?v=' . $cssVersion : '');
         <img loading="lazy" decoding="async" width="480" height="499" src="/img/landing/sinergin-480.png" alt="Sinergín, el asistente de IA de SinergIA" style="width:min(220px,40%);height:auto;flex:none">
         <div class="blueprint" style="flex:1 1 260px;min-width:220px">
           <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-          <img loading="lazy" decoding="async" width="1688" height="880" src="/img/landing/asistente-ia.png" alt="Asistente IA de SinergIA respondiendo preguntas sobre la facturación de la empresa" style="width:100%;display:block">
+          <img loading="lazy" decoding="async" width="1688" height="880" src="/img/landing/asistente-ia.png" alt="Asistente IA de SinergIA respondiendo preguntas sobre la facturación de la empresa" style="width:100%;height:auto;display:block">
         </div>
       </div>
     </div>
@@ -188,7 +188,7 @@ $cssHref    = '/css/landing.css' . ($cssVersion ? '?v=' . $cssVersion : '');
     <div style="display:flex;flex-wrap:wrap-reverse;align-items:center;gap:clamp(28px,5vw,56px)">
       <div class="blueprint" style="flex:1 1 420px;min-width:300px;max-width:560px">
         <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
-        <img loading="lazy" decoding="async" width="1656" height="849" src="/img/landing/carga-masiva.png" alt="Pantalla de facturación masiva mostrando folios disponibles y notas pendientes de emisión" style="width:100%;display:block">
+        <img loading="lazy" decoding="async" width="1656" height="849" src="/img/landing/carga-masiva.png" alt="Pantalla de facturación masiva mostrando folios disponibles y notas pendientes de emisión" style="width:100%;height:auto;display:block">
       </div>
       <div style="flex:1 1 380px;min-width:300px">
         <h2 style="font-size:clamp(26px,3.2vw,34px);text-transform:uppercase;margin:0 0 16px">Cientos de documentos, de una sola vez</h2>

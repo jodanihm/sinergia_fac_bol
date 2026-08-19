@@ -265,7 +265,12 @@ h6 { font-size: 13px; }
 h6 { letter-spacing: 0.08em; text-transform: uppercase; }
 p { margin: 0 0 var(--space-3); }
 a { color: var(--color-accent); text-underline-offset: 3px; }
-img { display: block; max-width: 100%; }
+/* height:auto NO estaba en el sistema original y es obligatorio aqui. Las <img>
+   de la landing llevan width/height como atributo (reservan el hueco y evitan
+   el salto de layout al cargar), y un atributo height fija el alto de verdad:
+   con max-width:100% recortando el ancho y el alto clavado en el del atributo,
+   la imagen sale estirada. Con height:auto manda la proporcion. */
+img { display: block; max-width: 100%; height: auto; }
 figure { margin: 0; }
 figcaption {
   font-size: 11px; margin-top: var(--space-1);
