@@ -71,11 +71,56 @@ final class BoletaSetPruebasBuilder
                 detalles: $detalles,
                 montosSonBrutos: true,
                 referencias: [[
-                    // Ver emitir_set_boletas_ea.php: el manual de boleta NO
-                    // lista "SET" entre los TpoDocRef validos (solo 39/41/50/52
-                    // y no-tributarios 801-813) -- se omite 'tipoDocumento' a
-                    // proposito, queda solo NroLinRef + CodRef + RazonRef.
+                    // "SET" VA EN TpoDocRef. NO LO SAQUES.
+                    //
+                    // El instructivo del SII (inst_set_pruebas.pdf, punto I.6)
+                    // lo pide textualmente:
+                    //
+                    //   "En la primera linea de referencia de cada DTE del set
+                    //    de prueba debe indicar: el texto 'SET' como 'Tipo de
+                    //    Documento de Referencia' y el texto 'CASO xxxxx-x' en
+                    //    el campo 'Razon referencia'"
+                    //
+                    // Aca hubo un error que costo siete intentos: este bloque
+                    // decia que se omitia 'tipoDocumento' a proposito, porque el
+                    // manual de boleta no lista "SET" entre los TpoDocRef
+                    // tributarios validos (39/41/50/52 y 801-813). El HECHO era
+                    // cierto, la CONCLUSION no: "SET" es un valor especial de
+                    // certificacion y el instructivo pide ponerlo ahi igual.
+                    //
+                    // Sin TpoDocRef, la revision del set responde "El Documento
+                    // no esta en el envio" con Tipo Doc. 00 y Folio 0: son los
+                    // dos campos que el validador busca EN LA REFERENCIA para
+                    // saber a que CASO pertenece cada boleta, y los encuentra
+                    // vacios. El 00/0 nunca hablo del documento.
+                    //
+                    // FolioRef no lo pone este arreglo: lo agrega
+                    // DteXmlBuilder::buildReferencia() al ver tipoDocumento
+                    // 'SET', con el folio PROPIO de la boleta.
+                    'tipoDocumento' => 'SET',
+
+                    // CodRef se MANTIENE ademas de TpoDocRef. Los dos documentos
+                    // que el SII nos dio piden cosas distintas y no se puede
+                    // elegir uno sin desobedecer al otro: el punto I.6 pide
+                    // TpoDocRef, y el archivo del set entregado a este
+                    // contribuyente (sinergia/Set Prueba Boletas.txt, seccion
+                    // OBSERVACIONES GENERALES) da como ejemplo "<CodRef> SET".
+                    // Llevar los dos ya se probo que pasa el esquema de boleta:
+                    // envio_boleta_combined_folio_128_track_28119455.xml fue
+                    // aceptado con esta misma forma (lo que fallo ahi fue el
+                    // canal, pangal en vez de maullin, no la referencia).
                     'codigo' => 'SET',
+
+                    // GUION Y NO ESPACIO, copiado tal cual del archivo del set.
+                    // El instructivo escribe "CASO xxxxx-x" con espacio, pero esa
+                    // es una plantilla cuyo hueco es el numero de caso (ej.
+                    // "1062-1") y el set de boleta no tiene un numero asi: titula
+                    // sus casos "CASO-1".."CASO-5" y su propio ejemplo de
+                    // RazonRef dice "CASO-1". El mismo archivo instruye que "los
+                    // caracteres deben estar informados tal cual se encuentran
+                    // en el Set", asi que manda el documento concreto por sobre
+                    // la plantilla generica. Viene de la plantilla, no escrito
+                    // aca, justamente para que sea copia y no transcripcion.
                     'razon'  => $caso['nombre'],
                 ]],
             );

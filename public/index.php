@@ -103,17 +103,43 @@ const TIPOS_PERMITIDOS_LISTADO = [33, 34, 61, 56, 39];
 // (no se "anula a si misma"). TIPOS_PERMITIDOS NO se toca (emitirDte sigue
 // exclusivo de 33/61/56).
 //
-// EL 34 NO ESTA AQUI A PROPOSITO, y no es un olvido de la entrega que abrio el
-// tipo 34. La NC 61 SI es el instrumento correcto para anular una factura exenta
-// -- no existe un tipo de NC exenta --, pero hoy la NC saldria mal formada:
-// SiiDirectoFacturador::anular() fija SIEMPRE 'MntNeto' e 'IVA' en los totales
-// explicitos (src/Providers/SiiDirectoFacturador.php:414-417), y para un 34
-// ambos valen 0. Como resolverTotales() corta en seco cuando recibe totales
-// explicitos (src/Sii/DteXmlBuilder.php:148), la proteccion por datos que evita
-// ese problema al emitir NO aplica al anular: la NC saldria con MntNeto=0 e
-// IVA=0 sobre un documento que no puede llevarlos. Abrir el 34 aqui exige antes
-// arreglar esos totales, y eso es una entrega propia.
-const TIPOS_PERMITIDOS_ANULAR = [33, 61, 56, 39];
+// EL 34 SI ESTA, Y ANTES NO. El comentario anterior decia que una NC que anula
+// una factura exenta "saldria con MntNeto=0 e IVA=0 sobre un documento que no
+// puede llevarlos". Esa frase NO CITABA NADA, y la fuente la desmiente.
+//
+// FUENTE: Formato DTE, Version 2.5 (2026-02).
+//   - Pag. 10, codigos de obligatoriedad: codigo 2 = "Dato condicional. El dato
+//     no es obligatorio en todos los documentos, pero pasa a ser obligatorio en
+//     determinadas operaciones si se cumple una cierta condicion". Codigo 0 =
+//     "no corresponde".
+//   - Pag. 28, campo 107 (MntNeto): para NOTA CRED el codigo es 2 -- el mismo
+//     que para FACT, NOTA DEBIT, FACT.COMP y LIQ.FACTURA. El codigo 0 lo tiene
+//     EXENT (tipo 34) para ese campo, no la nota de credito.
+//
+// DONDE ESTABA EL ERROR: la tabla de obligatoriedad organiza los codigos POR EL
+// TIPO DE DOCUMENTO EMITIDO. No existe ninguna columna, ni distincion, para "que
+// tipo de documento referencia" la nota de credito. El bloqueo estaba puesto
+// sobre el tipo del documento REFERENCIADO (34) usando una regla que habla del
+// documento EMITIDO (la NC, 61). Para el Formato DTE, una NC que referencia un
+// 34 es una NOTA CRED como cualquier otra, y su MntNeto es condicional segun
+// tenga o no lineas afectas.
+//
+// QUE PASA EN LA PRACTICA, medido y no supuesto: anular() sigue armando totales
+// explicitos con MntNeto e IVA (SiiDirectoFacturador.php:538-542), y para un 34
+// los dos valen 0. isset(0) es true, asi que resolverTotales() los emite. La NC
+// sale con MntNeto 0, MntExe X, IVA 0, MntTotal X -- aritmeticamente consistente
+// y, por la cita de arriba, PERMITIDO: condicional no es prohibido.
+//
+// QUEDA UNA MEJORA POSIBLE Y NO SE HACE AQUI: omitir MntNeto e IVA cuando valen
+// 0, como ya hace resolverTotales() en el camino automatico. Seria mas limpio,
+// pero cambiaria el XML de una NC que anula un 33 sin monto afecto -- un caso
+// que hoy existe y sale con MntNeto 0. Eso es una entrega propia, con su A/B.
+//
+// PRECONDICION YA CUMPLIDA: reconstruirOriginal() dejo de leer el primer
+// documento del sobre (76d2f7e, 08-ago). Sin ese arreglo, abrir el 34 habria
+// expuesto los 136 documentos exentos emitidos en lote a una NC armada con las
+// lineas de todo el sobre. Ver la nota de esa funcion.
+const TIPOS_PERMITIDOS_ANULAR = [33, 34, 61, 56, 39];
 /**
  * Tope de documentos por POST /api/v1/dte/lote.
  *
@@ -2169,7 +2195,7 @@ function xmlDte(array $tenant, int $tipoDte, int $folio): never
 function anularDte(array $tenant, int $tipoDte, int $folio): never
 {
     if (! in_array($tipoDte, TIPOS_PERMITIDOS_ANULAR, true)) {
-        invalido('tipoDte debe ser uno de 33, 61, 56, 39', 'tipoDte');
+        invalido('tipoDte debe ser uno de 33, 34, 61, 56, 39', 'tipoDte');
     }
     if ($folio <= 0) {
         invalido('folio debe ser > 0', 'folio');

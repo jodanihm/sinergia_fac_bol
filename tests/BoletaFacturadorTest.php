@@ -7,6 +7,7 @@ namespace Plantiflex\FacturacionCl\Tests;
 use GuzzleHttp\Client;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
 use Plantiflex\FacturacionCl\Dto\Certificado;
@@ -32,11 +33,34 @@ final class BoletaFacturadorTest extends TestCase
 
     private InMemoryFolioRepository $folios;
     private InMemoryEmisorRepository $emisor;
+    private ?string $volcadoPrevio = null;
 
     protected function setUp(): void
     {
         $this->folios = new InMemoryFolioRepository();
         $this->emisor = new InMemoryEmisorRepository();
+
+        // Todo emitirLote() vuelca el sobre a envio_boleta_debug.xml. Un envio
+        // real pudo dejar su captura ahi: se preserva para que correr la suite
+        // no la destruya.
+        $ruta                = $this->rutaVolcado();
+        $this->volcadoPrevio = is_file($ruta) ? (string) file_get_contents($ruta) : null;
+    }
+
+    protected function tearDown(): void
+    {
+        $ruta = $this->rutaVolcado();
+        if ($this->volcadoPrevio !== null) {
+            file_put_contents($ruta, $this->volcadoPrevio);
+        } elseif (is_file($ruta)) {
+            unlink($ruta);
+        }
+    }
+
+    /** Misma ruta que escribe BoletaFacturador::emitirLoteInterno(). */
+    private function rutaVolcado(): string
+    {
+        return __DIR__ . '/../envio_boleta_debug.xml';
     }
 
     private function certificadoAutoFirmado(): Certificado
@@ -198,6 +222,40 @@ final class BoletaFacturadorTest extends TestCase
         $resultado = $facturador->emitirLote([$this->boleta(1, 1000, 'Item unico')], $this->credenciales());
 
         self::assertSame('777', $resultado['trackId']);
+    }
+
+    /**
+     * El volcado a disco del EnvioBOLETA (envio_boleta_debug.xml, raiz del
+     * proyecto) existe para poder subir el MISMO sobre manualmente por el
+     * portal web del SII. Debe quedar en disco byte a byte el XML que viajo
+     * por HTTP, y no debe alterar el resultado de emitirLote().
+     */
+    public function testEmitirLoteVuelcaElEnvioBoletaADiscoAntesDeSubirlo(): void
+    {
+        $this->cargarCafBoleta();
+        $this->cargarEmisorCompleto();
+
+        $ruta          = $this->rutaVolcado();
+        $transacciones = [];
+        $stack = HandlerStack::create(new MockHandler(
+            [$this->seedBoleta(), $this->tokenBoleta(), $this->uploadBoleta('888888')]
+        ));
+        $stack->push(Middleware::history($transacciones));
+
+        $facturador = new BoletaFacturador(new Client(['handler' => $stack]), $this->folios, $this->emisor);
+
+        $resultado = $facturador->emitirLote([$this->boleta(2, 1500, 'Item volcado')], $this->credenciales());
+
+        self::assertSame('888888', $resultado['trackId'], 'El volcado no debe alterar el resultado');
+        self::assertFileExists($ruta);
+
+        $enDisco = (string) file_get_contents($ruta);
+        self::assertSame($resultado['xml'], $enDisco, 'El archivo debe ser el EnvioBOLETA serializado tal cual');
+        self::assertStringContainsString('<EnvioBOLETA', $enDisco);
+
+        // ...y ese mismo XML es el que viajo en el multipart al SII.
+        $cuerpoEnviado = (string) $transacciones[2]['request']->getBody();
+        self::assertStringContainsString($enDisco, $cuerpoEnviado, 'Disco y HTTP deben llevar el mismo XML');
     }
 
     public function testEmitirLoteClasicoTambienPersiste(): void

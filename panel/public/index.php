@@ -10252,7 +10252,6 @@ function handleEmpresaPost(): void
     $dir       = trim((string) ($_POST['dir_origen'] ?? ''));
     $cmna      = trim((string) ($_POST['cmna_origen'] ?? ''));
     $resFecha  = trim((string) ($_POST['resolucion_fecha'] ?? ''));
-    $resNumRaw = trim((string) ($_POST['resolucion_numero'] ?? ''));
 
     $errores = [];
 
@@ -10277,10 +10276,6 @@ function handleEmpresaPost(): void
     if (! fechaValida($resFecha)) {
         $errores['resolucion_fecha'] = 'Fecha de resolucion invalida (formato YYYY-MM-DD).';
     }
-    if (! ctype_digit($resNumRaw)) {
-        $errores['resolucion_numero'] = 'El numero de resolucion debe ser un numero entero (0 o mayor).';
-    }
-
     $datosForm = [
         'rut_emisor'        => $rutCrudo,
         'razon_social'      => $razon,
@@ -10289,7 +10284,6 @@ function handleEmpresaPost(): void
         'dir_origen'        => $dir,
         'cmna_origen'       => $cmna,
         'resolucion_fecha'  => $resFecha,
-        'resolucion_numero' => $resNumRaw,
     ];
 
     if ($errores !== []) {
@@ -10298,7 +10292,12 @@ function handleEmpresaPost(): void
     }
 
     $acteco = (int) $actecoRaw;
-    $resNum = (int) $resNumRaw;
+
+    // Este handler es SOLO de certificacion ($ambiente arriba), y ahi el
+    // NroResol va 0 -- lo fuerzan igual los builders de la carátula, asi que
+    // guardar otra cosa solo serviria para confundir a quien mire la tabla. El
+    // numero real de la empresa se carga en /empresa/produccion.
+    $resNum = 0;
     $pdo    = Db::conexion();
 
     try {

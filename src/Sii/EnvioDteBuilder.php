@@ -105,9 +105,26 @@ final class EnvioDteBuilder
         $car = $dom->createElementNS(self::NS_SII, 'Caratula');
         $car->setAttribute('version', '1.0');
 
-        // En CERTIFICACION el SII exige NroResol=0 (no el numero real de
-        // produccion); de lo contrario rechaza con CRT-3-19. En produccion se
-        // usa el numero real del emisor. La FchResol va igual en ambos casos.
+        // EN CERTIFICACION EL NroResol VA 0. NO ES UN VALOR MAGICO: es una
+        // propiedad del AMBIENTE, no del contribuyente, y por eso no sale de la
+        // base -- vale 0 para todos por igual.
+        //
+        // EVIDENCIA MEDIDA (2026-08-19), no una afirmacion heredada:
+        //   - Los 38 sobres de certificacion que el SII acepto con EPR (Sinergia
+        //     tipo 33/56/61 del 17-jul) llevan NroResol 0.
+        //   - Los sobres de Sinergia que llevaron NroResol 80 -- el numero que el
+        //     portal del SII publica para ese RUT -- volvieron RCT "Rechazado por
+        //     Error en Caratula".
+        //   - Ese 80 con FchResol 2014-08-22 es la Res. Ex. N.80 de 2014, que es
+        //     la resolucion GENERAL de facturacion electronica: la misma para
+        //     todo contribuyente, y la correcta SOLO en produccion. Confirmado
+        //     con un sobre de produccion realmente procesado (folios_reales/
+        //     envio_prod_NC_F7.xml, track 12278699744).
+        //
+        // Este ternario ya se quito una vez, el 2026-08-19, con el argumento de
+        // que su comentario de entonces no tenia respaldo. El comentario no lo
+        // tenia; la decision si. Antes de volver a sacarlo, medir contra la
+        // tabla de veredictos -- no contra el portal.
         $nroResol = $ambiente === Ambiente::Certificacion ? 0 : $emisor->resolucionNumero;
 
         $car->appendChild($this->el($dom, 'RutEmisor', $emisor->rutEmisor));

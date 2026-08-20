@@ -83,7 +83,7 @@ final class LibroXmlBuilderTest extends TestCase
     {
         $dom = (new LibroXmlBuilder())->build($this->libroVenta(), $this->emisor(), '13520634-2', Ambiente::Certificacion);
 
-        // Caratula (certif -> NroResol=0).
+        // Caratula (certif -> NroResol=0, aunque el emisor tenga 99 guardado).
         self::assertSame('VENTA', $this->texto($dom, 'TipoOperacion'));
         self::assertSame('0', $this->texto($dom, 'NroResol'));
 

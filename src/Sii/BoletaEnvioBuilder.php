@@ -113,9 +113,10 @@ final class BoletaEnvioBuilder
         $car = $dom->createElementNS(self::NS_SII, 'Caratula');
         $car->setAttribute('version', '1.0');
 
-        // En CERTIFICACION el SII exige NroResol=0 (no el numero real de
-        // produccion); de lo contrario rechaza (CRT-3-19). En produccion se usa
-        // el numero real del emisor. La FchResol va igual en ambos casos.
+        // En certificacion NroResol va 0 (propiedad del ambiente, no del
+        // contribuyente). La evidencia esta en EnvioDteBuilder::buildCaratula():
+        // los sobres aceptados llevan 0 y los que llevaron el 80 del portal
+        // volvieron RCT. La FchResol si sale de la base en los dos ambientes.
         $nroResol = $ambiente === Ambiente::Certificacion ? 0 : $emisor->resolucionNumero;
 
         $car->appendChild($this->el($dom, 'RutEmisor', $emisor->rutEmisor));

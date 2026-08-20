@@ -99,7 +99,8 @@ final class RvdBuilder
         $car = $dom->createElementNS(self::NS_SII, 'Caratula');
         $car->setAttribute('version', '1.0');
 
-        // En certificacion NroResol=0 (igual que en el sobre de boleta).
+        // En certificacion NroResol=0 (igual que en el sobre de boleta). La
+        // evidencia esta en EnvioDteBuilder::buildCaratula().
         $nroResol = $ambiente === Ambiente::Certificacion ? 0 : $emisor->resolucionNumero;
 
         $car->appendChild($this->el($dom, 'RutEmisor', $emisor->rutEmisor));

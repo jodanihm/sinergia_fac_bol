@@ -288,7 +288,18 @@ final class BoletaFacturador
             }
             $this->signer->calcularDigestYFirmar($envioDoc, 'SetDoc', $cert);
 
-            $envioXml  = $this->serializarParaSii($envioDoc);
+            $envioXml = $this->serializarParaSii($envioDoc);
+
+            // DEBUG: volcado del EnvioBOLETA final (byte a byte el mismo que se
+            // sube al SII) para poder subirlo tambien MANUALMENTE por el portal
+            // web. Best-effort, mismo criterio que persistirEmitido(): un fallo
+            // al escribir a disco nunca debe romper un envio real.
+            try {
+                @file_put_contents(__DIR__ . '/../../envio_boleta_debug.xml', $envioXml);
+            } catch (Throwable $e) {
+                error_log('volcado envio_boleta_debug.xml fallo: ' . $e->getMessage());
+            }
+
             $resultado = $clasico
                 ? $this->uploaderClasico->subir($envioXml, $token, $rutSender, $cred->rutEmisor, $cred->ambiente)
                 : $this->uploader->subir($envioXml, $token, $rutSender, $cred->rutEmisor, $cred->ambiente);

@@ -103,6 +103,18 @@ final class EnvioDteBuilderTest extends TestCase
         );
     }
 
+    /**
+     * EL 0 DE CERTIFICACION ES DELIBERADO Y ESTA MEDIDO.
+     *
+     * Este test se dio vuelta una vez, el 2026-08-19, porque el comentario que
+     * justificaba el 0 no tenia evidencia. El comentario no la tenia; la
+     * decision si: los sobres de certificacion que el SII acepto llevan 0, y los
+     * que llevaron el 80 que publica el portal volvieron RCT "Rechazado por
+     * Error en Caratula". El 80/2014-08-22 es la resolucion GENERAL y solo
+     * corresponde en produccion (testProduccionUsaNroResolReal).
+     *
+     * O sea: el emisor puede tener 99 guardado y en certificacion igual va 0.
+     */
     public function testCertificacionFuerzaNroResolCero(): void
     {
         // Emisor con resolucion 99 (produccion real), pero ambiente certificacion.
@@ -115,7 +127,7 @@ final class EnvioDteBuilderTest extends TestCase
         );
 
         self::assertSame('0', $this->texto($dom, 'NroResol'), 'En certificacion NroResol debe ser 0');
-        self::assertSame('2024-01-01', $this->texto($dom, 'FchResol'), 'FchResol no cambia');
+        self::assertSame('2024-01-01', $this->texto($dom, 'FchResol'), 'FchResol si sale de la base');
     }
 
     public function testProduccionUsaNroResolReal(): void

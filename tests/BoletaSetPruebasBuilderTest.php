@@ -47,10 +47,22 @@ final class BoletaSetPruebasBuilderTest extends TestCase
             self::assertSame('66666666-6', $doc->receptor->rut);
             self::assertSame('Consumidor Final', $doc->receptor->razonSocial);
             self::assertCount(1, $doc->referencias);
+
+            // "SET" EN TpoDocRef: lo exige el punto I.6 del instructivo del SII
+            // (ver el comentario de BoletaSetPruebasBuilder). Sin esto la
+            // revision del set responde "Tipo Doc. 00 / Folio 0" -- este assert
+            // existe para que nadie lo vuelva a quitar por el razonamiento de
+            // que "SET" no es un tipo tributario valido.
+            self::assertSame('SET', $doc->referencias[0]['tipoDocumento']);
+
+            // CodRef se mantiene ADEMAS: es lo que muestra el archivo del set
+            // entregado al contribuyente. Los dos juntos ya pasaron el esquema.
             self::assertSame('SET', $doc->referencias[0]['codigo']);
-            self::assertArrayNotHasKey('tipoDocumento', $doc->referencias[0]);
         }
 
+        // Con GUION, tal cual titula los casos el archivo del set. El
+        // instructivo escribe "CASO xxxxx-x" con espacio, pero eso es una
+        // plantilla para sets cuyo caso se numera "1062-1"; el de boleta no.
         self::assertSame('CASO-1', $docs[0]->referencias[0]['razon']);
         self::assertSame('CASO-5', $docs[4]->referencias[0]['razon']);
 

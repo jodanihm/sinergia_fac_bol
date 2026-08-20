@@ -88,7 +88,8 @@ final class LibroXmlBuilder
         string $rutEnvia,
         Ambiente $ambiente
     ): DOMElement {
-        // En certificacion el SII exige NroResol=0 (igual criterio que el EnvioDTE).
+        // En certificacion NroResol=0 (igual criterio que el EnvioDTE). La
+        // evidencia esta en EnvioDteBuilder::buildCaratula().
         $nroResol = $ambiente === Ambiente::Certificacion ? 0 : $emisor->resolucionNumero;
 
         $car = $dom->createElementNS(self::NS_SII, 'Caratula');

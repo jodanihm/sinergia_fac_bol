@@ -144,14 +144,24 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <?php endif; ?>
                     </div>
 
-                    <div class="<?= $claseCampo('resolucion_numero', 'form-campo--corto'); ?>">
-                        <label for="resolucion_numero">Numero de resolucion SII <?= $req; ?></label>
-                        <input type="text" inputmode="numeric" name="resolucion_numero" id="resolucion_numero" value="<?= $val('resolucion_numero'); ?>" placeholder="80" required>
-                        <?php if ($err('resolucion_numero')): ?>
-                            <p class="error"><?= htmlspecialchars($err('resolucion_numero')); ?></p>
-                        <?php else: ?>
-                            <small class="form-ayuda">Normalmente 80 (Res. Ex. N&deg;80 de 2014) en produccion. En certificacion suele ser un numero distinto; consulta tu caso en el SII.</small>
-                        <?php endif; ?>
+                    <?php
+                    /* EL NUMERO DE RESOLUCION YA NO SE PIDE ACA, Y NO ES UN OLVIDO.
+                       En certificacion SIEMPRE va 0: es una propiedad del ambiente,
+                       no de la empresa (ver EnvioDteBuilder::buildCaratula, que lo
+                       fuerza y documenta la medicion). Pedirlo era una trampa: el
+                       campo sugeria 80, que es el numero de PRODUCCION que el portal
+                       del SII publica para cualquier RUT, y escribirlo aca hizo que
+                       el SII devolviera RCT "Rechazado por Error en Caratula".
+                       El numero real se pide en /empresa/produccion, que es donde
+                       manda. */
+                    ?>
+                    <div class="form-campo form-campo--ancho">
+                        <p class="form-ayuda">
+                            <strong>El numero de resolucion no se pide en certificacion:</strong>
+                            el SII espera 0 en este ambiente y el sistema lo pone solo.
+                            El numero real de tu empresa (normalmente 80, Res. Ex. N&deg;80
+                            de 2014) se carga al configurar produccion.
+                        </p>
                     </div>
                 </div>
             </section>
