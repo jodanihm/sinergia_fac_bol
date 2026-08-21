@@ -31,6 +31,28 @@ require __DIR__ . '/partials/admin/header.php';
 <?php endif; ?>
 
 <?php
+    // Filtros. Formulario GET y no POST: asi el resultado queda en la URL y se
+    // puede guardar, compartir o recargar. Un POST aqui obligaria ademas a
+    // pasar por el CSRF central, que existe para las MUTACIONES; buscar no
+    // muta nada.
+    $hayFiltro = $busqueda !== '' || $estado !== '';
+?>
+<form class="toolbar" method="get" action="/admin/tenants">
+    <input type="search" name="q" value="<?= htmlspecialchars($busqueda); ?>"
+           placeholder="Nombre, email o RUT" aria-label="Buscar cuenta" style="max-width:280px;">
+    <select name="estado" aria-label="Filtrar por estado" style="max-width:170px;">
+        <option value="">Todos los estados</option>
+        <option value="activa" <?= $estado === 'activa' ? 'selected' : ''; ?>>Activas</option>
+        <option value="suspendida" <?= $estado === 'suspendida' ? 'selected' : ''; ?>>Suspendidas</option>
+    </select>
+    <button type="submit" class="btn sm">Buscar</button>
+    <?php if ($hayFiltro): ?>
+    <a class="btn ghost sm" href="/admin/tenants">Limpiar</a>
+    <span class="muted"><?= count($resumen); ?> de <?= (int) $totalCuentas; ?> cuentas</span>
+    <?php endif; ?>
+</form>
+
+<?php
     // Etapas con boton "Revertir": indice en la barra de 6 -> columna
     // dte_emisor asociada (whitelist identica a la del handler). Indice 0
     // (Set Basico, se calcula de datos reales, no de una confirmacion) e
@@ -46,7 +68,9 @@ require __DIR__ . '/partials/admin/header.php';
 
 <div class="panel">
 <?php if ($resumen === []): ?>
-<p class="muted" style="margin:0;">No hay cuentas registradas.</p>
+<p class="muted" style="margin:0;">
+    <?= $hayFiltro ? 'Ninguna cuenta coincide con la busqueda.' : 'No hay cuentas registradas.'; ?>
+</p>
 <?php else: ?>
 <div class="tabla-scroll">
 <table>
@@ -65,7 +89,7 @@ require __DIR__ . '/partials/admin/header.php';
         <?php $c = $fila['cuenta']; ?>
         <tr>
             <td>
-                <?= htmlspecialchars((string) $c['nombre']); ?><br>
+                <a href="/admin/tenants/<?= (int) $c['id']; ?>"><?= htmlspecialchars((string) $c['nombre']); ?></a><br>
                 <span class="muted" style="font-size:.85em;"><?= htmlspecialchars((string) $c['email']); ?></span>
             </td>
             <td>

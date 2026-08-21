@@ -10762,6 +10762,14 @@ if ($metodo === 'GET' && $ruta === '/admin/tenants') {
     handleAdminTenantsGet();
 }
 
+// Ficha de una cuenta. Mismo estilo de regex que PERMISOS_RUTA_PATRON, y va
+// DESPUES de la ruta exacta de arriba: (\d+) no puede capturar '/suspender'
+// ni '/reactivar', pero el orden deja el caso general al final igual que en el
+// resto del router.
+if ($metodo === 'GET' && preg_match('#^/admin/tenants/(\d+)$#', $ruta, $mCuenta)) {
+    handleAdminTenantFichaGet((int) $mCuenta[1]);
+}
+
 if ($metodo === 'POST' && $ruta === '/admin/tenants/suspender') {
     handleAdminTenantsSuspenderPost();
 }
@@ -12818,14 +12826,123 @@ function handleAdminPanelGet(): void
 //  TAL CUAL, por cada rut_emisor encontrado -- no reinventa el calculo de en
 //  que etapa esta cada empresa. Solo lectura: ninguna fila se modifica aqui.
 // ===========================================================================
+/**
+ * Resumen de certificacion de UN rut_emisor: en que etapa esta y si ya tiene
+ * certificado y CAF de produccion.
+ *
+ * EXTRAIDO TAL CUAL del cuerpo del loop de handleAdminTenantsGet(), sin
+ * cambiarle una linea de logica, cuando la ficha de cuenta necesito el mismo
+ * dato. La alternativa era copiarlo, y una copia de este calculo es justo lo
+ * que este panel no puede permitirse: el listado y la ficha mostrarian
+ * distinta etapa para la misma empresa, y ninguna de las dos pantallas diria
+ * cual miente. Que el listado siga viendose identico despues de la extraccion
+ * se verifico comparando el HTML renderizado antes y despues.
+ *
+ * @return array{rutEmisor:string, setBasico:array, libroVentas:array, libroCompras:array,
+ *               todosAprobados:bool, etapasManuales:array, certConfirmadaAt:?string,
+ *               barra:list<array{nombre:string,clase:string}>,
+ *               tieneCertProduccion:bool, tieneCafProduccion:bool}
+ */
+function resumenEmisorCertificacion(PDO $pdo, int $cuentaId, string $rutEmisor): array
+{
+    $agrupado       = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor));
+    $sokPorTrackId  = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+    $setBasico      = setBasicoAprobado($agrupado['envios'], $sokPorTrackId);
+    $ventas         = libroAprobado(listarLibros($pdo, $rutEmisor, 'VENTA'));
+    $compras        = libroAprobado(listarLibros($pdo, $rutEmisor, 'COMPRA'));
+    $todosAprobados = $setBasico['aprobado'] && $ventas['aprobado'] && $compras['aprobado'];
+
+    $etapasManuales   = calcularEtapasManuales(obtenerEtapasManualesRaw($pdo, $cuentaId), $todosAprobados);
+    $certConfirmadaAt = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
+
+    // Mismas consultas de produccion que pinta la estacion 7 del
+    // dashboard del tenant, centralizadas en estadoProduccion() para
+    // que superadmin y tenant no puedan divergir.
+    //
+    // De las 4 aqui solo se usan certificado y CAF: son las que van por
+    // rut_emisor y por eso viven dentro de este loop. La api_key va por
+    // CUENTA y se consulta mas abajo, fuera del loop, porque una cuenta
+    // sin emisores igual tiene que reportarla.
+    $prod = estadoProduccion($pdo, $cuentaId, $rutEmisor);
+
+    return [
+        'rutEmisor'           => $rutEmisor,
+        'setBasico'           => $setBasico,
+        'libroVentas'         => $ventas,
+        'libroCompras'        => $compras,
+        'todosAprobados'      => $todosAprobados,
+        'etapasManuales'      => $etapasManuales,
+        'certConfirmadaAt'    => $certConfirmadaAt,
+        'barra'               => resumenEtapasBarra($todosAprobados, $etapasManuales, $certConfirmadaAt),
+        'tieneCertProduccion' => $prod['certificado'],
+        'tieneCafProduccion'  => $prod['caf'],
+    ];
+}
+
+/**
+ * WHERE del listado de cuentas a partir del buscador y del filtro de estado.
+ *
+ * DEL LADO DEL SERVIDOR y no filtrando en JavaScript sobre la tabla ya
+ * dibujada: cada fila del listado cuesta varias consultas de certificacion
+ * (ver el loop de handleAdminTenantsGet), asi que filtrar despues de armarlas
+ * seria pagar el precio completo para tirar casi todo. Con 7 cuentas da igual;
+ * con 700 es la diferencia entre una pantalla y un timeout.
+ *
+ * El texto busca en nombre, email y RUT de cualquier emisor de la cuenta. El
+ * RUT va por EXISTS y no por JOIN para que una cuenta con dos emisores no
+ * aparezca dos veces.
+ *
+ * Cada valor viaja en su PROPIO placeholder, aunque el texto sea el mismo en
+ * los tres LIKE: repetir un nombre de placeholder solo funciona con prepares
+ * emuladas, y de eso no depende nada aqui.
+ *
+ * @return array{0:string, 1:array<string,string>} SQL del WHERE (vacio si no hay filtros) y sus parametros.
+ */
+function filtroCuentasAdmin(string $busqueda, string $estado): array
+{
+    $condiciones = [];
+    $parametros  = [];
+
+    if ($busqueda !== '') {
+        // LIKE con comodines a ambos lados: quien busca un RUT casi nunca se
+        // acuerda del digito verificador, y quien busca una empresa escribe
+        // una palabra del medio del nombre.
+        $like = '%' . $busqueda . '%';
+        $condiciones[] = '(c.nombre LIKE :q_nombre OR c.email LIKE :q_email '
+            . 'OR EXISTS (SELECT 1 FROM dte_emisor e WHERE e.cuenta_id = c.id AND e.rut_emisor LIKE :q_rut))';
+        $parametros[':q_nombre'] = $like;
+        $parametros[':q_email']  = $like;
+        $parametros[':q_rut']    = $like;
+    }
+
+    // Whitelist contra el ENUM de la columna: un valor cualquiera de la URL no
+    // llega nunca a la consulta, ni siquiera como parametro.
+    if (in_array($estado, ['activa', 'suspendida'], true)) {
+        $condiciones[] = 'c.estado = :estado';
+        $parametros[':estado'] = $estado;
+    }
+
+    return [$condiciones === [] ? '' : ' WHERE ' . implode(' AND ', $condiciones), $parametros];
+}
+
 function handleAdminTenantsGet(): void
 {
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
-    $cuentas = $pdo->query(
-        'SELECT id, email, nombre, estado, created_at FROM cuenta ORDER BY created_at DESC'
-    )->fetchAll(PDO::FETCH_ASSOC);
+    $busqueda = trim((string) ($_GET['q'] ?? ''));
+    $estado   = (string) ($_GET['estado'] ?? '');
+
+    [$where, $parametros] = filtroCuentasAdmin($busqueda, $estado);
+
+    $stmtCuentas = $pdo->prepare(
+        'SELECT c.id, c.email, c.nombre, c.estado, c.created_at FROM cuenta c'
+        . $where . ' ORDER BY c.created_at DESC'
+    );
+    $stmtCuentas->execute($parametros);
+    $cuentas = $stmtCuentas->fetchAll(PDO::FETCH_ASSOC);
+
+    $totalCuentas = (int) $pdo->query('SELECT COUNT(*) FROM cuenta')->fetchColumn();
 
     $resumen = [];
     foreach ($cuentas as $cuenta) {
@@ -12839,40 +12956,7 @@ function handleAdminTenantsGet(): void
 
         $emisores = [];
         foreach ($rutsEmisor as $rutEmisor) {
-            $rutEmisor = (string) $rutEmisor;
-
-            $agrupado       = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor));
-            $sokPorTrackId  = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
-            $setBasico      = setBasicoAprobado($agrupado['envios'], $sokPorTrackId);
-            $ventas         = libroAprobado(listarLibros($pdo, $rutEmisor, 'VENTA'));
-            $compras        = libroAprobado(listarLibros($pdo, $rutEmisor, 'COMPRA'));
-            $todosAprobados = $setBasico['aprobado'] && $ventas['aprobado'] && $compras['aprobado'];
-
-            $etapasManuales   = calcularEtapasManuales(obtenerEtapasManualesRaw($pdo, $cuentaId), $todosAprobados);
-            $certConfirmadaAt = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
-
-            // Mismas consultas de produccion que pinta la estacion 7 del
-            // dashboard del tenant, centralizadas en estadoProduccion() para
-            // que superadmin y tenant no puedan divergir.
-            //
-            // De las 4 aqui solo se usan certificado y CAF: son las que van por
-            // rut_emisor y por eso viven dentro de este loop. La api_key va por
-            // CUENTA y se consulta mas abajo, fuera del loop, porque una cuenta
-            // sin emisores igual tiene que reportarla.
-            $prod = estadoProduccion($pdo, $cuentaId, $rutEmisor);
-
-            $emisores[] = [
-                'rutEmisor'           => $rutEmisor,
-                'setBasico'           => $setBasico,
-                'libroVentas'         => $ventas,
-                'libroCompras'        => $compras,
-                'todosAprobados'      => $todosAprobados,
-                'etapasManuales'      => $etapasManuales,
-                'certConfirmadaAt'    => $certConfirmadaAt,
-                'barra'               => resumenEtapasBarra($todosAprobados, $etapasManuales, $certConfirmadaAt),
-                'tieneCertProduccion' => $prod['certificado'],
-                'tieneCafProduccion'  => $prod['caf'],
-            ];
+            $emisores[] = resumenEmisorCertificacion($pdo, $cuentaId, (string) $rutEmisor);
         }
 
         // Mismo criterio que estadoProduccion(): solo keys EXTERNAS activas.
@@ -12893,7 +12977,207 @@ function handleAdminTenantsGet(): void
         ];
     }
 
-    vista('admin-tenants', ['resumen' => $resumen, 'flash' => flashTomar()]);
+    vista('admin-tenants', [
+        'resumen'      => $resumen,
+        'flash'        => flashTomar(),
+        'busqueda'     => $busqueda,
+        'estado'       => $estado,
+        'totalCuentas' => $totalCuentas,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/tenants/{id} (SOLO SUPERADMIN) -- ficha de una cuenta.
+//
+//  Todo lo que hay que saber de un cliente en una pantalla, para poder atender
+//  su llamada sin ir saltando entre seis tablas. ESTRICTAMENTE SOLO LECTURA:
+//  ni un UPDATE, ni un formulario. Las tres acciones administrativas que
+//  existen siguen viviendo en el listado.
+//
+//  LO QUE NO SE MUESTRA, Y NO ES UN OLVIDO. Nunca salen a pantalla
+//  usuario.password_hash, api_key.key_hash, api_key.secreto_cifrado ni
+//  dte_certificado.cert_data_cifrado/pkey_data_cifrado. De las API keys solo
+//  el prefijo, que existe precisamente para poder nombrarlas sin revelarlas.
+//  Ninguna de esas columnas se lee siquiera: no estan en los SELECT.
+//
+//  LAS TABLAS DE DTE NO TIENEN cuenta_id: cuelgan de rut_emisor. Por eso
+//  todas las consultas de certificados, folios y documentos se acotan a la
+//  lista de RUT que pertenecen A ESTA cuenta, obtenida de dte_emisor. Ese IN
+//  es el limite de tenant de esta pantalla, aunque el superadmin pueda
+//  cruzarlo: sin el, la ficha de una cuenta mostraria documentos de otra.
+// ===========================================================================
+function handleAdminTenantFichaGet(int $cuentaId): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, created_at FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $cuentaId]);
+    $cuenta = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // 404 y no 500: un id que no existe es un enlace viejo o un numero
+    // escrito a mano, no una falla del sistema.
+    if ($cuenta === false) {
+        http_response_code(404);
+        echo '404 - cuenta no encontrada';
+        exit;
+    }
+
+    // Usuarios. rol es la propiedad ESTRUCTURAL (owner/colaborador/superadmin)
+    // y rol_id el rol configurable; se muestran los dos porque responden
+    // preguntas distintas y ver solo uno lleva a conclusiones equivocadas.
+    // usuario NO tiene columna de ultimo acceso, asi que esa columna que
+    // pedia el diseno no se puede dibujar (ver la nota en Pendientes).
+    $stmtUsuarios = $pdo->prepare(
+        'SELECT u.id, u.email, u.rol, r.nombre AS rol_nombre, u.estado, u.demo, u.created_at '
+        . 'FROM usuario u LEFT JOIN rol r ON r.id = u.rol_id '
+        . 'WHERE u.cuenta_id = :id ORDER BY u.id'
+    );
+    $stmtUsuarios->execute([':id' => $cuentaId]);
+    $usuarios = $stmtUsuarios->fetchAll(PDO::FETCH_ASSOC);
+
+    $stmtRoles = $pdo->prepare(
+        'SELECT r.id, r.nombre, r.created_at, '
+        . '       (SELECT COUNT(*) FROM permiso p WHERE p.rol_id = r.id)  AS permisos, '
+        . '       (SELECT COUNT(*) FROM usuario u WHERE u.rol_id = r.id)  AS usuarios '
+        . 'FROM rol r WHERE r.cuenta_id = :id ORDER BY r.nombre'
+    );
+    $stmtRoles->execute([':id' => $cuentaId]);
+    $roles = $stmtRoles->fetchAll(PDO::FETCH_ASSOC);
+
+    // Emisores de los dos ambientes. La barra de 6 etapas solo aplica a
+    // certificacion (es el proceso ante el SII); produccion no tiene etapas,
+    // tiene resolucion.
+    $stmtEmisores = $pdo->prepare(
+        'SELECT id, rut_emisor, ambiente, razon_social, giro, dir_origen, cmna_origen, '
+        . '       resolucion_fecha, resolucion_numero '
+        . 'FROM dte_emisor WHERE cuenta_id = :id ORDER BY ambiente, rut_emisor'
+    );
+    $stmtEmisores->execute([':id' => $cuentaId]);
+    $emisores = $stmtEmisores->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($emisores as &$emisor) {
+        $emisor['resumen'] = $emisor['ambiente'] === 'certificacion'
+            ? resumenEmisorCertificacion($pdo, $cuentaId, (string) $emisor['rut_emisor'])
+            : null;
+    }
+    unset($emisor);
+
+    // RUT de esta cuenta: el acotamiento de todo lo que sigue. Se deduplica
+    // porque el mismo RUT suele estar en certificacion Y en produccion.
+    $ruts = array_values(array_unique(array_map(
+        static fn (array $e): string => (string) $e['rut_emisor'],
+        $emisores
+    )));
+
+    $certificados = [];
+    $folios       = [];
+    $porMes       = [];
+    $documentos   = [];
+
+    if ($ruts !== []) {
+        // Lista de placeholders :rut0, :rut1, ... Un IN construido con los
+        // valores interpolados seria inyeccion; uno con placeholders fijos no
+        // serviria para una cantidad variable de emisores.
+        $marcas   = [];
+        $paramRut = [];
+        foreach ($ruts as $i => $rut) {
+            $marcas[]                 = ':rut' . $i;
+            $paramRut[':rut' . $i]    = $rut;
+        }
+        $listaRut = implode(', ', $marcas);
+
+        // Certificados: identificacion y fecha de carga. dte_certificado NO
+        // guarda la vigencia (vive dentro del propio certificado, cifrado), asi
+        // que la columna "vence" no se puede dibujar sin descifrar -- fuera de
+        // alcance de una pantalla de consulta.
+        $stmtCert = $pdo->prepare(
+            'SELECT rut_emisor, ambiente, rut_sender, created_at FROM dte_certificado '
+            . "WHERE rut_emisor IN ($listaRut) ORDER BY ambiente, rut_emisor"
+        );
+        $stmtCert->execute($paramRut);
+        $certificados = $stmtCert->fetchAll(PDO::FETCH_ASSOC);
+
+        // CAF y folios. proximo_folio_inicial y no folio_desde para medir el
+        // consumo, mismo criterio que dashFoliosPorTipo(): en un CAF migrado
+        // desde otro proveedor folio_desde contaria como consumo propio los
+        // folios que el emisor gasto antes de llegar aqui.
+        $stmtFolios = $pdo->prepare(
+            'SELECT f.rut_emisor, f.ambiente, f.tipo_dte, f.proximo_folio, '
+            . '       f.proximo_folio_inicial, f.folio_hasta, c.folio_desde, c.estado, c.created_at '
+            . 'FROM dte_folio f INNER JOIN dte_caf c ON c.id = f.caf_id '
+            . "WHERE f.rut_emisor IN ($listaRut) "
+            . 'ORDER BY f.ambiente, f.tipo_dte, c.folio_desde'
+        );
+        $stmtFolios->execute($paramRut);
+        $folios = $stmtFolios->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmtMes = $pdo->prepare(
+            "SELECT DATE_FORMAT(created_at, '%Y-%m') AS mes, ambiente, COUNT(*) AS n "
+            . "FROM dte_emitido WHERE rut_emisor IN ($listaRut) "
+            . 'AND created_at >= (NOW() - INTERVAL 12 MONTH) '
+            . 'GROUP BY mes, ambiente ORDER BY mes DESC'
+        );
+        $stmtMes->execute($paramRut);
+        $porMes = $stmtMes->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmtDocs = $pdo->prepare(
+            'SELECT rut_emisor, ambiente, tipo_dte, folio, estado, fecha_emision, total, created_at '
+            . "FROM dte_emitido WHERE rut_emisor IN ($listaRut) "
+            . 'ORDER BY created_at DESC, id DESC LIMIT 20'
+        );
+        $stmtDocs->execute($paramRut);
+        $documentos = $stmtDocs->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    // API keys: prefijo y metadatos, NUNCA key_hash ni secreto_cifrado.
+    $stmtKeys = $pdo->prepare(
+        'SELECT prefijo, ambiente, tipo, estado, rut_emisor_scope, last_used_at, created_at '
+        . 'FROM api_key WHERE cuenta_id = :id ORDER BY ambiente, created_at DESC'
+    );
+    $stmtKeys->execute([':id' => $cuentaId]);
+    $apiKeys = $stmtKeys->fetchAll(PDO::FETCH_ASSOC);
+
+    // Auditoria de esta cuenta. Ademas de entidad_tipo='cuenta' se traen las
+    // filas de sus dte_emisor: la accion administrativa mas frecuente es
+    // revertir una etapa, que se registra contra el emisor, y una ficha que la
+    // ocultara mostraria la cuenta como si nunca la hubieran tocado.
+    $idsEmisor = array_map(static fn (array $e): int => (int) $e['id'], $emisores);
+    $condicion = 'a.entidad_tipo = :tipo AND a.entidad_id = :cuenta_id';
+    $paramAud  = [':tipo' => 'cuenta', ':cuenta_id' => $cuentaId];
+    if ($idsEmisor !== []) {
+        $marcasEmisor = [];
+        foreach ($idsEmisor as $i => $idEmisor) {
+            $marcasEmisor[]                 = ':emisor' . $i;
+            $paramAud[':emisor' . $i]       = $idEmisor;
+        }
+        $condicion = '(' . $condicion . ') OR (a.entidad_tipo = :tipoEmisor AND a.entidad_id IN ('
+            . implode(', ', $marcasEmisor) . '))';
+        $paramAud[':tipoEmisor'] = 'dte_emisor';
+    }
+
+    $stmtAud = $pdo->prepare(
+        'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, '
+        . '       a.entidad_id, a.valor_anterior, a.valor_nuevo, a.created_at '
+        . 'FROM admin_auditoria a LEFT JOIN usuario u ON u.id = a.usuario_id '
+        . "WHERE $condicion ORDER BY a.created_at DESC, a.id DESC"
+    );
+    $stmtAud->execute($paramAud);
+    $auditoria = $stmtAud->fetchAll(PDO::FETCH_ASSOC);
+
+    vista('admin-tenant-ficha', [
+        'cuenta'       => $cuenta,
+        'usuarios'     => $usuarios,
+        'roles'        => $roles,
+        'emisores'     => $emisores,
+        'certificados' => $certificados,
+        'folios'       => $folios,
+        'apiKeys'      => $apiKeys,
+        'porMes'       => $porMes,
+        'documentos'   => $documentos,
+        'auditoria'    => $auditoria,
+        'puedeEmitir'  => estadoEmisionProduccion($pdo, $cuentaId),
+    ]);
 }
 
 // ===========================================================================

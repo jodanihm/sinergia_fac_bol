@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-21',
+        'version' => '1.13',
+        'titulo'  => 'Buscador de cuentas y ficha completa de cada cliente',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El listado de cuentas ahora se puede buscar por nombre, por email o por RUT del emisor, y filtrar por estado.',
+            'La busqueda queda en la direccion de la pagina, asi que se puede guardar o compartir el resultado.',
+            'Al hacer clic en una cuenta se abre su ficha: usuarios y sus roles, empresas emisoras con su avance de certificacion, certificados, folios disponibles, credenciales de API, documentos emitidos por mes y las acciones administrativas que se hicieron sobre ella.',
+            'La ficha es de solo consulta y nunca muestra claves, certificados ni credenciales: de las credenciales de API solo se ve el prefijo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-21',
         'version' => '1.12',
         'titulo'  => 'Panel de control interno para el equipo de Sinergia',
         'tag'     => 'arquitectura',
