@@ -440,6 +440,267 @@ const CATALOGO_MODULOS = [
 /** @var list<string> */
 const CATALOGO_ACCIONES = ['ver', 'gestionar', 'emitir'];
 
+// ---------------------------------------------------------------------------
+//  MAPA RUTA -> PERMISO, y por que existe
+//
+//  ESTE ARREGLO ES LO UNICO QUE SE HACE DISTINTO DE BREWER, A PROPOSITO.
+//
+//  Alla el permiso se declara con un decorador sobre el handler, y el guard
+//  dice literalmente "if (!requerido) return true": un endpoint sin decorador
+//  pasa. Son dos olvidos posibles -- el decorador y el @UseGuards del
+//  controlador -- y cualquiera de los dos ABRE la ruta sin hacer ruido.
+//
+//  Aqui la relacion vive en UNA tabla y el despachador la consulta por ruta:
+//  una ruta que no este listada NO PASA. El olvido cierra en vez de abrir, que
+//  es la unica direccion segura para el error.
+//
+//
+//  POR QUE ESTAS 5 CONSTANTES VIVEN AQUI ARRIBA Y NO JUNTO A SU FUNCION
+//  -----------------------------------------------------------------------------
+//  ESTE ARCHIVO SE EJECUTA DE ARRIBA HACIA ABAJO. No es solo un contenedor de
+//  funciones: el router son sentencias sueltas que corren en orden. Las
+//  funciones de nivel superior SI estan disponibles antes de su declaracion
+//  (PHP las liga en tiempo de compilacion), pero una `const` de nivel superior
+//  NO: existe recien cuando el interprete pasa fisicamente por su linea.
+//
+//  En el primer intento de la Fase 3 (commit be74e38) estas constantes quedaron
+//  ~2600 lineas MAS ABAJO que la llamada a exigirPermisoDeRuta() del router.
+//  El resultado fue un fatal en produccion -- "Undefined constant
+//  RUTAS_PUBLICAS" -- que dejo el panel caido hasta el revert (d7158fa).
+//
+//  NI php -l NI PHPUnit LO ATRAPARON, y por eso importa dejarlo escrito: php -l
+//  solo valida sintaxis, y la suite no ejecuta el router. La unica verificacion
+//  que lo habria detectado es pedirle una pagina al panel de verdad.
+//
+//  REGLA PRACTICA: cualquier constante que use el router va ANTES del router.
+//  Si mueves este bloque hacia abajo, lo rompes de nuevo.
+//
+//
+//  CRITERIO DE LA ACCION:
+//    ver        GET que solo muestra.
+//    gestionar  POST que toca datos nuestros (subir archivo, marcar etapa).
+//    emitir     POST que manda al SII y quema folios.
+// ---------------------------------------------------------------------------
+
+/** @var array<string, array{0:string, 1:string}> "METODO ruta" => [modulo, accion] */
+const PERMISOS_RUTA = [
+    // --- dashboard / chat / auditoria / informes ---
+    'GET /panel'                                 => ['dashboard', 'ver'],
+    'GET /auditoria'                             => ['auditoria', 'ver'],
+    'GET /chat'                                  => ['chat', 'ver'],
+    'GET /chat/excel'                            => ['chat', 'ver'],
+    'GET /informes/chat'                         => ['chat', 'ver'],
+    // confirmar CREA EL BORRADOR Y REDIRIGE al formulario de emision; no toca
+    // el SII. La emision es el POST /ventas/factura, que si pide 'emitir'.
+    'POST /chat'                                 => ['chat', 'gestionar'],
+    'POST /chat/confirmar'                       => ['chat', 'gestionar'],
+    'POST /chat/descartar'                       => ['chat', 'gestionar'],
+    'GET /informes'                              => ['informes', 'ver'],
+
+    // --- ventas: emision unitaria ---
+    'GET /ventas/factura'                        => ['ventas', 'ver'],
+    'POST /ventas/factura'                       => ['ventas', 'emitir'],
+    'GET /ventas/factura-exenta'                 => ['ventas', 'ver'],
+    'POST /ventas/factura-exenta'                => ['ventas', 'emitir'],
+    'GET /ventas/boleta'                         => ['ventas', 'ver'],
+    'POST /ventas/boleta'                        => ['ventas', 'emitir'],
+    'GET /ventas/nota-credito'                   => ['ventas', 'ver'],
+    'POST /ventas/nota-credito'                  => ['ventas', 'emitir'],
+    'GET /ventas/nota-debito'                    => ['ventas', 'ver'],
+    'POST /ventas/nota-debito'                   => ['ventas', 'emitir'],
+    'GET /ventas/resultado'                      => ['ventas', 'ver'],
+
+    // --- ventas: cotizaciones, cargas y panel ---
+    'GET /ventas/cotizaciones'                   => ['ventas', 'ver'],
+    'GET /ventas/cotizaciones/nueva'             => ['ventas', 'ver'],
+    'POST /ventas/cotizaciones/nueva'            => ['ventas', 'gestionar'],
+    'GET /ventas/carga-masiva'                   => ['ventas', 'ver'],
+    'POST /ventas/carga-masiva'                  => ['ventas', 'gestionar'],
+    'GET /ventas/carga-masiva/plantilla'         => ['ventas', 'ver'],
+    'GET /ventas/facturacion-masiva'             => ['ventas', 'ver'],
+    // LA QUE MAS FOLIOS QUEMA DE UNA VEZ: un sub-lote entero al SII.
+    'POST /ventas/facturacion-masiva/confirmar-sublote' => ['ventas', 'emitir'],
+    'GET /ventas/panel-emision'                  => ['ventas', 'ver'],
+    'GET /ventas/correos'                        => ['ventas', 'ver'],
+    'POST /ventas/correos/reintentar-fallidos'   => ['ventas', 'gestionar'],
+    'POST /ventas/correos/buscar-destinatarios'  => ['ventas', 'gestionar'],
+
+    // --- maestros ---
+    'GET /maestros/clientes'                     => ['maestros', 'ver'],
+    'GET /maestros/clientes/nuevo'               => ['maestros', 'ver'],
+    'POST /maestros/clientes/nuevo'              => ['maestros', 'gestionar'],
+    'GET /maestros/productos'                    => ['maestros', 'ver'],
+    'GET /maestros/productos/nuevo'              => ['maestros', 'ver'],
+    'POST /maestros/productos/nuevo'             => ['maestros', 'gestionar'],
+    // POR LO QUE LEE, NO POR DONDE SE USA. Lo consume el JS del formulario de
+    // emision, pero devuelve una ficha del maestro de clientes: con
+    // 'ventas:ver' se estarian leyendo maestros sin permiso de maestros.
+    'GET /ventas/cliente-por-rut'                => ['maestros', 'ver'],
+
+    // --- compras ---
+    'GET /compras/proveedores'                   => ['compras', 'ver'],
+    'GET /compras/proveedores/nuevo'             => ['compras', 'ver'],
+    'POST /compras/proveedores/nuevo'            => ['compras', 'gestionar'],
+    'GET /compras/proveedor-por-rut'             => ['compras', 'ver'],
+    'GET /compras/ordenes'                       => ['compras', 'ver'],
+    'GET /compras/ordenes/nueva'                 => ['compras', 'ver'],
+    'POST /compras/ordenes/nueva'                => ['compras', 'gestionar'],
+
+    // --- config: certificacion (ambiente) y produccion ---
+    'GET /empresa'                               => ['config', 'ver'],
+    'POST /empresa'                              => ['config', 'gestionar'],
+    'GET /empresa/importar-datos-sii'            => ['config', 'ver'],
+    'POST /empresa/importar-datos-sii'           => ['config', 'gestionar'],
+    'POST /empresa/logo'                         => ['config', 'gestionar'],
+    'POST /empresa/logo/quitar'                  => ['config', 'gestionar'],
+    'GET /empresa/consultar-sii'                 => ['config', 'ver'],
+    // Cuesta creditos del proveedor, pero no emite ni consume folios.
+    'POST /empresa/consultar-sii'                => ['config', 'gestionar'],
+    'GET /certificado'                           => ['config', 'ver'],
+    'POST /certificado'                          => ['config', 'gestionar'],
+    'GET /caf'                                   => ['config', 'ver'],
+    'POST /caf'                                  => ['config', 'gestionar'],
+    'POST /caf/confirmar'                        => ['config', 'gestionar'],
+    'GET /apikeys'                               => ['config', 'ver'],
+    'POST /apikeys/generar'                      => ['config', 'gestionar'],
+    'POST /apikeys/revocar'                      => ['config', 'gestionar'],
+    'GET /empresa-produccion'                    => ['config', 'ver'],
+    'POST /empresa-produccion'                   => ['config', 'gestionar'],
+    'GET /certificado-produccion'                => ['config', 'ver'],
+    'POST /certificado-produccion'               => ['config', 'gestionar'],
+    'GET /caf-produccion'                        => ['config', 'ver'],
+    'POST /caf-produccion'                       => ['config', 'gestionar'],
+    'POST /caf-produccion/confirmar'             => ['config', 'gestionar'],
+    'GET /apikeys-produccion'                    => ['config', 'ver'],
+    'POST /apikeys-produccion/generar'           => ['config', 'gestionar'],
+    'POST /apikeys-produccion/revocar'           => ['config', 'gestionar'],
+
+    // --- certificacion (Fase 1, sin cambios) ---
+    'GET /certificacion-elegir'                  => ['certificacion', 'ver'],
+    'GET /certificacion'                         => ['certificacion', 'ver'],
+    'GET /certificacion/set-pruebas'             => ['certificacion', 'ver'],
+    'GET /certificacion/simulacion'              => ['certificacion', 'ver'],
+    'GET /certificacion/boleta'                  => ['certificacion', 'ver'],
+    'GET /certificacion/boleta/set'              => ['certificacion', 'ver'],
+    'GET /certificacion/boleta/rvd'              => ['certificacion', 'ver'],
+    'GET /certificacion/intercambio'             => ['certificacion', 'ver'],
+    'GET /certificacion/muestras-impresas'       => ['certificacion', 'ver'],
+    'GET /certificacion-aprobada'                => ['certificacion', 'ver'],
+
+    'POST /certificacion/actualizar'             => ['certificacion', 'gestionar'],
+    'POST /certificacion/marcar-sok'             => ['certificacion', 'gestionar'],
+    'POST /certificacion/confirmar-etapa'        => ['certificacion', 'gestionar'],
+    'POST /certificacion/actualizar-libro'       => ['certificacion', 'gestionar'],
+    'POST /certificacion/set-pruebas'            => ['certificacion', 'gestionar'],
+    'POST /certificacion/boleta/confirmar-etapa' => ['certificacion', 'gestionar'],
+    'POST /certificacion/intercambio'            => ['certificacion', 'gestionar'],
+    'POST /certificacion/muestras-impresas.zip'  => ['certificacion', 'gestionar'],
+    'POST /certificacion-aprobada/confirmar'     => ['certificacion', 'gestionar'],
+
+    // LAS CINCO QUE QUEMAN FOLIOS ANTE EL SII.
+    'POST /certificacion/emitir-libro-ventas'    => ['certificacion', 'emitir'],
+    'POST /certificacion/emitir-libro-compras'   => ['certificacion', 'emitir'],
+    'POST /certificacion/set-pruebas/emitir'     => ['certificacion', 'emitir'],
+    'POST /certificacion/simulacion/emitir'      => ['certificacion', 'emitir'],
+    'POST /certificacion/boleta/set/emitir'      => ['certificacion', 'emitir'],
+    'POST /certificacion/boleta/rvd/emitir'      => ['certificacion', 'emitir'],
+];
+
+/**
+ * Rutas CON PARAMETRO. Van aparte porque no se pueden buscar por igualdad.
+ *
+ * El patron es el MISMO regex del router, copiado tal cual: si el router
+ * acepta una forma que este mapa no reconoce, la ruta cae al "no declarado" y
+ * se bloquea -- que es la direccion segura del error. Copiar el regex y no
+ * aproximarlo con un prefijo es lo que da esa garantia: '/compras/ordenes/'
+ * como prefijo dejaria pasar '/compras/ordenes/9/loquesea'.
+ *
+ * @var list<array{0:string, 1:string, 2:string, 3:string}> [metodo, regex, modulo, accion]
+ */
+const PERMISOS_RUTA_PATRON = [
+    // maestros
+    ['GET',  '#^/maestros/clientes/(\d+)/editar$#',      'maestros', 'ver'],
+    ['POST', '#^/maestros/clientes/(\d+)/editar$#',      'maestros', 'gestionar'],
+    ['POST', '#^/maestros/clientes/(\d+)/activar$#',     'maestros', 'gestionar'],
+    ['POST', '#^/maestros/clientes/(\d+)/desactivar$#',  'maestros', 'gestionar'],
+    ['GET',  '#^/maestros/productos/(\d+)/editar$#',     'maestros', 'ver'],
+    ['POST', '#^/maestros/productos/(\d+)/editar$#',     'maestros', 'gestionar'],
+    ['POST', '#^/maestros/productos/(\d+)/activar$#',    'maestros', 'gestionar'],
+    ['POST', '#^/maestros/productos/(\d+)/desactivar$#', 'maestros', 'gestionar'],
+
+    // compras
+    ['GET',  '#^/compras/proveedores/(\d+)/editar$#',                'compras', 'ver'],
+    ['POST', '#^/compras/proveedores/(\d+)/editar$#',                'compras', 'gestionar'],
+    ['POST', '#^/compras/proveedores/(\d+)/(activar|desactivar)$#',  'compras', 'gestionar'],
+    ['GET',  '#^/compras/ordenes/(\d+)/pdf$#',                       'compras', 'ver'],
+    ['GET',  '#^/compras/ordenes/(\d+)/editar$#',                    'compras', 'ver'],
+    ['POST', '#^/compras/ordenes/(\d+)/editar$#',                    'compras', 'gestionar'],
+    // 'enviar' manda un CORREO al proveedor, no un documento al SII.
+    ['POST', '#^/compras/ordenes/(\d+)/enviar$#',                    'compras', 'gestionar'],
+    ['GET',  '#^/compras/ordenes/(\d+)$#',                           'compras', 'ver'],
+
+    // ventas
+    ['GET',  '#^/ventas/cotizaciones/(\d+)/pdf$#',       'ventas', 'ver'],
+    // 'facturar' es un GET que solo PRELLENA el formulario de emision. El
+    // documento sale del POST /ventas/factura, que pide 'emitir'. Su handler
+    // llama a exigirProduccionCompleto() porque termina en una emision, pero la
+    // ruta en si no emite nada.
+    ['GET',  '#^/ventas/cotizaciones/(\d+)/facturar$#',  'ventas', 'ver'],
+    ['GET',  '#^/ventas/cotizaciones/(\d+)/editar$#',    'ventas', 'ver'],
+    ['POST', '#^/ventas/cotizaciones/(\d+)/editar$#',    'ventas', 'gestionar'],
+    ['GET',  '#^/ventas/cotizaciones/(\d+)$#',           'ventas', 'ver'],
+    ['GET',  '#^/ventas/carga-masiva/(\d+)$#',           'ventas', 'ver'],
+    ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)$#',        'ventas', 'ver'],
+    ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)/pdf$#',    'ventas', 'ver'],
+    ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)/xml$#',    'ventas', 'ver'],
+    // estado-sii CONSULTA al SII, no emite: no consume folios. Si algun dia se
+    // decide que hablar con el SII exige 'emitir', cambiar esta linea -- pero
+    // entonces un contador no podria revisar el estado de lo ya emitido.
+    ['POST', '#^/ventas/panel-emision/(\d+)/(\d+)/estado-sii$#', 'ventas', 'gestionar'],
+    ['POST', '#^/ventas/correos/(\d+)/reintentar$#',            'ventas', 'gestionar'],
+    ['POST', '#^/ventas/correos/(\d+)/buscar-destinatario$#',   'ventas', 'gestionar'],
+
+    // informes: el slug es el nombre del informe; los tres son de lectura.
+    ['GET',  '#^/informes/([a-z-]+)/(pdf|excel)$#', 'informes', 'ver'],
+    ['GET',  '#^/informes/([a-z-]+)$#',             'informes', 'ver'],
+
+    // certificacion (Fase 1)
+    ['GET',  '#^/certificacion/etapa/([^/]+)$#',                              'certificacion', 'ver'],
+    ['GET',  '#^/certificacion/intercambio/(acuse|resultado|recibos)\.xml$#', 'certificacion', 'ver'],
+];
+
+/**
+ * Rutas PUBLICAS: anteriores a cualquier sesion, no pueden llevar permiso
+ * porque el gate necesita un usuario. Estan listadas y no solo "antes del
+ * guard en el router" a proposito: asi el despachador es correcto donde sea que
+ * se lo llame, y no depende del orden de los `if`.
+ *
+ * @var list<string>
+ */
+const RUTAS_PUBLICAS = [
+    'GET /', 'GET /registro', 'POST /registro',
+    'GET /login', 'POST /login', 'GET /logout',
+];
+
+/** @var list<string> Regex de rutas publicas con parametro. */
+const PATRONES_PUBLICOS = ['#^/activar/[0-9a-f]{64}$#'];
+
+/**
+ * Espacios con GATE PROPIO, que el mapa de permisos NO debe volver a filtrar.
+ *
+ *   /admin/*                  exigirSuperadmin() -- 403 si no es superadmin.
+ *   /configuracion/usuarios*  exigirOwner()      -- administrar usuarios y
+ *   /configuracion/roles*                           roles no es un permiso del
+ *                                                   catalogo: seria una escalada
+ *                                                   de privilegios en un paso.
+ *
+ * NO es una excepcion que debilite el modelo: los tres exigen MAS que cualquier
+ * permiso configurable, no menos.
+ *
+ * @var list<string>
+ */
+const PREFIJOS_GATE_PROPIO = ['/admin/', '/configuracion/usuarios', '/configuracion/roles'];
+
 function definicionMenu(): array
 {
     return [
@@ -9677,6 +9938,33 @@ if ($metodo === 'POST' && preg_match('#^/activar/([0-9a-f]{64})$#', $ruta, $mAct
     handleActivarCuentaPost($mActivar[1]);
 }
 
+// ===========================================================================
+//  GATE DE PERMISOS DEL PANEL COMPLETO (Fase 3).
+//
+//  UN SOLO PUNTO, PARA TODAS LAS RUTAS. En la Fase 1 este guard cubria solo
+//  /certificacion*; ahora cubre el panel entero, y el motivo es el mismo:
+//
+//    con una llamada por handler, un handler nuevo nace SIN gate.
+//    con el despachador, nace BLOQUEADO hasta que alguien lo declare.
+//
+//  Ese es el defecto de Brewer Manager que este diseño existe para no repetir
+//  ("if (!requerido) return true": endpoint sin decorador pasa). Aqui el olvido
+//  cierra en vez de abrir, que es la unica direccion segura del error.
+//
+//  VA AQUI Y NO MAS ARRIBA, por dos razones y en este orden:
+//    1. Despues de las rutas PUBLICAS (/, /registro, /login, /logout,
+//       /activar), que ya salieron con su propio exit. El despachador igual las
+//       reconoce por RUTAS_PUBLICAS -- la doble cobertura es deliberada, para
+//       que mover este bloque no rompa el login.
+//    2. Despues del corte por cuenta demo, que debe seguir respondiendo su
+//       pantalla propia y no un 404 de permisos.
+//
+//  Los handlers conservan su Auth::requerirSesion(). Es redundante con el que
+//  hace el despachador y se deja asi: ninguno debe depender de que este bloque
+//  siga existiendo.
+// ===========================================================================
+exigirPermisoDeRuta($metodo, $ruta);
+
 // --- Maestros > Clientes ---
 if ($metodo === 'GET' && $ruta === '/maestros/clientes') {
     Auth::requerirSesion();
@@ -10230,27 +10518,6 @@ if ($metodo === 'POST' && $ruta === '/apikeys/generar') {
 if ($metodo === 'POST' && $ruta === '/apikeys/revocar') {
     Auth::requerirSesion();
     handleApiKeysRevocarPost();
-}
-
-// ---------------------------------------------------------------------------
-//  GATE DE PERMISOS DEL ESPACIO /certificacion* (Fase 1, piloto).
-//
-//  UN SOLO PUNTO, ANTES de todas sus rutas, y no una llamada por handler: asi
-//  una ruta nueva de este espacio nace BLOQUEADA hasta que alguien la declare
-//  en PERMISOS_RUTA. Con la llamada por handler, una ruta nueva naceria
-//  abierta -- que es el defecto de Brewer que este diseño evita.
-//
-//  str_starts_with('/certificacion') cubre los tres prefijos que existen:
-//  /certificacion, /certificacion-elegir y /certificacion-aprobada.
-//
-//  Auth::requerirSesion() PRIMERO y aparte: sin sesion corresponde el redirect
-//  a /login de siempre, no un 403. Los handlers conservan su propia llamada a
-//  requerirSesion(); es redundante y se deja asi a proposito, para que ninguno
-//  dependa de que este bloque siga existiendo.
-// ---------------------------------------------------------------------------
-if (str_starts_with($ruta, '/certificacion')) {
-    Auth::requerirSesion();
-    exigirPermisoDeRuta(Db::conexion(), Auth::cuentaId(), $metodo, $ruta);
 }
 
 if ($metodo === 'GET' && $ruta === '/certificacion-elegir') {
@@ -12226,77 +12493,12 @@ function sembrarRolAdministrador(PDO $pdo, int $cuentaId): int
     return $rolId;
 }
 
-// ---------------------------------------------------------------------------
-//  MAPA RUTA -> PERMISO, y por que existe
-//
-//  ESTE ARREGLO ES LO UNICO QUE SE HACE DISTINTO DE BREWER, A PROPOSITO.
-//
-//  Alla el permiso se declara con un decorador sobre el handler, y el guard
-//  dice literalmente "if (!requerido) return true": un endpoint sin decorador
-//  pasa. Son dos olvidos posibles -- el decorador y el @UseGuards del
-//  controlador -- y cualquiera de los dos ABRE la ruta sin hacer ruido.
-//
-//  Aqui la relacion vive en UNA tabla y el despachador la consulta por
-//  ruta: una ruta del espacio cubierto que no este listada NO PASA. El olvido
-//  cierra en vez de abrir, que es la unica direccion segura para el error.
-//
-//  ALCANCE DE ESTA FASE: solo /certificacion*. Son las rutas de mayor riesgo
-//  -- ahi adentro estan las cinco que emiten al SII -- y sirven de piloto del
-//  patron. Las otras ~128 rutas del panel siguen SIN gate de permisos, igual
-//  que hoy. Eso no es un descuido: extenderlo es Fase 2, y hasta entonces la
-//  propiedad de "fallar cerrado" vale para este espacio, no para el panel
-//  entero. Decirlo importa, porque un mapa parcial que se lea como total es
-//  peor que no tenerlo.
-//
-//  CRITERIO DE LA ACCION:
-//    ver        GET que solo muestra.
-//    gestionar  POST que toca datos nuestros (subir archivo, marcar etapa).
-//    emitir     POST que manda al SII y quema folios.
-// ---------------------------------------------------------------------------
-
-/** @var array<string, array{0:string, 1:string}> "METODO ruta" => [modulo, accion] */
-const PERMISOS_RUTA = [
-    'GET /certificacion-elegir'                  => ['certificacion', 'ver'],
-    'GET /certificacion'                         => ['certificacion', 'ver'],
-    'GET /certificacion/set-pruebas'             => ['certificacion', 'ver'],
-    'GET /certificacion/simulacion'              => ['certificacion', 'ver'],
-    'GET /certificacion/boleta'                  => ['certificacion', 'ver'],
-    'GET /certificacion/boleta/set'              => ['certificacion', 'ver'],
-    'GET /certificacion/boleta/rvd'              => ['certificacion', 'ver'],
-    'GET /certificacion/intercambio'             => ['certificacion', 'ver'],
-    'GET /certificacion/muestras-impresas'       => ['certificacion', 'ver'],
-    'GET /certificacion-aprobada'                => ['certificacion', 'ver'],
-
-    'POST /certificacion/actualizar'             => ['certificacion', 'gestionar'],
-    'POST /certificacion/marcar-sok'             => ['certificacion', 'gestionar'],
-    'POST /certificacion/confirmar-etapa'        => ['certificacion', 'gestionar'],
-    'POST /certificacion/actualizar-libro'       => ['certificacion', 'gestionar'],
-    'POST /certificacion/set-pruebas'            => ['certificacion', 'gestionar'],
-    'POST /certificacion/boleta/confirmar-etapa' => ['certificacion', 'gestionar'],
-    'POST /certificacion/intercambio'            => ['certificacion', 'gestionar'],
-    'POST /certificacion/muestras-impresas.zip'  => ['certificacion', 'gestionar'],
-    'POST /certificacion-aprobada/confirmar'     => ['certificacion', 'gestionar'],
-
-    // LAS CINCO QUE QUEMAN FOLIOS ANTE EL SII.
-    'POST /certificacion/emitir-libro-ventas'    => ['certificacion', 'emitir'],
-    'POST /certificacion/emitir-libro-compras'   => ['certificacion', 'emitir'],
-    'POST /certificacion/set-pruebas/emitir'     => ['certificacion', 'emitir'],
-    'POST /certificacion/simulacion/emitir'      => ['certificacion', 'emitir'],
-    'POST /certificacion/boleta/set/emitir'      => ['certificacion', 'emitir'],
-    'POST /certificacion/boleta/rvd/emitir'      => ['certificacion', 'emitir'],
-];
-
-/**
- * Rutas con parametro del mismo espacio. Van aparte porque no se pueden buscar
- * por igualdad; el prefijo se compara con str_starts_with y las dos son GET de
- * solo lectura.
- *
- * @var array<string, array{0:string, 1:string}>
- */
-const PERMISOS_RUTA_PREFIJO = [
-    '/certificacion/etapa/'       => ['certificacion', 'ver'],
-    '/certificacion/intercambio/' => ['certificacion', 'ver'],
-];
+// Las 5 constantes del mapa de permisos (PERMISOS_RUTA, PERMISOS_RUTA_PATRON,
+// RUTAS_PUBLICAS, PATRONES_PUBLICOS, PREFIJOS_GATE_PROPIO) VIVEN ARRIBA, junto
+// a CATALOGO_MODULOS. NO se pueden declarar aqui: este archivo se ejecuta de
+// arriba hacia abajo y el router las usa unas 2600 lineas antes de este punto.
+// Tenerlas aqui fue el fatal del commit be74e38. El porque completo esta en el
+// comentario que las acompaña.
 
 /**
  * Guard de espacio: aplica el permiso declarado para esta ruta, y NIEGA si no
@@ -12308,26 +12510,68 @@ const PERMISOS_RUTA_PREFIJO = [
  * el defecto de Brewer. Con el despachador, nace bloqueado hasta que alguien lo
  * declare, y ese alguien tiene que pensar que accion corresponde.
  */
-function exigirPermisoDeRuta(PDO $pdo, int $cuentaId, string $metodo, string $ruta): void
+function exigirPermisoDeRuta(string $metodo, string $ruta): void
 {
     $clave = $metodo . ' ' . $ruta;
+
+    // 1. Publicas: sin sesion todavia, no hay a quien preguntarle permisos.
+    if (in_array($clave, RUTAS_PUBLICAS, true)) {
+        return;
+    }
+    foreach (PATRONES_PUBLICOS as $patron) {
+        if (preg_match($patron, $ruta) === 1) {
+            return;
+        }
+    }
+
+    // 2. Espacios con gate propio: su handler ya exige superadmin u owner.
+    foreach (PREFIJOS_GATE_PROPIO as $prefijo) {
+        if (str_starts_with($ruta, $prefijo)) {
+            Auth::requerirSesion();
+            return;
+        }
+    }
+
+    // 3. De aqui en adelante hace falta sesion SI o SI. Va antes del mapa para
+    //    que un anonimo reciba el redirect a /login de siempre y no un 404 que
+    //    lo dejaria sin saber que solo le faltaba entrar.
+    Auth::requerirSesion();
+
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
     if (isset(PERMISOS_RUTA[$clave])) {
         [$modulo, $accion] = PERMISOS_RUTA[$clave];
         exigirPermiso($pdo, $cuentaId, $modulo, $accion);
         return;
     }
 
-    foreach (PERMISOS_RUTA_PREFIJO as $prefijo => $par) {
-        if ($metodo === 'GET' && str_starts_with($ruta, $prefijo)) {
-            exigirPermiso($pdo, $cuentaId, $par[0], $par[1]);
+    foreach (PERMISOS_RUTA_PATRON as [$m, $patron, $modulo, $accion]) {
+        if ($metodo === $m && preg_match($patron, $ruta) === 1) {
+            exigirPermiso($pdo, $cuentaId, $modulo, $accion);
             return;
         }
     }
 
-    // FALLA CERRADO. Si llegaste aqui leyendo un 403 inesperado: la ruta es
-    // nueva y falta declararla arriba. Es el comportamiento buscado, no un bug.
+    // 4. FALLA CERRADO: lo no declarado no pasa.
+    //
+    // 404 Y NO 403, y la diferencia importa. Ahora este despachador ve TODAS las
+    // rutas, incluidas las que no existen: un enlace viejo o un typo cae aqui
+    // igual que una ruta nueva sin declarar. Responder 403 le diria a un usuario
+    // legitimo "no tienes permiso" sobre algo que ni siquiera existe, y le
+    // confirmaria a quien sondee que la ruta si existe.
+    //
+    // La propiedad de fallar cerrado se conserva entera: la peticion termina
+    // aqui y NINGUN handler llega a ejecutarse. Lo unico que cambia es lo que se
+    // le cuenta al de afuera.
+    //
+    // Si estas leyendo un 404 inesperado sobre una ruta que SI existe: falta
+    // declararla en PERMISOS_RUTA o en PERMISOS_RUTA_PATRON. El error_log de
+    // abajo lo dice con nombre y apellido.
     error_log(sprintf('exigirPermisoDeRuta: ruta sin permiso declarado (%s) -- denegada', $clave));
-    negar403();
+    http_response_code(404);
+    echo '404 - ruta no encontrada';
+    exit;
 }
 
 function exigirSuperadmin(PDO $pdo): void
