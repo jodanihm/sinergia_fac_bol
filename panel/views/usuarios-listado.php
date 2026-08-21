@@ -7,11 +7,16 @@
  * y created_at, ordenados por created_at ASC. Sin filtros, sin busqueda, sin
  * paginacion: el handler no los tiene y no se inventan.
  *
- * ESTO NO ES UN EDITOR DE PERMISOS. La columna `rol` (VARCHAR, 'owner' o
- * 'colaborador') NO tiene efecto funcional: se escribe al registrar o invitar y
- * solo se lee para mostrarla aqui. Auth no la consulta y ningun gate depende de
- * ella. Por eso se presenta como una etiqueta neutra y la pantalla no promete
- * control de accesos por rol.
+ * AHORA SI HAY PERMISOS, Y SON DOS COLUMNAS DISTINTAS (Fase 2).
+ *
+ *   `rol`     (VARCHAR 'owner'|'colaborador') sigue SIN efecto configurable:
+ *             dice QUE ES el usuario. owner bypasea el gate entero.
+ *   `rol_id`  (FK a la tabla rol, migracion 042) dice QUE PUEDE HACER un
+ *             colaborador. Es el que se asigna aqui y el que lee exigirPermiso().
+ *
+ * Por eso la tabla muestra las dos: la etiqueta neutra de siempre y, al lado,
+ * el rol de permisos -- que puede estar vacio, y eso significa algo (ver el
+ * aviso de la columna).
  *
  * TRES ESTADOS VISUALES sobre DOS estados persistidos. El ENUM es
  * 'activo'|'inactivo'; "invitacion pendiente" es una lectura derivada
@@ -94,7 +99,8 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <thead>
                             <tr>
                                 <th>Email</th>
-                                <th>Rol</th>
+                                <th>Tipo</th>
+                                <th>Rol de permisos</th>
                                 <th class="tabla-datos__estado">Estado</th>
                                 <th>Alta</th>
                                 <th class="tabla-datos__acciones">Acciones</th>
@@ -109,6 +115,16 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                                 <tr<?= $u['estado'] !== 'activo' ? ' class="tabla-datos__fila--inactiva"' : ''; ?>>
                                     <td><?= htmlspecialchars((string) $u['email']); ?></td>
                                     <td><span class="badge badge--etiqueta"><?= htmlspecialchars((string) $u['rol']); ?></span></td>
+                                    <td>
+                                        <?php if ($u['rol'] === 'owner' || $u['rol'] === 'superadmin'): ?>
+                                            <span class="tabla-datos__secundario">acceso completo</span>
+                                        <?php elseif (! empty($u['rol_nombre'])): ?>
+                                            <span class="badge badge--ok"><?= htmlspecialchars((string) $u['rol_nombre']); ?></span>
+                                        <?php else: ?>
+                                            <?php /* Sin rol asignado NO es neutro: es 403 en lo ya protegido. */ ?>
+                                            <span class="badge badge--advertencia">Sin rol</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td class="tabla-datos__estado"><span class="badge <?= $claseBadge; ?>"><?= htmlspecialchars($textoBadge); ?></span></td>
                                     <td><?= htmlspecialchars((string) $u['created_at']); ?></td>
                                     <td class="tabla-datos__acciones">
@@ -145,7 +161,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <li>Se genera un link de activacion valido 48 horas y de un solo uso.</li>
                 <li>No se envia por correo: lo copias y lo compartes por el canal que prefieras.</li>
                 <li>La persona invitada define su propia contrasena al activarse.</li>
-                <li>El rol es informativo y hoy no restringe accesos.</li>
+                <li>El rol de permisos se elige al invitar y se puede cambiar despues.</li>
             </ul>
         </div>
 
@@ -159,6 +175,24 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <input type="email" name="email" id="email" required>
                         <small class="form-ayuda">Se genera un link de activacion para compartir a mano.</small>
                     </div>
+                    <div class="form-campo">
+                        <label for="rol_id">Rol de permisos</label>
+                        <select name="rol_id" id="rol_id">
+                            <?php foreach ($roles as $r): ?>
+                                <option value="<?= (int) $r['id']; ?>"<?= $r['nombre'] === 'Administrador' ? ' selected' : ''; ?>>
+                                    <?= htmlspecialchars($r['nombre']); ?>
+                                </option>
+                            <?php endforeach; ?>
+                            <?php /* La opcion vacia va AL FINAL y no primero: dejar a
+                                     alguien sin permisos es una decision, no el camino
+                                     por descuido. "Administrador" viene preseleccionado. */ ?>
+                            <option value="">Sin rol (no podra entrar a certificacion)</option>
+                        </select>
+                        <small class="form-ayuda">
+                            Sin rol, el colaborador entra al panel pero recibe un error de
+                            permisos en las areas ya protegidas &mdash; hoy, Certificacion SII.
+                        </small>
+                    </div>
                 </div>
                 <div class="acciones-grupo">
                     <button type="submit" class="boton-principal">Invitar</button>
@@ -167,5 +201,64 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         </section>
     </div>
 </div>
+
+<section class="tarjeta" aria-labelledby="titulo-roles">
+    <div class="dash-header">
+        <div>
+            <h2 id="titulo-roles">Roles de permisos</h2>
+        </div>
+        <div class="acciones-grupo acciones-grupo--header">
+            <a class="boton-principal" href="/configuracion/roles/nuevo">Nuevo rol</a>
+        </div>
+    </div>
+    <p class="nota">
+        Un rol es un conjunto de permisos. Solo se aplica a colaboradores: el dueno
+        de la cuenta siempre tiene acceso completo.
+    </p>
+
+    <?php if ($roles === []): ?>
+        <div class="estado-vacio">
+            <h2>Aun no hay roles</h2>
+            <p>Crea uno para poder asignarlo a tus colaboradores.</p>
+        </div>
+    <?php else: ?>
+        <div class="tabla-scroll">
+            <table class="tabla-datos">
+                <caption><?= count($roles); ?> rol<?= count($roles) === 1 ? '' : 'es'; ?></caption>
+                <thead>
+                    <tr>
+                        <th>Nombre</th>
+                        <th class="tabla-datos__num">Permisos</th>
+                        <th class="tabla-datos__num">Colaboradores</th>
+                        <th class="tabla-datos__acciones">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($roles as $r): ?>
+                        <tr>
+                            <td><?= htmlspecialchars($r['nombre']); ?></td>
+                            <td class="tabla-datos__num"><?= (int) $r['permisos']; ?></td>
+                            <td class="tabla-datos__num"><?= (int) $r['usuarios']; ?></td>
+                            <td class="tabla-datos__acciones">
+                                <a class="boton-texto" href="/configuracion/roles/<?= (int) $r['id']; ?>/editar">Editar</a>
+                                <?php if ((int) $r['usuarios'] === 0): ?>
+                                    <form method="post" action="/configuracion/roles/<?= (int) $r['id']; ?>/eliminar" style="display:inline;">
+                                        <?= csrfInput(); ?>
+                                        <button type="submit" class="boton-texto">Eliminar</button>
+                                    </form>
+                                <?php else: ?>
+                                    <?php /* Sin boton, y no deshabilitado: el handler lo
+                                             rechaza igual (y la FK detras), pero ofrecer un
+                                             boton que siempre falla es una promesa falsa. */ ?>
+                                    <span class="tabla-datos__secundario">en uso</span>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+    <?php endif; ?>
+</section>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>

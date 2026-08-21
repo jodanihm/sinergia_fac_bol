@@ -7859,9 +7859,16 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
 /** @return list<array<string,mixed>> */
 function listarUsuariosDeCuenta(PDO $pdo, int $cuentaId): array
 {
+    // El nombre del rol sale por LEFT JOIN acotado a la MISMA cuenta: sin ese
+    // segundo filtro, un rol_id que apuntara fuera de la cuenta pintaria en la
+    // tabla el nombre de un rol ajeno. El JOIN es LEFT porque rol_id NULL es
+    // legitimo (owner, y colaborador todavia sin asignar).
     $stmt = $pdo->prepare(
-        'SELECT id, email, rol, estado, activacion_token, activacion_expira, created_at '
-        . 'FROM usuario WHERE cuenta_id = :c ORDER BY created_at ASC, id ASC'
+        'SELECT u.id, u.email, u.rol, u.rol_id, r.nombre AS rol_nombre, u.estado, '
+        . '       u.activacion_token, u.activacion_expira, u.created_at '
+        . 'FROM usuario u '
+        . 'LEFT JOIN rol r ON r.id = u.rol_id AND r.cuenta_id = u.cuenta_id '
+        . 'WHERE u.cuenta_id = :c ORDER BY u.created_at ASC, u.id ASC'
     );
     $stmt->execute([':c' => $cuentaId]);
 
@@ -7887,7 +7894,7 @@ function contarUsuariosActivos(PDO $pdo, int $cuentaId): int
  *
  * @return array{status:string, mensaje?:string, token?:string, usuarioId?:int, regenerado?:bool}
  */
-function crearOResendearInvitacion(PDO $pdo, int $cuentaId, string $email): array
+function crearOResendearInvitacion(PDO $pdo, int $cuentaId, string $email, ?int $rolId = null): array
 {
     // Ojo: cuenta.email es el email del OWNER original (lo fija /registro).
     // Si el email pertenece a esta MISMA cuenta (invitar el propio email del
@@ -7916,8 +7923,19 @@ function crearOResendearInvitacion(PDO $pdo, int $cuentaId, string $email): arra
         // inactivo, misma cuenta: invitacion pendiente (o desactivada antes de
         // completar la activacion) -- regenerar token y reenviar.
         $token = bin2hex(random_bytes(32));
-        $pdo->prepare('UPDATE usuario SET activacion_token = :token, activacion_expira = :expira WHERE id = :id')
-            ->execute([':token' => $token, ':expira' => $expira, ':id' => $existente['id']]);
+        // El rol se reescribe tambien al reenviar: si el owner cambio de idea
+        // entre una invitacion y la siguiente, manda la ultima. El WHERE lleva
+        // cuenta_id aunque el id ya sea unico -- es la fila de un tenant.
+        $pdo->prepare(
+            'UPDATE usuario SET activacion_token = :token, activacion_expira = :expira, rol_id = :rol '
+            . 'WHERE id = :id AND cuenta_id = :c'
+        )->execute([
+            ':token'  => $token,
+            ':expira' => $expira,
+            ':rol'    => $rolId,
+            ':id'     => $existente['id'],
+            ':c'      => $cuentaId,
+        ]);
 
         return ['status' => 'ok', 'token' => $token, 'usuarioId' => (int) $existente['id'], 'regenerado' => true];
     }
@@ -7927,12 +7945,13 @@ function crearOResendearInvitacion(PDO $pdo, int $cuentaId, string $email): arra
     // (usuario.password_hash es NOT NULL, no se puede dejar vacio).
     $passwordInutilizable = password_hash(bin2hex(random_bytes(32)), PASSWORD_DEFAULT);
     $pdo->prepare(
-        'INSERT INTO usuario (cuenta_id, email, password_hash, rol, estado, activacion_token, activacion_expira, created_at) '
-        . "VALUES (:cuenta_id, :email, :hash, 'colaborador', 'inactivo', :token, :expira, NOW())"
+        'INSERT INTO usuario (cuenta_id, email, password_hash, rol, rol_id, estado, activacion_token, activacion_expira, created_at) '
+        . "VALUES (:cuenta_id, :email, :hash, 'colaborador', :rol, 'inactivo', :token, :expira, NOW())"
     )->execute([
         ':cuenta_id' => $cuentaId,
         ':email'     => $email,
         ':hash'      => $passwordInutilizable,
+        ':rol'       => $rolId,
         ':token'     => $token,
         ':expira'    => $expira,
     ]);
@@ -7967,13 +7986,340 @@ function resolverUsuarioPorTokenActivacion(PDO $pdo, string $token): array
     return ['estado' => 'valido', 'usuario' => $fila];
 }
 
+// ===========================================================================
+//  ROLES (Fase 2): CRUD scopeado por cuenta_id
+//
+//  POR QUE HAY UN exigirOwner() Y NO ALCANZA CON 'usuarios:gestionar'.
+//
+//  Un permiso configurable que permita administrar roles es una escalada de
+//  privilegios con un paso: el colaborador se edita su propio rol, se tilda
+//  'certificacion:emitir', y ya puede quemar folios. No hay forma de conceder
+//  "puede administrar roles" sin conceder "puede darse cualquier permiso".
+//
+//  Por eso la administracion de roles NO es un permiso del catalogo: es una
+//  propiedad estructural, como el bypass de owner/superadmin. Quien puede
+//  repartir poder es el dueno de la cuenta, y punto.
+//
+//  Y HACIA FALTA UN CHEQUEO NUEVO, no bastaba lo que ya habia: hasta esta
+//  entrega /configuracion/usuarios solo llamaba a Auth::requerirSesion(). Un
+//  colaborador podia entrar e invitar gente. Eso queda cerrado aqui.
+// ===========================================================================
+
+/** Exige que el usuario de la sesion sea owner o superadmin. 403 si no. */
+function exigirOwner(PDO $pdo): void
+{
+    if (! Auth::autenticado()) {
+        negar403();
+    }
+    $stmt = $pdo->prepare('SELECT rol FROM usuario WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => Auth::usuarioId()]);
+    $rol = $stmt->fetchColumn();
+
+    if (! in_array($rol, ['owner', 'superadmin'], true)) {
+        negar403();
+    }
+}
+
+/** @return list<array{id:int, nombre:string, created_at:string, usuarios:int, permisos:int}> */
+function listarRolesDeCuenta(PDO $pdo, int $cuentaId): array
+{
+    // Los dos contadores salen de subconsultas y no de JOINs: un JOIN doble
+    // sobre usuario Y permiso multiplicaria las filas y daria totales inflados.
+    $stmt = $pdo->prepare(
+        'SELECT r.id, r.nombre, r.created_at, '
+        . '  (SELECT COUNT(*) FROM usuario u WHERE u.rol_id = r.id) AS usuarios, '
+        . '  (SELECT COUNT(*) FROM permiso p WHERE p.rol_id = r.id) AS permisos '
+        . 'FROM rol r WHERE r.cuenta_id = :c ORDER BY r.nombre ASC'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+
+    return array_map(static fn (array $r): array => [
+        'id'         => (int) $r['id'],
+        'nombre'     => (string) $r['nombre'],
+        'created_at' => (string) $r['created_at'],
+        'usuarios'   => (int) $r['usuarios'],
+        'permisos'   => (int) $r['permisos'],
+    ], $stmt->fetchAll(PDO::FETCH_ASSOC));
+}
+
+/**
+ * Un rol de ESTA cuenta, con sus permisos como set "modulo:accion".
+ * SIEMPRE por (id, cuenta_id): pedir un rol por id suelto dejaria leer el de
+ * otro tenant con solo cambiar el numero de la URL.
+ *
+ * @return array{id:int, nombre:string, permisos:array<string,true>}|null
+ */
+function rolDeCuenta(PDO $pdo, int $cuentaId, int $rolId): ?array
+{
+    $stmt = $pdo->prepare('SELECT id, nombre FROM rol WHERE id = :id AND cuenta_id = :c LIMIT 1');
+    $stmt->execute([':id' => $rolId, ':c' => $cuentaId]);
+    $rol = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($rol === false) {
+        return null;
+    }
+
+    $stmt = $pdo->prepare('SELECT modulo, accion FROM permiso WHERE rol_id = :r');
+    $stmt->execute([':r' => $rolId]);
+
+    $permisos = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $p) {
+        $permisos[$p['modulo'] . ':' . $p['accion']] = true;
+    }
+
+    return ['id' => (int) $rol['id'], 'nombre' => (string) $rol['nombre'], 'permisos' => $permisos];
+}
+
+/**
+ * Lee la matriz de checkboxes del formulario y la devuelve como pares validos.
+ *
+ * FILTRA CONTRA EL CATALOGO, no contra lo que llegue: el POST lo arma el
+ * navegador y un par inventado se guardaria como fila que despues nadie sabe
+ * de donde salio. Lo que no esta en el catalogo se descarta en silencio -- no
+ * es un error del usuario, es ruido.
+ *
+ * @param array<string,mixed> $post
+ * @return list<array{0:string, 1:string}>
+ */
+function permisosDesdePost(array $post): array
+{
+    $matriz = is_array($post['permisos'] ?? null) ? $post['permisos'] : [];
+    $pares  = [];
+
+    foreach (CATALOGO_MODULOS as $modulo) {
+        $acciones = is_array($matriz[$modulo] ?? null) ? $matriz[$modulo] : [];
+        foreach (CATALOGO_ACCIONES as $accion) {
+            if (! empty($acciones[$accion])) {
+                $pares[] = [$modulo, $accion];
+            }
+        }
+    }
+
+    return $pares;
+}
+
+/**
+ * Reescribe los permisos de un rol: borra los que tenia y pone los nuevos.
+ *
+ * BORRAR Y REINSERTAR, y no un diff: el formulario manda el estado COMPLETO de
+ * la matriz, asi que calcular altas y bajas seria reconstruir informacion que
+ * ya viene entera. Va en transaccion porque un rol sin permisos a mitad de
+ * camino es un 403 para todos sus colaboradores.
+ *
+ * @param list<array{0:string, 1:string}> $pares
+ */
+function guardarPermisosDeRol(PDO $pdo, int $rolId, array $pares): void
+{
+    $propia = ! $pdo->inTransaction();
+    if ($propia) {
+        $pdo->beginTransaction();
+    }
+    try {
+        $pdo->prepare('DELETE FROM permiso WHERE rol_id = :r')->execute([':r' => $rolId]);
+        $ins = $pdo->prepare('INSERT INTO permiso (rol_id, modulo, accion) VALUES (:r, :m, :a)');
+        foreach ($pares as [$modulo, $accion]) {
+            $ins->execute([':r' => $rolId, ':m' => $modulo, ':a' => $accion]);
+        }
+        if ($propia) {
+            $pdo->commit();
+        }
+    } catch (Throwable $e) {
+        if ($propia && $pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        throw $e;
+    }
+}
+
+/** Nombre de rol valido: no vacio y dentro del VARCHAR(60) de la migracion. */
+function validarNombreRol(string $nombre): ?string
+{
+    if ($nombre === '') {
+        return 'El nombre del rol es obligatorio.';
+    }
+    if (mb_strlen($nombre) > 60) {
+        return 'El nombre del rol no puede superar los 60 caracteres.';
+    }
+    return null;
+}
+
+function handleRolesNuevoGet(): void
+{
+    $pdo = Db::conexion();
+    exigirOwner($pdo);
+
+    vista('rol-form', [
+        'rol'       => null,
+        'flash'     => flashTomar(),
+        'navActivo' => 'config.usuarios',
+    ]);
+}
+
+function handleRolesNuevoPost(): void
+{
+    $pdo      = Db::conexion();
+    exigirOwner($pdo);
+    $cuentaId = Auth::cuentaId();
+    $nombre   = trim((string) ($_POST['nombre'] ?? ''));
+
+    $error = validarNombreRol($nombre);
+    if ($error !== null) {
+        flashSet('error', $error);
+        redirigirPrg('/configuracion/roles/nuevo');
+    }
+
+    $pares = permisosDesdePost($_POST);
+
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('INSERT INTO rol (cuenta_id, nombre, created_at) VALUES (:c, :n, NOW())')
+            ->execute([':c' => $cuentaId, ':n' => $nombre]);
+        $rolId = (int) $pdo->lastInsertId();
+        guardarPermisosDeRol($pdo, $rolId, $pares);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        // uk_rol_cuenta_nombre: el nombre ya existe EN ESTA CUENTA. No se
+        // comprueba antes con un SELECT porque entre el SELECT y el INSERT cabe
+        // otro submit; la restriccion de la base es la que no se puede burlar.
+        error_log('panel roles crear: ' . $e->getMessage());
+        flashSet('error', 'No se pudo crear el rol. Puede que ya exista uno con ese nombre.');
+        redirigirPrg('/configuracion/roles/nuevo');
+    }
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'rol.crear', 'rol', $rolId, null, [
+        'nombre'   => $nombre,
+        'permisos' => array_map(static fn (array $p): string => $p[0] . ':' . $p[1], $pares),
+    ]);
+
+    flashSet('exito', 'Rol creado.');
+    redirigirPrg('/configuracion/usuarios');
+}
+
+function handleRolesEditarGet(int $rolId): void
+{
+    $pdo = Db::conexion();
+    exigirOwner($pdo);
+
+    $rol = rolDeCuenta($pdo, Auth::cuentaId(), $rolId);
+    if ($rol === null) {
+        flashSet('error', 'Rol no encontrado.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    vista('rol-form', [
+        'rol'       => $rol,
+        'flash'     => flashTomar(),
+        'navActivo' => 'config.usuarios',
+    ]);
+}
+
+function handleRolesEditarPost(int $rolId): void
+{
+    $pdo      = Db::conexion();
+    exigirOwner($pdo);
+    $cuentaId = Auth::cuentaId();
+
+    $antes = rolDeCuenta($pdo, $cuentaId, $rolId);
+    if ($antes === null) {
+        flashSet('error', 'Rol no encontrado.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    $nombre = trim((string) ($_POST['nombre'] ?? ''));
+    $error  = validarNombreRol($nombre);
+    if ($error !== null) {
+        flashSet('error', $error);
+        redirigirPrg('/configuracion/roles/' . $rolId . '/editar');
+    }
+
+    $pares = permisosDesdePost($_POST);
+
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare('UPDATE rol SET nombre = :n WHERE id = :id AND cuenta_id = :c')
+            ->execute([':n' => $nombre, ':id' => $rolId, ':c' => $cuentaId]);
+        guardarPermisosDeRol($pdo, $rolId, $pares);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log('panel roles editar: ' . $e->getMessage());
+        flashSet('error', 'No se pudo guardar el rol. Puede que ya exista uno con ese nombre.');
+        redirigirPrg('/configuracion/roles/' . $rolId . '/editar');
+    }
+
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'rol.editar',
+        'rol',
+        $rolId,
+        ['nombre' => $antes['nombre'], 'permisos' => array_keys($antes['permisos'])],
+        ['nombre' => $nombre, 'permisos' => array_map(static fn (array $p): string => $p[0] . ':' . $p[1], $pares)],
+    );
+
+    flashSet('exito', 'Rol actualizado. Los cambios rigen en la proxima peticion de cada colaborador.');
+    redirigirPrg('/configuracion/usuarios');
+}
+
+function handleRolesEliminarPost(int $rolId): void
+{
+    $pdo      = Db::conexion();
+    exigirOwner($pdo);
+    $cuentaId = Auth::cuentaId();
+
+    $rol = rolDeCuenta($pdo, $cuentaId, $rolId);
+    if ($rol === null) {
+        flashSet('error', 'Rol no encontrado.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    // SE COMPRUEBA ANTES ADEMAS DE CONFIAR EN EL RESTRICT de fk_usuario_rol.
+    // No es duplicar la regla: la base garantiza que no se borre, pero su error
+    // es un SQLSTATE que no le dice nada a nadie. Esto da el mensaje util; el
+    // RESTRICT sigue siendo la garantia real si dos owners borran a la vez.
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM usuario WHERE rol_id = :r AND cuenta_id = :c');
+    $stmt->execute([':r' => $rolId, ':c' => $cuentaId]);
+    $asignados = (int) $stmt->fetchColumn();
+    if ($asignados > 0) {
+        flashSet('error', sprintf(
+            'No se puede eliminar "%s": lo tienen asignado %d colaborador%s. Cambiales el rol primero.',
+            $rol['nombre'],
+            $asignados,
+            $asignados === 1 ? '' : 'es',
+        ));
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    try {
+        // Los permisos caen solos por ON DELETE CASCADE (migracion 042).
+        $pdo->prepare('DELETE FROM rol WHERE id = :id AND cuenta_id = :c')
+            ->execute([':id' => $rolId, ':c' => $cuentaId]);
+    } catch (Throwable $e) {
+        error_log('panel roles eliminar: ' . $e->getMessage());
+        flashSet('error', 'No se pudo eliminar el rol.');
+        redirigirPrg('/configuracion/usuarios');
+    }
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'rol.eliminar', 'rol', $rolId,
+        ['nombre' => $rol['nombre'], 'permisos' => array_keys($rol['permisos'])], null);
+
+    flashSet('exito', 'Rol eliminado.');
+    redirigirPrg('/configuracion/usuarios');
+}
+
 function handleUsuariosListadoGet(): void
 {
     $pdo      = Db::conexion();
+    exigirOwner($pdo);
     $cuentaId = Auth::cuentaId();
 
     vista('usuarios-listado', [
         'usuarios'  => listarUsuariosDeCuenta($pdo, $cuentaId),
+        'roles'     => listarRolesDeCuenta($pdo, $cuentaId),
         'flash'     => flashTomar(),
         'navActivo' => 'config.usuarios',
     ]);
@@ -7982,6 +8328,7 @@ function handleUsuariosListadoGet(): void
 function handleUsuarioInvitarPost(): void
 {
     $pdo      = Db::conexion();
+    exigirOwner($pdo);
     $cuentaId = Auth::cuentaId();
     $email    = trim((string) ($_POST['email'] ?? ''));
 
@@ -7990,7 +8337,17 @@ function handleUsuarioInvitarPost(): void
         redirigirPrg('/configuracion/usuarios');
     }
 
-    $resultado = crearOResendearInvitacion($pdo, $cuentaId, $email);
+    // ROL: '' significa "sin rol" a proposito (el <option> vacio de la vista), y
+    // no es lo mismo que un id invalido. Un id que no sea de esta cuenta se
+    // trata como sin rol en vez de asignarlo: rolDeCuenta() es quien decide, y
+    // el fk_usuario_rol lo rechazaria igual.
+    $rolIdRaw = trim((string) ($_POST['rol_id'] ?? ''));
+    $rolId    = null;
+    if ($rolIdRaw !== '' && ctype_digit($rolIdRaw)) {
+        $rolId = rolDeCuenta($pdo, $cuentaId, (int) $rolIdRaw) !== null ? (int) $rolIdRaw : null;
+    }
+
+    $resultado = crearOResendearInvitacion($pdo, $cuentaId, $email, $rolId);
     if ($resultado['status'] === 'error') {
         flashSet('error', $resultado['mensaje']);
         redirigirPrg('/configuracion/usuarios');
@@ -8007,7 +8364,7 @@ function handleUsuarioInvitarPost(): void
         'usuario',
         $resultado['usuarioId'],
         null,
-        ['email' => $email, 'regenerado' => $resultado['regenerado']],
+        ['email' => $email, 'regenerado' => $resultado['regenerado'], 'rol_id' => $rolId],
     );
 
     flashSet(
@@ -8021,6 +8378,7 @@ function handleUsuarioInvitarPost(): void
 function handleUsuarioActivarPost(int $id): void
 {
     $pdo      = Db::conexion();
+    exigirOwner($pdo);
     $cuentaId = Auth::cuentaId();
 
     $stmt = $pdo->prepare('SELECT estado, activacion_token FROM usuario WHERE id = :id AND cuenta_id = :c LIMIT 1');
@@ -8047,6 +8405,7 @@ function handleUsuarioActivarPost(int $id): void
 function handleUsuarioDesactivarPost(int $id): void
 {
     $pdo      = Db::conexion();
+    exigirOwner($pdo);
     $cuentaId = Auth::cuentaId();
 
     if ($id === Auth::usuarioId()) {
@@ -10064,6 +10423,36 @@ if ($metodo === 'POST' && preg_match('#^/configuracion/usuarios/(\d+)/activar$#'
 if ($metodo === 'POST' && preg_match('#^/configuracion/usuarios/(\d+)/desactivar$#', $ruta, $mUsu)) {
     Auth::requerirSesion();
     handleUsuarioDesactivarPost((int) $mUsu[1]);
+}
+
+// ROLES (Fase 2). Cada handler llama a exigirOwner() por su cuenta -- NO se usa
+// un guard de espacio como el de /certificacion*: aqui la regla no depende de
+// la ruta (todas exigen lo mismo) y el chequeo dentro del handler es visible
+// para quien lee la funcion. El guard de espacio existe alla porque cada ruta
+// pide un permiso distinto y la tabla es lo que evita el olvido.
+if ($metodo === 'GET' && $ruta === '/configuracion/roles/nuevo') {
+    Auth::requerirSesion();
+    handleRolesNuevoGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/configuracion/roles/nuevo') {
+    Auth::requerirSesion();
+    handleRolesNuevoPost();
+}
+
+if ($metodo === 'GET' && preg_match('#^/configuracion/roles/(\d+)/editar$#', $ruta, $mRol)) {
+    Auth::requerirSesion();
+    handleRolesEditarGet((int) $mRol[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/configuracion/roles/(\d+)/editar$#', $ruta, $mRol)) {
+    Auth::requerirSesion();
+    handleRolesEditarPost((int) $mRol[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/configuracion/roles/(\d+)/eliminar$#', $ruta, $mRol)) {
+    Auth::requerirSesion();
+    handleRolesEliminarPost((int) $mRol[1]);
 }
 
 // --- Auditoria de tenant (M6) ---
