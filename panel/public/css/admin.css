@@ -313,3 +313,46 @@ tr:hover td { background: var(--panel-2); }
     font-size: .74rem;
     color: var(--muted);
 }
+
+/* ---- Explorador de base de datos --------------------------------------- */
+.er-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+.er-table { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.er-table .head {
+    background: var(--panel-2);
+    padding: .55rem .8rem;
+    font-weight: 700;
+    font-size: .9rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    gap: .5rem;
+}
+.er-table .head .cnt { color: var(--muted); font-weight: 400; font-size: .78rem; white-space: nowrap; }
+
+/* Franja de aislamiento: va pegada al encabezado, antes que las columnas,
+   porque es el dato por el que se abre esta pantalla. */
+.er-ais {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .4rem;
+    padding: .45rem .8rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, .15);
+}
+.er-camino { color: var(--fk); font-size: .72rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+.er-col { display: flex; justify-content: space-between; gap: .5rem; padding: .35rem .8rem; font-size: .82rem; border-bottom: 1px solid #20272f; }
+.er-col:last-of-type { border-bottom: none; }
+.er-col .cname { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.er-col .ctype { color: var(--muted); font-size: .76rem; white-space: nowrap; }
+.badge { font-size: .62rem; padding: .05rem .35rem; border-radius: 4px; margin-left: .35rem; font-weight: 700; vertical-align: middle; }
+.badge.pk { background: rgba(217, 164, 65, .18); color: var(--pk); }
+.badge.fk { background: rgba(181, 126, 220, .18); color: var(--fk); }
+.fkref { color: var(--fk); font-size: .72rem; }
+.er-comentario { color: var(--muted); font-size: .7rem; cursor: help; border: 1px solid var(--border); border-radius: 50%; padding: 0 .28rem; }
+
+.er-indices { border-top: 1px solid var(--border); padding: .4rem .8rem; }
+.er-indices summary { cursor: pointer; color: var(--muted); font-size: .76rem; }
+.er-indice { font-size: .74rem; color: var(--muted); padding: .15rem 0; }
+.er-indice code { color: var(--text); }

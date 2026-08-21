@@ -98,6 +98,7 @@ require __DIR__ . '/../src/Rut.php';
 require __DIR__ . '/../src/Csrf.php';
 require __DIR__ . '/../src/FechaExcel.php';
 require __DIR__ . '/../src/DiffAuditoria.php';
+require __DIR__ . '/../src/AislamientoTenant.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -10787,6 +10788,10 @@ if ($metodo === 'GET' && $ruta === '/admin/auditoria') {
     handleAdminAuditoriaGet();
 }
 
+if ($metodo === 'GET' && $ruta === '/admin/base-datos') {
+    handleAdminBaseDatosGet();
+}
+
 http_response_code(404);
 echo '404 - ruta no encontrada';
 exit;
@@ -13179,6 +13184,187 @@ function handleAdminTenantFichaGet(int $cuentaId): void
         'auditoria'    => $auditoria,
         'puedeEmitir'  => estadoEmisionProduccion($pdo, $cuentaId),
     ]);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/base-datos (SOLO SUPERADMIN) -- explorador del esquema.
+//
+//  TODO SALE DE information_schema Y FILTRANDO POR DATABASE(), nunca por un
+//  nombre de base escrito a mano: lo que se informa es siempre la base a la
+//  que apuntan las credenciales, igual que en scripts/estado_migraciones.php.
+//  Con un nombre fijo, esta pantalla podria estar describiendo una base
+//  distinta de la que el panel esta usando, y no habria forma de notarlo.
+//
+//  PROHIBIDO EL SQL ARBITRARIO, y por eso aqui no hay campo de consulta libre
+//  ni EXPLAIN ni nada parecido. El unico parametro que acepta la pantalla es un
+//  texto de busqueda, y ese texto NO VIAJA A NINGUNA CONSULTA: filtra en PHP la
+//  lista que information_schema ya devolvio. Asi no existe el problema de
+//  validar un nombre de tabla que llega por la URL, porque ningun nombre de
+//  tabla llega por la URL.
+//
+//  Solo lectura, como todo el panel de control.
+// ===========================================================================
+function handleAdminBaseDatosGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $base = (string) $pdo->query('SELECT DATABASE()')->fetchColumn();
+
+    // TABLE_ROWS es una ESTIMACION en InnoDB, no un conteo: el motor la saca de
+    // sus estadisticas y puede errarle por mucho. Se muestra igual porque sirve
+    // para ordenar por tamano, pero rotulada como aproximada -- ver la vista.
+    $tablas = $pdo->query(
+        'SELECT TABLE_NAME, ENGINE, TABLE_COLLATION, TABLE_ROWS, TABLE_COMMENT '
+        . 'FROM information_schema.TABLES '
+        . "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' "
+        . 'ORDER BY TABLE_NAME'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $columnas = $pdo->query(
+        'SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, '
+        . '       COLUMN_KEY, EXTRA, COLUMN_COMMENT '
+        . 'FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() '
+        . 'ORDER BY TABLE_NAME, ORDINAL_POSITION'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $clavesForaneas = $pdo->query(
+        'SELECT TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME '
+        . 'FROM information_schema.KEY_COLUMN_USAGE '
+        . 'WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IS NOT NULL '
+        . 'ORDER BY TABLE_NAME, COLUMN_NAME'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    // Un indice con varias columnas es UNA fila por columna en STATISTICS; se
+    // agrupan aqui para que la vista muestre "ix_algo (a, b)" y no dos indices
+    // con el mismo nombre.
+    $indices = $pdo->query(
+        'SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, '
+        . "       GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ', ') AS COLUMNAS "
+        . 'FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() '
+        . 'GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE ORDER BY TABLE_NAME, INDEX_NAME'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    // --- Reagrupado por tabla, para que la vista no tenga que buscar ---
+    $nombresTabla     = array_map(static fn (array $t): string => (string) $t['TABLE_NAME'], $tablas);
+    $columnasPorTabla = [];
+    $soloNombres      = [];
+    foreach ($columnas as $col) {
+        $columnasPorTabla[$col['TABLE_NAME']][] = $col;
+        $soloNombres[$col['TABLE_NAME']][]      = (string) $col['COLUMN_NAME'];
+    }
+
+    // Destino de cada FK, indexado por tabla.columna: la vista lo necesita para
+    // pintar "-> tabla.columna" al lado de la columna que la tiene.
+    $fkPorColumna = [];
+    $fkParaGrafo  = [];
+    foreach ($clavesForaneas as $fk) {
+        $fkPorColumna[$fk['TABLE_NAME'] . '.' . $fk['COLUMN_NAME']]
+            = $fk['REFERENCED_TABLE_NAME'] . '.' . $fk['REFERENCED_COLUMN_NAME'];
+        $fkParaGrafo[] = [
+            'tabla'    => (string) $fk['TABLE_NAME'],
+            'columna'  => (string) $fk['COLUMN_NAME'],
+            'refTabla' => (string) $fk['REFERENCED_TABLE_NAME'],
+        ];
+    }
+
+    $indicesPorTabla = [];
+    foreach ($indices as $ix) {
+        $indicesPorTabla[$ix['TABLE_NAME']][] = $ix;
+    }
+
+    $aislamiento = AislamientoTenant::clasificar($nombresTabla, $soloNombres, $fkParaGrafo);
+
+    // Cuantas tablas hay de cada clase, para el resumen de arriba. El numero
+    // que importa es el de sin_ruta: son las tablas donde un WHERE olvidado no
+    // lo atrapa nadie.
+    $conteoAislamiento = [];
+    foreach ($aislamiento as $clasificacion) {
+        $clase = $clasificacion['clase'];
+        $conteoAislamiento[$clase] = ($conteoAislamiento[$clase] ?? 0) + 1;
+    }
+
+    // Busqueda: filtra EN PHP la lista ya traida. Nunca toca una consulta.
+    $busqueda = trim((string) ($_GET['q'] ?? ''));
+    if ($busqueda !== '') {
+        $tablas = array_values(array_filter(
+            $tablas,
+            static fn (array $t): bool => stripos((string) $t['TABLE_NAME'], $busqueda) !== false
+        ));
+    }
+
+    vista('admin-base-datos', [
+        'base'              => $base,
+        'tablas'            => $tablas,
+        'columnasPorTabla'  => $columnasPorTabla,
+        'fkPorColumna'      => $fkPorColumna,
+        'indicesPorTabla'   => $indicesPorTabla,
+        'aislamiento'       => $aislamiento,
+        'conteoAislamiento' => $conteoAislamiento,
+        'totalTablas'       => count($nombresTabla),
+        'totalFks'          => count($clavesForaneas),
+        'busqueda'          => $busqueda,
+        'migraciones'       => estadoMigracionesAdmin($pdo),
+    ]);
+}
+
+/**
+ * Veredicto de cada migracion, reusando el catalogo de
+ * scripts/catalogo_migraciones.php.
+ *
+ * NO REIMPLEMENTA NADA: las huellas y la regla de los tres veredictos son las
+ * mismas funciones que corre el chequeo de despliegue. Si esta pantalla tuviera
+ * su propia copia, el dia que se desincronizaran el deploy diria "al dia" y el
+ * panel "falta la 043" -- o al reves, que es peor -- y nada indicaria cual de
+ * los dos tiene razon.
+ *
+ * El require va aqui adentro y no en el bootstrap del panel porque este es el
+ * unico handler que lo necesita, y el archivo declara 42 entradas y varias
+ * funciones que no tienen por que cargarse en cada request del panel.
+ *
+ * @return list<array{id:string, archivo:string, nota:string, veredicto:string,
+ *                    presentes:int, esperados:int, diferida:?string, huellas:list<array{desc:string, ok:bool}>}>
+ */
+function estadoMigracionesAdmin(PDO $pdo): array
+{
+    require_once __DIR__ . '/../../scripts/catalogo_migraciones.php';
+
+    $salida = [];
+    foreach (MIGRACIONES as $migracion) {
+        $presentes = 0;
+        $esperados = 0;
+        $huellas   = [];
+
+        // evaluarHuella() devuelve las claves en SINGULAR ('presente' /
+        // 'esperado'): son el conteo de UNA huella, y se acumulan aqui para
+        // sacar el veredicto de la migracion completa.
+        foreach ($migracion['huellas'] as $huella) {
+            $evaluada   = evaluarHuella($pdo, $huella);
+            $presentes += $evaluada['presente'];
+            $esperados += $evaluada['esperado'];
+            $huellas[]  = [
+                'desc' => (string) $huella['desc'],
+                'ok'   => $evaluada['presente'] === $evaluada['esperado'],
+            ];
+        }
+
+        $salida[] = [
+            'id'        => (string) $migracion['id'],
+            'archivo'   => (string) $migracion['archivo'],
+            'nota'      => (string) ($migracion['nota'] ?? ''),
+            'veredicto' => veredicto($presentes, $esperados),
+            'presentes' => $presentes,
+            'esperados' => $esperados,
+            // 'diferida' es un STRING con el motivo y no un booleano, a
+            // proposito: obliga a escribir por que. Con un true la marca se
+            // pone en dos segundos y nadie recuerda la razon seis semanas
+            // despues.
+            'diferida'  => isset($migracion['diferida']) ? (string) $migracion['diferida'] : null,
+            'huellas'   => $huellas,
+        ];
+    }
+
+    return $salida;
 }
 
 // ===========================================================================

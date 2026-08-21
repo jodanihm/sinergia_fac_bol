@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-21',
+        'version' => '1.15',
+        'titulo'  => 'Explorador de la base de datos, con el aislamiento entre empresas a la vista',
+        'tag'     => 'datos',
+        'items'   => [
+            'Nueva pantalla que muestra la estructura completa de la base: tablas, columnas, tipos, claves e indices, leidos del propio motor.',
+            'Cada tabla dice como se separa una empresa de otra: si tiene el identificador de cuenta a la vista, si hay que seguir un camino de relaciones para encontrarlo, o si no existe ese vinculo. El camino se calcula solo, asi que una tabla nueva aparece clasificada sin que nadie la agregue a mano.',
+            'Quedaron a la vista 12 tablas que guardan documentos tributarios y no tienen relacion directa con la empresa dueña: es donde una consulta mal escrita podria mezclar datos de dos clientes.',
+            'La pantalla tambien informa que migraciones estan aplicadas, usando exactamente el mismo catalogo que revisa el despliegue, para que las dos no puedan decir cosas distintas.',
+            'No se puede ejecutar ninguna consulta desde esta pantalla: solo lee la estructura.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-21',
         'version' => '1.14',
         'titulo'  => 'La auditoria dice que cambio, no solo que se toco',
         'tag'     => 'frontend',
