@@ -1,15 +1,32 @@
-<?php $titulo = 'Superadmin: tenants'; require __DIR__ . '/partials/header.php'; ?>
+<?php
+/**
+ * Cuentas del SaaS (GET /admin/tenants).
+ *
+ * SOLO CAMBIO DE PRESENTACION respecto de la version anterior: pasa del layout
+ * del tenant al del panel de control. Los datos que recibe, la barra de 6
+ * etapas, el mapa de campos revertibles y los tres formularios POST son
+ * IDENTICOS -- handleAdminTenantsGet() y los handlers de suspender, reactivar
+ * y revertir no se tocaron.
+ *
+ * "Cuentas" y no "Tenants" en la interfaz: es como se llama la tabla, y es la
+ * palabra que usa quien atiende el telefono.
+ */
+$titulo      = 'Cuentas';
+$adminActivo = 'cuentas';
+require __DIR__ . '/partials/admin/header.php';
+?>
 
-<h1>Superadmin &mdash; Tenants</h1>
-<p style="color:#999;">Vista de vigilancia de TODAS las cuentas del SaaS (no solo la tuya).
-Solo lectura, salvo suspender/reactivar y revertir una etapa confirmada por error.</p>
-<p><a href="/admin/auditoria">Ver auditoria de acciones &rarr;</a></p>
+<h2 class="page-title">Cuentas</h2>
+<p class="muted">
+    Todas las cuentas del SaaS, no solo la tuya. Solo lectura, salvo suspender
+    o reactivar una cuenta y revertir una etapa confirmada por error.
+</p>
 
 <?php if ($flash !== null): ?>
     <?php if ($flash['tipo'] === 'error'): ?>
-    <p class="errores"><?= htmlspecialchars($flash['mensaje']); ?></p>
+    <p class="error"><?= htmlspecialchars($flash['mensaje']); ?></p>
     <?php else: ?>
-    <p style="color:#2e7d32;font-weight:600;"><?= htmlspecialchars($flash['mensaje']); ?></p>
+    <p class="msg-ok"><?= htmlspecialchars($flash['mensaje']); ?></p>
     <?php endif; ?>
 <?php endif; ?>
 
@@ -27,8 +44,9 @@ Solo lectura, salvo suspender/reactivar y revertir una etapa confirmada por erro
     ];
 ?>
 
+<div class="panel">
 <?php if ($resumen === []): ?>
-<p>No hay cuentas registradas.</p>
+<p class="muted" style="margin:0;">No hay cuentas registradas.</p>
 <?php else: ?>
 <div class="tabla-scroll">
 <table>
@@ -48,16 +66,16 @@ Solo lectura, salvo suspender/reactivar y revertir una etapa confirmada por erro
         <tr>
             <td>
                 <?= htmlspecialchars((string) $c['nombre']); ?><br>
-                <span style="color:#999;font-size:0.85em;"><?= htmlspecialchars((string) $c['email']); ?></span>
+                <span class="muted" style="font-size:.85em;"><?= htmlspecialchars((string) $c['email']); ?></span>
             </td>
             <td>
-                <span style="<?= $c['estado'] === 'activa' ? 'color:#2e7d32;font-weight:600;' : 'color:#b00020;font-weight:600;'; ?>">
+                <span class="tag <?= $c['estado'] === 'activa' ? 'ok' : 'err'; ?>">
                     <?= htmlspecialchars(strtoupper((string) $c['estado'])); ?>
                 </span>
             </td>
             <td>
                 <?php if ($fila['emisores'] === []): ?>
-                <span style="color:#999;">(sin emisor)</span>
+                <span class="muted">(sin emisor)</span>
                 <?php else: ?>
                     <?php foreach ($fila['emisores'] as $e): ?>
                     <div><?= htmlspecialchars($e['rutEmisor']); ?></div>
@@ -89,7 +107,7 @@ Solo lectura, salvo suspender/reactivar y revertir una etapa confirmada por erro
                     <?php endforeach; ?>
                 <?php endif; ?>
             </td>
-            <td style="font-size:0.85em;">
+            <td style="font-size:.85em;">
                 <?php if ($fila['emisores'] === []): ?>
                 &mdash;
                 <?php else: ?>
@@ -107,13 +125,13 @@ Solo lectura, salvo suspender/reactivar y revertir una etapa confirmada por erro
                 <form method="post" action="/admin/tenants/suspender" style="margin:0;" onsubmit="return confirm('Suspender esta cuenta?');">
                     <?= csrfInput(); ?>
                     <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
-                    <button type="submit">Suspender</button>
+                    <button type="submit" class="btn ghost sm">Suspender</button>
                 </form>
                 <?php else: ?>
                 <form method="post" action="/admin/tenants/reactivar" style="margin:0;" onsubmit="return confirm('Reactivar esta cuenta?');">
                     <?= csrfInput(); ?>
                     <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
-                    <button type="submit">Reactivar</button>
+                    <button type="submit" class="btn sm">Reactivar</button>
                 </form>
                 <?php endif; ?>
             </td>
@@ -123,5 +141,6 @@ Solo lectura, salvo suspender/reactivar y revertir una etapa confirmada por erro
 </table>
 </div>
 <?php endif; ?>
+</div>
 
-<?php require __DIR__ . '/partials/footer.php'; ?>
+<?php require __DIR__ . '/partials/admin/footer.php'; ?>

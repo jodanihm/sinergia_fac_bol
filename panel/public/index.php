@@ -701,6 +701,26 @@ const PATRONES_PUBLICOS = ['#^/activar/[0-9a-f]{64}$#'];
  */
 const PREFIJOS_GATE_PROPIO = ['/admin/', '/configuracion/usuarios', '/configuracion/roles'];
 
+/**
+ * Rutas EXACTAS con gate propio. Complemento de PREFIJOS_GATE_PROPIO para el
+ * caso que un prefijo no puede cubrir.
+ *
+ * POR QUE HACE FALTA. El router normaliza la ruta con rtrim($ruta, '/'), asi
+ * que la portada del panel de control llega aqui como '/admin', SIN barra
+ * final, y str_starts_with('/admin', '/admin/') es false. Sin esta lista la
+ * ruta caia en el fallo cerrado del paso 4 y respondia 404 -- la portada del
+ * panel entero, inalcanzable, sin que ningun handler llegara a ejecutarse.
+ *
+ * SE RESUELVE ASI Y NO QUITANDOLE LA BARRA AL PREFIJO. Con '/admin' como
+ * PREFIJO, cualquier ruta futura que empiece con esas seis letras
+ * (/administradores, /admin-api) se saltaria el mapa de permisos por accidente
+ * de nombre, sin que nadie lo hubiera decidido. Un match exacto no puede
+ * capturar de mas: solo entra lo que este escrito aqui.
+ *
+ * @var list<string>
+ */
+const RUTAS_GATE_PROPIO = ['/admin'];
+
 function definicionMenu(): array
 {
     return [
@@ -10734,6 +10754,10 @@ if ($metodo === 'GET' && $ruta === '/auditoria') {
 // Cada handler exige exigirSuperadmin() (403 si el rol no corresponde, sin
 // pasar por Auth::requerirSesion()/redirect a /login).
 // ---------------------------------------------------------------------------
+if ($metodo === 'GET' && $ruta === '/admin') {
+    handleAdminPanelGet();
+}
+
 if ($metodo === 'GET' && $ruta === '/admin/tenants') {
     handleAdminTenantsGet();
 }
@@ -12525,6 +12549,12 @@ function exigirPermisoDeRuta(string $metodo, string $ruta): void
     }
 
     // 2. Espacios con gate propio: su handler ya exige superadmin u owner.
+    //    Primero las rutas exactas (ver RUTAS_GATE_PROPIO: '/admin' no lo cubre
+    //    ningun prefijo porque el router le quita la barra final).
+    if (in_array($ruta, RUTAS_GATE_PROPIO, true)) {
+        Auth::requerirSesion();
+        return;
+    }
     foreach (PREFIJOS_GATE_PROPIO as $prefijo) {
         if (str_starts_with($ruta, $prefijo)) {
             Auth::requerirSesion();
@@ -12662,6 +12692,120 @@ function resumenEtapasBarra(bool $todosAprobados, array $etapasManuales, ?string
     unset($e);
 
     return $etapas;
+}
+
+// ===========================================================================
+//  Handler: GET /admin (SOLO SUPERADMIN) -- portada del panel de control.
+//
+//  Las cifras de la PLATAFORMA, no de una cuenta. La que manda es "cuantas
+//  cuentas pueden emitir en produccion": separa a quien contrato de quien
+//  efectivamente factura, que son dos numeros muy distintos y solo el segundo
+//  dice si el producto esta funcionando.
+//
+//  NINGUNA CIFRA SE CALCULA AQUI CON CRITERIO PROPIO. "Puede emitir" lo
+//  contesta estadoEmisionProduccion() -- el mismo predicado que usan el guard
+//  del servidor y el menu del tenant -- y el semaforo de folios lo contesta
+//  dashFoliosPorTipo(), el mismo que pinta el dashboard del tenant. Si el
+//  superadmin y el cliente vieran realidades distintas, la llamada telefonica
+//  del cliente seria imposible de atender.
+//
+//  Solo lectura: ninguna fila se modifica aqui.
+// ===========================================================================
+function handleAdminPanelGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $cuentas = $pdo->query('SELECT id, nombre, estado FROM cuenta')->fetchAll(PDO::FETCH_ASSOC);
+
+    $activas       = 0;
+    $suspendidas   = 0;
+    $puedenEmitir  = 0;
+    $alertaFolios  = [];
+
+    // UNA VUELTA POR CUENTA, y no una consulta agregada que resuelva todo de
+    // golpe. La agregada seria mas rapida y tendria que reimplementar las 3
+    // condiciones de produccion y la regla de folio disponible en SQL, o sea
+    // duplicarlas: exactamente la divergencia que estos helpers existen para
+    // impedir. El costo es proporcional a la cantidad de CUENTAS del SaaS
+    // (decenas), no a la de documentos, y esta pantalla la ve el equipo
+    // interno, no un cliente.
+    foreach ($cuentas as $cuenta) {
+        if ($cuenta['estado'] === 'activa') {
+            $activas++;
+        } else {
+            $suspendidas++;
+        }
+
+        $emision = estadoEmisionProduccion($pdo, (int) $cuenta['id']);
+        if ($emision['falta'] !== null) {
+            continue;
+        }
+        $puedenEmitir++;
+
+        // Los folios solo se miran en las cuentas que YA emiten: a una que
+        // todavia no cargo su CAF de produccion avisarle que le quedan pocos
+        // folios seria ruido, no alerta.
+        foreach (dashFoliosPorTipo($pdo, (string) $emision['rut']) as $folio) {
+            if ($folio['nivel'] === 'ok') {
+                continue;
+            }
+            $alertaFolios[] = [
+                'cuenta'      => (string) $cuenta['nombre'],
+                'cuentaId'    => (int) $cuenta['id'],
+                'tipo'        => nombreTipoDte($folio['tipo']),
+                'disponibles' => $folio['disponibles'],
+                'nivel'       => $folio['nivel'],
+            ];
+        }
+    }
+
+    // Documentos emitidos en produccion en los ultimos 30 dias. Se mide por
+    // created_at (cuando ESTE sistema lo emitio) y no por fecha_emision (la
+    // fecha que lleva impresa el documento, que el usuario puede fechar en el
+    // pasado): la pregunta aqui es cuanta actividad hubo, no que dia dicen los
+    // papeles.
+    $dteMes = (int) $pdo->query(
+        "SELECT COUNT(*) FROM dte_emitido WHERE ambiente = 'produccion' "
+        . 'AND created_at >= (NOW() - INTERVAL 30 DAY)'
+    )->fetchColumn();
+
+    $usuariosActivos = (int) $pdo->query(
+        "SELECT COUNT(*) FROM usuario WHERE estado = 'activo'"
+    )->fetchColumn();
+
+    // Correos que quedaron en error. Agrupados por cuenta porque la accion que
+    // sigue a este aviso ("reintentar la cola de fulano") es por cuenta.
+    $alertaCorreos = $pdo->query(
+        'SELECT c.id AS cuenta_id, c.nombre, COUNT(*) AS fallidos '
+        . 'FROM dte_envio_correo e '
+        . 'INNER JOIN cuenta c ON c.id = e.cuenta_id '
+        . "WHERE e.estado = 'error' "
+        . 'GROUP BY c.id, c.nombre ORDER BY fallidos DESC'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $ultimasAcciones = $pdo->query(
+        'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, '
+        . '       a.entidad_id, a.created_at '
+        . 'FROM admin_auditoria a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id '
+        . 'ORDER BY a.created_at DESC, a.id DESC LIMIT 10'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $changelog = require __DIR__ . '/../datos/changelog.php';
+
+    vista('admin-panel', [
+        'totalCuentas'    => count($cuentas),
+        'activas'         => $activas,
+        'suspendidas'     => $suspendidas,
+        'puedenEmitir'    => $puedenEmitir,
+        'dteMes'          => $dteMes,
+        'usuariosActivos' => $usuariosActivos,
+        'alertaFolios'    => $alertaFolios,
+        'alertaCorreos'   => $alertaCorreos,
+        'ultimasAcciones' => $ultimasAcciones,
+        'ultimoCambio'    => $changelog[0] ?? null,
+    ]);
 }
 
 // ===========================================================================
