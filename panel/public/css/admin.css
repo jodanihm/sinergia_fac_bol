@@ -356,3 +356,60 @@ tr:hover td { background: var(--panel-2); }
 .er-indices summary { cursor: pointer; color: var(--muted); font-size: .76rem; }
 .er-indice { font-size: .74rem; color: var(--muted); padding: .15rem 0; }
 .er-indice code { color: var(--text); }
+
+/* ---- Roles y permisos --------------------------------------------------- */
+.flow-diagram { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.25rem; }
+.flow-node {
+    background: var(--panel-2);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: .6rem .9rem;
+    font-size: .85rem;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.35;
+}
+.flow-node small { display: block; color: var(--muted); font-weight: 400; font-size: .72rem; }
+.flow-arrow { color: var(--accent); font-size: 1.3rem; font-weight: 700; }
+
+/* Las notas del concepto en columnas: son cuatro ideas independientes y en una
+   sola columna se leen como un muro. */
+.rp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.rp-note { border-left: 3px solid var(--accent); background: var(--panel-2); }
+.rp-note h4 { margin: 0 0 .5rem; font-size: .9rem; }
+.rp-note p { margin: 0 0 .5rem; font-size: .85rem; color: var(--muted); line-height: 1.5; }
+.rp-note p:last-child { margin-bottom: 0; }
+
+code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .05rem .3rem;
+    font-size: .8em;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.rp-matrix th, .rp-matrix td { text-align: center; }
+.rp-matrix th:first-child, .rp-matrix td:first-child { text-align: left; white-space: nowrap; }
+.rp-cell { font-size: .8rem; font-weight: 600; white-space: nowrap; cursor: default; }
+.rp-cell.full { color: var(--ok); }
+.rp-cell.ver { color: var(--pk); }
+.rp-cell.none { color: var(--border); }
+.rp-matrix summary { cursor: pointer; list-style: none; }
+.rp-matrix summary::-webkit-details-marker { display: none; }
+.rp-rutas { text-align: left; padding: .4rem 0; }
+.rp-rutas div { font-size: .74rem; padding: .1rem 0; }
+
+.rp-cuenta { border: 1px solid var(--border); border-radius: 8px; margin-bottom: .6rem; }
+.rp-cuenta > summary {
+    cursor: pointer;
+    padding: .6rem .8rem;
+    font-weight: 600;
+    font-size: .9rem;
+    display: flex;
+    gap: .6rem;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+.rp-cuenta[open] > summary { border-bottom: 1px solid var(--border); }
+.rp-cuenta > div { padding: .5rem .8rem .8rem; }

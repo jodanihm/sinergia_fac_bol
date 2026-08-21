@@ -99,6 +99,7 @@ require __DIR__ . '/../src/Csrf.php';
 require __DIR__ . '/../src/FechaExcel.php';
 require __DIR__ . '/../src/DiffAuditoria.php';
 require __DIR__ . '/../src/AislamientoTenant.php';
+require __DIR__ . '/../src/RutasDelRouter.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -10792,6 +10793,10 @@ if ($metodo === 'GET' && $ruta === '/admin/base-datos') {
     handleAdminBaseDatosGet();
 }
 
+if ($metodo === 'GET' && $ruta === '/admin/roles-permisos') {
+    handleAdminRolesPermisosGet();
+}
+
 http_response_code(404);
 echo '404 - ruta no encontrada';
 exit;
@@ -13365,6 +13370,225 @@ function estadoMigracionesAdmin(PDO $pdo): array
     }
 
     return $salida;
+}
+
+// ===========================================================================
+//  Handler: GET /admin/roles-permisos (SOLO SUPERADMIN)
+//
+//  Cuatro bloques, y a proposito mezclan dos fuentes distintas:
+//
+//    1. El concepto      texto, en la vista.
+//    2. El catalogo      sale del CODIGO (CATALOGO_MODULOS x CATALOGO_ACCIONES
+//                        contados sobre PERMISOS_RUTA): es la respuesta a "que
+//                        habilita de verdad ventas:emitir".
+//    3. Los roles reales salen de la BASE, de todas las cuentas.
+//    4. La cobertura     sale del CODIGO otra vez, cruzando lo que el router
+//                        despacha contra lo que esta declarado.
+//
+//  Que 2 y 4 vengan del codigo y no de una tabla es el punto: un permiso no es
+//  lo que dice una fila, es lo que exigen las rutas. Preguntarselo a la base
+//  daria la lista de lo que alguien concedio, no la de lo que hace falta.
+// ===========================================================================
+function handleAdminRolesPermisosGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    // --- Bloque 2: el catalogo, con las rutas que exige cada par -----------
+    $catalogo = [];
+    foreach (CATALOGO_MODULOS as $modulo) {
+        foreach (CATALOGO_ACCIONES as $accion) {
+            $catalogo[$modulo][$accion] = [];
+        }
+    }
+    foreach (PERMISOS_RUTA as $clave => [$modulo, $accion]) {
+        $catalogo[$modulo][$accion][] = $clave;
+    }
+    foreach (PERMISOS_RUTA_PATRON as [$metodoPatron, $patron, $modulo, $accion]) {
+        $catalogo[$modulo][$accion][] = $metodoPatron . ' ' . $patron;
+    }
+
+    // Acciones que al menos UNA ruta exige para cada modulo. Es el conjunto
+    // contra el que tiene sentido decir que un rol "tiene todo": un modulo
+    // donde ninguna ruta pide 'emitir' no puede exigirle a nadie ese permiso
+    // para estar completo.
+    $accionesUsadas = [];
+    foreach ($catalogo as $modulo => $porAccion) {
+        foreach ($porAccion as $accion => $rutas) {
+            if ($rutas !== []) {
+                $accionesUsadas[$modulo][] = $accion;
+            }
+        }
+    }
+
+    // --- Bloque 3: los roles reales de TODAS las cuentas -------------------
+    $roles = $pdo->query(
+        'SELECT r.id, r.nombre, r.created_at, c.id AS cuenta_id, c.nombre AS cuenta_nombre, '
+        . '       (SELECT COUNT(*) FROM usuario u WHERE u.rol_id = r.id) AS usuarios '
+        . 'FROM rol r INNER JOIN cuenta c ON c.id = r.cuenta_id '
+        . 'ORDER BY c.nombre, r.nombre'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $permisosPorRol = [];
+    foreach ($pdo->query('SELECT rol_id, modulo, accion FROM permiso') as $fila) {
+        $permisosPorRol[(int) $fila['rol_id']][(string) $fila['modulo']][] = (string) $fila['accion'];
+    }
+
+    // Agrupados por cuenta: son muchas filas y la vista los pliega.
+    $rolesPorCuenta = [];
+    foreach ($roles as $rol) {
+        $rolesPorCuenta[(int) $rol['cuenta_id']]['nombre'] = (string) $rol['cuenta_nombre'];
+        $rolesPorCuenta[(int) $rol['cuenta_id']]['roles'][] = $rol + [
+            'permisos' => $permisosPorRol[(int) $rol['id']] ?? [],
+        ];
+    }
+
+    // Cuantos usuarios NO pasan por rol_id: owner y superadmin se saltan el
+    // gate entero, asi que un panel que solo contara roles daria a entender
+    // que todo el mundo esta gobernado por esta matriz.
+    $usuariosPorTipo = $pdo->query(
+        'SELECT rol, COUNT(*) AS n FROM usuario GROUP BY rol ORDER BY rol'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $colaboradoresSinRol = (int) $pdo->query(
+        "SELECT COUNT(*) FROM usuario WHERE rol = 'colaborador' AND rol_id IS NULL"
+    )->fetchColumn();
+
+    // --- Bloque 4: cobertura del gate --------------------------------------
+    vista('admin-roles-permisos', [
+        'catalogo'            => $catalogo,
+        'accionesUsadas'      => $accionesUsadas,
+        'rolesPorCuenta'      => $rolesPorCuenta,
+        'totalRoles'          => count($roles),
+        'usuariosPorTipo'     => $usuariosPorTipo,
+        'colaboradoresSinRol' => $colaboradoresSinRol,
+        'cobertura'           => coberturaDelGate(),
+    ]);
+}
+
+/**
+ * Cruza las rutas que el router despacha contra lo que esta declarado.
+ *
+ * ESTO NO ES UNA LISTA DE AGUJEROS DE SEGURIDAD, y conviene decirlo antes de
+ * mirarla. Se leyo exigirPermisoDeRuta() para escribir esto: su paso 4 hace
+ * error_log(), http_response_code(404) y exit. O sea que una ruta no declarada
+ * NO pasa -- la peticion termina ahi y ningun handler llega a ejecutarse. El
+ * gate falla cerrado, que es la unica direccion segura del error.
+ *
+ * Lo que reporta esta lista es el efecto secundario incomodo de esa decision:
+ * la ruta no declarada devuelve un 404 comun, indistinguible de un enlace roto
+ * o de un typo. No se rompe con un mensaje que diga "falta declararme": se
+ * rompe en silencio, y solo queda rastro en el error_log del servidor. Este
+ * bloque es el unico lugar donde ese olvido se ve antes de que alguien reporte
+ * que "una pantalla no anda".
+ *
+ * @return array{rutas:list<array{metodo:string, ruta:string, esPatron:bool, estado:string, detalle:string}>,
+ *               conteo:array<string,int>, total:int}
+ */
+function coberturaDelGate(): array
+{
+    // El fuente del propio front controller: la unica fuente de verdad sobre
+    // que rutas existe es el router mismo.
+    $fuente = (string) file_get_contents(__FILE__);
+    $rutas  = RutasDelRouter::extraer($fuente);
+
+    $salida = [];
+    $conteo = [];
+
+    foreach ($rutas as $ruta) {
+        [$estado, $detalle] = $ruta['esPatron']
+            ? clasificarRutaPatron($ruta['metodo'], $ruta['ruta'])
+            : clasificarRutaExacta($ruta['metodo'], $ruta['ruta']);
+
+        $salida[]        = $ruta + ['estado' => $estado, 'detalle' => $detalle];
+        $conteo[$estado] = ($conteo[$estado] ?? 0) + 1;
+    }
+
+    // Las no declaradas primero: es lo unico que pide accion.
+    usort($salida, static function (array $a, array $b): int {
+        $peso = ['sin_declarar' => 0, 'indeterminado' => 1, 'permiso' => 2, 'gate_propio' => 3, 'publica' => 4];
+
+        return ($peso[$a['estado']] <=> $peso[$b['estado']])
+            ?: strcmp($a['metodo'] . $a['ruta'], $b['metodo'] . $b['ruta']);
+    });
+
+    return ['rutas' => $salida, 'conteo' => $conteo, 'total' => count($salida)];
+}
+
+/**
+ * Como queda cubierta una ruta literal. El orden de las comprobaciones es el
+ * MISMO que sigue exigirPermisoDeRuta(): si aqui se evaluara en otro orden, el
+ * informe podria atribuirle a una ruta una cobertura distinta de la que el gate
+ * le aplica de verdad.
+ *
+ * @return array{0:string, 1:string}
+ */
+function clasificarRutaExacta(string $metodo, string $ruta): array
+{
+    $clave = $metodo . ' ' . $ruta;
+
+    if (in_array($clave, RUTAS_PUBLICAS, true)) {
+        return ['publica', 'RUTAS_PUBLICAS'];
+    }
+    foreach (PATRONES_PUBLICOS as $patron) {
+        if (preg_match($patron, $ruta) === 1) {
+            return ['publica', 'PATRONES_PUBLICOS'];
+        }
+    }
+    if (in_array($ruta, RUTAS_GATE_PROPIO, true)) {
+        return ['gate_propio', 'RUTAS_GATE_PROPIO'];
+    }
+    foreach (PREFIJOS_GATE_PROPIO as $prefijo) {
+        if (str_starts_with($ruta, $prefijo)) {
+            return ['gate_propio', 'prefijo ' . $prefijo];
+        }
+    }
+    if (isset(PERMISOS_RUTA[$clave])) {
+        [$modulo, $accion] = PERMISOS_RUTA[$clave];
+        return ['permiso', $modulo . ':' . $accion];
+    }
+    foreach (PERMISOS_RUTA_PATRON as [$m, $patron, $modulo, $accion]) {
+        if ($metodo === $m && preg_match($patron, $ruta) === 1) {
+            return ['permiso', $modulo . ':' . $accion . ' (por patron)'];
+        }
+    }
+
+    return ['sin_declarar', 'cae en el 404 del paso 4'];
+}
+
+/**
+ * Como queda cubierta una ruta CON PARAMETRO.
+ *
+ * SE PREGUNTA CON UNA URL, NO COMPARANDO REGEX. El gate nunca compara un patron
+ * contra otro: corre preg_match del patron declarado contra la URL que llego.
+ * Comparar los textos de los dos regex parece equivalente y no lo es -- dos
+ * regex escritos distinto pueden cubrir las mismas URLs.
+ *
+ * Paso de verdad en este router: el despacho de /activar usa
+ * '#^/activar/([0-9a-f]{64})$#' porque necesita capturar el token, y
+ * PATRONES_PUBLICOS declara '#^/activar/[0-9a-f]{64}$#' sin el grupo porque
+ * solo necesita decidir. Son la misma ruta. La comparacion literal las daba por
+ * NO DECLARADAS, o sea que el informe gritaba por dos rutas que el gate deja
+ * pasar sin problema. Un informe que cria lobos deja de leerse.
+ *
+ * Por eso se genera una URL que ese patron acepta y se la clasifica con
+ * clasificarRutaExacta(), que sigue el mismo orden que exigirPermisoDeRuta().
+ *
+ * @return array{0:string, 1:string}
+ */
+function clasificarRutaPatron(string $metodo, string $patron): array
+{
+    $muestra = RutasDelRouter::muestraDePatron($patron);
+
+    // Sin URL de ejemplo NO SE AFIRMA NADA. Preferible un "no se pudo
+    // determinar" que se investiga, a un veredicto inventado que se cree.
+    if ($muestra === null) {
+        return ['indeterminado', 'no se pudo generar una URL de ejemplo para este patron'];
+    }
+
+    [$estado, $detalle] = clasificarRutaExacta($metodo, $muestra);
+
+    return [$estado, $detalle . ' (probado con ' . $muestra . ')'];
 }
 
 // ===========================================================================

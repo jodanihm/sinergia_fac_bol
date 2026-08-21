@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-21',
+        'version' => '1.16',
+        'titulo'  => 'Roles y permisos, explicados y auditados en una pantalla',
+        'tag'     => 'arquitectura',
+        'items'   => [
+            'Nueva pantalla que explica como se decide si alguien puede entrar a cada parte del sistema, con el recorrido completo dibujado.',
+            'Muestra que habilita de verdad cada permiso: cuantas pantallas abre y cuales, contadas sobre el codigo y no sobre una lista aparte.',
+            'Muestra los roles que cada empresa configuro, con una matriz de que puede hacer cada uno, y aclara que los duenos de cuenta no estan limitados por esos permisos.',
+            'Revisa que ninguna pantalla del sistema haya quedado sin declarar quien puede entrar. Hoy estan las 155 cubiertas.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-21',
         'version' => '1.15',
         'titulo'  => 'Explorador de la base de datos, con el aislamiento entre empresas a la vista',
         'tag'     => 'datos',
