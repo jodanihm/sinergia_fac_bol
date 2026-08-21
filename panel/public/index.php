@@ -402,6 +402,44 @@ function navEstadoItem(array $item, bool $puedeEmitir): string
  *
  * @return list<array<string,mixed>>
  */
+// ===========================================================================
+//  ROLES Y PERMISOS (Fase 1) -- catalogo
+//
+//  EL CATALOGO ES CODIGO, LA ASIGNACION ES DATO. Mismo reparto que Brewer
+//  Manager (provisioning/modulos.ts): estos dos arreglos definen QUE permisos
+//  pueden existir, y la tabla `permiso` (migracion 042) guarda cuales tiene
+//  cada rol. Si un modulo desaparece de aqui, ninguna fila vieja de la base
+//  puede seguir concediendolo.
+//
+//  LOS MODULOS SALEN DE definicionMenu(), con UNA excepcion deliberada:
+//  'certificacion'. En el menu las ~20 rutas de /certificacion/* cuelgan de una
+//  sola clave (config.certificacion), pero ahi adentro estan las que EMITEN al
+//  SII y queman folios. Meterlas en 'config' pondria "ver la pantalla de
+//  certificacion" y "emitir el set de pruebas" bajo el mismo permiso.
+//
+//  TRES ACCIONES, y 'emitir' es la que justifica el modelo entero:
+//    ver        leer la pantalla o el informe.
+//    gestionar  crear, editar, activar, desactivar. Toca datos nuestros.
+//    emitir     manda al SII. Consume folios y NO SE PUEDE DESHACER.
+// ===========================================================================
+
+/** @var list<string> */
+const CATALOGO_MODULOS = [
+    'ventas',
+    'compras',
+    'maestros',
+    'informes',
+    'config',
+    'certificacion',
+    'usuarios',
+    'auditoria',
+    'chat',
+    'dashboard',
+];
+
+/** @var list<string> */
+const CATALOGO_ACCIONES = ['ver', 'gestionar', 'emitir'];
+
 function definicionMenu(): array
 {
     return [
@@ -9835,6 +9873,27 @@ if ($metodo === 'POST' && $ruta === '/apikeys/revocar') {
     handleApiKeysRevocarPost();
 }
 
+// ---------------------------------------------------------------------------
+//  GATE DE PERMISOS DEL ESPACIO /certificacion* (Fase 1, piloto).
+//
+//  UN SOLO PUNTO, ANTES de todas sus rutas, y no una llamada por handler: asi
+//  una ruta nueva de este espacio nace BLOQUEADA hasta que alguien la declare
+//  en PERMISOS_RUTA. Con la llamada por handler, una ruta nueva naceria
+//  abierta -- que es el defecto de Brewer que este diseño evita.
+//
+//  str_starts_with('/certificacion') cubre los tres prefijos que existen:
+//  /certificacion, /certificacion-elegir y /certificacion-aprobada.
+//
+//  Auth::requerirSesion() PRIMERO y aparte: sin sesion corresponde el redirect
+//  a /login de siempre, no un 403. Los handlers conservan su propia llamada a
+//  requerirSesion(); es redundante y se deja asi a proposito, para que ninguno
+//  dependa de que este bloque siga existiendo.
+// ---------------------------------------------------------------------------
+if (str_starts_with($ruta, '/certificacion')) {
+    Auth::requerirSesion();
+    exigirPermisoDeRuta(Db::conexion(), Auth::cuentaId(), $metodo, $ruta);
+}
+
 if ($metodo === 'GET' && $ruta === '/certificacion-elegir') {
     Auth::requerirSesion();
     handleCertificacionElegirGet();
@@ -10101,6 +10160,15 @@ function handleRegistroPost(): void
             . "VALUES (:cuenta_id, :email, :hash, 'owner', 'activo', NOW())"
         )->execute([':cuenta_id' => $cuentaId, ':email' => $email, ':hash' => $hash]);
         $usuarioId = (int) $pdo->lastInsertId();
+
+        // Rol "Administrador" con todos los permisos (migracion 042). DENTRO de
+        // la misma transaccion que la cuenta y el owner: una cuenta a medias
+        // -- con owner pero sin rol plantilla -- obligaria a repararla a mano,
+        // y no hay pantalla para eso hasta la Fase 2.
+        //
+        // El owner NO se lo autoasigna: bypasea el gate por su usuario.rol, y
+        // ponerselo aqui sugeriria que sus permisos dependen de esta fila.
+        sembrarRolAdministrador($pdo, $cuentaId);
 
         $pdo->commit();
     } catch (Throwable $e) {
@@ -11652,6 +11720,227 @@ function handleApiKeysProduccionRevocarPost(): void
  * cualquiera que la sondee sin sesion; un 403 uniforme no distingue esos
  * casos.
  */
+// ===========================================================================
+//  ROLES Y PERMISOS (Fase 1) -- el gate
+// ===========================================================================
+
+/** Corta la ejecucion con 403, mismo formato que exigirSuperadmin(). */
+function negar403(): never
+{
+    http_response_code(403);
+    echo '403 - No autorizado.';
+    exit;
+}
+
+/**
+ * Exige que el usuario de la sesion tenga (modulo, accion) en su rol.
+ *
+ * BYPASS DE owner Y superadmin, y no es un atajo: son estructurales.
+ *   - owner      es el dueno de la cuenta. Quitarle acceso a su propia cuenta
+ *                no tiene a quien proteger, y lo dejaria sin poder repararla.
+ *   - superadmin ya tiene su gate en exigirSuperadmin(); volver a filtrarlo
+ *                aqui solo agregaria un segundo criterio que puede divergir.
+ * Los dos salen ANTES de consultar rol/permiso: no necesitan rol_id, y por eso
+ * la columna es NULLABLE.
+ *
+ * EL AISLAMIENTO ES LA PARTE DELICADA. El JOIN filtra por cuenta_id en DOS
+ * puntos -- el usuario y el rol -- y no es redundancia defensiva: son dos
+ * caminos distintos por los que un rol de otro tenant podria colarse (un
+ * usuario reasignado de cuenta, o un rol_id apuntando fuera de la cuenta). En
+ * un modelo multi-tenant por fila esto NO se puede dejar implicito.
+ *
+ * 403 Y NUNCA UN REDIRECT, por el mismo motivo que exigirSuperadmin(): un
+ * redirect a /login le confirmaria a quien sondee la ruta que existe.
+ */
+function exigirPermiso(PDO $pdo, int $cuentaId, string $modulo, string $accion): void
+{
+    if (! Auth::autenticado()) {
+        negar403();
+    }
+
+    // Fallar cerrado tambien ante un error de programacion: un modulo o una
+    // accion que no esten en el catalogo no pueden concederse por descuido.
+    if (! in_array($modulo, CATALOGO_MODULOS, true) || ! in_array($accion, CATALOGO_ACCIONES, true)) {
+        error_log(sprintf('exigirPermiso: par fuera del catalogo (%s:%s)', $modulo, $accion));
+        negar403();
+    }
+
+    $stmt = $pdo->prepare('SELECT rol, rol_id, cuenta_id FROM usuario WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => Auth::usuarioId()]);
+    $usuario = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($usuario === false || (int) $usuario['cuenta_id'] !== $cuentaId) {
+        // La sesion dice una cuenta y la fila dice otra: no se resuelve a favor
+        // de nadie.
+        negar403();
+    }
+
+    if (in_array($usuario['rol'], ['owner', 'superadmin'], true)) {
+        return;
+    }
+
+    if ($usuario['rol_id'] === null) {
+        // Colaborador sin rol asignado: todavia no puede nada. Es el estado en
+        // que quedan todos hasta que exista la UI de asignacion (Fase 2).
+        negar403();
+    }
+
+    $stmt = $pdo->prepare(
+        'SELECT 1 FROM usuario u '
+        . 'INNER JOIN rol r     ON r.id = u.rol_id AND r.cuenta_id = :cuenta_rol '
+        . 'INNER JOIN permiso p ON p.rol_id = r.id '
+        . 'WHERE u.id = :usuario AND u.cuenta_id = :cuenta_usuario '
+        . '  AND p.modulo = :modulo AND p.accion = :accion LIMIT 1'
+    );
+    $stmt->execute([
+        ':cuenta_rol'     => $cuentaId,
+        ':usuario'        => Auth::usuarioId(),
+        ':cuenta_usuario' => $cuentaId,
+        ':modulo'         => $modulo,
+        ':accion'         => $accion,
+    ]);
+
+    if ($stmt->fetchColumn() === false) {
+        negar403();
+    }
+}
+
+/**
+ * Crea el rol "Administrador" de una cuenta con TODOS los permisos.
+ *
+ * Igual que el seed de Brewer, y por el mismo motivo: el owner ya bypasea el
+ * gate, asi que este rol no le sirve a el -- sirve como PLANTILLA para el
+ * primer colaborador al que se le quiera dar acceso total, sin obligar a nadie
+ * a tildar 30 casillas para el caso mas comun.
+ *
+ * Se siembran las 30 combinaciones completas (10 modulos x 3 acciones) aunque
+ * algunas no tengan sentido hoy (no hay nada que "emitir" en auditoria). Es
+ * deliberado: el catalogo es el producto cartesiano, y un rol de acceso total
+ * que dejara huecos obligaria a revisarlo cada vez que una accion pase a
+ * existir en un modulo donde antes no aplicaba.
+ *
+ * @return int id del rol creado
+ */
+function sembrarRolAdministrador(PDO $pdo, int $cuentaId): int
+{
+    $pdo->prepare('INSERT INTO rol (cuenta_id, nombre, created_at) VALUES (:c, :n, NOW())')
+        ->execute([':c' => $cuentaId, ':n' => 'Administrador']);
+    $rolId = (int) $pdo->lastInsertId();
+
+    $ins = $pdo->prepare('INSERT INTO permiso (rol_id, modulo, accion) VALUES (:r, :m, :a)');
+    foreach (CATALOGO_MODULOS as $modulo) {
+        foreach (CATALOGO_ACCIONES as $accion) {
+            $ins->execute([':r' => $rolId, ':m' => $modulo, ':a' => $accion]);
+        }
+    }
+
+    return $rolId;
+}
+
+// ---------------------------------------------------------------------------
+//  MAPA RUTA -> PERMISO, y por que existe
+//
+//  ESTE ARREGLO ES LO UNICO QUE SE HACE DISTINTO DE BREWER, A PROPOSITO.
+//
+//  Alla el permiso se declara con un decorador sobre el handler, y el guard
+//  dice literalmente "if (!requerido) return true": un endpoint sin decorador
+//  pasa. Son dos olvidos posibles -- el decorador y el @UseGuards del
+//  controlador -- y cualquiera de los dos ABRE la ruta sin hacer ruido.
+//
+//  Aqui la relacion vive en UNA tabla y el despachador la consulta por
+//  ruta: una ruta del espacio cubierto que no este listada NO PASA. El olvido
+//  cierra en vez de abrir, que es la unica direccion segura para el error.
+//
+//  ALCANCE DE ESTA FASE: solo /certificacion*. Son las rutas de mayor riesgo
+//  -- ahi adentro estan las cinco que emiten al SII -- y sirven de piloto del
+//  patron. Las otras ~128 rutas del panel siguen SIN gate de permisos, igual
+//  que hoy. Eso no es un descuido: extenderlo es Fase 2, y hasta entonces la
+//  propiedad de "fallar cerrado" vale para este espacio, no para el panel
+//  entero. Decirlo importa, porque un mapa parcial que se lea como total es
+//  peor que no tenerlo.
+//
+//  CRITERIO DE LA ACCION:
+//    ver        GET que solo muestra.
+//    gestionar  POST que toca datos nuestros (subir archivo, marcar etapa).
+//    emitir     POST que manda al SII y quema folios.
+// ---------------------------------------------------------------------------
+
+/** @var array<string, array{0:string, 1:string}> "METODO ruta" => [modulo, accion] */
+const PERMISOS_RUTA = [
+    'GET /certificacion-elegir'                  => ['certificacion', 'ver'],
+    'GET /certificacion'                         => ['certificacion', 'ver'],
+    'GET /certificacion/set-pruebas'             => ['certificacion', 'ver'],
+    'GET /certificacion/simulacion'              => ['certificacion', 'ver'],
+    'GET /certificacion/boleta'                  => ['certificacion', 'ver'],
+    'GET /certificacion/boleta/set'              => ['certificacion', 'ver'],
+    'GET /certificacion/boleta/rvd'              => ['certificacion', 'ver'],
+    'GET /certificacion/intercambio'             => ['certificacion', 'ver'],
+    'GET /certificacion/muestras-impresas'       => ['certificacion', 'ver'],
+    'GET /certificacion-aprobada'                => ['certificacion', 'ver'],
+
+    'POST /certificacion/actualizar'             => ['certificacion', 'gestionar'],
+    'POST /certificacion/marcar-sok'             => ['certificacion', 'gestionar'],
+    'POST /certificacion/confirmar-etapa'        => ['certificacion', 'gestionar'],
+    'POST /certificacion/actualizar-libro'       => ['certificacion', 'gestionar'],
+    'POST /certificacion/set-pruebas'            => ['certificacion', 'gestionar'],
+    'POST /certificacion/boleta/confirmar-etapa' => ['certificacion', 'gestionar'],
+    'POST /certificacion/intercambio'            => ['certificacion', 'gestionar'],
+    'POST /certificacion/muestras-impresas.zip'  => ['certificacion', 'gestionar'],
+    'POST /certificacion-aprobada/confirmar'     => ['certificacion', 'gestionar'],
+
+    // LAS CINCO QUE QUEMAN FOLIOS ANTE EL SII.
+    'POST /certificacion/emitir-libro-ventas'    => ['certificacion', 'emitir'],
+    'POST /certificacion/emitir-libro-compras'   => ['certificacion', 'emitir'],
+    'POST /certificacion/set-pruebas/emitir'     => ['certificacion', 'emitir'],
+    'POST /certificacion/simulacion/emitir'      => ['certificacion', 'emitir'],
+    'POST /certificacion/boleta/set/emitir'      => ['certificacion', 'emitir'],
+    'POST /certificacion/boleta/rvd/emitir'      => ['certificacion', 'emitir'],
+];
+
+/**
+ * Rutas con parametro del mismo espacio. Van aparte porque no se pueden buscar
+ * por igualdad; el prefijo se compara con str_starts_with y las dos son GET de
+ * solo lectura.
+ *
+ * @var array<string, array{0:string, 1:string}>
+ */
+const PERMISOS_RUTA_PREFIJO = [
+    '/certificacion/etapa/'       => ['certificacion', 'ver'],
+    '/certificacion/intercambio/' => ['certificacion', 'ver'],
+];
+
+/**
+ * Guard de espacio: aplica el permiso declarado para esta ruta, y NIEGA si no
+ * hay ninguno declarado.
+ *
+ * Se llama UNA vez, antes del bloque de rutas de /certificacion*, en vez de
+ * repetir exigirPermiso() en cada handler. La diferencia no es de estilo: con
+ * la llamada por handler, un handler nuevo nace SIN gate -- que es exactamente
+ * el defecto de Brewer. Con el despachador, nace bloqueado hasta que alguien lo
+ * declare, y ese alguien tiene que pensar que accion corresponde.
+ */
+function exigirPermisoDeRuta(PDO $pdo, int $cuentaId, string $metodo, string $ruta): void
+{
+    $clave = $metodo . ' ' . $ruta;
+    if (isset(PERMISOS_RUTA[$clave])) {
+        [$modulo, $accion] = PERMISOS_RUTA[$clave];
+        exigirPermiso($pdo, $cuentaId, $modulo, $accion);
+        return;
+    }
+
+    foreach (PERMISOS_RUTA_PREFIJO as $prefijo => $par) {
+        if ($metodo === 'GET' && str_starts_with($ruta, $prefijo)) {
+            exigirPermiso($pdo, $cuentaId, $par[0], $par[1]);
+            return;
+        }
+    }
+
+    // FALLA CERRADO. Si llegaste aqui leyendo un 403 inesperado: la ruta es
+    // nueva y falta declararla arriba. Es el comportamiento buscado, no un bug.
+    error_log(sprintf('exigirPermisoDeRuta: ruta sin permiso declarado (%s) -- denegada', $clave));
+    negar403();
+}
+
 function exigirSuperadmin(PDO $pdo): void
 {
     if (! Auth::autenticado()) {

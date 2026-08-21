@@ -562,6 +562,16 @@ const MIGRACIONES = [
              'columnas' => ['total_documentos'], 'esperado' => 1],
         ],
     ],
+    [
+        'id' => '042', 'archivo' => '042_rol_permiso.sql', 'nota' => 'CREATE (2 tablas) + ALTER',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'rol + permiso', 'tablas' => ['rol', 'permiso'], 'esperado' => 2],
+            ['tipo' => 'indice', 'desc' => 'uk_rol_cuenta_nombre', 'tabla' => 'rol',
+             'indice' => 'uk_rol_cuenta_nombre'],
+            ['tipo' => 'columnas', 'desc' => 'usuario.rol_id', 'tabla' => 'usuario',
+             'columnas' => ['rol_id'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
