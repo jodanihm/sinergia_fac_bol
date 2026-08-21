@@ -270,3 +270,46 @@ tr:hover td { background: var(--panel-2); }
     color: var(--muted);
     margin-left: .5rem;
 }
+
+/* ---- Diff de auditoria ------------------------------------------------- */
+/* Una linea por clave que cambio. El valor viejo va tachado y en gris y el
+   nuevo en verde: el color y el tachado dicen la direccion del cambio sin
+   tener que leer las etiquetas, que es lo que se quiere al recorrer una lista
+   larga buscando una accion concreta. */
+.diff { list-style: none; margin: 0; padding: 0; }
+.diff li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: .4rem;
+    font-size: .82rem;
+    padding: .12rem 0;
+}
+.diff__clave {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .05rem .35rem;
+    font-size: .74rem;
+    color: var(--muted);
+}
+.diff__antes { color: var(--muted); text-decoration: line-through; }
+.diff__flecha { color: var(--accent); }
+.diff__despues { color: var(--ok); font-weight: 600; }
+
+.diff__crudo { margin-top: .4rem; }
+.diff__crudo summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
+.diff__crudo-cols { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: .4rem; }
+.diff__crudo-cols > div { flex: 1; min-width: 220px; }
+.diff__crudo-cols .muted { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+.diff__crudo pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: .2rem 0 0;
+    padding: .5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: .74rem;
+    color: var(--muted);
+}

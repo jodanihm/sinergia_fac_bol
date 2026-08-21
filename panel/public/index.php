@@ -97,6 +97,7 @@ require __DIR__ . '/../src/Auth.php';
 require __DIR__ . '/../src/Rut.php';
 require __DIR__ . '/../src/Csrf.php';
 require __DIR__ . '/../src/FechaExcel.php';
+require __DIR__ . '/../src/DiffAuditoria.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -13308,20 +13309,120 @@ function handleAdminTenantsRevertirEtapaPost(): void
 //  Lista cronologica (mas reciente primero) del changelog admin_auditoria.
 //  Solo lectura, sin filtros por ahora.
 // ===========================================================================
+/**
+ * WHERE de la auditoria a partir de los cuatro filtros de la pantalla.
+ *
+ * Cada valor pasa por una validacion ANTES de llegar a la consulta:
+ *   - accion y usuario se comparan contra las listas que la propia tabla
+ *     devolvio (los <select> se llenan con DISTINCT), asi que un valor
+ *     inventado en la URL simplemente no filtra por nada.
+ *   - las fechas pasan por fechaValida(), el mismo validador ISO que ya usan
+ *     los filtros de documentos. Una fecha mal formada se descarta en vez de
+ *     viajar a MySQL.
+ *
+ * EL RANGO ES INCLUSIVO EN LOS DOS EXTREMOS. created_at es un datetime, asi
+ * que "hasta el 21-08" comparado con '2026-08-21' dejaria fuera todo lo que
+ * paso ese dia despues de medianoche -- o sea, el dia entero. Por eso el
+ * limite superior es < (hasta + 1 dia), y no <=. Se compara contra la columna
+ * cruda y no contra DATE(created_at) para no anular un indice sobre ella.
+ *
+ * @return array{0:string, 1:array<string,string>}
+ */
+function filtroAuditoriaAdmin(string $accion, string $usuarioId, string $desde, string $hasta): array
+{
+    $condiciones = [];
+    $parametros  = [];
+
+    if ($accion !== '') {
+        $condiciones[] = 'a.accion = :accion';
+        $parametros[':accion'] = $accion;
+    }
+    if ($usuarioId !== '' && ctype_digit($usuarioId)) {
+        $condiciones[] = 'a.usuario_id = :usuario_id';
+        $parametros[':usuario_id'] = $usuarioId;
+    }
+    if ($desde !== '' && fechaValida($desde)) {
+        $condiciones[] = 'a.created_at >= :desde';
+        $parametros[':desde'] = $desde . ' 00:00:00';
+    }
+    if ($hasta !== '' && fechaValida($hasta)) {
+        $condiciones[] = 'a.created_at < DATE_ADD(:hasta, INTERVAL 1 DAY)';
+        $parametros[':hasta'] = $hasta;
+    }
+
+    return [$condiciones === [] ? '' : ' WHERE ' . implode(' AND ', $condiciones), $parametros];
+}
+
 function handleAdminAuditoriaGet(): void
 {
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
-    $filas = $pdo->query(
+    $accion    = trim((string) ($_GET['accion'] ?? ''));
+    $usuarioId = trim((string) ($_GET['usuario'] ?? ''));
+    $desde     = trim((string) ($_GET['desde'] ?? ''));
+    $hasta     = trim((string) ($_GET['hasta'] ?? ''));
+
+    [$where, $parametros] = filtroAuditoriaAdmin($accion, $usuarioId, $desde, $hasta);
+
+    // PAGINACION OBLIGATORIA, no una comodidad. admin_auditoria es append-only:
+    // no se limpia nunca y solo crece. Sin LIMIT, esta pantalla es una consulta
+    // que un dia deja de responder, y justo el dia que mas se la necesita.
+    $porPagina = 50;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $offset    = ($pagina - 1) * $porPagina;
+
+    $stmtTotal = $pdo->prepare('SELECT COUNT(*) FROM admin_auditoria a' . $where);
+    $stmtTotal->execute($parametros);
+    $total = (int) $stmtTotal->fetchColumn();
+
+    $stmt = $pdo->prepare(
         'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, a.entidad_id, '
         . '       a.valor_anterior, a.valor_nuevo, a.created_at '
         . 'FROM admin_auditoria a '
         . 'LEFT JOIN usuario u ON u.id = a.usuario_id '
-        . 'ORDER BY a.created_at DESC, a.id DESC'
+        . $where
+        . ' ORDER BY a.created_at DESC, a.id DESC LIMIT :limit OFFSET :offset'
+    );
+    foreach ($parametros as $clave => $valor) {
+        $stmt->bindValue($clave, $valor);
+    }
+    // PARAM_INT explicito, igual que MySqlClienteRepository::listar(): con
+    // prepares emuladas un LIMIT ligado como string llega entrecomillado y
+    // MySQL lo rechaza por sintaxis.
+    $stmt->bindValue(':limit', $porPagina, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $filas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // El diff se calcula aqui y no en la vista: la vista pinta, no interpreta.
+    foreach ($filas as &$fila) {
+        $fila['diff'] = DiffAuditoria::comparar($fila['valor_anterior'], $fila['valor_nuevo']);
+    }
+    unset($fila);
+
+    // Opciones de los <select>, sacadas de la propia tabla: si manana aparece
+    // una accion administrativa nueva, el filtro la ofrece sin que nadie tenga
+    // que acordarse de agregarla a una lista escrita a mano.
+    $acciones = $pdo->query('SELECT DISTINCT accion FROM admin_auditoria ORDER BY accion')
+        ->fetchAll(PDO::FETCH_COLUMN);
+    $autores = $pdo->query(
+        'SELECT DISTINCT a.usuario_id, u.email FROM admin_auditoria a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id ORDER BY u.email'
     )->fetchAll(PDO::FETCH_ASSOC);
 
-    vista('admin-auditoria', ['filas' => $filas]);
+    vista('admin-auditoria', [
+        'filas'        => $filas,
+        'acciones'     => $acciones,
+        'autores'      => $autores,
+        'accion'       => $accion,
+        'usuarioId'    => $usuarioId,
+        'desde'        => $desde,
+        'hasta'        => $hasta,
+        'total'        => $total,
+        'pagina'       => $pagina,
+        'totalPaginas' => max(1, (int) ceil($total / $porPagina)),
+    ]);
 }
 
 /**

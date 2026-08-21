@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-21',
+        'version' => '1.14',
+        'titulo'  => 'La auditoria dice que cambio, no solo que se toco',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Cada accion administrativa ahora muestra en una linea que campo cambio y de que valor a cual, en vez de dos bloques de datos que habia que comparar a ojo.',
+            'El registro completo de antes y despues sigue estando, ahora plegado: se abre cuando hace falta la prueba.',
+            'Se puede filtrar por accion, por quien la hizo y por rango de fechas, y el rango incluye el dia completo en los dos extremos.',
+            'El listado se pagina de a 50, porque este registro no se borra nunca y solo crece.',
+            'Desde cada accion se llega a la ficha de la cuenta afectada.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-21',
         'version' => '1.13',
         'titulo'  => 'Buscador de cuentas y ficha completa de cada cliente',
         'tag'     => 'frontend',
