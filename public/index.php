@@ -140,6 +140,13 @@ const TIPOS_PERMITIDOS_LISTADO = [33, 34, 61, 56, 39];
 // expuesto los 136 documentos exentos emitidos en lote a una NC armada con las
 // lineas de todo el sobre. Ver la nota de esa funcion.
 const TIPOS_PERMITIDOS_ANULAR = [33, 34, 61, 56, 39];
+
+// Receptor generico de BOLETA cuando la venta es a un comprador que no se
+// identifica -- el caso normal del mostrador. Es el RUT que el SII reserva para
+// eso, y el mismo que llevan las 5 boletas del set de certificacion. Solo lo usa
+// emitirBoleta(): en factura el receptor es obligatorio y no hay default.
+const RUT_CONSUMIDOR_FINAL   = '66666666-6';
+const RAZON_CONSUMIDOR_FINAL = 'Consumidor Final';
 /**
  * Tope de documentos por POST /api/v1/dte/lote.
  *
@@ -1522,17 +1529,36 @@ function emitirBoleta(array $tenant): never
         invalido('JSON invalido o vacio', 'body');
     }
 
-    $r = $body['receptor'] ?? null;
-    if (! is_array($r)) {
-        invalido('receptor es obligatorio', 'receptor');
-    }
-    foreach (['rut', 'razonSocial'] as $campo) {
-        if (! isset($r[$campo]) || ! is_string($r[$campo]) || trim($r[$campo]) === '') {
-            invalido("receptor.{$campo} es obligatorio", "receptor.{$campo}");
-        }
-    }
-    if (! rutDvValido($r['rut'])) {
+    // --- RECEPTOR ANONIMO: EL CASO NORMAL DE UNA BOLETA ---
+    //
+    // A diferencia de la factura, la boleta se le entrega a quien pasa por el
+    // mostrador: no hay RUT que pedirle. El SII usa 66666666-6 "Consumidor
+    // Final" para eso, y es el mismo receptor que llevan las 5 boletas del set
+    // de certificacion (integration/plantiflex/templates/boleta_set_pruebas_casos.json).
+    //
+    // Por eso el bloque 'receptor' ENTERO es opcional: no informarlo es el uso
+    // esperado, no un error. Si viene un RUT, se valida el DV igual que en
+    // factura -- lo que se relaja es la exigencia, nunca la validacion de lo
+    // que el cliente si mando.
+    //
+    // ESTO VIVE EN EL MOTOR Y NO SOLO EN LA VISTA: el panel es un cliente mas
+    // de esta API, y al cliente no se le cree nunca (mismo criterio que el
+    // forzado de lineas exentas del 34 en validarDocumentoDte).
+    $r = is_array($body['receptor'] ?? null) ? $body['receptor'] : [];
+
+    $rutRecep = trim((string) ($r['rut'] ?? ''));
+    if ($rutRecep === '') {
+        $rutRecep = RUT_CONSUMIDOR_FINAL;
+    } elseif (! rutDvValido($rutRecep)) {
         invalido('receptor.rut tiene DV invalido', 'receptor.rut');
+    }
+
+    // La razon social acompana al RUT: si no se informa ninguna, va la glosa
+    // generica. Se decide por separado del RUT a proposito -- un comercio puede
+    // querer dejar el nombre del comprador sin pedirle el RUT.
+    $razonRecep = trim((string) ($r['razonSocial'] ?? ''));
+    if ($razonRecep === '') {
+        $razonRecep = RAZON_CONSUMIDOR_FINAL;
     }
 
     $detalles = $body['detalles'] ?? null;
@@ -1558,8 +1584,8 @@ function emitirBoleta(array $tenant): never
     $doc = new DocumentoTributario(
         tipoDte: TipoDte::BoletaElectronica,
         receptor: new Receptor(
-            rut: $r['rut'],
-            razonSocial: $r['razonSocial'],
+            rut: $rutRecep,
+            razonSocial: $razonRecep,
         ),
         detalles: array_map(
             static fn (array $d): Detalle => new Detalle(
@@ -1574,6 +1600,36 @@ function emitirBoleta(array $tenant): never
 
     $ambiente = ambienteDesdeTenant($tenant);
     $pdo      = pdo();
+
+    // --- Idempotencia opcional por (rut_emisor, ambiente, Idempotency-Key) ---
+    //
+    // MISMO MECANISMO Y MISMA TABLA QUE emitirDte(), sin variantes: si los dos
+    // endpoints trataran distinto un reintento, la diferencia aparecería el dia
+    // que alguien reintente, no antes.
+    //
+    // POR QUE HACIA FALTA AQUI. Hasta esta entrega este handler solo lo llamaban
+    // scripts. Colgarle el formulario de /ventas/boleta lo cambia: un F5 o un
+    // reintento tras un timeout emitiria una SEGUNDA boleta ante el SII por la
+    // misma venta, con otro folio quemado -- los folios no se devuelven. Es el
+    // mismo riesgo que handleEmisionPost() del panel documenta para factura.
+    //
+    // Va DESPUES de armar $doc y ANTES de tocar el SII: validar primero deja que
+    // un payload malformado se corrija y se reintente con la MISMA clave, en vez
+    // de quedar atrapado 300 s tras un claim de algo que nunca se emitio.
+    $clave = trim((string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''));
+    $idem  = $clave !== '' ? new MySqlIdempotenciaRepository($pdo) : null;
+    if ($idem !== null && ! $idem->reclamar($tenant['rut_emisor'], $ambiente, $clave)) {
+        $previo = $idem->obtener($tenant['rut_emisor'], $ambiente, $clave);
+        // La marca de terminado es http_status, no folio: mismo criterio que
+        // emitirDte(), documentado alli.
+        if ($previo !== null && $previo['httpStatus'] !== null) {
+            header('Idempotent-Replay: true');
+            responder($previo['httpStatus'], json_decode((string) $previo['respuestaJson'], true));
+        }
+        if (! $idem->reactivarSiMuerto($tenant['rut_emisor'], $ambiente, $clave, IDEMPOTENCIA_TTL_SEGUNDOS)) {
+            responder(409, ['error' => 'solicitud en proceso']);
+        }
+    }
 
     $cred = new Credenciales(
         rutEmisor: $tenant['rut_emisor'],
@@ -1603,6 +1659,19 @@ function emitirBoleta(array $tenant): never
         'iva'     => $m['iva'],
         'total'   => $m['total'],
     ];
+
+    // Guardar el resultado para reintentos con la misma clave (at-most-once).
+    if ($idem !== null) {
+        $idem->completar(
+            $tenant['rut_emisor'],
+            $ambiente,
+            $clave,
+            $res->tipoDte->value,
+            (int) $res->folio,
+            json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            201,
+        );
+    }
 
     responder(201, $payload);
 }

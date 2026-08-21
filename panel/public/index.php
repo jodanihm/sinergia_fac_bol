@@ -434,6 +434,12 @@ function definicionMenu(): array
                         // prestado: una exenta ES una factura, solo que sin IVA.
                         // Lo que las distingue es la etiqueta, no el dibujo.
                         ['clave' => 'ventas.factura-exenta', 'label' => 'Factura exenta', 'destino' => '/ventas/factura-exenta', 'icono' => 'factura', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        // Boleta: mismo icono 'factura' por el mismo criterio que
+                        // la exenta -- es un documento de venta, lo que cambia es
+                        // el destinatario, no el dibujo. requiereProduccion=true
+                        // como sus vecinas: sin CAF de boleta en produccion la
+                        // pantalla no puede emitir nada.
+                        ['clave' => 'ventas.boleta', 'label' => 'Boleta electronica', 'destino' => '/ventas/boleta', 'icono' => 'factura', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                         ['clave' => 'ventas.nc', 'label' => 'Nota de credito', 'destino' => '/ventas/nota-credito', 'icono' => 'nota-credito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                         ['clave' => 'ventas.nd', 'label' => 'Nota de debito', 'destino' => '/ventas/nota-debito', 'icono' => 'nota-debito', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
@@ -4388,6 +4394,7 @@ function metaTipoEmision(int $tipoDte): array
     return match ($tipoDte) {
         33 => ['Factura electronica', '/ventas/factura', 'ventas.factura'],
         34 => ['Factura exenta', '/ventas/factura-exenta', 'ventas.factura-exenta'],
+        39 => ['Boleta electronica', '/ventas/boleta', 'ventas.boleta'],
         61 => ['Nota de credito', '/ventas/nota-credito', 'ventas.nc'],
         56 => ['Nota de debito', '/ventas/nota-debito', 'ventas.nd'],
         default => ['Documento', '/ventas/factura', 'ventas.factura'],
@@ -4567,6 +4574,36 @@ function clienteMotor(): Client
 function emitirEnMotor(string $keyServicio, array $documento, string $idemKey): array
 {
     $resp = clienteMotor()->post('api/v1/dte', [
+        'headers' => [
+            'X-Api-Key'       => $keyServicio,
+            'Idempotency-Key' => $idemKey,
+            'Content-Type'    => 'application/json',
+        ],
+        'json' => $documento,
+    ]);
+    $body = json_decode((string) $resp->getBody(), true);
+
+    return ['status' => $resp->getStatusCode(), 'body' => is_array($body) ? $body : []];
+}
+
+/**
+ * POST /api/v1/boleta del motor. Gemela de emitirEnMotor(), y separada por la
+ * misma razon por la que el motor tiene dos handlers: la boleta va por el canal
+ * REST (BoletaFacturador) y la factura por el clasico (SiiDirectoFacturador).
+ *
+ * NO se emite boleta por /api/v1/dte: ese endpoint no acepta el tipo 39
+ * (TIPOS_PERMITIDOS) y su consulta de estado usa el servicio SOAP de Maullin,
+ * que no conoce los TrackID nacidos en pangal. Boleta tiene su propio par
+ * emitir/consultar-estado en el motor, y este es el lado del panel.
+ *
+ * Mismo contrato que emitirEnMotor(): NO lanza en 4xx/5xx.
+ *
+ * @param array<string,mixed> $documento
+ * @return array{status:int, body:array<string,mixed>}
+ */
+function emitirBoletaEnMotor(string $keyServicio, array $documento, string $idemKey): array
+{
+    $resp = clienteMotor()->post('api/v1/boleta', [
         'headers' => [
             'X-Api-Key'       => $keyServicio,
             'Idempotency-Key' => $idemKey,
@@ -4876,6 +4913,180 @@ function handleEmisionPost(int $tipoDte): void
     error_log('panel emision: respuesta inesperada del motor (' . $status . ') - ' . json_encode($body, JSON_UNESCAPED_UNICODE));
     renderEmisionForm(
         $tipoDte,
+        $idemKey,
+        $_POST,
+        null,
+        null,
+        'Error del motor de emision. NO se emitio; intenta nuevamente.'
+    );
+}
+
+// ===========================================================================
+//  Ventas > Boleta electronica (39)
+//
+//  HANDLERS PROPIOS Y NO handleEmisionGet/Post(39), aunque el formulario sea el
+//  mismo. La razon no es cosmetica: aquellos postean a /api/v1/dte, que NO
+//  acepta el tipo 39, y arman un payload con giro/direccion/comuna que el
+//  endpoint de boleta no recibe. La boleta tiene su propio par emitir/consultar
+//  en el motor porque va por otro canal (REST/pangal, BoletaFacturador).
+//
+//  LO QUE SI SE REUSA, TAL CUAL: el guard de produccion, renderEmisionForm(),
+//  guardarClienteDesdeReceptor() y la pantalla de resultado. Solo se separa lo
+//  que de verdad difiere -- el payload y el endpoint.
+//
+//  FUERA DE ALCANCE EN ESTA FASE, y es deliberado:
+//    - Conversion de cotizacion: es de factura (registrarConversionCotizacion).
+//    - Encolado del correo al receptor: una boleta a "Consumidor Final" no
+//      tiene a quien mandarsela, y el endpoint del motor ni siquiera lee
+//      receptor.email.
+//    - Lineas exentas: eso es boleta EXENTA (41), un tipo distinto. El motor
+//      ignora 'exento' en el detalle de boleta, asi que la casilla no tendria
+//      efecto -- por eso la vista tampoco la ofrece para 39.
+// ===========================================================================
+
+/** Arma el JSON que espera POST /api/v1/boleta desde $_POST. */
+function armarDocumentoBoleta(array $post): array
+{
+    $r        = is_array($post['receptor'] ?? null) ? $post['receptor'] : [];
+    $receptor = [];
+
+    // RUT Y RAZON SOCIAL VAN SOLO SI EL USUARIO LOS ESCRIBIO. Mandar cadenas
+    // vacias no es lo mismo que omitirlas: el motor pone el default de
+    // Consumidor Final cuando NO vienen, y una cadena vacia recorreria la misma
+    // rama pero dejando el dato ambiguo para quien lea la peticion despues.
+    $rut = trim((string) ($r['rut'] ?? ''));
+    if ($rut !== '') {
+        $receptor['rut'] = $rut;
+    }
+    $razon = trim((string) ($r['razonSocial'] ?? ''));
+    if ($razon !== '') {
+        $receptor['razonSocial'] = $razon;
+    }
+
+    // giro/direccion/comuna NO se mandan: no aplican a boleta y el endpoint del
+    // motor no los lee. La vista tampoco los muestra para el tipo 39.
+    $detalles = [];
+    foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $d) {
+        if (! is_array($d)) {
+            continue;
+        }
+        $nombre = trim((string) ($d['nombre'] ?? ''));
+        $cantR  = trim((string) ($d['cantidad'] ?? ''));
+        $precR  = trim((string) ($d['precioUnitario'] ?? ''));
+        if ($nombre === '' && $cantR === '' && $precR === '') {
+            continue; // linea totalmente vacia: se ignora, igual que en factura
+        }
+        $detalles[] = [
+            'nombre'         => $nombre,
+            'cantidad'       => is_numeric($cantR) ? (float) $cantR : $cantR,
+            'precioUnitario' => is_numeric($precR) ? (float) $precR : $precR,
+        ];
+    }
+
+    return [
+        'receptor'        => $receptor,
+        'detalles'        => $detalles,
+        'montosSonBrutos' => ! empty($post['montosSonBrutos']),
+    ];
+}
+
+function handleBoletaGet(): void
+{
+    exigirProduccionCompleto(Db::conexion(), Auth::cuentaId(), 39); // guard
+    renderEmisionForm(39, bin2hex(random_bytes(16)), [], null, null, null);
+}
+
+function handleBoletaPost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId, 39); // guard
+
+    // Idempotency-Key: viene del hidden del GET y se preserva en reintentos.
+    // Mismo criterio que la emision de factura -- y ahora el endpoint de boleta
+    // del motor tambien la honra (ver emitirBoleta()).
+    $idemKey   = trim((string) ($_POST['idem_key'] ?? '')) !== ''
+        ? trim((string) $_POST['idem_key'])
+        : bin2hex(random_bytes(16));
+    $documento = armarDocumentoBoleta($_POST);
+
+    try {
+        $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+        $res         = emitirBoletaEnMotor($keyServicio, $documento, $idemKey);
+    } catch (Throwable $e) {
+        error_log('panel boleta: fallo de conexion con el motor - ' . $e->getMessage());
+        renderEmisionForm(
+            39,
+            $idemKey,
+            $_POST,
+            null,
+            null,
+            'No se pudo contactar el motor de emision. NO se emitio ninguna boleta; revisa la conexion y reintenta.'
+        );
+    }
+
+    $status = $res['status'];
+    $body   = $res['body'];
+
+    if ($status === 201) {
+        // Solo tiene sentido guardar el cliente si el usuario informo un RUT
+        // real: dar de alta "Consumidor Final" en el maestro seria basura.
+        if (! empty($_POST['guardar_cliente']) && ($documento['receptor']['rut'] ?? '') !== '') {
+            guardarClienteDesdeReceptor($cuentaId, $documento['receptor']);
+        }
+
+        flashSet('exito', 'Boleta emitida.', ['resultado' => [
+            'tipoDte' => $body['tipoDte'] ?? 39,
+            'folio'   => $body['folio'] ?? null,
+            'estado'  => $body['estado'] ?? null,
+            'trackId' => $body['trackId'] ?? null,
+            'fchEmis' => $body['fchEmis'] ?? null,
+            'neto'    => $body['neto'] ?? null,
+            'iva'     => $body['iva'] ?? null,
+            'total'   => $body['total'] ?? null,
+        ]]);
+        redirigirPrg('/ventas/resultado');
+    }
+
+    if ($status === 422) {
+        renderEmisionForm(
+            39,
+            $idemKey,
+            $_POST,
+            (string) ($body['campo'] ?? ''),
+            (string) ($body['error'] ?? 'Hay un dato invalido en la boleta.'),
+            null
+        );
+    }
+
+    if ($status === 409) {
+        // Claim de idempotencia vivo: la misma boleta se esta emitiendo ahora.
+        // NO se reintenta solo -- reintentar es lo que quema un folio de mas.
+        renderEmisionForm(
+            39,
+            $idemKey,
+            $_POST,
+            null,
+            null,
+            'Esta boleta ya se esta emitiendo. Espera unos segundos y revisa el listado de ventas antes de volver a intentar.'
+        );
+    }
+
+    if ($status === 502) {
+        error_log('panel boleta: 502 del motor - ' . json_encode($body, JSON_UNESCAPED_UNICODE));
+        renderEmisionForm(
+            39,
+            $idemKey,
+            $_POST,
+            null,
+            null,
+            'No se pudo emitir: el SII rechazo la boleta o no respondio. Revisa los datos e intenta nuevamente en unos minutos.'
+        );
+    }
+
+    error_log('panel boleta: respuesta inesperada del motor (' . $status . ') - ' . json_encode($body, JSON_UNESCAPED_UNICODE));
+    renderEmisionForm(
+        39,
         $idemKey,
         $_POST,
         null,
@@ -8503,8 +8714,16 @@ function rutEmisorProduccion(PDO $pdo, int $cuentaId): ?string
  * en el mismo caso que antes. Lo unico que cambio es de donde salen las tres
  * comprobaciones -- ahora de estadoEmisionProduccion(), para que el menu pueda
  * preguntar lo mismo sin duplicar la logica. Los 25 llamadores no se tocan.
+ *
+ * $tipoDte ES OPCIONAL Y SOLO SIRVE PARA EL MENSAJE. No cambia ninguna
+ * condicion: el guard deja pasar o redirige exactamente igual que antes, con
+ * tipo o sin el. Existe porque el redirect mudo no decia QUE faltaba, y con la
+ * boleta eso pasa a importar de verdad: un tenant puede tener CAF de factura
+ * cargado y creer que ya esta habilitado para todo, cuando el CAF de boleta es
+ * un tramite aparte ante el SII. Llegar a /caf-produccion sin saber que folio
+ * hay que pedir es quedarse mirando la pantalla.
  */
-function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
+function exigirProduccionCompleto(PDO $pdo, int $cuentaId, ?int $tipoDte = null): string
 {
     $estado = estadoEmisionProduccion($pdo, $cuentaId);
 
@@ -8514,6 +8733,18 @@ function exigirProduccionCompleto(PDO $pdo, int $cuentaId): string
         'caf'         => '/caf-produccion',
     ];
     if ($estado['falta'] !== null) {
+        $mensaje = match ($estado['falta']) {
+            'empresa'     => 'Falta configurar los datos de tu empresa en produccion (Resolucion del SII) antes de emitir.',
+            'certificado' => 'Falta cargar el certificado digital de produccion antes de emitir.',
+            'caf'         => $tipoDte === null
+                ? 'Faltan folios (CAF) de produccion antes de emitir.'
+                : sprintf(
+                    'Faltan folios (CAF) de produccion para %s. Es un timbraje aparte: '
+                    . 'tener folios de otro tipo de documento no habilita este.',
+                    nombreTipoDte($tipoDte),
+                ),
+        };
+        flashSet('error', $mensaje);
         redirigir($rutaQueFalta[$estado['falta']]);
     }
 
@@ -9305,6 +9536,18 @@ if ($metodo === 'POST' && $ruta === '/ventas/factura') {
 // Lo unico propio del 34 vive donde corresponde -- el forzado de lineas exentas
 // en armarDocumentoEmision() y la validacion en el motor --, no en una ruta
 // especial.
+// Boleta electronica (39). Handlers PROPIOS y no handleEmisionGet/Post(39): la
+// boleta va por /api/v1/boleta (canal REST, BoletaFacturador), no por
+// /api/v1/dte. Ver el bloque de handleBoletaGet().
+if ($metodo === 'GET' && $ruta === '/ventas/boleta') {
+    Auth::requerirSesion();
+    handleBoletaGet();
+}
+if ($metodo === 'POST' && $ruta === '/ventas/boleta') {
+    Auth::requerirSesion();
+    handleBoletaPost();
+}
+
 if ($metodo === 'GET' && $ruta === '/ventas/factura-exenta') {
     Auth::requerirSesion();
     handleEmisionGet(34);

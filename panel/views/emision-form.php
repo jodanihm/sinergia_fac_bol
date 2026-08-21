@@ -92,6 +92,12 @@ $esExenta = $tipoDte === 34;
 // del 31/05/2017). NC y ND no lo llevan.
 $esFactura = in_array($tipoDte, [33, 34], true);
 
+// BOLETA (39): el receptor puede no identificarse -- es el caso normal de una
+// venta de mostrador. Giro, direccion y comuna no existen en el documento, y el
+// RUT y la razon social son opcionales: el motor pone Consumidor Final
+// (66666666-6) cuando no vienen. Ver emitirBoleta() en public/index.php.
+$esBoleta = $tipoDte === 39;
+
 // "Emitir factura electronica" / "Emitir nota de credito" / "Emitir nota de
 // debito". strtolower y no mb_strtolower: los titulos de metaTipoEmision() son
 // ASCII sin tildes y mbstring no esta garantizada en la imagen.
@@ -166,14 +172,27 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <h2 id="titulo-receptor">Datos del receptor</h2>
                 <div class="form-grid">
                     <div class="form-campo">
-                        <label for="receptor-rut">RUT <?= $req; ?></label>
-                        <input type="text" name="receptor[rut]" id="receptor-rut" value="<?= $vr('rut'); ?>" placeholder="76543210-9" aria-describedby="rut-aviso"<?= $errStyle('receptor.rut'); ?>>
+                        <label for="receptor-rut">RUT <?= $esBoleta ? '' : $req; ?></label>
+                        <input type="text" name="receptor[rut]" id="receptor-rut" value="<?= $vr('rut'); ?>" placeholder="<?= $esBoleta ? 'Dejar vacio si no se identifica' : '76543210-9'; ?>" aria-describedby="rut-aviso"<?= $errStyle('receptor.rut'); ?>>
                         <small class="form-ayuda" id="rut-aviso" aria-live="polite"></small>
+                        <?php if ($esBoleta): ?>
+                            <small class="form-ayuda">Opcional. Si lo dejas vacio, la boleta sale a Consumidor Final (66666666-6), que es lo normal en una venta de mostrador.</small>
+                        <?php endif; ?>
                     </div>
                     <div class="form-campo">
-                        <label for="receptor-razonSocial">Razon social <?= $req; ?></label>
+                        <label for="receptor-razonSocial">Razon social <?= $esBoleta ? '' : $req; ?></label>
                         <input type="text" name="receptor[razonSocial]" id="receptor-razonSocial" value="<?= $vr('razonSocial'); ?>"<?= $errStyle('receptor.razonSocial'); ?>>
                     </div>
+                    <?php
+                    /* GIRO, DIRECCION Y COMUNA NO EXISTEN EN LA BOLETA. No es que
+                       se oculten por comodidad: el esquema del DTE 39 no los lleva
+                       y el endpoint del motor (POST /api/v1/boleta) ni siquiera los
+                       lee. Mostrarlos deshabilitados haria creer que son datos que
+                       el documento podria llevar. Mismo criterio con el que este
+                       formulario ya esconde forma de pago fuera de 33/34 y las
+                       referencias fuera de 61/56. */
+                    ?>
+                    <?php if (! $esBoleta): ?>
                     <div class="form-campo form-campo--ancho">
                         <label for="receptor-giro">Giro <?= $req; ?></label>
                         <input type="text" name="receptor[giro]" id="receptor-giro" value="<?= $vr('giro'); ?>"<?= $errStyle('receptor.giro'); ?>>
@@ -186,6 +205,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <label for="receptor-comuna">Comuna <?= $req; ?></label>
                         <input type="text" name="receptor[comuna]" id="receptor-comuna" value="<?= $vr('comuna'); ?>"<?= $errStyle('receptor.comuna'); ?>>
                     </div>
+                    <?php endif; ?>
                     <div class="form-campo">
                         <label for="receptor-email">Email</label>
                         <input type="email" name="receptor[email]" id="receptor-email" value="<?= $vr('email'); ?>"<?= $errStyle('receptor.email'); ?>>
@@ -483,11 +503,19 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     return;
                 }
                 var c = data.cliente || {};
-                document.getElementById('receptor-razonSocial').value = c.razon_social || '';
-                document.getElementById('receptor-giro').value = c.giro || '';
-                document.getElementById('receptor-direccion').value = c.direccion || '';
-                document.getElementById('receptor-comuna').value = c.comuna || '';
-                document.getElementById('receptor-email').value = c.email || '';
+                // POR ID Y CON GUARDA: en boleta los campos giro/direccion/comuna
+                // NO EXISTEN en el DOM. Sin el chequeo, el primer getElementById
+                // que devuelve null lanza y aborta el resto del autocompletado --
+                // el usuario veria el aviso a medias y la razon social sin llenar.
+                var poner = function (id, valor) {
+                    var el = document.getElementById(id);
+                    if (el) { el.value = valor || ''; }
+                };
+                poner('receptor-razonSocial', c.razon_social);
+                poner('receptor-giro', c.giro);
+                poner('receptor-direccion', c.direccion);
+                poner('receptor-comuna', c.comuna);
+                poner('receptor-email', c.email);
                 aviso.textContent = c.activo === false
                     ? 'Cliente encontrado (INACTIVO en tus maestros).'
                     : 'Cliente encontrado: datos autocompletados.';
