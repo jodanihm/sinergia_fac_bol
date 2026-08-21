@@ -10797,6 +10797,22 @@ if ($metodo === 'GET' && $ruta === '/admin/roles-permisos') {
     handleAdminRolesPermisosGet();
 }
 
+if ($metodo === 'GET' && $ruta === '/admin/flujos') {
+    handleAdminFlujosGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/documentos') {
+    handleAdminDocumentosGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/pendientes') {
+    handleAdminPendientesGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/changelog') {
+    handleAdminChangelogGet();
+}
+
 http_response_code(404);
 echo '404 - ruta no encontrada';
 exit;
@@ -13589,6 +13605,48 @@ function clasificarRutaPatron(string $metodo, string $patron): array
     [$estado, $detalle] = clasificarRutaExacta($metodo, $muestra);
 
     return [$estado, $detalle . ' (probado con ' . $muestra . ')'];
+}
+
+// ===========================================================================
+//  Handlers: las cuatro paginas de DOCUMENTACION del panel de control.
+//
+//  GET /admin/changelog   GET /admin/pendientes
+//  GET /admin/flujos      GET /admin/documentos
+//
+//  NO TOCAN LA BASE. Cada una lee un archivo de panel/datos/ que solo devuelve
+//  un array. Aun asi empiezan con exigirSuperadmin(), como todo /admin/*: el
+//  contenido describe como funciona el sistema por dentro -- que rutas existen,
+//  que falta construir, donde estan los riesgos conocidos -- y eso es
+//  informacion de la casa, no material publico. Ademas la regla vale mas que la
+//  excepcion: "todo handler de /admin empieza con el gate" es verificable de un
+//  vistazo; "todos menos estos cuatro, porque no consultan nada" es una
+//  excepcion que alguien va a copiar al handler equivocado.
+//
+//  El require devuelve el array directamente; si el archivo faltara, PHP falla
+//  ruidoso, que es lo correcto para un dato que deberia estar versionado.
+// ===========================================================================
+function handleAdminChangelogGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-changelog', ['entradas' => require __DIR__ . '/../datos/changelog.php']);
+}
+
+function handleAdminPendientesGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-pendientes', ['items' => require __DIR__ . '/../datos/pendientes.php']);
+}
+
+function handleAdminFlujosGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-flujos', ['flujos' => require __DIR__ . '/../datos/flujos.php']);
+}
+
+function handleAdminDocumentosGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-documentos', ['documentos' => require __DIR__ . '/../datos/documentos.php']);
 }
 
 // ===========================================================================

@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-21',
+        'version' => '1.17',
+        'titulo'  => 'Documentacion viva del producto: flujos, documentos, pendientes y changelog',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Nueva pagina de flujos con el camino completo de una empresa nueva, "de cero a emitir en produccion", paso a paso y con la pantalla exacta donde se hace cada cosa. Ese recorrido no estaba escrito en ninguna parte: vivia repartido entre el sistema y la cabeza de quien ya lo habia hecho una vez.',
+            'Catalogo de todos los documentos que el sistema imprime, con quien los recibe: no es lo mismo un informe interno que una factura que va al SII.',
+            'Lista de pendientes e ideas, donde cada cosa que quedo fuera dice por que quedo fuera.',
+            'El changelog completo, con las 17 versiones del producto.',
+            'Las cuatro paginas se mantienen en archivos de texto, sin base de datos, y hay comprobaciones automaticas de que cada pantalla que prometen exista de verdad: una documentacion que miente es peor que no tenerla, porque se le cree.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-21',
         'version' => '1.16',
         'titulo'  => 'Roles y permisos, explicados y auditados en una pantalla',
         'tag'     => 'arquitectura',
