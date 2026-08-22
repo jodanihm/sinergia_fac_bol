@@ -1,0 +1,44 @@
+-- =============================================================================
+-- Migracion 043: forzar el cambio de clave en el primer acceso.
+--
+-- POR QUE EXISTE
+-- -----------------------------------------------------------------------------
+-- El alta de cuenta desde el panel de superadmin (/admin/tenants/nueva) crea la
+-- cuenta y su usuario owner de una vez, sin pasar por el link de activacion de
+-- /registro ni por la invitacion de la migracion 021. Ese camino resuelve el
+-- caso real de dar de alta a un cliente por telefono, pero tiene una
+-- consecuencia que las otras dos vias no tienen: alguien que no es el dueno de
+-- la cuenta -- el superadmin -- conoce una clave que abre esa cuenta.
+--
+-- La clave se genera al azar y se muestra una sola vez en pantalla, nunca se
+-- guarda en texto plano ni se registra en la auditoria. Aun asi, entre que se
+-- dicta por telefono y que el cliente entra, esa clave existe fuera de la
+-- cabeza de su dueno. Esta columna acota esa ventana a un solo uso: el sistema
+-- no deja pasar a ninguna pantalla hasta que la persona ponga una clave que
+-- solo ella conozca.
+--
+-- No alcanza con avisarlo en pantalla. El bloqueo tiene que ser del servidor,
+-- y para eso hace falta un dato persistente que sobreviva a cerrar sesion,
+-- abrir otra pestana o escribir una URL a mano.
+--
+--   debe_cambiar_clave = 1  -> la sesion solo puede llegar a la pantalla de
+--                              cambio de clave; cualquier otra ruta se corta.
+--   debe_cambiar_clave = 0  -> comportamiento normal.
+--
+-- POR QUE DEFAULT 0 Y NOT NULL. Las filas que ya existen -- y las que crean
+-- /registro y la invitacion por token -- nacen en 0 porque en esos dos caminos
+-- la clave la elige la propia persona y nadie mas la conoce: no hay nada que
+-- forzar. Solo el alta administrativa la pone en 1. Un DEFAULT distinto
+-- dejaria a todos los usuarios actuales encerrados en la pantalla de cambio.
+--
+-- 100% aditiva: ALTER TABLE ADD COLUMN con default, no toca ninguna fila
+-- existente ni borra ni renombra nada.
+--
+-- SIN "IF NOT EXISTS" en ADD COLUMN: esa variante es exclusiva de MariaDB y
+-- MySQL de Oracle falla con error de sintaxis (mismo criterio que las
+-- migraciones 013 y 042).
+-- =============================================================================
+
+ALTER TABLE usuario
+    ADD COLUMN debe_cambiar_clave TINYINT(1) NOT NULL DEFAULT 0
+    COMMENT 'Alta administrativa: obliga a cambiar la clave temporal en el primer acceso (migracion 043)';

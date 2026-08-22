@@ -501,6 +501,13 @@ const MIGRACIONES = [
              'columnas' => ['rol_id'], 'esperado' => 1],
         ],
     ],
+    [
+        'id' => '043', 'archivo' => '043_debe_cambiar_clave.sql', 'nota' => 'ALTER',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'usuario.debe_cambiar_clave', 'tabla' => 'usuario',
+             'columnas' => ['debe_cambiar_clave'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
