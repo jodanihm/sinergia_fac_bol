@@ -5066,6 +5066,12 @@ function handleEmisionPost(int $tipoDte): void
 
     try {
         $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+        // Inalcanzable mientras el router corte los POST de las sesiones de solo
+        // lectura. Se comprueba igual: el dia que ese corte cambie, el fallo
+        // tiene que ser un mensaje y no un TypeError con traza.
+        if ($keyServicio === null) {
+            throw new RuntimeException('sin key de servicio (sesion de solo lectura)');
+        }
         $res         = emitirEnMotor($keyServicio, $documento, $idemKey);
     } catch (Throwable $e) {
         error_log('panel emision: fallo de conexion con el motor - ' . $e->getMessage());
@@ -5335,6 +5341,9 @@ function handleBoletaPost(): void
 
     try {
         $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+        if ($keyServicio === null) {
+            throw new RuntimeException('sin key de servicio (sesion de solo lectura)');
+        }
         $res         = emitirBoletaEnMotor($keyServicio, $documento, $idemKey);
     } catch (Throwable $e) {
         error_log('panel boleta: fallo de conexion con el motor - ' . $e->getMessage());
@@ -5505,6 +5514,22 @@ function handleDocumentosListadoGet(): void
 
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
 
+    // Sin credencial y sin poder crearla (sesion de solo lectura): se informa,
+    // igual que cuando el motor no responde. Se reusa 'errorMotor' porque para
+    // quien mira la pantalla el resultado es el mismo -- no hay listado -- y no
+    // hace falta un canal nuevo para decir lo mismo.
+    if ($keyServicio === null) {
+        vista('documentos-listado', [
+            'items'        => [],
+            'total'        => 0,
+            'pagina'       => 1,
+            'totalPaginas' => 1,
+            'filtros'      => $filtros,
+            'errorMotor'   => 'Esta cuenta todavia no tiene credencial de servicio para hablar con el motor, y en una sesion de solo lectura no se crea. Por eso este listado no se puede consultar.',
+            'navActivo'    => 'ventas.panel-emision',
+        ]);
+    }
+
     try {
         $res = listarDocumentosEnMotor($keyServicio, $filtrosMotor);
     } catch (Throwable $e) {
@@ -5566,17 +5591,26 @@ function handleDocumentoDetalleGet(int $tipoDte, int $folio): void
 
     $documento   = null;
     $errorMotor  = null;
-    try {
-        $res = listarDocumentosEnMotor($keyServicio, ['tipoDte' => $tipoDte, 'folio' => $folio]);
-        if ($res['status'] === 200 && ! empty($res['body']['items'])) {
-            [$documento] = resolverRazonSocialReceptores($cuentaId, $res['body']['items']);
-        } elseif ($res['status'] !== 200) {
-            error_log('panel documentos: respuesta ' . $res['status'] . ' del motor al pedir detalle - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
-            $errorMotor = 'El motor de emision devolvio un error al buscar el documento.';
+    // Sin credencial de servicio no hay a quien preguntarle por el documento, y
+    // no se consulta: $errorMotor ya es el canal que esta vista usa para
+    // explicar por que no hay datos. La consulta va en el else y no despues del
+    // if, porque llamar al motor con la key en null seria un TypeError.
+    if ($keyServicio === null) {
+        $errorMotor = 'Esta cuenta todavia no tiene credencial de servicio para hablar con el motor, '
+            . 'y en una sesion de solo lectura no se crea.';
+    } else {
+        try {
+            $res = listarDocumentosEnMotor($keyServicio, ['tipoDte' => $tipoDte, 'folio' => $folio]);
+            if ($res['status'] === 200 && ! empty($res['body']['items'])) {
+                [$documento] = resolverRazonSocialReceptores($cuentaId, $res['body']['items']);
+            } elseif ($res['status'] !== 200) {
+                error_log('panel documentos: respuesta ' . $res['status'] . ' del motor al pedir detalle - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
+                $errorMotor = 'El motor de emision devolvio un error al buscar el documento.';
+            }
+        } catch (Throwable $e) {
+            error_log('panel documentos: fallo de conexion al pedir detalle - ' . $e->getMessage());
+            $errorMotor = 'No se pudo contactar el motor de emision.';
         }
-    } catch (Throwable $e) {
-        error_log('panel documentos: fallo de conexion al pedir detalle - ' . $e->getMessage());
-        $errorMotor = 'No se pudo contactar el motor de emision.';
     }
 
     vista('documento-detalle', [
@@ -5601,6 +5635,16 @@ function proxyDocumentoBinario(int $tipoDte, int $folio, string $sufijo): void
     $cuentaId  = Auth::cuentaId();
     $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+
+    // 409 y no 502: el motor esta bien; lo que falta es la credencial, y en una
+    // sesion de solo lectura no se crea. Un 502 mandaria a revisar la conexion,
+    // que es la pista equivocada.
+    if ($keyServicio === null) {
+        http_response_code(409);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'Esta cuenta todavia no tiene credencial de servicio, y en una sesion de solo lectura no se crea.';
+        exit;
+    }
 
     try {
         $res = obtenerBinarioEnMotor($keyServicio, "api/v1/dte/{$tipoDte}/{$folio}/{$sufijo}");
@@ -6055,6 +6099,13 @@ function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
     $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
     $destino     = "/ventas/panel-emision/{$tipoDte}/{$folio}";
+
+    // Inalcanzable hoy (el router corta los POST de solo lectura); se comprueba
+    // para que un cambio ahi no degenere en un TypeError.
+    if ($keyServicio === null) {
+        flashSet('error', 'No hay credencial de servicio para consultar al SII.');
+        redirigirPrg($destino);
+    }
 
     try {
         $res = consultarEstadoSiiEnMotor($keyServicio, $tipoDte, $folio);
@@ -8118,6 +8169,10 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
     $subLote = obtenerNotasVentaPendientesPorIds($pdo, $cuentaId, $ids, FACTURACION_MASIVA_SUBLOTE);
 
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+    // Idem: inalcanzable hoy, comprobado para que no degenere en TypeError.
+    if ($keyServicio === null) {
+        responderJsonFacturacionMasiva(409, ['status' => 'error', 'error' => 'sin credencial de servicio']);
+    }
     facturarSubLote($pdo, $keyServicio, $subLote, $cuentaId, $rutEmisor);
 
     $conteo = contarNotasVentaPorEstado($pdo, $cuentaId, $ids);
@@ -9098,12 +9153,53 @@ function generarKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): array
 }
 
 /**
+ * True si la sesion NO puede escribir en los datos del tenant.
+ *
+ * Junta los dos modos de solo lectura que existen, que llegaron por caminos
+ * distintos y comparten la misma consecuencia:
+ *   - cuenta demo    (usuario.demo = 1): recorrer el sistema sin alterar nada.
+ *   - vista superadmin: mirar el panel de otro tenant sin operarlo.
+ *
+ * SE PREGUNTA POR LOS DOS EN UN SOLO LUGAR para que quien agregue un tercer
+ * modo manana no tenga que descubrir todos los sitios que lo consultan. El
+ * router ya corta los POST de ambos; esta funcion existe para lo que el router
+ * NO puede cubrir: las escrituras que ocurren durante un GET.
+ */
+function sesionSoloLectura(): bool
+{
+    return Auth::viendoCuentaId() !== null || sesionEsDemo();
+}
+
+/**
  * Devuelve el X-Api-Key ("prefijo.secreto") de la key de SERVICIO de la cuenta
  * (ambiente produccion), generandola de forma perezosa si no existe. Si la key
  * activa esta corrupta (no desenvuelve), la revoca, genera una nueva y registra
  * el evento en admin_auditoria (auto-recuperacion, no silenciosa).
+ *
+ * DEVUELVE null EN LOS MODOS DE SOLO LECTURA, EN VEZ DE CREAR NADA
+ * -----------------------------------------------------------------------------
+ * Esta era la unica escritura que sobrevivia al bloqueo de POST del router, y
+ * no por descuido: ocurre durante un GET, que es justo lo que ese bloqueo no
+ * mira. Un superadmin recorriendo el panel de un cliente, o una demostracion
+ * en vivo, podian dejar una fila nueva en api_key sin que nadie lo pidiera.
+ *
+ * SON DOS LOS CAMINOS QUE ESCRIBEN, y los dos quedan cortados:
+ *   1. no hay key      -> generarKeyServicio() INSERTA.
+ *   2. la key no abre  -> UPDATE de revocacion + INSERT + INSERT de auditoria.
+ * El segundo es el mas facil de pasar por alto y el que mas ensucia: dejaria la
+ * credencial real del tenant revocada por haber mirado su panel.
+ *
+ * LO QUE NO CAMBIA. Si la key EXISTE y abre, se devuelve igual que siempre:
+ * leerla no escribe nada. O sea que un tenant que ya emite se ve completo en la
+ * vista de superadmin. El null aparece solo cuando la alternativa habria sido
+ * crear algo -- y en esa situacion el motor tampoco tendria documentos que
+ * mostrar, porque la cuenta nunca emitio.
+ *
+ * FUERA DE ESOS DOS MODOS EL COMPORTAMIENTO ES IDENTICO al de antes.
+ *
+ * @return string|null null solo en modo de solo lectura y cuando habria que crear o regenerar.
  */
-function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
+function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): ?string
 {
     $stmt = $pdo->prepare(
         "SELECT id, prefijo, secreto_cifrado, dek_envuelta FROM api_key "
@@ -9118,6 +9214,20 @@ function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
             $secreto = descifrarSecretoServicio((string) $fila['dek_envuelta'], (string) $fila['secreto_cifrado']);
             return (string) $fila['prefijo'] . '.' . $secreto;
         } catch (CertificadoCryptoException $e) {
+            // En solo lectura NO se auto-recupera: la recuperacion revoca la
+            // credencial vigente del tenant y crea otra. Hacer eso porque
+            // alguien miro su panel seria peor que el problema que arregla, y
+            // ademas dejaria la reparacion registrada como si el tenant la
+            // hubiera pedido. La key rota sigue rota y se ve al salir.
+            if (sesionSoloLectura()) {
+                error_log(sprintf(
+                    'obtenerKeyServicio: key de servicio corrupta en la cuenta %d; no se regenera por sesion de solo lectura',
+                    $cuentaId
+                ));
+
+                return null;
+            }
+
             // Corrupta: revocar, regenerar y AUDITAR la auto-recuperacion.
             $viejaId      = (int) $fila['id'];
             $viejoPrefijo = (string) $fila['prefijo'];
@@ -9136,6 +9246,12 @@ function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
             );
             return $nueva['prefijo'] . '.' . $nueva['secreto'];
         }
+    }
+
+    // No hay key y la sesion no puede escribir: se informa que no hay, en vez
+    // de fabricarla. Es el caso que motivo todo esto.
+    if (sesionSoloLectura()) {
+        return null;
     }
 
     $nueva = generarKeyServicio($pdo, $cuentaId, $rutEmisor);
@@ -9832,6 +9948,52 @@ function cortarPorDemo(): never
     exit;
 }
 
+/**
+ * Ruta por la que un superadmin SALE de la vista de un tenant.
+ *
+ * Es la unica excepcion al bloqueo de escritura de cortarPorVistaSuperadmin(),
+ * y por eso vive en una constante y no escrita a mano dentro del if: el dia que
+ * alguien la renombre en el router y no aqui, el superadmin quedaria encerrado
+ * dentro del tenant sin forma de volver salvo cerrando sesion.
+ */
+const RUTA_SALIR_VISTA_SUPERADMIN = '/admin/tenants/salir-vista';
+
+/**
+ * Corta el request cuando un superadmin intenta ESCRIBIR mientras mira el panel
+ * de un tenant.
+ *
+ * MISMO PATRON Y MISMO PUNTO QUE cortarPorDemo(), a proposito. El argumento que
+ * ya se demostro correcto para el modo demostracion vale igual aca: una regla
+ * que aplica a todas las rutas POST se aplica UNA vez, antes de despachar, y no
+ * se reparte entre ~58 handlers de los que alguien se va a olvidar. La
+ * propiedad que importa no es que hoy queden cubiertas todas, sino que la ruta
+ * POST que se escriba MANANA nazca cubierta sin que su autor sepa que esto
+ * existe.
+ *
+ * POR QUE ES 403 SECO Y NO LA PANTALLA AMABLE DEL DEMO. A esa la ve un
+ * prospecto haciendo clic durante una demostracion; a esta la ve alguien del
+ * equipo interno que sabe perfectamente donde esta parado, porque tiene un
+ * banner arriba diciendoselo. Aca el mensaje corto y claro sirve mas.
+ */
+function cortarPorVistaSuperadmin(): never
+{
+    http_response_code(403);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">'
+        . '<title>Vista de solo lectura</title>'
+        . '<link rel="stylesheet" href="/css/style.css"></head><body>'
+        . '<h1>403 - Vista de solo lectura</h1>'
+        . '<p>Estas mirando el panel de otra cuenta como <strong>superadmin</strong>. '
+        . 'Esta vista es de <strong>solo lectura</strong>: ninguna accion que modifique '
+        . 'datos del tenant esta permitida, ni siquiera para corregir algo.</p>'
+        . '<p>Si hay que cambiar algo en esta cuenta, sale de la vista y hazlo por el '
+        . 'camino que corresponda, que queda registrado a tu nombre.</p>'
+        . '<p><a href="javascript:history.back()">Volver atras</a> &middot; '
+        . '<a href="/admin/tenants">Ir al panel de control</a></p>'
+        . '</body></html>';
+    exit;
+}
+
 // ===========================================================================
 //  Router: metodo y ruta
 // ===========================================================================
@@ -9904,6 +10066,31 @@ if ($metodo === 'POST' && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))
 // ===========================================================================
 if ($metodo === 'POST' && sesionEsDemo()) {
     cortarPorDemo();
+}
+
+// ===========================================================================
+//  VISTA DE SUPERADMIN: bloqueo CENTRAL de escritura, junto al del demo.
+//
+//  Mientras un superadmin mira el panel de un tenant, Auth::cuentaId() devuelve
+//  la cuenta de ESE tenant. Eso es lo que hace que las pantallas existentes
+//  muestren sus datos sin tocarlas -- y es tambien lo que haria que un POST
+//  ESCRIBIERA en sus datos. Este corte es lo que convierte la funcion en lo que
+//  promete: mirar, no operar.
+//
+//  VA DESPUES DEL CORTE POR DEMO y antes de cualquier despacho, por el mismo
+//  motivo por el que aquel va donde va: es la ultima linea desde la que se
+//  puede afirmar que NINGUN handler corrio.
+//
+//  LA UNICA EXCEPCION ES SALIR. Sin ella el bloqueo se bloquearia a si mismo:
+//  el boton "Salir" del banner es un POST (lleva CSRF, como toda mutacion), y
+//  si tambien lo cortara, el superadmin quedaria encerrado dentro del tenant
+//  con la unica salida de cerrar sesion.
+// ===========================================================================
+//  EN UNA SOLA LINEA, como el corte por demo y el de CSRF: el router entero
+//  mantiene esa forma uniforme, y de eso depende que RutasDelRouter pueda
+//  inventariar las rutas leyendo el fuente (ver /admin/roles-permisos).
+if ($metodo === 'POST' && Auth::viendoCuentaId() !== null && $ruta !== RUTA_SALIR_VISTA_SUPERADMIN) {
+    cortarPorVistaSuperadmin();
 }
 
 // La raiz es la LANDING PUBLICA, no un redirect a /login. Antes / rebotaba a
@@ -10772,6 +10959,17 @@ if ($metodo === 'GET' && $ruta === '/admin/tenants') {
 // resto del router.
 if ($metodo === 'GET' && preg_match('#^/admin/tenants/(\d+)$#', $ruta, $mCuenta)) {
     handleAdminTenantFichaGet((int) $mCuenta[1]);
+}
+
+// Entrar a mirar el panel de un tenant, y salir. La ruta de salida es literal y
+// no lleva el id: la cuenta que se esta mirando la sabe la sesion, y tomarla del
+// POST permitiria pedir la salida de una vista que no es la abierta.
+if ($metodo === 'GET' && preg_match('#^/admin/tenants/(\d+)/ver$#', $ruta, $mVer)) {
+    handleAdminVerTenantGet((int) $mVer[1]);
+}
+
+if ($metodo === 'POST' && $ruta === RUTA_SALIR_VISTA_SUPERADMIN) {
+    handleAdminSalirVistaPost();
 }
 
 if ($metodo === 'POST' && $ruta === '/admin/tenants/suspender') {
@@ -12485,7 +12683,28 @@ function exigirPermiso(PDO $pdo, int $cuentaId, string $modulo, string $accion):
     $stmt->execute([':id' => Auth::usuarioId()]);
     $usuario = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if ($usuario === false || (int) $usuario['cuenta_id'] !== $cuentaId) {
+    // UNICA EXCEPCION AL CHEQUEO DE ABAJO: la vista de superadmin.
+    //
+    // Esa funcion existe justamente para que la sesion diga una cuenta y la
+    // fila del usuario diga otra -- es lo que significa mirar el panel de otro
+    // tenant. Sin esta salida, el chequeo siguiente negaria TODAS las pantallas
+    // del tenant y la funcion no andaria.
+    //
+    // LAS DOS CONDICIONES SON NECESARIAS Y EL ORDEN IMPORTA. El rol se lee de
+    // la BASE ($usuario['rol']), no de la sesion: una marca de sesion sola seria
+    // un permiso que se concede a si mismo quien pueda escribir su sesion. La
+    // marca solo dice "hay una vista en curso"; quien puede abrirla lo decide
+    // exigirSuperadmin() en el handler que la escribe.
+    //
+    // Esto NO amplia lo que un superadmin ya podia ver: /admin/tenants/{id} le
+    // muestra los datos de cualquier cuenta desde antes. Lo que cambia es la
+    // forma de mirarlos. Y no habilita ninguna escritura: todo POST muere antes
+    // de llegar aca, en cortarPorVistaSuperadmin().
+    $enVistaSuperadmin = $usuario !== false
+        && $usuario['rol'] === 'superadmin'
+        && Auth::viendoCuentaId() !== null;
+
+    if ($usuario === false || (! $enVistaSuperadmin && (int) $usuario['cuenta_id'] !== $cuentaId)) {
         // La sesion dice una cuenta y la fila dice otra: no se resuelve a favor
         // de nadie.
         negar403();
@@ -13660,6 +13879,84 @@ function handleAdminDocumentosGet(): void
 {
     exigirSuperadmin(Db::conexion());
     vista('admin-documentos', ['documentos' => require __DIR__ . '/../datos/documentos.php']);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/tenants/{id}/ver  (SOLO SUPERADMIN)
+//  Handler: POST /admin/tenants/salir-vista (SOLO SUPERADMIN)
+//
+//  Entrar y salir de la vista del panel de un tenant.
+//
+//  QUE HACE Y QUE NO. Guarda en la sesion la cuenta que se va a mirar y manda a
+//  /panel. A partir de ahi Auth::cuentaId() devuelve esa cuenta y las pantallas
+//  del tenant se dibujan con SUS datos, sin que ninguna de ellas se haya
+//  modificado. Lo que NO hace es cambiar quien sos: usuario_id sigue siendo el
+//  del superadmin, y de ahi salen exigirSuperadmin() y la auditoria.
+//
+//  POR QUE ENTRAR ES UN GET Y SALIR UN POST. Entrar no modifica datos del
+//  tenant ni del sistema; es navegacion, y como GET se puede enlazar desde la
+//  ficha con un <a>. Salir cambia el estado de la sesion y por eso va por POST
+//  con CSRF, igual que el resto de las mutaciones del panel. La asimetria es
+//  deliberada, no un descuido.
+//
+//  LAS DOS QUEDAN AUDITADAS. Entrar al panel de un contribuyente y mirar sus
+//  documentos es exactamente la clase de cosa que tiene que dejar rastro,
+//  aunque no cambie una sola fila: la auditoria no registra solo los danos,
+//  registra los accesos.
+// ===========================================================================
+function handleAdminVerTenantGet(int $cuentaId): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $stmt = $pdo->prepare('SELECT id, nombre, email, estado FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $cuentaId]);
+    $cuenta = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // 404 y no 500: un id que no existe es un enlace viejo, no una falla.
+    if ($cuenta === false) {
+        http_response_code(404);
+        echo '404 - cuenta no encontrada';
+        exit;
+    }
+
+    Auth::iniciarVista($cuentaId);
+
+    // valor_anterior null porque no habia estado previo que preservar: es un
+    // acceso, no la modificacion de una fila. valor_nuevo describe QUE se
+    // abrio, para que la fila se entienda sin ir a buscar la cuenta.
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'admin.ver_tenant.entrar',
+        'cuenta',
+        $cuentaId,
+        null,
+        ['cuenta' => $cuenta['nombre'], 'email' => $cuenta['email'], 'estado' => $cuenta['estado']]
+    );
+
+    redirigir('/panel');
+}
+
+function handleAdminSalirVistaPost(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $cuentaId = Auth::viendoCuentaId();
+
+    // Salir sin vista activa no es un error que valga la pena mostrar: el
+    // resultado que el usuario quiere -- no estar dentro de ningun tenant -- ya
+    // se cumple. Puede pasar con el boton "atras" o con dos pestañas abiertas.
+    if ($cuentaId === null) {
+        redirigir('/admin/tenants');
+    }
+
+    Auth::terminarVista();
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'admin.ver_tenant.salir', 'cuenta', $cuentaId, null, null);
+
+    redirigir('/admin/tenants/' . $cuentaId);
 }
 
 // ===========================================================================

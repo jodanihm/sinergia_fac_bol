@@ -54,6 +54,18 @@ final class RutasDelRouter
     private const RE_PATRON = "/^\\s*if \\(\\\$metodo === '([A-Z]+)' && preg_match\\('([^']*)', \\\$ruta/m";
 
     /**
+     * Despacho cuya ruta viene de una CONSTANTE en vez de un literal:
+     *   if ($metodo === 'POST' && $ruta === RUTA_SALIR_VISTA_SUPERADMIN) {
+     *
+     * Existe porque una ruta puede necesitar nombrarse en dos lugares -- el
+     * router y una regla que la exceptue -- y entonces conviene que viva en una
+     * constante, para que renombrarla no desincronice los dos. Sin reconocer
+     * esta forma, el informe de cobertura se saltaria esa ruta EN SILENCIO, que
+     * es exactamente el hueco que este archivo existe para no dejar.
+     */
+    private const RE_CONSTANTE = "/^\\s*if \\(\\\$metodo === '([A-Z]+)' && \\\$ruta === ([A-Z][A-Z0-9_]*)\\)/m";
+
+    /**
      * @return list<array{metodo:string, ruta:string, esPatron:bool}>
      *         'ruta' es la ruta literal, o el regex tal cual esta escrito.
      */
@@ -64,6 +76,20 @@ final class RutasDelRouter
         preg_match_all(self::RE_EXACTA, $fuente, $exactas, PREG_SET_ORDER);
         foreach ($exactas as $m) {
             $rutas[] = ['metodo' => $m[1], 'ruta' => $m[2], 'esPatron' => false];
+        }
+
+        preg_match_all(self::RE_CONSTANTE, $fuente, $constantes, PREG_SET_ORDER);
+        foreach ($constantes as $m) {
+            // Si la constante esta definida se usa su valor -- que es la ruta
+            // real que despacha el router. Si no lo esta (por ejemplo desde un
+            // test que solo lee el fuente), se deja el NOMBRE: la ruta figura
+            // igual en el inventario, aunque sin poder cruzarla con lo
+            // declarado. Vale mas nombrarla que perderla.
+            $rutas[] = [
+                'metodo'   => $m[1],
+                'ruta'     => defined($m[2]) ? (string) constant($m[2]) : $m[2],
+                'esPatron' => false,
+            ];
         }
 
         preg_match_all(self::RE_PATRON, $fuente, $patrones, PREG_SET_ORDER);

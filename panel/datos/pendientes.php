@@ -80,10 +80,11 @@ return [
     ],
     [
         'titulo'  => 'No hay cuenta de demostracion en la base local',
-        'detalle' => 'Ningun usuario tiene demo = 1, asi que el corte de escritura del modo demostracion '
-            . 'no se pudo ejercitar al verificar el panel de control. El corte vive en el router, antes '
-            . 'de despachar, y cubre todo POST por construccion -- pero eso es un argumento, no una '
-            . 'comprobacion. Sembrar un usuario demo local dejaria esa verificacion cerrada.',
+        'detalle' => 'Ningun usuario tiene demo = 1 de forma permanente. El corte de escritura SI quedo '
+            . 'comprobado -- se marco demo = 1 a mano un momento y se confirmo que un POST devuelve la '
+            . 'pantalla de modo demostracion y que navegar no crea ninguna credencial --, pero la prueba '
+            . 'hay que rearmarla cada vez. Una cuenta demo sembrada de forma estable dejaria esa '
+            . 'verificacion disponible sin tocar datos.',
         'tipo'    => 'pendiente',
         'estado'  => 'nuevo',
     ],

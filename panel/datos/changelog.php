@@ -32,6 +32,30 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-08-22',
+        'version' => '1.20',
+        'titulo'  => 'Las sesiones de solo lectura ya no crean credenciales sin querer',
+        'tag'     => 'backend',
+        'items'   => [
+            'Recorrer el sistema en modo demostracion, o mirar el panel de un cliente como superadmin, podia crear una credencial interna de la empresa como efecto colateral de abrir una pantalla. Ya no.',
+            'Tampoco se reemplaza una credencial que este danada: antes, mirar el panel de un cliente con ese problema le revocaba la credencial en uso y creaba otra.',
+            'Cuando la credencial falta, las pantallas que dependen de ella lo dicen en vez de fabricarla.',
+            'Fuera de esos dos modos no cambia nada: la credencial se sigue creando sola la primera vez que hace falta.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-22',
+        'version' => '1.19',
+        'titulo'  => 'El equipo interno puede ver el panel de un cliente, sin poder tocarlo',
+        'tag'     => 'arquitectura',
+        'items'   => [
+            'Desde la ficha de una cuenta se puede abrir el panel de ese cliente y recorrerlo con sus datos reales, para atender un problema viendo exactamente lo mismo que ve quien llama por telefono.',
+            'La vista es de solo lectura y no depende de acordarse: cualquier accion que modifique datos queda bloqueada en un unico punto del sistema, antes de llegar a ninguna pantalla.',
+            'Un aviso permanente arriba de cada pagina dice de que empresa son los datos que se estan viendo, con un boton para salir.',
+            'Entrar y salir quedan registrados en la auditoria a nombre de quien lo hizo: mirar los documentos de un contribuyente deja rastro aunque no se cambie nada.',
+        ],
+    ],
+    [
         'fecha'   => '2026-08-21',
         'version' => '1.18',
         'titulo'  => 'Diagrama de la base de datos, navegable',
