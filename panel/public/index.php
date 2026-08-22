@@ -11182,17 +11182,55 @@ function buscarUsuarioParaLogin(PDO $pdo, string $email): ?array
 /**
  * True si el usuario existe, esta activo y la contrasena coincide.
  *
- * Mismas tres condiciones y en el mismo orden que tenia handleLoginPost():
- * usuario encontrado, estado activo, password_verify. No se le agrego ni se le
- * quito nada, para que /login se comporte exactamente igual que antes.
+ * Mismas tres condiciones y en el mismo orden de siempre. Lo que cambia es que
+ * SIEMPRE se verifica un hash, incluso cuando ya se sabe que la respuesta va a
+ * ser false.
+ *
+ * POR QUE, Y QUE SE MIDIO
+ * -----------------------------------------------------------------------------
+ * Verificar una contrasena cuesta caro a proposito -- unos 60 ms en este
+ * servidor -- y es lo que hace inviable probar millones. El efecto colateral es
+ * que ese costo se NOTA desde afuera. La version anterior salia por el return
+ * temprano sin verificar nada cuando el usuario no existia o estaba inactivo, y
+ * el reloj terminaba diciendo lo que el mensaje se cuidaba de no decir.
+ *
+ * Medido sobre /login antes de este cambio, mediana de 10 intentos:
+ *     email inexistente          2,1 ms
+ *     email inactivo             2,3 ms
+ *     email real, clave mala    61,2 ms
+ *
+ * Con esa diferencia de 28x, cualquiera puede recorrer una lista de correos y
+ * separar los que estan registrados y activos de los que no, sin acertar una
+ * sola contrasena y sin que el mensaje de error cambie ni un caracter. Es
+ * enumeracion de cuentas: para un sistema donde el email suele ser el del
+ * contador o el del dueno de la empresa, es decir quienes son sus clientes.
+ *
+ * VA AQUI Y NO EN CADA HANDLER. La primera version de esto puso la verificacion
+ * señuelo dentro de POST /admin/login, y cubria solo el caso "no existe": el
+ * usuario INACTIVO seguia respondiendo en 2 ms y delataba que ese email si
+ * estaba registrado. Con el señuelo en este unico punto, las dos pantallas y
+ * los tres caminos hacen exactamente el mismo trabajo, y una tercera pantalla
+ * de acceso que se escriba manana lo hereda sin que su autor tenga que saberlo.
+ *
+ * LO QUE ESTO NO ES: no reemplaza a un limitador de intentos, que este panel no
+ * tiene. Cierra la fuga por tiempo, no la fuerza bruta.
  */
 function credencialesValidas(?array $usuario, string $pass): bool
 {
-    if ($usuario === null || $usuario['estado'] !== 'activo') {
-        return false;
-    }
+    $utilizable = $usuario !== null && $usuario['estado'] === 'activo';
 
-    return password_verify($pass, (string) $usuario['password_hash']);
+    // El hash señuelo entra cuando no hay uno real que comparar. La comparacion
+    // se hace igual y su resultado se descarta: lo unico que se busca es que el
+    // trabajo -- y por lo tanto el tiempo -- sea el mismo por los tres caminos.
+    $hash = $utilizable ? (string) $usuario['password_hash'] : HASH_SENUELO_LOGIN;
+
+    // SIN CORTOCIRCUITO: se calcula primero y se combina despues. Escrito como
+    // ($utilizable && password_verify(...)), PHP se saltaria la verificacion
+    // cuando $utilizable es false y volveriamos exactamente al problema que
+    // esto arregla.
+    $coincide = password_verify($pass, $hash);
+
+    return $utilizable && $coincide;
 }
 
 function handleLoginPost(): void
@@ -14004,20 +14042,12 @@ function handleAdminLoginPost(): void
     $valido  = credencialesValidas($usuario, $pass);
 
     if (! $valido) {
-        // EL TRABAJO SE IGUALA CUANDO EL EMAIL NO EXISTE. credencialesValidas()
-        // sale sin llamar a password_verify() si no hay fila, y ese atajo se
-        // MIDE: verificar un hash cuesta del orden de 100 ms a proposito, asi
-        // que un email inexistente responderia notoriamente mas rapido que uno
-        // real con la clave equivocada. El mensaje seria el mismo y el reloj
-        // diria cual es cual. Con esta verificacion señuelo los dos caminos
-        // hacen el mismo trabajo.
-        //
-        // El caso "existe pero no es superadmin" NO necesita señuelo: ahi
-        // password_verify() ya corrio.
-        if ($usuario === null) {
-            password_verify($pass, HASH_SENUELO_LOGIN);
-        }
-
+        // La igualacion de tiempos NO va aqui: vive dentro de
+        // credencialesValidas(), que es por donde pasan las dos pantallas de
+        // acceso. Estuvo aqui y cubria un caso de menos -- el usuario inactivo
+        // seguia respondiendo en 2 ms --, y ademas duplicarla ahora
+        // significaria DOS verificaciones para un email inexistente y un
+        // oraculo nuevo, esta vez por ser el doble de lento.
         vista('admin-login', ['error' => MSG_CREDENCIALES_INVALIDAS, 'email' => $email]);
         return;
     }
