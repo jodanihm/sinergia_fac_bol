@@ -526,3 +526,37 @@ code {
 }
 .mermaid-controls button:hover { border-color: var(--accent); }
 .mermaid-controls span { color: var(--muted); font-size: .8rem; min-width: 46px; text-align: center; }
+
+/* ---- Pantalla de acceso del panel de control ---------------------------- */
+/* Portado del admin-web hermano (.login-wrap / .login-card), que ya tenia la
+   forma para esto: una tarjeta centrada sobre un fondo con degradado, sin
+   sidebar ni topbar -- los dos suponen una sesion que en esta pantalla todavia
+   no existe. */
+.login-wrap {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 2rem;
+    background: radial-gradient(900px 500px at 70% -10%, #11314a, #0a0c10 60%);
+}
+.login-card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 2rem;
+}
+.login-card h1 { margin: 0 0 .25rem; font-size: 1.4rem; }
+.login-card .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: .9rem; }
+/* El error va sobre el formulario y con fondo propio: en una tarjeta chica, un
+   texto rojo suelto se confunde con la ayuda de un campo. */
+.login-card .error {
+    background: rgba(224, 86, 75, .12);
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+    padding: .6rem .8rem;
+    margin: 0 0 1rem;
+}
+.login-pie { margin: 1.25rem 0 0; font-size: .82rem; text-align: center; }
+.login-pie a { color: var(--accent); text-decoration: underline; }

@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-22',
+        'version' => '1.22',
+        'titulo'  => 'Puerta de entrada propia para el equipo interno',
+        'tag'     => 'backend',
+        'items'   => [
+            'El panel de control tiene su propia pantalla de acceso, con su aspecto y terminando directo en el tablero interno en vez del panel de una empresa.',
+            'Quien no sea del equipo interno recibe exactamente la misma respuesta que si la clave estuviera mal: la pantalla no sirve para averiguar que correos existen en el sistema ni cuales son cuentas de clientes.',
+            'La pantalla de acceso de siempre no cambia: quien entra por ahi sigue llegando a su panel igual que antes.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-22',
         'version' => '1.21',
         'titulo'  => 'Los nombres de cuenta se ven como lo que son: enlaces',
         'tag'     => 'frontend',

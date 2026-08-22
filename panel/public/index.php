@@ -684,10 +684,52 @@ const PERMISOS_RUTA_PATRON = [
 const RUTAS_PUBLICAS = [
     'GET /', 'GET /registro', 'POST /registro',
     'GET /login', 'POST /login', 'GET /logout',
+    // Acceso del panel de control. UNICA ruta de /admin/* sin sesion, y por eso
+    // esta declarada aqui y no cubierta por el prefijo: el paso 1 del gate
+    // (publicas) corre ANTES del paso 2 (espacios con gate propio), asi que
+    // esta pasa sin sesion y el resto de /admin/* sigue exigiendola.
+    'GET /admin/login', 'POST /admin/login',
 ];
 
 /** @var list<string> Regex de rutas publicas con parametro. */
 const PATRONES_PUBLICOS = ['#^/activar/[0-9a-f]{64}$#'];
+
+/**
+ * MENSAJE UNICO DE FALLO DE ACCESO, para las dos pantallas de login.
+ *
+ * Esta en una constante y no escrito dos veces porque la propiedad que importa
+ * es que sea EL MISMO: si /admin/login respondiera algo aunque sea un caracter
+ * distinto de /login -- o algo distinto segun el motivo del rechazo --, quien
+ * sondee podria separar "ese email no existe" de "existe pero no es superadmin".
+ * Dos literales iguales hoy se vuelven dos literales distintos el dia que
+ * alguien mejore la redaccion de uno solo.
+ *
+ * VA AQUI ARRIBA Y NO JUNTO A handleLoginPost(), por la regla que este archivo
+ * ya pago una vez (commit be74e38): las funciones estan disponibles antes de su
+ * declaracion, las CONSTANTES no -- existen recien cuando el interprete pasa
+ * por su linea, y el router corre antes. Declarada abajo, el primer intento de
+ * login moria con "Undefined constant". php -l NO lo detecta.
+ */
+const MSG_CREDENCIALES_INVALIDAS = 'Credenciales invalidas.';
+
+/**
+ * Hash señuelo para igualar el tiempo de un intento de acceso fallido.
+ *
+ * Verificar una contrasena cuesta caro A PROPOSITO (del orden de 100 ms): es lo
+ * que hace inviable probar millones. El efecto colateral es que ese costo se
+ * MIDE desde afuera: si el email no existe no hay hash contra el cual comparar,
+ * la respuesta sale enseguida, y el reloj distingue lo que el mensaje se cuida
+ * de no decir. POST /admin/login verifica contra este hash cuando no encontro
+ * usuario, para que los dos caminos cuesten lo mismo.
+ *
+ * Es el hash de una cadena aleatoria de 32 bytes que no se guardo en ninguna
+ * parte: no hay contrasena que lo satisfaga, y aunque la hubiera no abriria
+ * nada, porque el resultado de esta comparacion se descarta.
+ *
+ * Va con las demas constantes del router por la regla de siempre: una const
+ * declarada abajo no existe cuando el router pasa por ella.
+ */
+const HASH_SENUELO_LOGIN = '$2y$10$1ed28XJ5aEIJLyODdPa.a.9oA/o9dERbv8lYxtG2v4BqjHYm8dw5u';
 
 /**
  * Espacios con GATE PROPIO, que el mapa de permisos NO debe volver a filtrar.
@@ -10945,6 +10987,16 @@ if ($metodo === 'GET' && $ruta === '/auditoria') {
 // Cada handler exige exigirSuperadmin() (403 si el rol no corresponde, sin
 // pasar por Auth::requerirSesion()/redirect a /login).
 // ---------------------------------------------------------------------------
+// Acceso del panel de control. Va PRIMERO entre las rutas de /admin porque es
+// la unica que se alcanza sin sesion.
+if ($metodo === 'GET' && $ruta === '/admin/login') {
+    handleAdminLoginGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/admin/login') {
+    handleAdminLoginPost();
+}
+
 if ($metodo === 'GET' && $ruta === '/admin') {
     handleAdminPanelGet();
 }
@@ -11105,29 +11157,58 @@ function handleRegistroPost(): void
 // ===========================================================================
 //  Handler: POST /login
 // ===========================================================================
+/**
+ * Busca al usuario por email para un intento de acceso.
+ *
+ * EXTRAIDO TAL CUAL de handleLoginPost() cuando /admin/login necesito la misma
+ * consulta. Se agrega 'rol' al SELECT -- la unica diferencia con la consulta
+ * original -- porque el login de superadmin tiene que comprobarlo, y traerlo
+ * aqui evita una segunda consulta por el mismo id. /login sigue ignorando esa
+ * columna, asi que su comportamiento no cambia.
+ *
+ * @return array<string,mixed>|null
+ */
+function buscarUsuarioParaLogin(PDO $pdo, string $email): ?array
+{
+    $stmt = $pdo->prepare(
+        'SELECT id, cuenta_id, password_hash, estado, rol FROM usuario WHERE email = :email LIMIT 1'
+    );
+    $stmt->execute([':email' => $email]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    return $row === false ? null : $row;
+}
+
+/**
+ * True si el usuario existe, esta activo y la contrasena coincide.
+ *
+ * Mismas tres condiciones y en el mismo orden que tenia handleLoginPost():
+ * usuario encontrado, estado activo, password_verify. No se le agrego ni se le
+ * quito nada, para que /login se comporte exactamente igual que antes.
+ */
+function credencialesValidas(?array $usuario, string $pass): bool
+{
+    if ($usuario === null || $usuario['estado'] !== 'activo') {
+        return false;
+    }
+
+    return password_verify($pass, (string) $usuario['password_hash']);
+}
+
 function handleLoginPost(): void
 {
     $email = trim((string) ($_POST['email'] ?? ''));
     $pass  = (string) ($_POST['password'] ?? '');
 
-    $pdo  = Db::conexion();
-    $stmt = $pdo->prepare(
-        'SELECT id, cuenta_id, password_hash, estado FROM usuario WHERE email = :email LIMIT 1'
-    );
-    $stmt->execute([':email' => $email]);
-    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    $usuario = buscarUsuarioParaLogin(Db::conexion(), $email);
 
     // Mensaje generico en TODOS los casos de fallo: no revela si el email existe.
-    if (
-        $row === false
-        || $row['estado'] !== 'activo'
-        || ! password_verify($pass, $row['password_hash'])
-    ) {
-        vista('login', ['error' => 'Credenciales invalidas.', 'email' => $email]);
+    if (! credencialesValidas($usuario, $pass)) {
+        vista('login', ['error' => MSG_CREDENCIALES_INVALIDAS, 'email' => $email]);
         return;
     }
 
-    Auth::login((int) $row['id'], (int) $row['cuenta_id']);
+    Auth::login((int) $usuario['id'], (int) $usuario['cuenta_id']);
     Csrf::regenerarToken();
     redirigir('/panel');
 }
@@ -13879,6 +13960,97 @@ function handleAdminDocumentosGet(): void
 {
     exigirSuperadmin(Db::conexion());
     vista('admin-documentos', ['documentos' => require __DIR__ . '/../datos/documentos.php']);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/login  y  POST /admin/login
+//
+//  Punto de entrada propio del panel de control. NO reemplaza a /login: un
+//  superadmin puede seguir entrando por ahi y llegar a /panel como siempre.
+//  Este es un atajo que ademas termina en /admin en vez de /panel.
+//
+//  ES LA UNICA RUTA DE /admin/* SIN SESION, y por eso esta declarada en
+//  RUTAS_PUBLICAS. El gate evalua las publicas ANTES que el prefijo /admin/
+//  (ver exigirPermisoDeRuta pasos 1 y 2), asi que esta pasa sin sesion y el
+//  resto de /admin/* sigue exigiendo la suya.
+//
+//  LOS TRES RECHAZOS SON INDISTINGUIBLES, y esa es la propiedad que decide si
+//  esta pantalla filtra o no que cuentas existen:
+//     email inexistente
+//     credenciales validas de un usuario que NO es superadmin
+//     contrasena incorrecta
+//  Las tres responden el MISMO texto (MSG_CREDENCIALES_INVALIDAS) y la misma
+//  pantalla. Si el segundo caso dijera algo distinto -- "no tienes permiso" --
+//  esta URL se volveria un oraculo para averiguar que emails son cuentas
+//  reales del sistema, que es justo lo que una pantalla de acceso no debe dar.
+// ===========================================================================
+function handleAdminLoginGet(): void
+{
+    // Ya autenticado como superadmin: no tiene sentido pedirle las credenciales
+    // otra vez. Mismo criterio que GET /login, que manda a /panel.
+    if (Auth::autenticado() && esSuperadmin(Db::conexion(), Auth::usuarioId())) {
+        redirigir('/admin');
+    }
+
+    vista('admin-login', ['error' => null, 'email' => '']);
+}
+
+function handleAdminLoginPost(): void
+{
+    $email = trim((string) ($_POST['email'] ?? ''));
+    $pass  = (string) ($_POST['password'] ?? '');
+
+    $usuario = buscarUsuarioParaLogin(Db::conexion(), $email);
+    $valido  = credencialesValidas($usuario, $pass);
+
+    if (! $valido) {
+        // EL TRABAJO SE IGUALA CUANDO EL EMAIL NO EXISTE. credencialesValidas()
+        // sale sin llamar a password_verify() si no hay fila, y ese atajo se
+        // MIDE: verificar un hash cuesta del orden de 100 ms a proposito, asi
+        // que un email inexistente responderia notoriamente mas rapido que uno
+        // real con la clave equivocada. El mensaje seria el mismo y el reloj
+        // diria cual es cual. Con esta verificacion señuelo los dos caminos
+        // hacen el mismo trabajo.
+        //
+        // El caso "existe pero no es superadmin" NO necesita señuelo: ahi
+        // password_verify() ya corrio.
+        if ($usuario === null) {
+            password_verify($pass, HASH_SENUELO_LOGIN);
+        }
+
+        vista('admin-login', ['error' => MSG_CREDENCIALES_INVALIDAS, 'email' => $email]);
+        return;
+    }
+
+    // El rol se comprueba contra la BASE, nunca contra nada que venga del POST.
+    if ($usuario['rol'] !== 'superadmin') {
+        error_log(sprintf('admin/login: acceso rechazado para el usuario %d (rol %s)', (int) $usuario['id'], (string) $usuario['rol']));
+        vista('admin-login', ['error' => MSG_CREDENCIALES_INVALIDAS, 'email' => $email]);
+        return;
+    }
+
+    // Misma sesion de siempre: usuario_id y cuenta_id. El panel de control no
+    // necesita ninguna marca extra -- exigirSuperadmin() vuelve a preguntarle
+    // el rol a la base en cada request, que es lo correcto: un rol revocado
+    // tiene que surtir efecto sin esperar a que la persona cierre sesion.
+    Auth::login((int) $usuario['id'], (int) $usuario['cuenta_id']);
+    Csrf::regenerarToken();
+    redirigir('/admin');
+}
+
+/**
+ * True si ese usuario es superadmin segun la BASE.
+ *
+ * Existe para que GET /admin/login pueda decidir si redirigir sin duplicar la
+ * consulta de exigirSuperadmin(), que corta la ejecucion con 403 y por eso no
+ * sirve para preguntar.
+ */
+function esSuperadmin(PDO $pdo, int $usuarioId): bool
+{
+    $stmt = $pdo->prepare('SELECT rol FROM usuario WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $usuarioId]);
+
+    return $stmt->fetchColumn() === 'superadmin';
 }
 
 // ===========================================================================
