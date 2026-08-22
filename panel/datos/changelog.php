@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-22',
+        'version' => '1.20',
+        'titulo'  => 'Las sesiones de solo lectura ya no crean credenciales sin querer',
+        'tag'     => 'backend',
+        'items'   => [
+            'Recorrer el sistema en modo demostracion, o mirar el panel de un cliente como superadmin, podia crear una credencial interna de la empresa como efecto colateral de abrir una pantalla. Ya no.',
+            'Tampoco se reemplaza una credencial que este danada: antes, mirar el panel de un cliente con ese problema le revocaba la credencial en uso y creaba otra.',
+            'Cuando la credencial falta, las pantallas que dependen de ella lo dicen en vez de fabricarla.',
+            'Fuera de esos dos modos no cambia nada: la credencial se sigue creando sola la primera vez que hace falta.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-22',
         'version' => '1.19',
         'titulo'  => 'El equipo interno puede ver el panel de un cliente, sin poder tocarlo',
         'tag'     => 'arquitectura',

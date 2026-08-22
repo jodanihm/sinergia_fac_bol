@@ -5066,6 +5066,12 @@ function handleEmisionPost(int $tipoDte): void
 
     try {
         $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+        // Inalcanzable mientras el router corte los POST de las sesiones de solo
+        // lectura. Se comprueba igual: el dia que ese corte cambie, el fallo
+        // tiene que ser un mensaje y no un TypeError con traza.
+        if ($keyServicio === null) {
+            throw new RuntimeException('sin key de servicio (sesion de solo lectura)');
+        }
         $res         = emitirEnMotor($keyServicio, $documento, $idemKey);
     } catch (Throwable $e) {
         error_log('panel emision: fallo de conexion con el motor - ' . $e->getMessage());
@@ -5335,6 +5341,9 @@ function handleBoletaPost(): void
 
     try {
         $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+        if ($keyServicio === null) {
+            throw new RuntimeException('sin key de servicio (sesion de solo lectura)');
+        }
         $res         = emitirBoletaEnMotor($keyServicio, $documento, $idemKey);
     } catch (Throwable $e) {
         error_log('panel boleta: fallo de conexion con el motor - ' . $e->getMessage());
@@ -5505,6 +5514,22 @@ function handleDocumentosListadoGet(): void
 
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
 
+    // Sin credencial y sin poder crearla (sesion de solo lectura): se informa,
+    // igual que cuando el motor no responde. Se reusa 'errorMotor' porque para
+    // quien mira la pantalla el resultado es el mismo -- no hay listado -- y no
+    // hace falta un canal nuevo para decir lo mismo.
+    if ($keyServicio === null) {
+        vista('documentos-listado', [
+            'items'        => [],
+            'total'        => 0,
+            'pagina'       => 1,
+            'totalPaginas' => 1,
+            'filtros'      => $filtros,
+            'errorMotor'   => 'Esta cuenta todavia no tiene credencial de servicio para hablar con el motor, y en una sesion de solo lectura no se crea. Por eso este listado no se puede consultar.',
+            'navActivo'    => 'ventas.panel-emision',
+        ]);
+    }
+
     try {
         $res = listarDocumentosEnMotor($keyServicio, $filtrosMotor);
     } catch (Throwable $e) {
@@ -5566,17 +5591,26 @@ function handleDocumentoDetalleGet(int $tipoDte, int $folio): void
 
     $documento   = null;
     $errorMotor  = null;
-    try {
-        $res = listarDocumentosEnMotor($keyServicio, ['tipoDte' => $tipoDte, 'folio' => $folio]);
-        if ($res['status'] === 200 && ! empty($res['body']['items'])) {
-            [$documento] = resolverRazonSocialReceptores($cuentaId, $res['body']['items']);
-        } elseif ($res['status'] !== 200) {
-            error_log('panel documentos: respuesta ' . $res['status'] . ' del motor al pedir detalle - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
-            $errorMotor = 'El motor de emision devolvio un error al buscar el documento.';
+    // Sin credencial de servicio no hay a quien preguntarle por el documento, y
+    // no se consulta: $errorMotor ya es el canal que esta vista usa para
+    // explicar por que no hay datos. La consulta va en el else y no despues del
+    // if, porque llamar al motor con la key en null seria un TypeError.
+    if ($keyServicio === null) {
+        $errorMotor = 'Esta cuenta todavia no tiene credencial de servicio para hablar con el motor, '
+            . 'y en una sesion de solo lectura no se crea.';
+    } else {
+        try {
+            $res = listarDocumentosEnMotor($keyServicio, ['tipoDte' => $tipoDte, 'folio' => $folio]);
+            if ($res['status'] === 200 && ! empty($res['body']['items'])) {
+                [$documento] = resolverRazonSocialReceptores($cuentaId, $res['body']['items']);
+            } elseif ($res['status'] !== 200) {
+                error_log('panel documentos: respuesta ' . $res['status'] . ' del motor al pedir detalle - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
+                $errorMotor = 'El motor de emision devolvio un error al buscar el documento.';
+            }
+        } catch (Throwable $e) {
+            error_log('panel documentos: fallo de conexion al pedir detalle - ' . $e->getMessage());
+            $errorMotor = 'No se pudo contactar el motor de emision.';
         }
-    } catch (Throwable $e) {
-        error_log('panel documentos: fallo de conexion al pedir detalle - ' . $e->getMessage());
-        $errorMotor = 'No se pudo contactar el motor de emision.';
     }
 
     vista('documento-detalle', [
@@ -5601,6 +5635,16 @@ function proxyDocumentoBinario(int $tipoDte, int $folio, string $sufijo): void
     $cuentaId  = Auth::cuentaId();
     $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+
+    // 409 y no 502: el motor esta bien; lo que falta es la credencial, y en una
+    // sesion de solo lectura no se crea. Un 502 mandaria a revisar la conexion,
+    // que es la pista equivocada.
+    if ($keyServicio === null) {
+        http_response_code(409);
+        header('Content-Type: text/plain; charset=utf-8');
+        echo 'Esta cuenta todavia no tiene credencial de servicio, y en una sesion de solo lectura no se crea.';
+        exit;
+    }
 
     try {
         $res = obtenerBinarioEnMotor($keyServicio, "api/v1/dte/{$tipoDte}/{$folio}/{$sufijo}");
@@ -6055,6 +6099,13 @@ function handleDocumentoEstadoSiiPost(int $tipoDte, int $folio): void
     $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
     $destino     = "/ventas/panel-emision/{$tipoDte}/{$folio}";
+
+    // Inalcanzable hoy (el router corta los POST de solo lectura); se comprueba
+    // para que un cambio ahi no degenere en un TypeError.
+    if ($keyServicio === null) {
+        flashSet('error', 'No hay credencial de servicio para consultar al SII.');
+        redirigirPrg($destino);
+    }
 
     try {
         $res = consultarEstadoSiiEnMotor($keyServicio, $tipoDte, $folio);
@@ -8118,6 +8169,10 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
     $subLote = obtenerNotasVentaPendientesPorIds($pdo, $cuentaId, $ids, FACTURACION_MASIVA_SUBLOTE);
 
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+    // Idem: inalcanzable hoy, comprobado para que no degenere en TypeError.
+    if ($keyServicio === null) {
+        responderJsonFacturacionMasiva(409, ['status' => 'error', 'error' => 'sin credencial de servicio']);
+    }
     facturarSubLote($pdo, $keyServicio, $subLote, $cuentaId, $rutEmisor);
 
     $conteo = contarNotasVentaPorEstado($pdo, $cuentaId, $ids);
@@ -9098,12 +9153,53 @@ function generarKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): array
 }
 
 /**
+ * True si la sesion NO puede escribir en los datos del tenant.
+ *
+ * Junta los dos modos de solo lectura que existen, que llegaron por caminos
+ * distintos y comparten la misma consecuencia:
+ *   - cuenta demo    (usuario.demo = 1): recorrer el sistema sin alterar nada.
+ *   - vista superadmin: mirar el panel de otro tenant sin operarlo.
+ *
+ * SE PREGUNTA POR LOS DOS EN UN SOLO LUGAR para que quien agregue un tercer
+ * modo manana no tenga que descubrir todos los sitios que lo consultan. El
+ * router ya corta los POST de ambos; esta funcion existe para lo que el router
+ * NO puede cubrir: las escrituras que ocurren durante un GET.
+ */
+function sesionSoloLectura(): bool
+{
+    return Auth::viendoCuentaId() !== null || sesionEsDemo();
+}
+
+/**
  * Devuelve el X-Api-Key ("prefijo.secreto") de la key de SERVICIO de la cuenta
  * (ambiente produccion), generandola de forma perezosa si no existe. Si la key
  * activa esta corrupta (no desenvuelve), la revoca, genera una nueva y registra
  * el evento en admin_auditoria (auto-recuperacion, no silenciosa).
+ *
+ * DEVUELVE null EN LOS MODOS DE SOLO LECTURA, EN VEZ DE CREAR NADA
+ * -----------------------------------------------------------------------------
+ * Esta era la unica escritura que sobrevivia al bloqueo de POST del router, y
+ * no por descuido: ocurre durante un GET, que es justo lo que ese bloqueo no
+ * mira. Un superadmin recorriendo el panel de un cliente, o una demostracion
+ * en vivo, podian dejar una fila nueva en api_key sin que nadie lo pidiera.
+ *
+ * SON DOS LOS CAMINOS QUE ESCRIBEN, y los dos quedan cortados:
+ *   1. no hay key      -> generarKeyServicio() INSERTA.
+ *   2. la key no abre  -> UPDATE de revocacion + INSERT + INSERT de auditoria.
+ * El segundo es el mas facil de pasar por alto y el que mas ensucia: dejaria la
+ * credencial real del tenant revocada por haber mirado su panel.
+ *
+ * LO QUE NO CAMBIA. Si la key EXISTE y abre, se devuelve igual que siempre:
+ * leerla no escribe nada. O sea que un tenant que ya emite se ve completo en la
+ * vista de superadmin. El null aparece solo cuando la alternativa habria sido
+ * crear algo -- y en esa situacion el motor tampoco tendria documentos que
+ * mostrar, porque la cuenta nunca emitio.
+ *
+ * FUERA DE ESOS DOS MODOS EL COMPORTAMIENTO ES IDENTICO al de antes.
+ *
+ * @return string|null null solo en modo de solo lectura y cuando habria que crear o regenerar.
  */
-function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
+function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): ?string
 {
     $stmt = $pdo->prepare(
         "SELECT id, prefijo, secreto_cifrado, dek_envuelta FROM api_key "
@@ -9118,6 +9214,20 @@ function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
             $secreto = descifrarSecretoServicio((string) $fila['dek_envuelta'], (string) $fila['secreto_cifrado']);
             return (string) $fila['prefijo'] . '.' . $secreto;
         } catch (CertificadoCryptoException $e) {
+            // En solo lectura NO se auto-recupera: la recuperacion revoca la
+            // credencial vigente del tenant y crea otra. Hacer eso porque
+            // alguien miro su panel seria peor que el problema que arregla, y
+            // ademas dejaria la reparacion registrada como si el tenant la
+            // hubiera pedido. La key rota sigue rota y se ve al salir.
+            if (sesionSoloLectura()) {
+                error_log(sprintf(
+                    'obtenerKeyServicio: key de servicio corrupta en la cuenta %d; no se regenera por sesion de solo lectura',
+                    $cuentaId
+                ));
+
+                return null;
+            }
+
             // Corrupta: revocar, regenerar y AUDITAR la auto-recuperacion.
             $viejaId      = (int) $fila['id'];
             $viejoPrefijo = (string) $fila['prefijo'];
@@ -9136,6 +9246,12 @@ function obtenerKeyServicio(PDO $pdo, int $cuentaId, string $rutEmisor): string
             );
             return $nueva['prefijo'] . '.' . $nueva['secreto'];
         }
+    }
+
+    // No hay key y la sesion no puede escribir: se informa que no hay, en vez
+    // de fabricarla. Es el caso que motivo todo esto.
+    if (sesionSoloLectura()) {
+        return null;
     }
 
     $nueva = generarKeyServicio($pdo, $cuentaId, $rutEmisor);
