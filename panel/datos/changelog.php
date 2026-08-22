@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-22',
+        'version' => '1.21',
+        'titulo'  => 'Los nombres de cuenta se ven como lo que son: enlaces',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En el listado de cuentas del panel de control, el nombre de cada empresa llevaba a su ficha desde hace rato, pero se veia igual que cualquier otro texto: habia que pasarle el mouse por encima para descubrirlo.',
+            'Lo mismo pasaba con los enlaces a la cuenta afectada en la pantalla de auditoria.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-22',
         'version' => '1.20',
         'titulo'  => 'Las sesiones de solo lectura ya no crean credenciales sin querer',
         'tag'     => 'backend',
