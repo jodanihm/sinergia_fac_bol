@@ -18,6 +18,18 @@ $o = static fn ($v): string => ($v === null || $v === '') ? '&mdash;' : htmlspec
 
 <p class="muted" style="margin-top:0;"><a href="/admin/tenants">&larr; Cuentas</a></p>
 
+<div class="toolbar">
+    <?php /* Enlace y no formulario: entrar es navegacion, no una mutacion de
+             datos del tenant. El confirm() dice que la accion queda registrada,
+             porque queda: entrar al panel de un contribuyente deja su fila en la
+             auditoria aunque no se toque nada. */ ?>
+    <a class="btn sm" href="/admin/tenants/<?= (int) $cuenta['id']; ?>/ver"
+       onclick="return confirm('Vas a ver el panel de <?= htmlspecialchars((string) $cuenta['nombre'], ENT_QUOTES); ?> en modo solo lectura. Queda registrado en la auditoria.');">
+        Ver como este tenant
+    </a>
+    <span class="muted">Abre el panel del cliente con sus datos reales, sin poder modificar nada.</span>
+</div>
+
 <h2 class="page-title">
     <?= htmlspecialchars((string) $cuenta['nombre']); ?>
     <span class="tag <?= $cuenta['estado'] === 'activa' ? 'ok' : 'err'; ?>">

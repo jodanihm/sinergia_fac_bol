@@ -54,6 +54,33 @@ $cssHref    = '/css/style.css' . ($cssVersion ? '?v=' . $cssVersion : '');
 <?php require __DIR__ . '/_nav.php'; ?>
 <?php endif; ?>
 <main id="contenido" aria-label="Contenido principal">
+<?php
+/* AVISO DE VISTA DE SUPERADMIN.
+   Va PRIMERO, antes que el de modo demostracion y antes que el contenido: es
+   la unica pista de que lo que se ve abajo no es la cuenta propia. Sin el, un
+   superadmin con una vista abierta y olvidada creeria estar mirando su panel y
+   sacaria conclusiones sobre la empresa equivocada.
+   Permanente y en todas las pantallas del tenant, por el mismo motivo: no
+   alcanza con avisarlo al entrar. */
+$vistaCuentaId = class_exists('Auth') ? Auth::viendoCuentaId() : null;
+if ($panelAutenticado && $vistaCuentaId !== null):
+    $vistaStmt = Db::conexion()->prepare('SELECT nombre FROM cuenta WHERE id = :id LIMIT 1');
+    $vistaStmt->execute([':id' => $vistaCuentaId]);
+    $vistaNombre = (string) ($vistaStmt->fetchColumn() ?: ('cuenta #' . $vistaCuentaId));
+?>
+<div class="aviso-vista-admin" role="status">
+    <div>
+        <strong>Vista de superadmin.</strong>
+        Estas viendo el panel de <strong><?= htmlspecialchars($vistaNombre); ?></strong>
+        (cuenta #<?= (int) $vistaCuentaId; ?>) en <strong>solo lectura</strong>:
+        cualquier accion que modifique datos esta bloqueada.
+    </div>
+    <form method="post" action="/admin/tenants/salir-vista">
+        <?= csrfInput(); ?>
+        <button type="submit">Salir de la vista</button>
+    </form>
+</div>
+<?php endif; ?>
 <?php if ($panelAutenticado && sesionEsDemo()): ?>
 <?php /* Aviso permanente de sesion de solo lectura. Va DENTRO de <main> y no
          sobre el <body>: el shell es flex y un hermano mas del <nav> le

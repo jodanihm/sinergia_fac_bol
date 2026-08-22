@@ -9832,6 +9832,52 @@ function cortarPorDemo(): never
     exit;
 }
 
+/**
+ * Ruta por la que un superadmin SALE de la vista de un tenant.
+ *
+ * Es la unica excepcion al bloqueo de escritura de cortarPorVistaSuperadmin(),
+ * y por eso vive en una constante y no escrita a mano dentro del if: el dia que
+ * alguien la renombre en el router y no aqui, el superadmin quedaria encerrado
+ * dentro del tenant sin forma de volver salvo cerrando sesion.
+ */
+const RUTA_SALIR_VISTA_SUPERADMIN = '/admin/tenants/salir-vista';
+
+/**
+ * Corta el request cuando un superadmin intenta ESCRIBIR mientras mira el panel
+ * de un tenant.
+ *
+ * MISMO PATRON Y MISMO PUNTO QUE cortarPorDemo(), a proposito. El argumento que
+ * ya se demostro correcto para el modo demostracion vale igual aca: una regla
+ * que aplica a todas las rutas POST se aplica UNA vez, antes de despachar, y no
+ * se reparte entre ~58 handlers de los que alguien se va a olvidar. La
+ * propiedad que importa no es que hoy queden cubiertas todas, sino que la ruta
+ * POST que se escriba MANANA nazca cubierta sin que su autor sepa que esto
+ * existe.
+ *
+ * POR QUE ES 403 SECO Y NO LA PANTALLA AMABLE DEL DEMO. A esa la ve un
+ * prospecto haciendo clic durante una demostracion; a esta la ve alguien del
+ * equipo interno que sabe perfectamente donde esta parado, porque tiene un
+ * banner arriba diciendoselo. Aca el mensaje corto y claro sirve mas.
+ */
+function cortarPorVistaSuperadmin(): never
+{
+    http_response_code(403);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8">'
+        . '<title>Vista de solo lectura</title>'
+        . '<link rel="stylesheet" href="/css/style.css"></head><body>'
+        . '<h1>403 - Vista de solo lectura</h1>'
+        . '<p>Estas mirando el panel de otra cuenta como <strong>superadmin</strong>. '
+        . 'Esta vista es de <strong>solo lectura</strong>: ninguna accion que modifique '
+        . 'datos del tenant esta permitida, ni siquiera para corregir algo.</p>'
+        . '<p>Si hay que cambiar algo en esta cuenta, sale de la vista y hazlo por el '
+        . 'camino que corresponda, que queda registrado a tu nombre.</p>'
+        . '<p><a href="javascript:history.back()">Volver atras</a> &middot; '
+        . '<a href="/admin/tenants">Ir al panel de control</a></p>'
+        . '</body></html>';
+    exit;
+}
+
 // ===========================================================================
 //  Router: metodo y ruta
 // ===========================================================================
@@ -9904,6 +9950,31 @@ if ($metodo === 'POST' && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))
 // ===========================================================================
 if ($metodo === 'POST' && sesionEsDemo()) {
     cortarPorDemo();
+}
+
+// ===========================================================================
+//  VISTA DE SUPERADMIN: bloqueo CENTRAL de escritura, junto al del demo.
+//
+//  Mientras un superadmin mira el panel de un tenant, Auth::cuentaId() devuelve
+//  la cuenta de ESE tenant. Eso es lo que hace que las pantallas existentes
+//  muestren sus datos sin tocarlas -- y es tambien lo que haria que un POST
+//  ESCRIBIERA en sus datos. Este corte es lo que convierte la funcion en lo que
+//  promete: mirar, no operar.
+//
+//  VA DESPUES DEL CORTE POR DEMO y antes de cualquier despacho, por el mismo
+//  motivo por el que aquel va donde va: es la ultima linea desde la que se
+//  puede afirmar que NINGUN handler corrio.
+//
+//  LA UNICA EXCEPCION ES SALIR. Sin ella el bloqueo se bloquearia a si mismo:
+//  el boton "Salir" del banner es un POST (lleva CSRF, como toda mutacion), y
+//  si tambien lo cortara, el superadmin quedaria encerrado dentro del tenant
+//  con la unica salida de cerrar sesion.
+// ===========================================================================
+//  EN UNA SOLA LINEA, como el corte por demo y el de CSRF: el router entero
+//  mantiene esa forma uniforme, y de eso depende que RutasDelRouter pueda
+//  inventariar las rutas leyendo el fuente (ver /admin/roles-permisos).
+if ($metodo === 'POST' && Auth::viendoCuentaId() !== null && $ruta !== RUTA_SALIR_VISTA_SUPERADMIN) {
+    cortarPorVistaSuperadmin();
 }
 
 // La raiz es la LANDING PUBLICA, no un redirect a /login. Antes / rebotaba a
@@ -10772,6 +10843,17 @@ if ($metodo === 'GET' && $ruta === '/admin/tenants') {
 // resto del router.
 if ($metodo === 'GET' && preg_match('#^/admin/tenants/(\d+)$#', $ruta, $mCuenta)) {
     handleAdminTenantFichaGet((int) $mCuenta[1]);
+}
+
+// Entrar a mirar el panel de un tenant, y salir. La ruta de salida es literal y
+// no lleva el id: la cuenta que se esta mirando la sabe la sesion, y tomarla del
+// POST permitiria pedir la salida de una vista que no es la abierta.
+if ($metodo === 'GET' && preg_match('#^/admin/tenants/(\d+)/ver$#', $ruta, $mVer)) {
+    handleAdminVerTenantGet((int) $mVer[1]);
+}
+
+if ($metodo === 'POST' && $ruta === RUTA_SALIR_VISTA_SUPERADMIN) {
+    handleAdminSalirVistaPost();
 }
 
 if ($metodo === 'POST' && $ruta === '/admin/tenants/suspender') {
@@ -12485,7 +12567,28 @@ function exigirPermiso(PDO $pdo, int $cuentaId, string $modulo, string $accion):
     $stmt->execute([':id' => Auth::usuarioId()]);
     $usuario = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    if ($usuario === false || (int) $usuario['cuenta_id'] !== $cuentaId) {
+    // UNICA EXCEPCION AL CHEQUEO DE ABAJO: la vista de superadmin.
+    //
+    // Esa funcion existe justamente para que la sesion diga una cuenta y la
+    // fila del usuario diga otra -- es lo que significa mirar el panel de otro
+    // tenant. Sin esta salida, el chequeo siguiente negaria TODAS las pantallas
+    // del tenant y la funcion no andaria.
+    //
+    // LAS DOS CONDICIONES SON NECESARIAS Y EL ORDEN IMPORTA. El rol se lee de
+    // la BASE ($usuario['rol']), no de la sesion: una marca de sesion sola seria
+    // un permiso que se concede a si mismo quien pueda escribir su sesion. La
+    // marca solo dice "hay una vista en curso"; quien puede abrirla lo decide
+    // exigirSuperadmin() en el handler que la escribe.
+    //
+    // Esto NO amplia lo que un superadmin ya podia ver: /admin/tenants/{id} le
+    // muestra los datos de cualquier cuenta desde antes. Lo que cambia es la
+    // forma de mirarlos. Y no habilita ninguna escritura: todo POST muere antes
+    // de llegar aca, en cortarPorVistaSuperadmin().
+    $enVistaSuperadmin = $usuario !== false
+        && $usuario['rol'] === 'superadmin'
+        && Auth::viendoCuentaId() !== null;
+
+    if ($usuario === false || (! $enVistaSuperadmin && (int) $usuario['cuenta_id'] !== $cuentaId)) {
         // La sesion dice una cuenta y la fila dice otra: no se resuelve a favor
         // de nadie.
         negar403();
@@ -13660,6 +13763,84 @@ function handleAdminDocumentosGet(): void
 {
     exigirSuperadmin(Db::conexion());
     vista('admin-documentos', ['documentos' => require __DIR__ . '/../datos/documentos.php']);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/tenants/{id}/ver  (SOLO SUPERADMIN)
+//  Handler: POST /admin/tenants/salir-vista (SOLO SUPERADMIN)
+//
+//  Entrar y salir de la vista del panel de un tenant.
+//
+//  QUE HACE Y QUE NO. Guarda en la sesion la cuenta que se va a mirar y manda a
+//  /panel. A partir de ahi Auth::cuentaId() devuelve esa cuenta y las pantallas
+//  del tenant se dibujan con SUS datos, sin que ninguna de ellas se haya
+//  modificado. Lo que NO hace es cambiar quien sos: usuario_id sigue siendo el
+//  del superadmin, y de ahi salen exigirSuperadmin() y la auditoria.
+//
+//  POR QUE ENTRAR ES UN GET Y SALIR UN POST. Entrar no modifica datos del
+//  tenant ni del sistema; es navegacion, y como GET se puede enlazar desde la
+//  ficha con un <a>. Salir cambia el estado de la sesion y por eso va por POST
+//  con CSRF, igual que el resto de las mutaciones del panel. La asimetria es
+//  deliberada, no un descuido.
+//
+//  LAS DOS QUEDAN AUDITADAS. Entrar al panel de un contribuyente y mirar sus
+//  documentos es exactamente la clase de cosa que tiene que dejar rastro,
+//  aunque no cambie una sola fila: la auditoria no registra solo los danos,
+//  registra los accesos.
+// ===========================================================================
+function handleAdminVerTenantGet(int $cuentaId): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $stmt = $pdo->prepare('SELECT id, nombre, email, estado FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $cuentaId]);
+    $cuenta = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // 404 y no 500: un id que no existe es un enlace viejo, no una falla.
+    if ($cuenta === false) {
+        http_response_code(404);
+        echo '404 - cuenta no encontrada';
+        exit;
+    }
+
+    Auth::iniciarVista($cuentaId);
+
+    // valor_anterior null porque no habia estado previo que preservar: es un
+    // acceso, no la modificacion de una fila. valor_nuevo describe QUE se
+    // abrio, para que la fila se entienda sin ir a buscar la cuenta.
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'admin.ver_tenant.entrar',
+        'cuenta',
+        $cuentaId,
+        null,
+        ['cuenta' => $cuenta['nombre'], 'email' => $cuenta['email'], 'estado' => $cuenta['estado']]
+    );
+
+    redirigir('/panel');
+}
+
+function handleAdminSalirVistaPost(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $cuentaId = Auth::viendoCuentaId();
+
+    // Salir sin vista activa no es un error que valga la pena mostrar: el
+    // resultado que el usuario quiere -- no estar dentro de ningun tenant -- ya
+    // se cumple. Puede pasar con el boton "atras" o con dos pestañas abiertas.
+    if ($cuentaId === null) {
+        redirigir('/admin/tenants');
+    }
+
+    Auth::terminarVista();
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'admin.ver_tenant.salir', 'cuenta', $cuentaId, null, null);
+
+    redirigir('/admin/tenants/' . $cuentaId);
 }
 
 // ===========================================================================

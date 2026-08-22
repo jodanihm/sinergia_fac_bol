@@ -192,6 +192,7 @@ final class RutasDelRouterTest extends TestCase
         // PERMISOS_RUTA_PATRON (el del gate y el del informe de cobertura).
         $noSonDespachos = static fn (string $l): bool => str_contains($l, 'sesionEsDemo()')
             || str_contains($l, 'Csrf::validar')
+            || str_contains($l, 'Auth::viendoCuentaId()')
             || str_contains($l, '$metodo === $m');
 
         $despachos = array_filter($lineas[0], static fn (string $l): bool => ! $noSonDespachos($l));

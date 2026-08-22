@@ -32,6 +32,18 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-08-22',
+        'version' => '1.19',
+        'titulo'  => 'El equipo interno puede ver el panel de un cliente, sin poder tocarlo',
+        'tag'     => 'arquitectura',
+        'items'   => [
+            'Desde la ficha de una cuenta se puede abrir el panel de ese cliente y recorrerlo con sus datos reales, para atender un problema viendo exactamente lo mismo que ve quien llama por telefono.',
+            'La vista es de solo lectura y no depende de acordarse: cualquier accion que modifique datos queda bloqueada en un unico punto del sistema, antes de llegar a ninguna pantalla.',
+            'Un aviso permanente arriba de cada pagina dice de que empresa son los datos que se estan viendo, con un boton para salir.',
+            'Entrar y salir quedan registrados en la auditoria a nombre de quien lo hizo: mirar los documentos de un contribuyente deja rastro aunque no se cambie nada.',
+        ],
+    ],
+    [
         'fecha'   => '2026-08-21',
         'version' => '1.18',
         'titulo'  => 'Diagrama de la base de datos, navegable',
