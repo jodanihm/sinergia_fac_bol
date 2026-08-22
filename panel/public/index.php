@@ -100,6 +100,7 @@ require __DIR__ . '/../src/FechaExcel.php';
 require __DIR__ . '/../src/DiffAuditoria.php';
 require __DIR__ . '/../src/AislamientoTenant.php';
 require __DIR__ . '/../src/RutasDelRouter.php';
+require __DIR__ . '/../src/DiagramaEr.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -13305,6 +13306,16 @@ function handleAdminBaseDatosGet(): void
         $conteoAislamiento[$clase] = ($conteoAislamiento[$clase] ?? 0) + 1;
     }
 
+    // El diagrama se arma SOLO cuando se pide esa vista. No es por ahorrar
+    // milisegundos de PHP: la vista de diagrama es la unica pagina del panel
+    // que carga un archivo JS, y son 3,3 MB de mermaid. Servirlos tambien a
+    // quien viene a mirar una columna seria cobrarle a todos el costo del
+    // diagrama.
+    $vista     = ($_GET['vista'] ?? '') === 'diagrama' ? 'diagrama' : 'detalle';
+    $diagramaEr = $vista === 'diagrama'
+        ? DiagramaEr::construir($nombresTabla, $columnasPorTabla, $fkParaGrafo)
+        : '';
+
     // Busqueda: filtra EN PHP la lista ya traida. Nunca toca una consulta.
     $busqueda = trim((string) ($_GET['q'] ?? ''));
     if ($busqueda !== '') {
@@ -13325,6 +13336,8 @@ function handleAdminBaseDatosGet(): void
         'totalTablas'       => count($nombresTabla),
         'totalFks'          => count($clavesForaneas),
         'busqueda'          => $busqueda,
+        'vista'             => $vista,
+        'diagramaEr'        => $diagramaEr,
         'migraciones'       => estadoMigracionesAdmin($pdo),
     ]);
 }

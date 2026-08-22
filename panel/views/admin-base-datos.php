@@ -70,6 +70,50 @@ $orden = [
     <?php endif; ?>
 </div>
 
+<div class="toolbar">
+    <a class="btn sm <?= $vista === 'detalle' ? '' : 'ghost'; ?>" href="/admin/base-datos">Detalle</a>
+    <a class="btn sm <?= $vista === 'diagrama' ? '' : 'ghost'; ?>" href="/admin/base-datos?vista=diagrama">Diagrama ER</a>
+</div>
+
+<?php if ($vista === 'diagrama'): ?>
+<div class="panel">
+    <h3>Diagrama ER</h3>
+    <p class="muted" style="margin-top:-.5rem;">
+        Las <?= (int) $totalTablas; ?> tablas y sus <?= (int) $totalFks; ?> claves foraneas.
+        Rueda para acercar, arrastra para mover. El diagrama se arma en el servidor a partir
+        del mismo <code>information_schema</code> que lee la vista de detalle.
+    </p>
+    <div class="mermaid-viewport" id="er-viewport">
+        <div class="mermaid-controls">
+            <button type="button" id="er-mas" title="Acercar">+</button>
+            <button type="button" id="er-menos" title="Alejar">&minus;</button>
+            <span id="er-zoom">100%</span>
+            <button type="button" id="er-reset" title="Volver al 100%">&#8635;</button>
+        </div>
+        <div class="mermaid-canvas" id="er-canvas"></div>
+    </div>
+</div>
+
+<?php
+    /* El texto del diagrama viaja dentro de un <script> con un type que el
+       navegador NO ejecuta ni interpreta: lo trata como texto opaco. Aun asi va
+       escapado, porque el contenido sale de information_schema y una secuencia
+       </script> ahi adentro cerraria la etiqueta antes de tiempo. */
+?>
+<script type="application/x-mermaid" id="er-fuente"><?= htmlspecialchars($diagramaEr, ENT_NOQUOTES); ?></script>
+<?php
+    /* Mermaid VENDORIZADO y servido local, nunca desde un CDN: el panel va
+       detras de Cloudflare Tunnel y una dependencia externa es una pantalla que
+       se rompe el dia que el CDN falla. Ver panel/public/js/MERMAID.md.
+       Cache-busting por filemtime, igual que el CSS. */
+    $erJs      = '/js/mermaid.min.js?v=' . (@filemtime(__DIR__ . '/../public/js/mermaid.min.js') ?: '1');
+    $erVisorJs = '/js/admin-er.js?v=' . (@filemtime(__DIR__ . '/../public/js/admin-er.js') ?: '1');
+?>
+<script src="<?= htmlspecialchars($erJs); ?>"></script>
+<script src="<?= htmlspecialchars($erVisorJs); ?>"></script>
+
+<?php else: ?>
+
 <form class="toolbar" method="get" action="/admin/base-datos">
     <input type="search" name="q" value="<?= htmlspecialchars($busqueda); ?>"
            placeholder="Filtrar tablas por nombre" aria-label="Filtrar tablas" style="max-width:280px;">
@@ -154,6 +198,7 @@ $orden = [
     no para informar cifras.
 </p>
 <?php endif; ?>
+<?php endif; /* fin de la vista de detalle; el panel de migraciones va en las dos */ ?>
 
 <div class="panel">
     <h3>Migraciones</h3>

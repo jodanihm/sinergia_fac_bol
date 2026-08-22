@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-21',
+        'version' => '1.18',
+        'titulo'  => 'Diagrama de la base de datos, navegable',
+        'tag'     => 'datos',
+        'items'   => [
+            'La pantalla de base de datos ahora tiene una segunda vista: el diagrama completo de las 37 tablas y sus 33 relaciones, con lupa y arrastre.',
+            'El dibujo se arma en el servidor a partir de la estructura real, asi que refleja la base tal como esta hoy y no un diagrama que alguien dibujo una vez.',
+            'La libreria que lo dibuja se guarda dentro del proyecto y se sirve desde el propio servidor, nunca desde un servicio externo: una pantalla que depende de un tercero es una pantalla que se cae el dia que ese tercero falla.',
+            'Solo se carga al abrir el diagrama; quien entra a ver una tabla no paga ese costo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-21',
         'version' => '1.17',
         'titulo'  => 'Documentacion viva del producto: flujos, documentos, pendientes y changelog',
         'tag'     => 'frontend',

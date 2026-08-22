@@ -70,17 +70,6 @@ return [
         'estado'  => 'nuevo',
     ],
     [
-        'titulo'  => 'Diagrama ER navegable en /admin/base-datos',
-        'detalle' => 'La vista de detalle con tarjetas por tabla se basta sola, asi que el diagrama quedo '
-            . 'como opcional. Si se hace, Mermaid va VENDORIZADO en panel/public/js/ y servido local: el '
-            . 'panel va detras de Cloudflare Tunnel y hoy no carga ni un solo archivo JS externo, asi que '
-            . 'una dependencia de CDN seria la primera, y una pantalla que se rompe el dia que el CDN '
-            . 'falla. El erDiagram se genera en PHP a partir de las mismas claves foraneas que ya lee la '
-            . 'pagina.',
-        'tipo'    => 'idea',
-        'estado'  => 'en_pausa',
-    ],
-    [
         'titulo'  => 'Pagina de APIs e integraciones',
         'detalle' => 'El panel hermano tiene una y quedo fuera de alcance a proposito. Aqui las '
             . 'credenciales de API ya se ven por cuenta en la ficha (solo el prefijo) y el motor se '
