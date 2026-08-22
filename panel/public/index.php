@@ -97,6 +97,10 @@ require __DIR__ . '/../src/Auth.php';
 require __DIR__ . '/../src/Rut.php';
 require __DIR__ . '/../src/Csrf.php';
 require __DIR__ . '/../src/FechaExcel.php';
+require __DIR__ . '/../src/DiffAuditoria.php';
+require __DIR__ . '/../src/AislamientoTenant.php';
+require __DIR__ . '/../src/RutasDelRouter.php';
+require __DIR__ . '/../src/DiagramaEr.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -700,6 +704,26 @@ const PATRONES_PUBLICOS = ['#^/activar/[0-9a-f]{64}$#'];
  * @var list<string>
  */
 const PREFIJOS_GATE_PROPIO = ['/admin/', '/configuracion/usuarios', '/configuracion/roles'];
+
+/**
+ * Rutas EXACTAS con gate propio. Complemento de PREFIJOS_GATE_PROPIO para el
+ * caso que un prefijo no puede cubrir.
+ *
+ * POR QUE HACE FALTA. El router normaliza la ruta con rtrim($ruta, '/'), asi
+ * que la portada del panel de control llega aqui como '/admin', SIN barra
+ * final, y str_starts_with('/admin', '/admin/') es false. Sin esta lista la
+ * ruta caia en el fallo cerrado del paso 4 y respondia 404 -- la portada del
+ * panel entero, inalcanzable, sin que ningun handler llegara a ejecutarse.
+ *
+ * SE RESUELVE ASI Y NO QUITANDOLE LA BARRA AL PREFIJO. Con '/admin' como
+ * PREFIJO, cualquier ruta futura que empiece con esas seis letras
+ * (/administradores, /admin-api) se saltaria el mapa de permisos por accidente
+ * de nombre, sin que nadie lo hubiera decidido. Un match exacto no puede
+ * capturar de mas: solo entra lo que este escrito aqui.
+ *
+ * @var list<string>
+ */
+const RUTAS_GATE_PROPIO = ['/admin'];
 
 function definicionMenu(): array
 {
@@ -10734,8 +10758,20 @@ if ($metodo === 'GET' && $ruta === '/auditoria') {
 // Cada handler exige exigirSuperadmin() (403 si el rol no corresponde, sin
 // pasar por Auth::requerirSesion()/redirect a /login).
 // ---------------------------------------------------------------------------
+if ($metodo === 'GET' && $ruta === '/admin') {
+    handleAdminPanelGet();
+}
+
 if ($metodo === 'GET' && $ruta === '/admin/tenants') {
     handleAdminTenantsGet();
+}
+
+// Ficha de una cuenta. Mismo estilo de regex que PERMISOS_RUTA_PATRON, y va
+// DESPUES de la ruta exacta de arriba: (\d+) no puede capturar '/suspender'
+// ni '/reactivar', pero el orden deja el caso general al final igual que en el
+// resto del router.
+if ($metodo === 'GET' && preg_match('#^/admin/tenants/(\d+)$#', $ruta, $mCuenta)) {
+    handleAdminTenantFichaGet((int) $mCuenta[1]);
 }
 
 if ($metodo === 'POST' && $ruta === '/admin/tenants/suspender') {
@@ -10752,6 +10788,30 @@ if ($metodo === 'POST' && $ruta === '/admin/tenants/revertir-etapa') {
 
 if ($metodo === 'GET' && $ruta === '/admin/auditoria') {
     handleAdminAuditoriaGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/base-datos') {
+    handleAdminBaseDatosGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/roles-permisos') {
+    handleAdminRolesPermisosGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/flujos') {
+    handleAdminFlujosGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/documentos') {
+    handleAdminDocumentosGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/pendientes') {
+    handleAdminPendientesGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/changelog') {
+    handleAdminChangelogGet();
 }
 
 http_response_code(404);
@@ -12525,6 +12585,12 @@ function exigirPermisoDeRuta(string $metodo, string $ruta): void
     }
 
     // 2. Espacios con gate propio: su handler ya exige superadmin u owner.
+    //    Primero las rutas exactas (ver RUTAS_GATE_PROPIO: '/admin' no lo cubre
+    //    ningun prefijo porque el router le quita la barra final).
+    if (in_array($ruta, RUTAS_GATE_PROPIO, true)) {
+        Auth::requerirSesion();
+        return;
+    }
     foreach (PREFIJOS_GATE_PROPIO as $prefijo) {
         if (str_starts_with($ruta, $prefijo)) {
             Auth::requerirSesion();
@@ -12665,6 +12731,120 @@ function resumenEtapasBarra(bool $todosAprobados, array $etapasManuales, ?string
 }
 
 // ===========================================================================
+//  Handler: GET /admin (SOLO SUPERADMIN) -- portada del panel de control.
+//
+//  Las cifras de la PLATAFORMA, no de una cuenta. La que manda es "cuantas
+//  cuentas pueden emitir en produccion": separa a quien contrato de quien
+//  efectivamente factura, que son dos numeros muy distintos y solo el segundo
+//  dice si el producto esta funcionando.
+//
+//  NINGUNA CIFRA SE CALCULA AQUI CON CRITERIO PROPIO. "Puede emitir" lo
+//  contesta estadoEmisionProduccion() -- el mismo predicado que usan el guard
+//  del servidor y el menu del tenant -- y el semaforo de folios lo contesta
+//  dashFoliosPorTipo(), el mismo que pinta el dashboard del tenant. Si el
+//  superadmin y el cliente vieran realidades distintas, la llamada telefonica
+//  del cliente seria imposible de atender.
+//
+//  Solo lectura: ninguna fila se modifica aqui.
+// ===========================================================================
+function handleAdminPanelGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $cuentas = $pdo->query('SELECT id, nombre, estado FROM cuenta')->fetchAll(PDO::FETCH_ASSOC);
+
+    $activas       = 0;
+    $suspendidas   = 0;
+    $puedenEmitir  = 0;
+    $alertaFolios  = [];
+
+    // UNA VUELTA POR CUENTA, y no una consulta agregada que resuelva todo de
+    // golpe. La agregada seria mas rapida y tendria que reimplementar las 3
+    // condiciones de produccion y la regla de folio disponible en SQL, o sea
+    // duplicarlas: exactamente la divergencia que estos helpers existen para
+    // impedir. El costo es proporcional a la cantidad de CUENTAS del SaaS
+    // (decenas), no a la de documentos, y esta pantalla la ve el equipo
+    // interno, no un cliente.
+    foreach ($cuentas as $cuenta) {
+        if ($cuenta['estado'] === 'activa') {
+            $activas++;
+        } else {
+            $suspendidas++;
+        }
+
+        $emision = estadoEmisionProduccion($pdo, (int) $cuenta['id']);
+        if ($emision['falta'] !== null) {
+            continue;
+        }
+        $puedenEmitir++;
+
+        // Los folios solo se miran en las cuentas que YA emiten: a una que
+        // todavia no cargo su CAF de produccion avisarle que le quedan pocos
+        // folios seria ruido, no alerta.
+        foreach (dashFoliosPorTipo($pdo, (string) $emision['rut']) as $folio) {
+            if ($folio['nivel'] === 'ok') {
+                continue;
+            }
+            $alertaFolios[] = [
+                'cuenta'      => (string) $cuenta['nombre'],
+                'cuentaId'    => (int) $cuenta['id'],
+                'tipo'        => nombreTipoDte($folio['tipo']),
+                'disponibles' => $folio['disponibles'],
+                'nivel'       => $folio['nivel'],
+            ];
+        }
+    }
+
+    // Documentos emitidos en produccion en los ultimos 30 dias. Se mide por
+    // created_at (cuando ESTE sistema lo emitio) y no por fecha_emision (la
+    // fecha que lleva impresa el documento, que el usuario puede fechar en el
+    // pasado): la pregunta aqui es cuanta actividad hubo, no que dia dicen los
+    // papeles.
+    $dteMes = (int) $pdo->query(
+        "SELECT COUNT(*) FROM dte_emitido WHERE ambiente = 'produccion' "
+        . 'AND created_at >= (NOW() - INTERVAL 30 DAY)'
+    )->fetchColumn();
+
+    $usuariosActivos = (int) $pdo->query(
+        "SELECT COUNT(*) FROM usuario WHERE estado = 'activo'"
+    )->fetchColumn();
+
+    // Correos que quedaron en error. Agrupados por cuenta porque la accion que
+    // sigue a este aviso ("reintentar la cola de fulano") es por cuenta.
+    $alertaCorreos = $pdo->query(
+        'SELECT c.id AS cuenta_id, c.nombre, COUNT(*) AS fallidos '
+        . 'FROM dte_envio_correo e '
+        . 'INNER JOIN cuenta c ON c.id = e.cuenta_id '
+        . "WHERE e.estado = 'error' "
+        . 'GROUP BY c.id, c.nombre ORDER BY fallidos DESC'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $ultimasAcciones = $pdo->query(
+        'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, '
+        . '       a.entidad_id, a.created_at '
+        . 'FROM admin_auditoria a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id '
+        . 'ORDER BY a.created_at DESC, a.id DESC LIMIT 10'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $changelog = require __DIR__ . '/../datos/changelog.php';
+
+    vista('admin-panel', [
+        'totalCuentas'    => count($cuentas),
+        'activas'         => $activas,
+        'suspendidas'     => $suspendidas,
+        'puedenEmitir'    => $puedenEmitir,
+        'dteMes'          => $dteMes,
+        'usuariosActivos' => $usuariosActivos,
+        'alertaFolios'    => $alertaFolios,
+        'alertaCorreos'   => $alertaCorreos,
+        'ultimasAcciones' => $ultimasAcciones,
+        'ultimoCambio'    => $changelog[0] ?? null,
+    ]);
+}
+
+// ===========================================================================
 //  Handler: GET /admin/tenants (SOLO SUPERADMIN)
 //
 //  Recorre TODAS las cuentas (no solo Auth::cuentaId(), a diferencia de todo
@@ -12674,14 +12854,123 @@ function resumenEtapasBarra(bool $todosAprobados, array $etapasManuales, ?string
 //  TAL CUAL, por cada rut_emisor encontrado -- no reinventa el calculo de en
 //  que etapa esta cada empresa. Solo lectura: ninguna fila se modifica aqui.
 // ===========================================================================
+/**
+ * Resumen de certificacion de UN rut_emisor: en que etapa esta y si ya tiene
+ * certificado y CAF de produccion.
+ *
+ * EXTRAIDO TAL CUAL del cuerpo del loop de handleAdminTenantsGet(), sin
+ * cambiarle una linea de logica, cuando la ficha de cuenta necesito el mismo
+ * dato. La alternativa era copiarlo, y una copia de este calculo es justo lo
+ * que este panel no puede permitirse: el listado y la ficha mostrarian
+ * distinta etapa para la misma empresa, y ninguna de las dos pantallas diria
+ * cual miente. Que el listado siga viendose identico despues de la extraccion
+ * se verifico comparando el HTML renderizado antes y despues.
+ *
+ * @return array{rutEmisor:string, setBasico:array, libroVentas:array, libroCompras:array,
+ *               todosAprobados:bool, etapasManuales:array, certConfirmadaAt:?string,
+ *               barra:list<array{nombre:string,clase:string}>,
+ *               tieneCertProduccion:bool, tieneCafProduccion:bool}
+ */
+function resumenEmisorCertificacion(PDO $pdo, int $cuentaId, string $rutEmisor): array
+{
+    $agrupado       = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor));
+    $sokPorTrackId  = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
+    $setBasico      = setBasicoAprobado($agrupado['envios'], $sokPorTrackId);
+    $ventas         = libroAprobado(listarLibros($pdo, $rutEmisor, 'VENTA'));
+    $compras        = libroAprobado(listarLibros($pdo, $rutEmisor, 'COMPRA'));
+    $todosAprobados = $setBasico['aprobado'] && $ventas['aprobado'] && $compras['aprobado'];
+
+    $etapasManuales   = calcularEtapasManuales(obtenerEtapasManualesRaw($pdo, $cuentaId), $todosAprobados);
+    $certConfirmadaAt = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
+
+    // Mismas consultas de produccion que pinta la estacion 7 del
+    // dashboard del tenant, centralizadas en estadoProduccion() para
+    // que superadmin y tenant no puedan divergir.
+    //
+    // De las 4 aqui solo se usan certificado y CAF: son las que van por
+    // rut_emisor y por eso viven dentro de este loop. La api_key va por
+    // CUENTA y se consulta mas abajo, fuera del loop, porque una cuenta
+    // sin emisores igual tiene que reportarla.
+    $prod = estadoProduccion($pdo, $cuentaId, $rutEmisor);
+
+    return [
+        'rutEmisor'           => $rutEmisor,
+        'setBasico'           => $setBasico,
+        'libroVentas'         => $ventas,
+        'libroCompras'        => $compras,
+        'todosAprobados'      => $todosAprobados,
+        'etapasManuales'      => $etapasManuales,
+        'certConfirmadaAt'    => $certConfirmadaAt,
+        'barra'               => resumenEtapasBarra($todosAprobados, $etapasManuales, $certConfirmadaAt),
+        'tieneCertProduccion' => $prod['certificado'],
+        'tieneCafProduccion'  => $prod['caf'],
+    ];
+}
+
+/**
+ * WHERE del listado de cuentas a partir del buscador y del filtro de estado.
+ *
+ * DEL LADO DEL SERVIDOR y no filtrando en JavaScript sobre la tabla ya
+ * dibujada: cada fila del listado cuesta varias consultas de certificacion
+ * (ver el loop de handleAdminTenantsGet), asi que filtrar despues de armarlas
+ * seria pagar el precio completo para tirar casi todo. Con 7 cuentas da igual;
+ * con 700 es la diferencia entre una pantalla y un timeout.
+ *
+ * El texto busca en nombre, email y RUT de cualquier emisor de la cuenta. El
+ * RUT va por EXISTS y no por JOIN para que una cuenta con dos emisores no
+ * aparezca dos veces.
+ *
+ * Cada valor viaja en su PROPIO placeholder, aunque el texto sea el mismo en
+ * los tres LIKE: repetir un nombre de placeholder solo funciona con prepares
+ * emuladas, y de eso no depende nada aqui.
+ *
+ * @return array{0:string, 1:array<string,string>} SQL del WHERE (vacio si no hay filtros) y sus parametros.
+ */
+function filtroCuentasAdmin(string $busqueda, string $estado): array
+{
+    $condiciones = [];
+    $parametros  = [];
+
+    if ($busqueda !== '') {
+        // LIKE con comodines a ambos lados: quien busca un RUT casi nunca se
+        // acuerda del digito verificador, y quien busca una empresa escribe
+        // una palabra del medio del nombre.
+        $like = '%' . $busqueda . '%';
+        $condiciones[] = '(c.nombre LIKE :q_nombre OR c.email LIKE :q_email '
+            . 'OR EXISTS (SELECT 1 FROM dte_emisor e WHERE e.cuenta_id = c.id AND e.rut_emisor LIKE :q_rut))';
+        $parametros[':q_nombre'] = $like;
+        $parametros[':q_email']  = $like;
+        $parametros[':q_rut']    = $like;
+    }
+
+    // Whitelist contra el ENUM de la columna: un valor cualquiera de la URL no
+    // llega nunca a la consulta, ni siquiera como parametro.
+    if (in_array($estado, ['activa', 'suspendida'], true)) {
+        $condiciones[] = 'c.estado = :estado';
+        $parametros[':estado'] = $estado;
+    }
+
+    return [$condiciones === [] ? '' : ' WHERE ' . implode(' AND ', $condiciones), $parametros];
+}
+
 function handleAdminTenantsGet(): void
 {
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
-    $cuentas = $pdo->query(
-        'SELECT id, email, nombre, estado, created_at FROM cuenta ORDER BY created_at DESC'
-    )->fetchAll(PDO::FETCH_ASSOC);
+    $busqueda = trim((string) ($_GET['q'] ?? ''));
+    $estado   = (string) ($_GET['estado'] ?? '');
+
+    [$where, $parametros] = filtroCuentasAdmin($busqueda, $estado);
+
+    $stmtCuentas = $pdo->prepare(
+        'SELECT c.id, c.email, c.nombre, c.estado, c.created_at FROM cuenta c'
+        . $where . ' ORDER BY c.created_at DESC'
+    );
+    $stmtCuentas->execute($parametros);
+    $cuentas = $stmtCuentas->fetchAll(PDO::FETCH_ASSOC);
+
+    $totalCuentas = (int) $pdo->query('SELECT COUNT(*) FROM cuenta')->fetchColumn();
 
     $resumen = [];
     foreach ($cuentas as $cuenta) {
@@ -12695,40 +12984,7 @@ function handleAdminTenantsGet(): void
 
         $emisores = [];
         foreach ($rutsEmisor as $rutEmisor) {
-            $rutEmisor = (string) $rutEmisor;
-
-            $agrupado       = agruparEmitidosPorEnvio(listarEmitidosFactura($pdo, $rutEmisor));
-            $sokPorTrackId  = (new MySqlSetBasicoSokRepository($pdo))->confirmadosPorTrackId($rutEmisor, Ambiente::Certificacion);
-            $setBasico      = setBasicoAprobado($agrupado['envios'], $sokPorTrackId);
-            $ventas         = libroAprobado(listarLibros($pdo, $rutEmisor, 'VENTA'));
-            $compras        = libroAprobado(listarLibros($pdo, $rutEmisor, 'COMPRA'));
-            $todosAprobados = $setBasico['aprobado'] && $ventas['aprobado'] && $compras['aprobado'];
-
-            $etapasManuales   = calcularEtapasManuales(obtenerEtapasManualesRaw($pdo, $cuentaId), $todosAprobados);
-            $certConfirmadaAt = obtenerCertificacionConfirmadaAt($pdo, $cuentaId);
-
-            // Mismas consultas de produccion que pinta la estacion 7 del
-            // dashboard del tenant, centralizadas en estadoProduccion() para
-            // que superadmin y tenant no puedan divergir.
-            //
-            // De las 4 aqui solo se usan certificado y CAF: son las que van por
-            // rut_emisor y por eso viven dentro de este loop. La api_key va por
-            // CUENTA y se consulta mas abajo, fuera del loop, porque una cuenta
-            // sin emisores igual tiene que reportarla.
-            $prod = estadoProduccion($pdo, $cuentaId, $rutEmisor);
-
-            $emisores[] = [
-                'rutEmisor'           => $rutEmisor,
-                'setBasico'           => $setBasico,
-                'libroVentas'         => $ventas,
-                'libroCompras'        => $compras,
-                'todosAprobados'      => $todosAprobados,
-                'etapasManuales'      => $etapasManuales,
-                'certConfirmadaAt'    => $certConfirmadaAt,
-                'barra'               => resumenEtapasBarra($todosAprobados, $etapasManuales, $certConfirmadaAt),
-                'tieneCertProduccion' => $prod['certificado'],
-                'tieneCafProduccion'  => $prod['caf'],
-            ];
+            $emisores[] = resumenEmisorCertificacion($pdo, $cuentaId, (string) $rutEmisor);
         }
 
         // Mismo criterio que estadoProduccion(): solo keys EXTERNAS activas.
@@ -12749,7 +13005,661 @@ function handleAdminTenantsGet(): void
         ];
     }
 
-    vista('admin-tenants', ['resumen' => $resumen, 'flash' => flashTomar()]);
+    vista('admin-tenants', [
+        'resumen'      => $resumen,
+        'flash'        => flashTomar(),
+        'busqueda'     => $busqueda,
+        'estado'       => $estado,
+        'totalCuentas' => $totalCuentas,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/tenants/{id} (SOLO SUPERADMIN) -- ficha de una cuenta.
+//
+//  Todo lo que hay que saber de un cliente en una pantalla, para poder atender
+//  su llamada sin ir saltando entre seis tablas. ESTRICTAMENTE SOLO LECTURA:
+//  ni un UPDATE, ni un formulario. Las tres acciones administrativas que
+//  existen siguen viviendo en el listado.
+//
+//  LO QUE NO SE MUESTRA, Y NO ES UN OLVIDO. Nunca salen a pantalla
+//  usuario.password_hash, api_key.key_hash, api_key.secreto_cifrado ni
+//  dte_certificado.cert_data_cifrado/pkey_data_cifrado. De las API keys solo
+//  el prefijo, que existe precisamente para poder nombrarlas sin revelarlas.
+//  Ninguna de esas columnas se lee siquiera: no estan en los SELECT.
+//
+//  LAS TABLAS DE DTE NO TIENEN cuenta_id: cuelgan de rut_emisor. Por eso
+//  todas las consultas de certificados, folios y documentos se acotan a la
+//  lista de RUT que pertenecen A ESTA cuenta, obtenida de dte_emisor. Ese IN
+//  es el limite de tenant de esta pantalla, aunque el superadmin pueda
+//  cruzarlo: sin el, la ficha de una cuenta mostraria documentos de otra.
+// ===========================================================================
+function handleAdminTenantFichaGet(int $cuentaId): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, created_at FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $cuentaId]);
+    $cuenta = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // 404 y no 500: un id que no existe es un enlace viejo o un numero
+    // escrito a mano, no una falla del sistema.
+    if ($cuenta === false) {
+        http_response_code(404);
+        echo '404 - cuenta no encontrada';
+        exit;
+    }
+
+    // Usuarios. rol es la propiedad ESTRUCTURAL (owner/colaborador/superadmin)
+    // y rol_id el rol configurable; se muestran los dos porque responden
+    // preguntas distintas y ver solo uno lleva a conclusiones equivocadas.
+    // usuario NO tiene columna de ultimo acceso, asi que esa columna que
+    // pedia el diseno no se puede dibujar (ver la nota en Pendientes).
+    $stmtUsuarios = $pdo->prepare(
+        'SELECT u.id, u.email, u.rol, r.nombre AS rol_nombre, u.estado, u.demo, u.created_at '
+        . 'FROM usuario u LEFT JOIN rol r ON r.id = u.rol_id '
+        . 'WHERE u.cuenta_id = :id ORDER BY u.id'
+    );
+    $stmtUsuarios->execute([':id' => $cuentaId]);
+    $usuarios = $stmtUsuarios->fetchAll(PDO::FETCH_ASSOC);
+
+    $stmtRoles = $pdo->prepare(
+        'SELECT r.id, r.nombre, r.created_at, '
+        . '       (SELECT COUNT(*) FROM permiso p WHERE p.rol_id = r.id)  AS permisos, '
+        . '       (SELECT COUNT(*) FROM usuario u WHERE u.rol_id = r.id)  AS usuarios '
+        . 'FROM rol r WHERE r.cuenta_id = :id ORDER BY r.nombre'
+    );
+    $stmtRoles->execute([':id' => $cuentaId]);
+    $roles = $stmtRoles->fetchAll(PDO::FETCH_ASSOC);
+
+    // Emisores de los dos ambientes. La barra de 6 etapas solo aplica a
+    // certificacion (es el proceso ante el SII); produccion no tiene etapas,
+    // tiene resolucion.
+    $stmtEmisores = $pdo->prepare(
+        'SELECT id, rut_emisor, ambiente, razon_social, giro, dir_origen, cmna_origen, '
+        . '       resolucion_fecha, resolucion_numero '
+        . 'FROM dte_emisor WHERE cuenta_id = :id ORDER BY ambiente, rut_emisor'
+    );
+    $stmtEmisores->execute([':id' => $cuentaId]);
+    $emisores = $stmtEmisores->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($emisores as &$emisor) {
+        $emisor['resumen'] = $emisor['ambiente'] === 'certificacion'
+            ? resumenEmisorCertificacion($pdo, $cuentaId, (string) $emisor['rut_emisor'])
+            : null;
+    }
+    unset($emisor);
+
+    // RUT de esta cuenta: el acotamiento de todo lo que sigue. Se deduplica
+    // porque el mismo RUT suele estar en certificacion Y en produccion.
+    $ruts = array_values(array_unique(array_map(
+        static fn (array $e): string => (string) $e['rut_emisor'],
+        $emisores
+    )));
+
+    $certificados = [];
+    $folios       = [];
+    $porMes       = [];
+    $documentos   = [];
+
+    if ($ruts !== []) {
+        // Lista de placeholders :rut0, :rut1, ... Un IN construido con los
+        // valores interpolados seria inyeccion; uno con placeholders fijos no
+        // serviria para una cantidad variable de emisores.
+        $marcas   = [];
+        $paramRut = [];
+        foreach ($ruts as $i => $rut) {
+            $marcas[]                 = ':rut' . $i;
+            $paramRut[':rut' . $i]    = $rut;
+        }
+        $listaRut = implode(', ', $marcas);
+
+        // Certificados: identificacion y fecha de carga. dte_certificado NO
+        // guarda la vigencia (vive dentro del propio certificado, cifrado), asi
+        // que la columna "vence" no se puede dibujar sin descifrar -- fuera de
+        // alcance de una pantalla de consulta.
+        $stmtCert = $pdo->prepare(
+            'SELECT rut_emisor, ambiente, rut_sender, created_at FROM dte_certificado '
+            . "WHERE rut_emisor IN ($listaRut) ORDER BY ambiente, rut_emisor"
+        );
+        $stmtCert->execute($paramRut);
+        $certificados = $stmtCert->fetchAll(PDO::FETCH_ASSOC);
+
+        // CAF y folios. proximo_folio_inicial y no folio_desde para medir el
+        // consumo, mismo criterio que dashFoliosPorTipo(): en un CAF migrado
+        // desde otro proveedor folio_desde contaria como consumo propio los
+        // folios que el emisor gasto antes de llegar aqui.
+        $stmtFolios = $pdo->prepare(
+            'SELECT f.rut_emisor, f.ambiente, f.tipo_dte, f.proximo_folio, '
+            . '       f.proximo_folio_inicial, f.folio_hasta, c.folio_desde, c.estado, c.created_at '
+            . 'FROM dte_folio f INNER JOIN dte_caf c ON c.id = f.caf_id '
+            . "WHERE f.rut_emisor IN ($listaRut) "
+            . 'ORDER BY f.ambiente, f.tipo_dte, c.folio_desde'
+        );
+        $stmtFolios->execute($paramRut);
+        $folios = $stmtFolios->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmtMes = $pdo->prepare(
+            "SELECT DATE_FORMAT(created_at, '%Y-%m') AS mes, ambiente, COUNT(*) AS n "
+            . "FROM dte_emitido WHERE rut_emisor IN ($listaRut) "
+            . 'AND created_at >= (NOW() - INTERVAL 12 MONTH) '
+            . 'GROUP BY mes, ambiente ORDER BY mes DESC'
+        );
+        $stmtMes->execute($paramRut);
+        $porMes = $stmtMes->fetchAll(PDO::FETCH_ASSOC);
+
+        $stmtDocs = $pdo->prepare(
+            'SELECT rut_emisor, ambiente, tipo_dte, folio, estado, fecha_emision, total, created_at '
+            . "FROM dte_emitido WHERE rut_emisor IN ($listaRut) "
+            . 'ORDER BY created_at DESC, id DESC LIMIT 20'
+        );
+        $stmtDocs->execute($paramRut);
+        $documentos = $stmtDocs->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+    // API keys: prefijo y metadatos, NUNCA key_hash ni secreto_cifrado.
+    $stmtKeys = $pdo->prepare(
+        'SELECT prefijo, ambiente, tipo, estado, rut_emisor_scope, last_used_at, created_at '
+        . 'FROM api_key WHERE cuenta_id = :id ORDER BY ambiente, created_at DESC'
+    );
+    $stmtKeys->execute([':id' => $cuentaId]);
+    $apiKeys = $stmtKeys->fetchAll(PDO::FETCH_ASSOC);
+
+    // Auditoria de esta cuenta. Ademas de entidad_tipo='cuenta' se traen las
+    // filas de sus dte_emisor: la accion administrativa mas frecuente es
+    // revertir una etapa, que se registra contra el emisor, y una ficha que la
+    // ocultara mostraria la cuenta como si nunca la hubieran tocado.
+    $idsEmisor = array_map(static fn (array $e): int => (int) $e['id'], $emisores);
+    $condicion = 'a.entidad_tipo = :tipo AND a.entidad_id = :cuenta_id';
+    $paramAud  = [':tipo' => 'cuenta', ':cuenta_id' => $cuentaId];
+    if ($idsEmisor !== []) {
+        $marcasEmisor = [];
+        foreach ($idsEmisor as $i => $idEmisor) {
+            $marcasEmisor[]                 = ':emisor' . $i;
+            $paramAud[':emisor' . $i]       = $idEmisor;
+        }
+        $condicion = '(' . $condicion . ') OR (a.entidad_tipo = :tipoEmisor AND a.entidad_id IN ('
+            . implode(', ', $marcasEmisor) . '))';
+        $paramAud[':tipoEmisor'] = 'dte_emisor';
+    }
+
+    $stmtAud = $pdo->prepare(
+        'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, '
+        . '       a.entidad_id, a.valor_anterior, a.valor_nuevo, a.created_at '
+        . 'FROM admin_auditoria a LEFT JOIN usuario u ON u.id = a.usuario_id '
+        . "WHERE $condicion ORDER BY a.created_at DESC, a.id DESC"
+    );
+    $stmtAud->execute($paramAud);
+    $auditoria = $stmtAud->fetchAll(PDO::FETCH_ASSOC);
+
+    vista('admin-tenant-ficha', [
+        'cuenta'       => $cuenta,
+        'usuarios'     => $usuarios,
+        'roles'        => $roles,
+        'emisores'     => $emisores,
+        'certificados' => $certificados,
+        'folios'       => $folios,
+        'apiKeys'      => $apiKeys,
+        'porMes'       => $porMes,
+        'documentos'   => $documentos,
+        'auditoria'    => $auditoria,
+        'puedeEmitir'  => estadoEmisionProduccion($pdo, $cuentaId),
+    ]);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/base-datos (SOLO SUPERADMIN) -- explorador del esquema.
+//
+//  TODO SALE DE information_schema Y FILTRANDO POR DATABASE(), nunca por un
+//  nombre de base escrito a mano: lo que se informa es siempre la base a la
+//  que apuntan las credenciales, igual que en scripts/estado_migraciones.php.
+//  Con un nombre fijo, esta pantalla podria estar describiendo una base
+//  distinta de la que el panel esta usando, y no habria forma de notarlo.
+//
+//  PROHIBIDO EL SQL ARBITRARIO, y por eso aqui no hay campo de consulta libre
+//  ni EXPLAIN ni nada parecido. El unico parametro que acepta la pantalla es un
+//  texto de busqueda, y ese texto NO VIAJA A NINGUNA CONSULTA: filtra en PHP la
+//  lista que information_schema ya devolvio. Asi no existe el problema de
+//  validar un nombre de tabla que llega por la URL, porque ningun nombre de
+//  tabla llega por la URL.
+//
+//  Solo lectura, como todo el panel de control.
+// ===========================================================================
+function handleAdminBaseDatosGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $base = (string) $pdo->query('SELECT DATABASE()')->fetchColumn();
+
+    // TABLE_ROWS es una ESTIMACION en InnoDB, no un conteo: el motor la saca de
+    // sus estadisticas y puede errarle por mucho. Se muestra igual porque sirve
+    // para ordenar por tamano, pero rotulada como aproximada -- ver la vista.
+    $tablas = $pdo->query(
+        'SELECT TABLE_NAME, ENGINE, TABLE_COLLATION, TABLE_ROWS, TABLE_COMMENT '
+        . 'FROM information_schema.TABLES '
+        . "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' "
+        . 'ORDER BY TABLE_NAME'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $columnas = $pdo->query(
+        'SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, '
+        . '       COLUMN_KEY, EXTRA, COLUMN_COMMENT '
+        . 'FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() '
+        . 'ORDER BY TABLE_NAME, ORDINAL_POSITION'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $clavesForaneas = $pdo->query(
+        'SELECT TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME '
+        . 'FROM information_schema.KEY_COLUMN_USAGE '
+        . 'WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IS NOT NULL '
+        . 'ORDER BY TABLE_NAME, COLUMN_NAME'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    // Un indice con varias columnas es UNA fila por columna en STATISTICS; se
+    // agrupan aqui para que la vista muestre "ix_algo (a, b)" y no dos indices
+    // con el mismo nombre.
+    $indices = $pdo->query(
+        'SELECT TABLE_NAME, INDEX_NAME, NON_UNIQUE, '
+        . "       GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX SEPARATOR ', ') AS COLUMNAS "
+        . 'FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() '
+        . 'GROUP BY TABLE_NAME, INDEX_NAME, NON_UNIQUE ORDER BY TABLE_NAME, INDEX_NAME'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    // --- Reagrupado por tabla, para que la vista no tenga que buscar ---
+    $nombresTabla     = array_map(static fn (array $t): string => (string) $t['TABLE_NAME'], $tablas);
+    $columnasPorTabla = [];
+    $soloNombres      = [];
+    foreach ($columnas as $col) {
+        $columnasPorTabla[$col['TABLE_NAME']][] = $col;
+        $soloNombres[$col['TABLE_NAME']][]      = (string) $col['COLUMN_NAME'];
+    }
+
+    // Destino de cada FK, indexado por tabla.columna: la vista lo necesita para
+    // pintar "-> tabla.columna" al lado de la columna que la tiene.
+    $fkPorColumna = [];
+    $fkParaGrafo  = [];
+    foreach ($clavesForaneas as $fk) {
+        $fkPorColumna[$fk['TABLE_NAME'] . '.' . $fk['COLUMN_NAME']]
+            = $fk['REFERENCED_TABLE_NAME'] . '.' . $fk['REFERENCED_COLUMN_NAME'];
+        $fkParaGrafo[] = [
+            'tabla'    => (string) $fk['TABLE_NAME'],
+            'columna'  => (string) $fk['COLUMN_NAME'],
+            'refTabla' => (string) $fk['REFERENCED_TABLE_NAME'],
+        ];
+    }
+
+    $indicesPorTabla = [];
+    foreach ($indices as $ix) {
+        $indicesPorTabla[$ix['TABLE_NAME']][] = $ix;
+    }
+
+    $aislamiento = AislamientoTenant::clasificar($nombresTabla, $soloNombres, $fkParaGrafo);
+
+    // Cuantas tablas hay de cada clase, para el resumen de arriba. El numero
+    // que importa es el de sin_ruta: son las tablas donde un WHERE olvidado no
+    // lo atrapa nadie.
+    $conteoAislamiento = [];
+    foreach ($aislamiento as $clasificacion) {
+        $clase = $clasificacion['clase'];
+        $conteoAislamiento[$clase] = ($conteoAislamiento[$clase] ?? 0) + 1;
+    }
+
+    // El diagrama se arma SOLO cuando se pide esa vista. No es por ahorrar
+    // milisegundos de PHP: la vista de diagrama es la unica pagina del panel
+    // que carga un archivo JS, y son 3,3 MB de mermaid. Servirlos tambien a
+    // quien viene a mirar una columna seria cobrarle a todos el costo del
+    // diagrama.
+    $vista     = ($_GET['vista'] ?? '') === 'diagrama' ? 'diagrama' : 'detalle';
+    $diagramaEr = $vista === 'diagrama'
+        ? DiagramaEr::construir($nombresTabla, $columnasPorTabla, $fkParaGrafo)
+        : '';
+
+    // Busqueda: filtra EN PHP la lista ya traida. Nunca toca una consulta.
+    $busqueda = trim((string) ($_GET['q'] ?? ''));
+    if ($busqueda !== '') {
+        $tablas = array_values(array_filter(
+            $tablas,
+            static fn (array $t): bool => stripos((string) $t['TABLE_NAME'], $busqueda) !== false
+        ));
+    }
+
+    vista('admin-base-datos', [
+        'base'              => $base,
+        'tablas'            => $tablas,
+        'columnasPorTabla'  => $columnasPorTabla,
+        'fkPorColumna'      => $fkPorColumna,
+        'indicesPorTabla'   => $indicesPorTabla,
+        'aislamiento'       => $aislamiento,
+        'conteoAislamiento' => $conteoAislamiento,
+        'totalTablas'       => count($nombresTabla),
+        'totalFks'          => count($clavesForaneas),
+        'busqueda'          => $busqueda,
+        'vista'             => $vista,
+        'diagramaEr'        => $diagramaEr,
+        'migraciones'       => estadoMigracionesAdmin($pdo),
+    ]);
+}
+
+/**
+ * Veredicto de cada migracion, reusando el catalogo de
+ * scripts/catalogo_migraciones.php.
+ *
+ * NO REIMPLEMENTA NADA: las huellas y la regla de los tres veredictos son las
+ * mismas funciones que corre el chequeo de despliegue. Si esta pantalla tuviera
+ * su propia copia, el dia que se desincronizaran el deploy diria "al dia" y el
+ * panel "falta la 043" -- o al reves, que es peor -- y nada indicaria cual de
+ * los dos tiene razon.
+ *
+ * El require va aqui adentro y no en el bootstrap del panel porque este es el
+ * unico handler que lo necesita, y el archivo declara 42 entradas y varias
+ * funciones que no tienen por que cargarse en cada request del panel.
+ *
+ * @return list<array{id:string, archivo:string, nota:string, veredicto:string,
+ *                    presentes:int, esperados:int, diferida:?string, huellas:list<array{desc:string, ok:bool}>}>
+ */
+function estadoMigracionesAdmin(PDO $pdo): array
+{
+    require_once __DIR__ . '/../../scripts/catalogo_migraciones.php';
+
+    $salida = [];
+    foreach (MIGRACIONES as $migracion) {
+        $presentes = 0;
+        $esperados = 0;
+        $huellas   = [];
+
+        // evaluarHuella() devuelve las claves en SINGULAR ('presente' /
+        // 'esperado'): son el conteo de UNA huella, y se acumulan aqui para
+        // sacar el veredicto de la migracion completa.
+        foreach ($migracion['huellas'] as $huella) {
+            $evaluada   = evaluarHuella($pdo, $huella);
+            $presentes += $evaluada['presente'];
+            $esperados += $evaluada['esperado'];
+            $huellas[]  = [
+                'desc' => (string) $huella['desc'],
+                'ok'   => $evaluada['presente'] === $evaluada['esperado'],
+            ];
+        }
+
+        $salida[] = [
+            'id'        => (string) $migracion['id'],
+            'archivo'   => (string) $migracion['archivo'],
+            'nota'      => (string) ($migracion['nota'] ?? ''),
+            'veredicto' => veredicto($presentes, $esperados),
+            'presentes' => $presentes,
+            'esperados' => $esperados,
+            // 'diferida' es un STRING con el motivo y no un booleano, a
+            // proposito: obliga a escribir por que. Con un true la marca se
+            // pone en dos segundos y nadie recuerda la razon seis semanas
+            // despues.
+            'diferida'  => isset($migracion['diferida']) ? (string) $migracion['diferida'] : null,
+            'huellas'   => $huellas,
+        ];
+    }
+
+    return $salida;
+}
+
+// ===========================================================================
+//  Handler: GET /admin/roles-permisos (SOLO SUPERADMIN)
+//
+//  Cuatro bloques, y a proposito mezclan dos fuentes distintas:
+//
+//    1. El concepto      texto, en la vista.
+//    2. El catalogo      sale del CODIGO (CATALOGO_MODULOS x CATALOGO_ACCIONES
+//                        contados sobre PERMISOS_RUTA): es la respuesta a "que
+//                        habilita de verdad ventas:emitir".
+//    3. Los roles reales salen de la BASE, de todas las cuentas.
+//    4. La cobertura     sale del CODIGO otra vez, cruzando lo que el router
+//                        despacha contra lo que esta declarado.
+//
+//  Que 2 y 4 vengan del codigo y no de una tabla es el punto: un permiso no es
+//  lo que dice una fila, es lo que exigen las rutas. Preguntarselo a la base
+//  daria la lista de lo que alguien concedio, no la de lo que hace falta.
+// ===========================================================================
+function handleAdminRolesPermisosGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    // --- Bloque 2: el catalogo, con las rutas que exige cada par -----------
+    $catalogo = [];
+    foreach (CATALOGO_MODULOS as $modulo) {
+        foreach (CATALOGO_ACCIONES as $accion) {
+            $catalogo[$modulo][$accion] = [];
+        }
+    }
+    foreach (PERMISOS_RUTA as $clave => [$modulo, $accion]) {
+        $catalogo[$modulo][$accion][] = $clave;
+    }
+    foreach (PERMISOS_RUTA_PATRON as [$metodoPatron, $patron, $modulo, $accion]) {
+        $catalogo[$modulo][$accion][] = $metodoPatron . ' ' . $patron;
+    }
+
+    // Acciones que al menos UNA ruta exige para cada modulo. Es el conjunto
+    // contra el que tiene sentido decir que un rol "tiene todo": un modulo
+    // donde ninguna ruta pide 'emitir' no puede exigirle a nadie ese permiso
+    // para estar completo.
+    $accionesUsadas = [];
+    foreach ($catalogo as $modulo => $porAccion) {
+        foreach ($porAccion as $accion => $rutas) {
+            if ($rutas !== []) {
+                $accionesUsadas[$modulo][] = $accion;
+            }
+        }
+    }
+
+    // --- Bloque 3: los roles reales de TODAS las cuentas -------------------
+    $roles = $pdo->query(
+        'SELECT r.id, r.nombre, r.created_at, c.id AS cuenta_id, c.nombre AS cuenta_nombre, '
+        . '       (SELECT COUNT(*) FROM usuario u WHERE u.rol_id = r.id) AS usuarios '
+        . 'FROM rol r INNER JOIN cuenta c ON c.id = r.cuenta_id '
+        . 'ORDER BY c.nombre, r.nombre'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $permisosPorRol = [];
+    foreach ($pdo->query('SELECT rol_id, modulo, accion FROM permiso') as $fila) {
+        $permisosPorRol[(int) $fila['rol_id']][(string) $fila['modulo']][] = (string) $fila['accion'];
+    }
+
+    // Agrupados por cuenta: son muchas filas y la vista los pliega.
+    $rolesPorCuenta = [];
+    foreach ($roles as $rol) {
+        $rolesPorCuenta[(int) $rol['cuenta_id']]['nombre'] = (string) $rol['cuenta_nombre'];
+        $rolesPorCuenta[(int) $rol['cuenta_id']]['roles'][] = $rol + [
+            'permisos' => $permisosPorRol[(int) $rol['id']] ?? [],
+        ];
+    }
+
+    // Cuantos usuarios NO pasan por rol_id: owner y superadmin se saltan el
+    // gate entero, asi que un panel que solo contara roles daria a entender
+    // que todo el mundo esta gobernado por esta matriz.
+    $usuariosPorTipo = $pdo->query(
+        'SELECT rol, COUNT(*) AS n FROM usuario GROUP BY rol ORDER BY rol'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    $colaboradoresSinRol = (int) $pdo->query(
+        "SELECT COUNT(*) FROM usuario WHERE rol = 'colaborador' AND rol_id IS NULL"
+    )->fetchColumn();
+
+    // --- Bloque 4: cobertura del gate --------------------------------------
+    vista('admin-roles-permisos', [
+        'catalogo'            => $catalogo,
+        'accionesUsadas'      => $accionesUsadas,
+        'rolesPorCuenta'      => $rolesPorCuenta,
+        'totalRoles'          => count($roles),
+        'usuariosPorTipo'     => $usuariosPorTipo,
+        'colaboradoresSinRol' => $colaboradoresSinRol,
+        'cobertura'           => coberturaDelGate(),
+    ]);
+}
+
+/**
+ * Cruza las rutas que el router despacha contra lo que esta declarado.
+ *
+ * ESTO NO ES UNA LISTA DE AGUJEROS DE SEGURIDAD, y conviene decirlo antes de
+ * mirarla. Se leyo exigirPermisoDeRuta() para escribir esto: su paso 4 hace
+ * error_log(), http_response_code(404) y exit. O sea que una ruta no declarada
+ * NO pasa -- la peticion termina ahi y ningun handler llega a ejecutarse. El
+ * gate falla cerrado, que es la unica direccion segura del error.
+ *
+ * Lo que reporta esta lista es el efecto secundario incomodo de esa decision:
+ * la ruta no declarada devuelve un 404 comun, indistinguible de un enlace roto
+ * o de un typo. No se rompe con un mensaje que diga "falta declararme": se
+ * rompe en silencio, y solo queda rastro en el error_log del servidor. Este
+ * bloque es el unico lugar donde ese olvido se ve antes de que alguien reporte
+ * que "una pantalla no anda".
+ *
+ * @return array{rutas:list<array{metodo:string, ruta:string, esPatron:bool, estado:string, detalle:string}>,
+ *               conteo:array<string,int>, total:int}
+ */
+function coberturaDelGate(): array
+{
+    // El fuente del propio front controller: la unica fuente de verdad sobre
+    // que rutas existe es el router mismo.
+    $fuente = (string) file_get_contents(__FILE__);
+    $rutas  = RutasDelRouter::extraer($fuente);
+
+    $salida = [];
+    $conteo = [];
+
+    foreach ($rutas as $ruta) {
+        [$estado, $detalle] = $ruta['esPatron']
+            ? clasificarRutaPatron($ruta['metodo'], $ruta['ruta'])
+            : clasificarRutaExacta($ruta['metodo'], $ruta['ruta']);
+
+        $salida[]        = $ruta + ['estado' => $estado, 'detalle' => $detalle];
+        $conteo[$estado] = ($conteo[$estado] ?? 0) + 1;
+    }
+
+    // Las no declaradas primero: es lo unico que pide accion.
+    usort($salida, static function (array $a, array $b): int {
+        $peso = ['sin_declarar' => 0, 'indeterminado' => 1, 'permiso' => 2, 'gate_propio' => 3, 'publica' => 4];
+
+        return ($peso[$a['estado']] <=> $peso[$b['estado']])
+            ?: strcmp($a['metodo'] . $a['ruta'], $b['metodo'] . $b['ruta']);
+    });
+
+    return ['rutas' => $salida, 'conteo' => $conteo, 'total' => count($salida)];
+}
+
+/**
+ * Como queda cubierta una ruta literal. El orden de las comprobaciones es el
+ * MISMO que sigue exigirPermisoDeRuta(): si aqui se evaluara en otro orden, el
+ * informe podria atribuirle a una ruta una cobertura distinta de la que el gate
+ * le aplica de verdad.
+ *
+ * @return array{0:string, 1:string}
+ */
+function clasificarRutaExacta(string $metodo, string $ruta): array
+{
+    $clave = $metodo . ' ' . $ruta;
+
+    if (in_array($clave, RUTAS_PUBLICAS, true)) {
+        return ['publica', 'RUTAS_PUBLICAS'];
+    }
+    foreach (PATRONES_PUBLICOS as $patron) {
+        if (preg_match($patron, $ruta) === 1) {
+            return ['publica', 'PATRONES_PUBLICOS'];
+        }
+    }
+    if (in_array($ruta, RUTAS_GATE_PROPIO, true)) {
+        return ['gate_propio', 'RUTAS_GATE_PROPIO'];
+    }
+    foreach (PREFIJOS_GATE_PROPIO as $prefijo) {
+        if (str_starts_with($ruta, $prefijo)) {
+            return ['gate_propio', 'prefijo ' . $prefijo];
+        }
+    }
+    if (isset(PERMISOS_RUTA[$clave])) {
+        [$modulo, $accion] = PERMISOS_RUTA[$clave];
+        return ['permiso', $modulo . ':' . $accion];
+    }
+    foreach (PERMISOS_RUTA_PATRON as [$m, $patron, $modulo, $accion]) {
+        if ($metodo === $m && preg_match($patron, $ruta) === 1) {
+            return ['permiso', $modulo . ':' . $accion . ' (por patron)'];
+        }
+    }
+
+    return ['sin_declarar', 'cae en el 404 del paso 4'];
+}
+
+/**
+ * Como queda cubierta una ruta CON PARAMETRO.
+ *
+ * SE PREGUNTA CON UNA URL, NO COMPARANDO REGEX. El gate nunca compara un patron
+ * contra otro: corre preg_match del patron declarado contra la URL que llego.
+ * Comparar los textos de los dos regex parece equivalente y no lo es -- dos
+ * regex escritos distinto pueden cubrir las mismas URLs.
+ *
+ * Paso de verdad en este router: el despacho de /activar usa
+ * '#^/activar/([0-9a-f]{64})$#' porque necesita capturar el token, y
+ * PATRONES_PUBLICOS declara '#^/activar/[0-9a-f]{64}$#' sin el grupo porque
+ * solo necesita decidir. Son la misma ruta. La comparacion literal las daba por
+ * NO DECLARADAS, o sea que el informe gritaba por dos rutas que el gate deja
+ * pasar sin problema. Un informe que cria lobos deja de leerse.
+ *
+ * Por eso se genera una URL que ese patron acepta y se la clasifica con
+ * clasificarRutaExacta(), que sigue el mismo orden que exigirPermisoDeRuta().
+ *
+ * @return array{0:string, 1:string}
+ */
+function clasificarRutaPatron(string $metodo, string $patron): array
+{
+    $muestra = RutasDelRouter::muestraDePatron($patron);
+
+    // Sin URL de ejemplo NO SE AFIRMA NADA. Preferible un "no se pudo
+    // determinar" que se investiga, a un veredicto inventado que se cree.
+    if ($muestra === null) {
+        return ['indeterminado', 'no se pudo generar una URL de ejemplo para este patron'];
+    }
+
+    [$estado, $detalle] = clasificarRutaExacta($metodo, $muestra);
+
+    return [$estado, $detalle . ' (probado con ' . $muestra . ')'];
+}
+
+// ===========================================================================
+//  Handlers: las cuatro paginas de DOCUMENTACION del panel de control.
+//
+//  GET /admin/changelog   GET /admin/pendientes
+//  GET /admin/flujos      GET /admin/documentos
+//
+//  NO TOCAN LA BASE. Cada una lee un archivo de panel/datos/ que solo devuelve
+//  un array. Aun asi empiezan con exigirSuperadmin(), como todo /admin/*: el
+//  contenido describe como funciona el sistema por dentro -- que rutas existen,
+//  que falta construir, donde estan los riesgos conocidos -- y eso es
+//  informacion de la casa, no material publico. Ademas la regla vale mas que la
+//  excepcion: "todo handler de /admin empieza con el gate" es verificable de un
+//  vistazo; "todos menos estos cuatro, porque no consultan nada" es una
+//  excepcion que alguien va a copiar al handler equivocado.
+//
+//  El require devuelve el array directamente; si el archivo faltara, PHP falla
+//  ruidoso, que es lo correcto para un dato que deberia estar versionado.
+// ===========================================================================
+function handleAdminChangelogGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-changelog', ['entradas' => require __DIR__ . '/../datos/changelog.php']);
+}
+
+function handleAdminPendientesGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-pendientes', ['items' => require __DIR__ . '/../datos/pendientes.php']);
+}
+
+function handleAdminFlujosGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-flujos', ['flujos' => require __DIR__ . '/../datos/flujos.php']);
+}
+
+function handleAdminDocumentosGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-documentos', ['documentos' => require __DIR__ . '/../datos/documentos.php']);
 }
 
 // ===========================================================================
@@ -12880,20 +13790,120 @@ function handleAdminTenantsRevertirEtapaPost(): void
 //  Lista cronologica (mas reciente primero) del changelog admin_auditoria.
 //  Solo lectura, sin filtros por ahora.
 // ===========================================================================
+/**
+ * WHERE de la auditoria a partir de los cuatro filtros de la pantalla.
+ *
+ * Cada valor pasa por una validacion ANTES de llegar a la consulta:
+ *   - accion y usuario se comparan contra las listas que la propia tabla
+ *     devolvio (los <select> se llenan con DISTINCT), asi que un valor
+ *     inventado en la URL simplemente no filtra por nada.
+ *   - las fechas pasan por fechaValida(), el mismo validador ISO que ya usan
+ *     los filtros de documentos. Una fecha mal formada se descarta en vez de
+ *     viajar a MySQL.
+ *
+ * EL RANGO ES INCLUSIVO EN LOS DOS EXTREMOS. created_at es un datetime, asi
+ * que "hasta el 21-08" comparado con '2026-08-21' dejaria fuera todo lo que
+ * paso ese dia despues de medianoche -- o sea, el dia entero. Por eso el
+ * limite superior es < (hasta + 1 dia), y no <=. Se compara contra la columna
+ * cruda y no contra DATE(created_at) para no anular un indice sobre ella.
+ *
+ * @return array{0:string, 1:array<string,string>}
+ */
+function filtroAuditoriaAdmin(string $accion, string $usuarioId, string $desde, string $hasta): array
+{
+    $condiciones = [];
+    $parametros  = [];
+
+    if ($accion !== '') {
+        $condiciones[] = 'a.accion = :accion';
+        $parametros[':accion'] = $accion;
+    }
+    if ($usuarioId !== '' && ctype_digit($usuarioId)) {
+        $condiciones[] = 'a.usuario_id = :usuario_id';
+        $parametros[':usuario_id'] = $usuarioId;
+    }
+    if ($desde !== '' && fechaValida($desde)) {
+        $condiciones[] = 'a.created_at >= :desde';
+        $parametros[':desde'] = $desde . ' 00:00:00';
+    }
+    if ($hasta !== '' && fechaValida($hasta)) {
+        $condiciones[] = 'a.created_at < DATE_ADD(:hasta, INTERVAL 1 DAY)';
+        $parametros[':hasta'] = $hasta;
+    }
+
+    return [$condiciones === [] ? '' : ' WHERE ' . implode(' AND ', $condiciones), $parametros];
+}
+
 function handleAdminAuditoriaGet(): void
 {
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
-    $filas = $pdo->query(
+    $accion    = trim((string) ($_GET['accion'] ?? ''));
+    $usuarioId = trim((string) ($_GET['usuario'] ?? ''));
+    $desde     = trim((string) ($_GET['desde'] ?? ''));
+    $hasta     = trim((string) ($_GET['hasta'] ?? ''));
+
+    [$where, $parametros] = filtroAuditoriaAdmin($accion, $usuarioId, $desde, $hasta);
+
+    // PAGINACION OBLIGATORIA, no una comodidad. admin_auditoria es append-only:
+    // no se limpia nunca y solo crece. Sin LIMIT, esta pantalla es una consulta
+    // que un dia deja de responder, y justo el dia que mas se la necesita.
+    $porPagina = 50;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $offset    = ($pagina - 1) * $porPagina;
+
+    $stmtTotal = $pdo->prepare('SELECT COUNT(*) FROM admin_auditoria a' . $where);
+    $stmtTotal->execute($parametros);
+    $total = (int) $stmtTotal->fetchColumn();
+
+    $stmt = $pdo->prepare(
         'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.accion, a.entidad_tipo, a.entidad_id, '
         . '       a.valor_anterior, a.valor_nuevo, a.created_at '
         . 'FROM admin_auditoria a '
         . 'LEFT JOIN usuario u ON u.id = a.usuario_id '
-        . 'ORDER BY a.created_at DESC, a.id DESC'
+        . $where
+        . ' ORDER BY a.created_at DESC, a.id DESC LIMIT :limit OFFSET :offset'
+    );
+    foreach ($parametros as $clave => $valor) {
+        $stmt->bindValue($clave, $valor);
+    }
+    // PARAM_INT explicito, igual que MySqlClienteRepository::listar(): con
+    // prepares emuladas un LIMIT ligado como string llega entrecomillado y
+    // MySQL lo rechaza por sintaxis.
+    $stmt->bindValue(':limit', $porPagina, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $filas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // El diff se calcula aqui y no en la vista: la vista pinta, no interpreta.
+    foreach ($filas as &$fila) {
+        $fila['diff'] = DiffAuditoria::comparar($fila['valor_anterior'], $fila['valor_nuevo']);
+    }
+    unset($fila);
+
+    // Opciones de los <select>, sacadas de la propia tabla: si manana aparece
+    // una accion administrativa nueva, el filtro la ofrece sin que nadie tenga
+    // que acordarse de agregarla a una lista escrita a mano.
+    $acciones = $pdo->query('SELECT DISTINCT accion FROM admin_auditoria ORDER BY accion')
+        ->fetchAll(PDO::FETCH_COLUMN);
+    $autores = $pdo->query(
+        'SELECT DISTINCT a.usuario_id, u.email FROM admin_auditoria a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id ORDER BY u.email'
     )->fetchAll(PDO::FETCH_ASSOC);
 
-    vista('admin-auditoria', ['filas' => $filas]);
+    vista('admin-auditoria', [
+        'filas'        => $filas,
+        'acciones'     => $acciones,
+        'autores'      => $autores,
+        'accion'       => $accion,
+        'usuarioId'    => $usuarioId,
+        'desde'        => $desde,
+        'hasta'        => $hasta,
+        'total'        => $total,
+        'pagina'       => $pagina,
+        'totalPaginas' => max(1, (int) ceil($total / $porPagina)),
+    ]);
 }
 
 /**

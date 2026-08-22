@@ -1,0 +1,512 @@
+/* ===========================================================================
+   admin.css -- HOJA DE ESTILOS DEL PANEL DE CONTROL (superadmin).
+
+   SEPARADA DE style.css A PROPOSITO, y no por comodidad de mantenimiento.
+
+   Este panel recorre TODAS las cuentas del SaaS; el panel del tenant recorre
+   una sola. Quien mira una pantalla tiene que saber en un vistazo cual de las
+   dos esta viendo, y un tema oscuro contra el tema claro de style.css lo dice
+   antes de leer una sola palabra. Ese contraste ES la funcion, no decoracion:
+   una accion administrativa ejecutada creyendo estar en el panel propio es
+   justamente lo que hay que hacer improbable.
+
+   Ademas style.css tiene 2.724 lineas de tema claro que este panel no usa, y
+   su shell depende de definicionMenu() y de Auth::cuentaId(), que aqui no
+   significa nada (ver partials/admin/_nav.php).
+
+   Los tokens y los nombres de clase replican el admin-web de Brewer Manager
+   (apps/admin-web/src/index.css), el panel hermano del que este es la version
+   PHP: mismo lenguaje visual para el mismo rol, en dos productos distintos.
+   =========================================================================== */
+
+:root {
+    --bg: #0d1014;
+    --panel: #151a20;
+    --panel-2: #1c232b;
+    --border: #29333d;
+    --text: #eaeef2;
+    --muted: #8b97a3;
+    --accent: #4aa3df;
+    --accent-dark: #2f86c4;
+    --ok: #4caf7d;
+    --danger: #e0564b;
+    --pk: #d9a441;
+    --fk: #b57edc;
+    /* Le dice al navegador que las partes que el pinta -- barras de scroll,
+       controles nativos de <input>, autocompletado -- van en oscuro. Sin esto
+       quedan en claro sobre el fondo oscuro y se ven como un error de carga. */
+    color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+}
+
+a { color: inherit; text-decoration: none; }
+a:hover { color: var(--accent); }
+button { font: inherit; cursor: pointer; }
+
+/* Salto al contenido para navegacion con teclado (WCAG 2.4.1), mismo criterio
+   que el header del tenant: solo visible cuando recibe foco. */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    background: var(--accent);
+    color: #06121c;
+    padding: .6rem 1rem;
+    font-weight: 600;
+    border-radius: 0 0 8px 0;
+}
+.skip-link:focus { left: 0; }
+
+/* ---- Shell ------------------------------------------------------------- */
+.shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
+.sidebar { background: var(--panel); border-right: 1px solid var(--border); padding: 1.25rem 0; }
+.brand {
+    padding: 0 1.25rem 1rem;
+    font-weight: 700;
+    font-size: 1.1rem;
+    display: flex;
+    gap: .5rem;
+    align-items: center;
+}
+.brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex: none; }
+.nav-group {
+    padding: .75rem 1.25rem .25rem;
+    font-size: .7rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+.nav a {
+    display: block;
+    padding: .55rem 1.25rem;
+    color: var(--muted);
+    font-size: .92rem;
+    border-left: 3px solid transparent;
+}
+.nav a:hover { color: var(--text); background: var(--panel-2); }
+.nav a.active { color: var(--text); border-left-color: var(--accent); background: var(--panel-2); }
+
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: .9rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+}
+.topbar .who { color: var(--muted); font-size: .88rem; }
+.topbar .acciones { display: flex; gap: .5rem; align-items: center; }
+.content { padding: 1.5rem; overflow: auto; }
+
+/* ---- Bloques ----------------------------------------------------------- */
+h2.page-title { margin: 0 0 1rem; font-size: 1.4rem; }
+.panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-bottom: 1.25rem;
+}
+.panel h3 { margin: 0 0 1rem; font-size: 1rem; }
+
+label.field { display: block; margin-bottom: .8rem; font-size: .85rem; color: var(--muted); }
+label.field span { display: block; margin-bottom: .3rem; }
+input, select {
+    width: 100%;
+    padding: .6rem .7rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+}
+input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+.btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #06121c;
+    border: none;
+    padding: .6rem 1.1rem;
+    border-radius: 8px;
+    font-weight: 600;
+}
+.btn:hover { background: var(--accent-dark); color: #06121c; }
+.btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn.ghost:hover { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
+.btn.sm { padding: .35rem .7rem; font-size: .82rem; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+.row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: end; }
+.row > * { flex: 1; min-width: 140px; }
+
+/* ---- Tablas ------------------------------------------------------------ */
+.tabla-scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th {
+    color: var(--muted);
+    font-weight: 600;
+    font-size: .78rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+}
+tr:hover td { background: var(--panel-2); }
+
+.tag {
+    display: inline-block;
+    padding: .15rem .5rem;
+    border-radius: 20px;
+    font-size: .75rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    white-space: nowrap;
+}
+.tag.ok { color: var(--ok); border-color: var(--ok); }
+.tag.warn { color: var(--pk); border-color: var(--pk); }
+.tag.err { color: var(--danger); border-color: var(--danger); }
+
+.error { color: var(--danger); font-size: .85rem; margin: .5rem 0; }
+.msg-ok { color: var(--ok); font-size: .85rem; margin: .5rem 0; }
+.muted { color: var(--muted); }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+.stat { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem; }
+.stat .n { font-size: 1.8rem; font-weight: 700; color: var(--accent); }
+.stat .l { color: var(--muted); font-size: .85rem; }
+
+.actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.toolbar { display: flex; gap: .6rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+
+.chips { display: flex; gap: .5rem; flex-wrap: wrap; }
+.chip {
+    font-size: .8rem;
+    padding: .3rem .65rem;
+    border-radius: 20px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+}
+
+/* ---- Mini barra de 6 etapas de certificacion --------------------------- */
+/* Misma forma y mismo significado que .progreso-etapas--admin de style.css
+   (la vista de cuentas ya la usaba antes de tener panel propio), reexpresada
+   en los tokens oscuros. Los nombres de clase se conservan IDENTICOS porque
+   los emite resumenEtapasBarra(), que es codigo compartido con el panel del
+   tenant y no se toca: si aqui se renombraran, habria que tocar esa funcion y
+   las dos vistas quedarian atadas a que nadie se olvide de la otra. */
+.progreso-etapas--admin { display: flex; gap: .35rem; margin: 0 0 .25rem; }
+.etapa-circulo {
+    position: relative;
+    flex: none;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .72rem;
+    font-weight: 700;
+}
+.etapa--completada { background: rgba(76, 175, 125, .18); border-color: var(--ok); color: var(--ok); }
+.etapa--activa { background: rgba(74, 163, 223, .18); border-color: var(--accent); color: var(--accent); }
+.etapa--no-gestionada { background: var(--panel-2); border-color: var(--border); color: var(--muted); cursor: help; }
+
+.etapa-circulo__revertir-form { position: absolute; top: -.4rem; right: -.4rem; margin: 0; line-height: 0; }
+.etapa-circulo__revertir {
+    width: .95rem;
+    height: .95rem;
+    line-height: .8rem;
+    border-radius: 50%;
+    background: var(--danger);
+    color: #fff;
+    font-size: .6rem;
+    font-weight: 700;
+    text-align: center;
+    padding: 0;
+    margin: 0;
+    border: 1px solid var(--panel);
+}
+.etapa-circulo__revertir:hover { background: #f0695e; }
+
+/* ---- Responsive -------------------------------------------------------- */
+/* El shell de dos columnas colapsa a una sola: el sidebar pasa a ser una
+   banda superior con los enlaces en linea. Sin esto la grilla de 240px fija
+   deja el contenido en una columna inservible en pantallas angostas. */
+@media (max-width: 800px) {
+    .shell { grid-template-columns: 1fr; }
+    .sidebar { border-right: none; border-bottom: 1px solid var(--border); padding-bottom: .5rem; }
+    .nav { display: flex; flex-wrap: wrap; gap: .2rem; padding: 0 .75rem; }
+    .nav a { border-left: none; border-bottom: 3px solid transparent; padding: .45rem .7rem; }
+    .nav a.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+    .nav-group { width: 100%; padding: .5rem .75rem .1rem; }
+    .content { padding: 1rem; }
+}
+
+/* ---- Changelog --------------------------------------------------------- */
+/* .cl-tag se define ya en la Fase 1 porque la portada muestra el ultimo
+   cambio; el resto del bloque del changelog llega con su propia pantalla. */
+.cl-tag {
+    display: inline-block;
+    font-size: .68rem;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    padding: .1rem .45rem;
+    border-radius: 4px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin-left: .5rem;
+}
+
+/* ---- Diff de auditoria ------------------------------------------------- */
+/* Una linea por clave que cambio. El valor viejo va tachado y en gris y el
+   nuevo en verde: el color y el tachado dicen la direccion del cambio sin
+   tener que leer las etiquetas, que es lo que se quiere al recorrer una lista
+   larga buscando una accion concreta. */
+.diff { list-style: none; margin: 0; padding: 0; }
+.diff li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: .4rem;
+    font-size: .82rem;
+    padding: .12rem 0;
+}
+.diff__clave {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .05rem .35rem;
+    font-size: .74rem;
+    color: var(--muted);
+}
+.diff__antes { color: var(--muted); text-decoration: line-through; }
+.diff__flecha { color: var(--accent); }
+.diff__despues { color: var(--ok); font-weight: 600; }
+
+.diff__crudo { margin-top: .4rem; }
+.diff__crudo summary { cursor: pointer; color: var(--muted); font-size: .78rem; }
+.diff__crudo-cols { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: .4rem; }
+.diff__crudo-cols > div { flex: 1; min-width: 220px; }
+.diff__crudo-cols .muted { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; }
+.diff__crudo pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: .2rem 0 0;
+    padding: .5rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: .74rem;
+    color: var(--muted);
+}
+
+/* ---- Explorador de base de datos --------------------------------------- */
+.er-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
+.er-table { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.er-table .head {
+    background: var(--panel-2);
+    padding: .55rem .8rem;
+    font-weight: 700;
+    font-size: .9rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    gap: .5rem;
+}
+.er-table .head .cnt { color: var(--muted); font-weight: 400; font-size: .78rem; white-space: nowrap; }
+
+/* Franja de aislamiento: va pegada al encabezado, antes que las columnas,
+   porque es el dato por el que se abre esta pantalla. */
+.er-ais {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: .4rem;
+    padding: .45rem .8rem;
+    border-bottom: 1px solid var(--border);
+    background: rgba(0, 0, 0, .15);
+}
+.er-camino { color: var(--fk); font-size: .72rem; font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+.er-col { display: flex; justify-content: space-between; gap: .5rem; padding: .35rem .8rem; font-size: .82rem; border-bottom: 1px solid #20272f; }
+.er-col:last-of-type { border-bottom: none; }
+.er-col .cname { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.er-col .ctype { color: var(--muted); font-size: .76rem; white-space: nowrap; }
+.badge { font-size: .62rem; padding: .05rem .35rem; border-radius: 4px; margin-left: .35rem; font-weight: 700; vertical-align: middle; }
+.badge.pk { background: rgba(217, 164, 65, .18); color: var(--pk); }
+.badge.fk { background: rgba(181, 126, 220, .18); color: var(--fk); }
+.fkref { color: var(--fk); font-size: .72rem; }
+.er-comentario { color: var(--muted); font-size: .7rem; cursor: help; border: 1px solid var(--border); border-radius: 50%; padding: 0 .28rem; }
+
+.er-indices { border-top: 1px solid var(--border); padding: .4rem .8rem; }
+.er-indices summary { cursor: pointer; color: var(--muted); font-size: .76rem; }
+.er-indice { font-size: .74rem; color: var(--muted); padding: .15rem 0; }
+.er-indice code { color: var(--text); }
+
+/* ---- Roles y permisos --------------------------------------------------- */
+.flow-diagram { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; margin-bottom: 1.25rem; }
+.flow-node {
+    background: var(--panel-2);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: .6rem .9rem;
+    font-size: .85rem;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.35;
+}
+.flow-node small { display: block; color: var(--muted); font-weight: 400; font-size: .72rem; }
+.flow-arrow { color: var(--accent); font-size: 1.3rem; font-weight: 700; }
+
+/* Las notas del concepto en columnas: son cuatro ideas independientes y en una
+   sola columna se leen como un muro. */
+.rp-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+.rp-note { border-left: 3px solid var(--accent); background: var(--panel-2); }
+.rp-note h4 { margin: 0 0 .5rem; font-size: .9rem; }
+.rp-note p { margin: 0 0 .5rem; font-size: .85rem; color: var(--muted); line-height: 1.5; }
+.rp-note p:last-child { margin-bottom: 0; }
+
+code {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .05rem .3rem;
+    font-size: .8em;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.rp-matrix th, .rp-matrix td { text-align: center; }
+.rp-matrix th:first-child, .rp-matrix td:first-child { text-align: left; white-space: nowrap; }
+.rp-cell { font-size: .8rem; font-weight: 600; white-space: nowrap; cursor: default; }
+.rp-cell.full { color: var(--ok); }
+.rp-cell.ver { color: var(--pk); }
+.rp-cell.none { color: var(--border); }
+.rp-matrix summary { cursor: pointer; list-style: none; }
+.rp-matrix summary::-webkit-details-marker { display: none; }
+.rp-rutas { text-align: left; padding: .4rem 0; }
+.rp-rutas div { font-size: .74rem; padding: .1rem 0; }
+
+.rp-cuenta { border: 1px solid var(--border); border-radius: 8px; margin-bottom: .6rem; }
+.rp-cuenta > summary {
+    cursor: pointer;
+    padding: .6rem .8rem;
+    font-weight: 600;
+    font-size: .9rem;
+    display: flex;
+    gap: .6rem;
+    align-items: baseline;
+    flex-wrap: wrap;
+}
+.rp-cuenta[open] > summary { border-bottom: 1px solid var(--border); }
+.rp-cuenta > div { padding: .5rem .8rem .8rem; }
+
+/* ---- Flujos ------------------------------------------------------------- */
+.steps { display: flex; flex-direction: column; }
+.step { display: flex; gap: .9rem; padding: .85rem 0; border-bottom: 1px solid var(--border); }
+.step:last-child { border-bottom: none; }
+.step-num {
+    flex: 0 0 30px;
+    height: 30px;
+    width: 30px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #06121c;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    font-size: .9rem;
+}
+.step-body { flex: 1; min-width: 0; }
+.step-title { font-weight: 600; font-size: .95rem; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+/* La ruta va en la misma linea del titulo y con el color del acento: es el dato
+   accionable del paso, no una nota al pie. */
+.step-where {
+    font-size: .7rem;
+    font-weight: 500;
+    color: var(--accent);
+    background: rgba(74, 163, 223, .12);
+    border: 1px solid rgba(74, 163, 223, .3);
+    padding: .1rem .45rem;
+    border-radius: 4px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+}
+.step-detail { color: var(--muted); font-size: .88rem; margin-top: .25rem; line-height: 1.45; }
+
+/* ---- Changelog (entradas) ----------------------------------------------- */
+.cl-entry { display: grid; grid-template-columns: 130px 1fr; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--border); }
+.cl-entry:last-child { border-bottom: none; }
+.cl-entry .meta .date { color: var(--muted); font-size: .82rem; }
+.cl-entry .meta .ver { font-weight: 700; color: var(--accent); }
+.cl-entry .meta .cl-tag { margin-left: 0; margin-top: .3rem; }
+.cl-entry h4 { margin: 0 0 .5rem; font-size: 1rem; }
+.cl-entry ul { margin: 0; padding-left: 1.1rem; }
+.cl-entry li { margin: .25rem 0; font-size: .9rem; line-height: 1.5; }
+
+/* ---- Pendientes --------------------------------------------------------- */
+.pend-item { padding: .85rem 0; border-bottom: 1px solid var(--border); }
+.pend-item:last-child { border-bottom: none; padding-bottom: 0; }
+.pend-head { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: .3rem; }
+.pend-item p { margin: 0; font-size: .88rem; line-height: 1.5; }
+
+@media (max-width: 640px) {
+    .cl-entry { grid-template-columns: 1fr; gap: .3rem; }
+}
+
+/* ---- Visor del diagrama ER ---------------------------------------------- */
+.mermaid-viewport {
+    position: relative;
+    height: 72vh;
+    background: #0c0f13;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: grab;
+    user-select: none;
+}
+.mermaid-viewport:active { cursor: grabbing; }
+/* Sin will-change ni translateZ: asi el navegador REDIBUJA el vector al
+   escalar (nitido) en vez de rasterizar a 1x y estirar el bitmap (pixelado). */
+.mermaid-canvas { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.mermaid-canvas svg { max-width: none !important; display: block; }
+.mermaid-controls {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    z-index: 5;
+    display: flex;
+    gap: .4rem;
+    align-items: center;
+    background: rgba(21, 26, 32, .9);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .35rem .5rem;
+    cursor: default;
+}
+.mermaid-controls button {
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    border-radius: 6px;
+    font-size: 1rem;
+    line-height: 1;
+    display: grid;
+    place-items: center;
+}
+.mermaid-controls button:hover { border-color: var(--accent); }
+.mermaid-controls span { color: var(--muted); font-size: .8rem; min-width: 46px; text-align: center; }
