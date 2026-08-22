@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-22',
+        'version' => '1.23',
+        'titulo'  => 'Las pantallas de acceso ya no delatan que correos estan registrados',
+        'tag'     => 'backend',
+        'items'   => [
+            'Aunque el mensaje de error siempre fue el mismo, el sistema respondia mucho mas rapido cuando el correo no existia que cuando existia con la clave equivocada. Esa diferencia de tiempo permitia recorrer una lista de correos y averiguar cuales son clientes, sin acertar ninguna contrasena.',
+            'Ahora los dos casos tardan lo mismo, y tambien el de una cuenta desactivada, que delataba lo mismo.',
+            'Vale para las dos pantallas de acceso, y una tercera que se agregue en el futuro lo hereda sola.',
+            'Nada mas cambia: los mensajes, las redirecciones y el manejo de sesion son identicos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-22',
         'version' => '1.22',
         'titulo'  => 'Puerta de entrada propia para el equipo interno',
         'tag'     => 'backend',
