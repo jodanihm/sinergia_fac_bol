@@ -25,17 +25,6 @@ declare(strict_types=1);
 
 return [
     [
-        'titulo'  => 'Alta de cuenta desde el panel de control',
-        'detalle' => 'El panel hermano crea tenants desde su admin y aqui no se hizo. El alta pasa hoy '
-            . 'por /registro, con activacion por token y correo (migracion 021). Duplicar ese flujo desde '
-            . '/admin sin revisarlo entero es exactamente como se crean cuentas a medio activar: con fila '
-            . 'en cuenta, sin usuario confirmado y sin el correo que entrega el acceso. Antes de hacerlo '
-            . 'hay que decidir si el alta administrativa manda el mismo correo de activacion o marca la '
-            . 'cuenta como ya activa, y quien queda como owner.',
-        'tipo'    => 'pendiente',
-        'estado'  => 'nuevo',
-    ],
-    [
         'titulo'  => '12 tablas guardan documentos sin poder decir de que empresa son',
         'detalle' => 'Lo dejo a la vista la columna de aislamiento de /admin/base-datos: dte_emitido, '
             . 'dte_caf, dte_certificado, dte_folio, dte_libro, dte_idempotencia y companhia cuelgan de '

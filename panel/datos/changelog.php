@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-22',
+        'version' => '1.24',
+        'titulo'  => 'Dar de alta un cliente desde el panel de control',
+        'tag'     => 'backend',
+        'items'   => [
+            'El equipo interno puede crear una cuenta y su usuario propietario en un paso, sin esperar a que el cliente abra un correo. Resuelve el alta por telefono.',
+            'La clave se genera sola, al azar, y se muestra una sola vez en pantalla: no queda guardada en ninguna parte y no se puede recuperar. Solo su version cifrada llega a la base.',
+            'La primera vez que ese cliente entra, el sistema no lo deja pasar a ninguna pantalla hasta que reemplace esa clave por una que solo el conozca: mientras tanto, alguien mas la conoce.',
+            'El alta queda registrada en la auditoria, sin la clave.',
+            'El registro publico de siempre no cambia en nada.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-22',
         'version' => '1.23',
         'titulo'  => 'Las pantallas de acceso ya no delatan que correos estan registrados',
         'tag'     => 'backend',

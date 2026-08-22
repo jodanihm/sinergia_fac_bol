@@ -713,6 +713,16 @@ const PATRONES_PUBLICOS = ['#^/activar/[0-9a-f]{64}$#'];
 const MSG_CREDENCIALES_INVALIDAS = 'Credenciales invalidas.';
 
 /**
+ * Ruta donde termina obligado quien tiene debe_cambiar_clave = 1.
+ *
+ * En una constante y no escrita a mano en cada sitio porque la nombran TRES
+ * lugares que tienen que coincidir o el usuario queda encerrado: el corte
+ * central del router, la excepcion de ese mismo corte, y el redirect de
+ * handleLoginPost(). Renombrarla en dos de los tres es un callejon sin salida.
+ */
+const RUTA_CAMBIO_CLAVE = '/cambiar-clave';
+
+/**
  * Hash señuelo para igualar el tiempo de un intento de acceso fallido.
  *
  * Verificar una contrasena cuesta caro A PROPOSITO (del orden de 100 ms): es lo
@@ -765,7 +775,15 @@ const PREFIJOS_GATE_PROPIO = ['/admin/', '/configuracion/usuarios', '/configurac
  *
  * @var list<string>
  */
-const RUTAS_GATE_PROPIO = ['/admin'];
+const RUTAS_GATE_PROPIO = [
+    '/admin',
+    // Cambio de clave obligatorio. No lleva permiso del catalogo a proposito:
+    // quien tiene que cambiar su clave todavia no puede entrar a ninguna
+    // pantalla, asi que exigirle un permiso para llegar a la unica que si puede
+    // usar seria un candado sobre la salida de emergencia. Su handler exige
+    // sesion y comprueba la marca por su cuenta.
+    RUTA_CAMBIO_CLAVE,
+];
 
 function definicionMenu(): array
 {
@@ -9961,6 +9979,29 @@ function sesionEsDemo(): bool
 }
 
 /**
+ * True si la sesion tiene pendiente cambiar su clave (migracion 043).
+ *
+ * Se pregunta a la BASE en cada request y NO se cachea en sesion, por el mismo
+ * motivo que sesionEsDemo(): ahorraria un SELECT por clave primaria -- nada --
+ * a cambio de que la marca dejara de surtir efecto hasta que la persona cierre
+ * sesion. Aqui ademas importa al reves: cuando la clave SE CAMBIA, el bloqueo
+ * tiene que levantarse en el acto, y una copia en sesion lo dejaria encerrado.
+ *
+ * Sin sesion devuelve false: no hay a quien preguntarle.
+ */
+function sesionDebeCambiarClave(): bool
+{
+    if (! Auth::autenticado()) {
+        return false;
+    }
+
+    $stmt = Db::conexion()->prepare('SELECT debe_cambiar_clave FROM usuario WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => Auth::usuarioId()]);
+
+    return (int) $stmt->fetchColumn() === 1;
+}
+
+/**
  * Corta el request con la pantalla de "modo demostracion" y termina.
  *
  * NO es un 403 pelado: esto lo va a ver un prospecto haciendo clic en botones
@@ -10133,6 +10174,33 @@ if ($metodo === 'POST' && sesionEsDemo()) {
 //  inventariar las rutas leyendo el fuente (ver /admin/roles-permisos).
 if ($metodo === 'POST' && Auth::viendoCuentaId() !== null && $ruta !== RUTA_SALIR_VISTA_SUPERADMIN) {
     cortarPorVistaSuperadmin();
+}
+
+// ===========================================================================
+//  CLAVE TEMPORAL: bloqueo CENTRAL hasta que la persona la cambie.
+//
+//  Va junto a los otros dos cortes y por el mismo argumento: una regla que
+//  aplica a todas las rutas se aplica UNA vez, antes de despachar, y no se
+//  reparte entre handlers de los que alguien se va a olvidar.
+//
+//  ES LA DIFERENCIA ENTRE UN BLOQUEO Y UN AVISO. Sin esto, la pantalla de
+//  cambio de clave seria una sugerencia: bastaria escribir /panel en la barra
+//  de direcciones para saltarsela. El bloqueo vive en el servidor y la marca en
+//  la base, asi que sobrevive a cerrar sesion, abrir otra pestana o entrar
+//  desde otro navegador.
+//
+//  CORTA TODOS LOS METODOS, no solo POST -- a diferencia del corte por demo y
+//  del de la vista de superadmin, que existen para impedir ESCRITURAS. Aqui lo
+//  que hay que impedir es el acceso entero: la clave la conoce alguien mas
+//  ademas de su dueno, asi que tampoco puede LEER los documentos de su empresa
+//  hasta que eso deje de ser cierto.
+//
+//  DOS EXCEPCIONES, y las dos son salidas: la propia pantalla de cambio -- sin
+//  ella el bloqueo se bloquearia a si mismo -- y /logout, para que cerrar
+//  sesion siempre funcione y nadie quede encerrado.
+// ===========================================================================
+if ($ruta !== RUTA_CAMBIO_CLAVE && $ruta !== '/logout' && sesionDebeCambiarClave()) {
+    redirigir(RUTA_CAMBIO_CLAVE);
 }
 
 // La raiz es la LANDING PUBLICA, no un redirect a /login. Antes / rebotaba a
@@ -10989,6 +11057,16 @@ if ($metodo === 'GET' && $ruta === '/auditoria') {
 // ---------------------------------------------------------------------------
 // Acceso del panel de control. Va PRIMERO entre las rutas de /admin porque es
 // la unica que se alcanza sin sesion.
+// Cambio de clave obligatorio. Fuera del espacio /admin: la usa un owner de
+// tenant, no el equipo interno.
+if ($metodo === 'GET' && $ruta === RUTA_CAMBIO_CLAVE) {
+    handleCambiarClaveGet();
+}
+
+if ($metodo === 'POST' && $ruta === RUTA_CAMBIO_CLAVE) {
+    handleCambiarClavePost();
+}
+
 if ($metodo === 'GET' && $ruta === '/admin/login') {
     handleAdminLoginGet();
 }
@@ -11003,6 +11081,16 @@ if ($metodo === 'GET' && $ruta === '/admin') {
 
 if ($metodo === 'GET' && $ruta === '/admin/tenants') {
     handleAdminTenantsGet();
+}
+
+// Alta de cuenta. Va antes del regex de la ficha por legibilidad; no hay
+// ambiguedad posible porque 'nueva' no casa con (\d+).
+if ($metodo === 'GET' && $ruta === '/admin/tenants/nueva') {
+    handleAdminTenantNuevaGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/admin/tenants/nueva') {
+    handleAdminTenantNuevaPost();
 }
 
 // Ficha de una cuenta. Mismo estilo de regex que PERMISOS_RUTA_PATRON, y va
@@ -11171,7 +11259,7 @@ function handleRegistroPost(): void
 function buscarUsuarioParaLogin(PDO $pdo, string $email): ?array
 {
     $stmt = $pdo->prepare(
-        'SELECT id, cuenta_id, password_hash, estado, rol FROM usuario WHERE email = :email LIMIT 1'
+        'SELECT id, cuenta_id, password_hash, estado, rol, debe_cambiar_clave FROM usuario WHERE email = :email LIMIT 1'
     );
     $stmt->execute([':email' => $email]);
     $row = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -11248,6 +11336,15 @@ function handleLoginPost(): void
 
     Auth::login((int) $usuario['id'], (int) $usuario['cuenta_id']);
     Csrf::regenerarToken();
+
+    // Clave temporal creada por el equipo interno: se va derecho a cambiarla.
+    // El corte central del router lo atajaria igual una peticion despues -- ese
+    // es el bloqueo de verdad --, pero mandarlo aqui evita el rebote por /panel
+    // y evita que la primera pantalla que vea sea una a la que no puede entrar.
+    if ((int) ($usuario['debe_cambiar_clave'] ?? 0) === 1) {
+        redirigir(RUTA_CAMBIO_CLAVE);
+    }
+
     redirigir('/panel');
 }
 
@@ -13998,6 +14095,220 @@ function handleAdminDocumentosGet(): void
 {
     exigirSuperadmin(Db::conexion());
     vista('admin-documentos', ['documentos' => require __DIR__ . '/../datos/documentos.php']);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/tenants/nueva  y  POST /admin/tenants/nueva
+//
+//  Alta de cuenta desde el panel de control. CAMINO PARALELO a /registro, que
+//  no se toca: aquel es autoservicio con activacion por token; este resuelve el
+//  caso real de dar de alta a un cliente por telefono, donde no hay nadie del
+//  otro lado esperando un link.
+//
+//  LA CLAVE ES ALEATORIA Y SE VE UNA SOLA VEZ. Se genera con random_bytes(),
+//  se guarda SOLO como hash, y el texto plano existe unicamente en la variable
+//  local de este request y en la pantalla que se dibuja a continuacion. No va
+//  al flash, ni a la sesion, ni al log, ni a la auditoria.
+//
+//  POR ESO ESTA PANTALLA NO REDIRIGE, y es la unica mutacion del panel que no
+//  sigue el patron PRG. Con un redirect, la clave tendria que viajar en la
+//  sesion para sobrevivir al salto -- exactamente lo que no se quiere. El costo
+//  es que un F5 reenvia el POST; ese reenvio choca con la validacion de email
+//  unico y termina en un mensaje de error, no en una cuenta duplicada.
+//
+//  Y POR ESO EXISTE debe_cambiar_clave (migracion 043): entre que la clave se
+//  dicta y el cliente entra, alguien que no es el dueno de la cuenta la conoce.
+//  El primer acceso obliga a reemplazarla.
+// ===========================================================================
+function handleAdminTenantNuevaGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-tenant-nueva', ['errores' => [], 'nombreCuenta' => '', 'email' => '']);
+}
+
+function handleAdminTenantNuevaPost(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $nombre = trim((string) ($_POST['nombre'] ?? ''));
+    $email  = trim((string) ($_POST['email'] ?? ''));
+
+    $errores = [];
+    if ($nombre === '') {
+        $errores[] = 'El nombre de la cuenta no puede quedar vacio.';
+    }
+    if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $errores[] = 'Email invalido.';
+    }
+
+    // Se comprueba en las DOS tablas, igual que handleRegistroPost(): cuenta y
+    // usuario tienen cada una su propio UNIQUE sobre email, y chocar contra
+    // cualquiera de los dos daria un 500 en vez de un mensaje.
+    if ($errores === []) {
+        $stmt = $pdo->prepare('SELECT 1 FROM cuenta WHERE email = :email LIMIT 1');
+        $stmt->execute([':email' => $email]);
+        if ($stmt->fetchColumn() !== false) {
+            $errores[] = 'Ese email ya esta registrado en otra cuenta.';
+        }
+    }
+    if ($errores === []) {
+        $stmt = $pdo->prepare('SELECT 1 FROM usuario WHERE email = :email LIMIT 1');
+        $stmt->execute([':email' => $email]);
+        if ($stmt->fetchColumn() !== false) {
+            $errores[] = 'Ese email ya esta registrado en otra cuenta.';
+        }
+    }
+
+    if ($errores !== []) {
+        vista('admin-tenant-nueva', ['errores' => $errores, 'nombreCuenta' => $nombre, 'email' => $email]);
+    }
+
+    // 8 bytes de random_bytes() = 64 bits, en hexadecimal y en grupos de cuatro
+    // para poder dictarla por telefono sin equivocarse. random_bytes() y no
+    // rand()/uniqid(): es el generador criptografico, el unico apropiado para
+    // algo que abre una cuenta.
+    $claveTemporal = implode('-', str_split(bin2hex(random_bytes(8)), 4));
+
+    try {
+        $pdo->beginTransaction();
+
+        $pdo->prepare(
+            'INSERT INTO cuenta (email, nombre, estado, created_at) '
+            . "VALUES (:email, :nombre, 'activa', NOW())"
+        )->execute([':email' => $email, ':nombre' => $nombre]);
+        $cuentaId = (int) $pdo->lastInsertId();
+
+        $pdo->prepare(
+            'INSERT INTO usuario (cuenta_id, email, password_hash, rol, estado, demo, debe_cambiar_clave, created_at) '
+            . "VALUES (:cuenta_id, :email, :hash, 'owner', 'activo', 0, 1, NOW())"
+        )->execute([
+            ':cuenta_id' => $cuentaId,
+            ':email'     => $email,
+            ':hash'      => password_hash($claveTemporal, PASSWORD_DEFAULT),
+        ]);
+        $usuarioId = (int) $pdo->lastInsertId();
+
+        // Mismo rol plantilla que siembra /registro, y DENTRO de la misma
+        // transaccion por el mismo motivo: una cuenta con owner pero sin rol
+        // "Administrador" habria que repararla a mano.
+        sembrarRolAdministrador($pdo, $cuentaId);
+
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        // El rollback es lo que impide la fila huerfana en cuenta sin su
+        // usuario. Se registra el error para poder diagnosticarlo, y JAMAS la
+        // clave: $e->getMessage() no la contiene porque nunca viajo en una
+        // consulta en texto plano, solo su hash.
+        error_log('admin alta de cuenta fallo: ' . $e->getMessage());
+        vista('admin-tenant-nueva', [
+            'errores'      => ['No se pudo crear la cuenta. Intenta nuevamente.'],
+            'nombreCuenta' => $nombre,
+            'email'        => $email,
+        ]);
+    }
+
+    // SIN LA CLAVE en el snapshot, ni siquiera en el hash: admin_auditoria es
+    // append-only y se lee desde el panel, asi que lo que entra ahi queda a la
+    // vista para siempre.
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'admin.tenant.crear',
+        'cuenta',
+        $cuentaId,
+        null,
+        ['nombre' => $nombre, 'email' => $email, 'usuario_id' => $usuarioId, 'rol' => 'owner']
+    );
+
+    // OJO CON LAS CLAVES DE ESTE ARRAY: vista() hace extract($datos) y su propio
+    // parametro se llama $nombre, asi que una clave 'nombre' PISA el nombre de
+    // la vista y el require termina buscando views/.php. Paso de verdad al
+    // escribir esta pantalla. Por eso 'nombreCuenta' y no 'nombre'.
+    vista('admin-tenant-creada', [
+        'cuentaId'     => $cuentaId,
+        'nombreCuenta' => $nombre,
+        'email'        => $email,
+        'clave'        => $claveTemporal,
+    ]);
+}
+
+// ===========================================================================
+//  Handler: GET /cambiar-clave  y  POST /cambiar-clave
+//
+//  Pantalla de cambio OBLIGATORIO, para quien entra con una clave temporal
+//  creada por el equipo interno. El bloqueo que la hace obligatoria no vive
+//  aqui sino en el router (ver el corte junto a cortarPorDemo): esto es solo la
+//  salida.
+//
+//  LAS REGLAS DE LA CLAVE SON LAS MISMAS que ya aplica la activacion por token
+//  (handleActivarCuentaPost): minimo 8 caracteres y confirmacion que coincida.
+//  No se inventan otras: dos pantallas del mismo sistema que exijan cosas
+//  distintas para lo mismo se contradicen a la vista del usuario.
+// ===========================================================================
+function handleCambiarClaveGet(): void
+{
+    Auth::requerirSesion();
+
+    // Quien no tiene nada que cambiar no tiene por que ver esta pantalla.
+    if (! sesionDebeCambiarClave()) {
+        redirigir('/panel');
+    }
+
+    vista('cambiar-clave', ['errores' => []]);
+}
+
+function handleCambiarClavePost(): void
+{
+    Auth::requerirSesion();
+
+    if (! sesionDebeCambiarClave()) {
+        redirigir('/panel');
+    }
+
+    $pass     = (string) ($_POST['password'] ?? '');
+    $confirma = (string) ($_POST['password_confirmacion'] ?? '');
+
+    $errores = [];
+    if (strlen($pass) < 8) {
+        $errores[] = 'La contrasena debe tener al menos 8 caracteres.';
+    }
+    if ($pass !== $confirma) {
+        $errores[] = 'Las contrasenas no coinciden.';
+    }
+    if ($errores !== []) {
+        vista('cambiar-clave', ['errores' => $errores]);
+    }
+
+    // El WHERE lleva debe_cambiar_clave = 1 ademas del id: si dos pestañas
+    // mandan el formulario a la vez, la segunda no pisa la clave que acaba de
+    // fijar la primera.
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'UPDATE usuario SET password_hash = :hash, debe_cambiar_clave = 0 '
+        . 'WHERE id = :id AND debe_cambiar_clave = 1'
+    );
+    $stmt->execute([':hash' => password_hash($pass, PASSWORD_DEFAULT), ':id' => Auth::usuarioId()]);
+
+    // Se audita el HECHO, nunca la clave ni su hash.
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'usuario.clave_temporal_cambiada',
+        'usuario',
+        Auth::usuarioId(),
+        null,
+        null
+    );
+
+    // La sesion sigue: la persona ya se autentico con la clave temporal y
+    // acaba de demostrar que controla la cuenta. Pedirle que entre de nuevo no
+    // agrega seguridad y si agrega una oportunidad de perderse.
+    Csrf::regenerarToken();
+    redirigir('/panel');
 }
 
 // ===========================================================================

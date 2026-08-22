@@ -560,3 +560,24 @@ code {
 }
 .login-pie { margin: 1.25rem 0 0; font-size: .82rem; text-align: center; }
 .login-pie a { color: var(--accent); text-decoration: underline; }
+
+/* ---- Clave temporal, mostrada una sola vez ------------------------------ */
+/* Monoespaciada y grande porque se dicta por telefono, y user-select:all para
+   poder seleccionarla de una pasada: el panel corre sobre HTTP plano y no hay
+   copia automatica confiable. Mismo criterio que .secreto-unico del panel del
+   tenant, que resuelve lo mismo para el link de invitacion. */
+.clave-unica {
+    display: block;
+    margin: .5rem 0 1rem;
+    padding: .9rem 1rem;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 1.35rem;
+    letter-spacing: .06em;
+    text-align: center;
+    overflow-wrap: anywhere;
+    user-select: all;
+}

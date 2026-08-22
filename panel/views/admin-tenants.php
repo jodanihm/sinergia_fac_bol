@@ -37,6 +37,11 @@ require __DIR__ . '/partials/admin/header.php';
     // muta nada.
     $hayFiltro = $busqueda !== '' || $estado !== '';
 ?>
+<div class="toolbar">
+    <a class="btn" href="/admin/tenants/nueva">Nueva cuenta</a>
+    <span class="muted">Crea la cuenta y su propietario en un paso, con clave temporal.</span>
+</div>
+
 <form class="toolbar" method="get" action="/admin/tenants">
     <input type="search" name="q" value="<?= htmlspecialchars($busqueda); ?>"
            placeholder="Nombre, email o RUT" aria-label="Buscar cuenta" style="max-width:280px;">
