@@ -32,6 +32,19 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-08-25',
+        'version' => '1.25',
+        'titulo'  => 'Ver que tareas corren solas en el servidor y a que hora',
+        'tag'     => 'devops',
+        'items'   => [
+            'El panel de control tiene una pantalla nueva, "Tareas programadas", con los tres trabajos que el servidor ejecuta solo: enviar los correos de los documentos, enviar los correos de las ordenes de compra y preguntarle al SII que paso con lo enviado.',
+            'De cada uno se ve cada cuanto corre, dicho en castellano, y las tres proximas veces que le toca, en hora de Chile. Hasta ahora eso solo se sabia entrando al servidor por consola.',
+            'La pantalla dice cuando le TOCA a cada tarea, no si la ultima vez resulto bien: es un calendario, no una alarma. Queda escrito en la misma pagina para que nadie la lea como si fuera un monitor.',
+            'Cada tarea muestra ademas que supone sobre su propia frecuencia, para que cambiarsela en el servidor no la rompa en silencio.',
+            'Solo la ve el equipo interno; ningun cliente llega a esa pantalla.',
+        ],
+    ],
+    [
         'fecha'   => '2026-08-22',
         'version' => '1.24',
         'titulo'  => 'Dar de alta un cliente desde el panel de control',

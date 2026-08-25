@@ -101,6 +101,7 @@ require __DIR__ . '/../src/DiffAuditoria.php';
 require __DIR__ . '/../src/AislamientoTenant.php';
 require __DIR__ . '/../src/RutasDelRouter.php';
 require __DIR__ . '/../src/DiagramaEr.php';
+require __DIR__ . '/../src/AgendaCron.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -11152,6 +11153,10 @@ if ($metodo === 'GET' && $ruta === '/admin/changelog') {
     handleAdminChangelogGet();
 }
 
+if ($metodo === 'GET' && $ruta === '/admin/tareas') {
+    handleAdminTareasGet();
+}
+
 http_response_code(404);
 echo '404 - ruta no encontrada';
 exit;
@@ -14056,9 +14061,9 @@ function clasificarRutaPatron(string $metodo, string $patron): array
 }
 
 // ===========================================================================
-//  Handlers: las cuatro paginas de DOCUMENTACION del panel de control.
+//  Handlers: las cinco paginas de DOCUMENTACION del panel de control.
 //
-//  GET /admin/changelog   GET /admin/pendientes
+//  GET /admin/changelog   GET /admin/pendientes   GET /admin/tareas
 //  GET /admin/flujos      GET /admin/documentos
 //
 //  NO TOCAN LA BASE. Cada una lee un archivo de panel/datos/ que solo devuelve
@@ -14068,7 +14073,9 @@ function clasificarRutaPatron(string $metodo, string $patron): array
 //  informacion de la casa, no material publico. Ademas la regla vale mas que la
 //  excepcion: "todo handler de /admin empieza con el gate" es verificable de un
 //  vistazo; "todos menos estos cuatro, porque no consultan nada" es una
-//  excepcion que alguien va a copiar al handler equivocado.
+//  excepcion que alguien va a copiar al handler equivocado. (Se escribio "estos
+//  cuatro" mientras fueron cuatro; hoy son cinco, y ese es exactamente el
+//  problema de contar excepciones.)
 //
 //  El require devuelve el array directamente; si el archivo faltara, PHP falla
 //  ruidoso, que es lo correcto para un dato que deberia estar versionado.
@@ -14095,6 +14102,18 @@ function handleAdminDocumentosGet(): void
 {
     exigirSuperadmin(Db::conexion());
     vista('admin-documentos', ['documentos' => require __DIR__ . '/../datos/documentos.php']);
+}
+
+//  Quinta pagina del mismo tipo, con una diferencia que conviene tener presente:
+//  las otras cuatro describen el producto, esta describe la MAQUINA. El
+//  contenido sale igual de un archivo de panel/datos/, pero lo que enumera son
+//  los crones del host -- nombres de contenedor, rutas de scripts y de logs --,
+//  o sea justo el mapa que le sirve a alguien que ya entro donde no debia. Una
+//  razon mas para que empiece por el gate como todas.
+function handleAdminTareasGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+    vista('admin-tareas', ['tareas' => require __DIR__ . '/../datos/tareas_programadas.php']);
 }
 
 // ===========================================================================
