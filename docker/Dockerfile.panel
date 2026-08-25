@@ -50,9 +50,23 @@ COPY docker/supervisord-panel.conf /etc/supervisor/conf.d/panel.conf
 
 WORKDIR /app
 
-# Dependencias primero, en su propia capa (ver nota en Dockerfile.motor sobre
-# la ausencia de composer.lock y lo que eso implica para la reproducibilidad).
-COPY composer.json ./
+# Dependencias primero, en su propia capa: mientras composer.json/lock no
+# cambien, un cambio de codigo no vuelve a bajar TCPDF/PhpSpreadsheet/Guzzle.
+#
+# EL LOCK ENTRA A LA IMAGEN, y es lo que hace reproducible esta construccion.
+# Hasta el 25-08-2026 se copiaba solo composer.json y composer install resolvia
+# versiones frescas cada vez: la version de cada dependencia la decidia la FECHA
+# del build, no el repositorio. Con tecnickcom/tcpdf declarado como "*" eso
+# significaba que produccion corria 6.11.3 -- la API contra la que esta escrito
+# InformePdf -- mientras cualquier build nuevo habria traido 7.0.6, que es otra
+# libreria y no incluye las fuentes. Solo seguia funcionando porque esta capa
+# estaba cacheada desde el 26-07 y su clave era composer.json, que no cambiaba.
+#
+# --no-dev respeta el lock igual: instala lo de "packages" y omite
+# "packages-dev". Si composer.json y composer.lock no concuerdan, composer
+# install FALLA en vez de resolver por su cuenta, que es exactamente lo que se
+# quiere -- el build se detiene en vez de instalar algo que nadie eligio.
+COPY composer.json composer.lock ./
 RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
 
 # Codigo. Los secretos NO entran aqui: los excluye .dockerignore y llegan en

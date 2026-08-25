@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.34',
+        'titulo'  => 'Dos maquinas que instalen el sistema ahora obtienen exactamente lo mismo',
+        'tag'     => 'arquitectura',
+        'items'   => [
+            'Hasta hoy, la version de cada libreria de terceros la decidia la FECHA en que se construia el sistema, no el proyecto: el archivo que fija esas versiones no viajaba en el repositorio. Dos instalaciones hechas con una semana de diferencia podian terminar con librerias distintas, y nadie se enteraba hasta que algo se rompia.',
+            'Ese archivo ahora se versiona, asi que una instalacion nueva obtiene exactamente las mismas versiones que estan corriendo hoy. Si alguien pide una libreria incompatible, la construccion se detiene con un error en vez de instalar por su cuenta algo que nadie eligio.',
+            'Es la causa de fondo del problema de los informes en PDF que se corrigio en la version anterior: alli se fijo una libreria, aqui se fijan todas.',
+            'Verificado construyendo el sistema entero desde cero, sin caches: instala exactamente lo declarado.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.33',
         'titulo'  => 'Los informes en PDF no se van a romper en el proximo despliegue',
         'tag'     => 'arquitectura',
