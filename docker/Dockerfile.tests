@@ -1,0 +1,49 @@
+# docker/Dockerfile.tests -- sinergia_fac_bol
+#
+# IMAGEN SOLO PARA CORRER LA SUITE. No se despliega, no sirve trafico, no entra
+# en docker-compose.vps.yml. La construye y la usa deploy.sh, y nada mas.
+#
+# POR QUE HACE FALTA UNA IMAGEN APARTE
+# -----------------------------------------------------------------------------
+# La imagen del panel instala con --no-dev, asi que NO trae PHPUnit: correr la
+# suite ahi es imposible. Y no se le van a agregar dependencias de desarrollo a
+# la imagen que sirve internet solo para poder testear.
+#
+# HEREDA DE LA IMAGEN DEL PANEL A PROPOSITO. Lo barato seria partir de un
+# php:8.2-cli pelado, pero entonces la suite correria en un entorno que NO es el
+# de produccion: sin pdo_mysql, sin gd/zip, y sobre todo sin la configuracion de
+# OpenSSL. Eso ultimo no es hipotetico -- el 25-08-2026, 34 de los 43 errores de
+# la suite venian justamente de esa configuracion. Un test que pasa en un
+# entorno distinto al de produccion no prueba lo que uno cree.
+#
+# La unica capa propia es composer install CON dependencias de desarrollo, y su
+# clave de cache es composer.json + composer.lock: mientras esos dos no cambien,
+# construir esta imagen no vuelve a bajar nada.
+#
+# SIN --optimize-autoloader, y eso es deliberado. El autoloader optimizado es un
+# classmap con rutas fijas, generado contra el codigo que habia al construir.
+# deploy.sh monta el codigo NUEVO encima al correr los tests, asi que un
+# classmap congelado no encontraria ninguna clase que no existiera antes -- y la
+# suite fallaria por una razon que no tiene nada que ver con el cambio. El
+# autoload PSR-4 sin optimizar resuelve por ruta en cada llamada, que es
+# exactamente lo que hace falta aqui.
+#
+# Uso (lo hace deploy.sh, no hace falta a mano):
+#   docker build -f docker/Dockerfile.tests -t sinergia_tests:latest .
+#   docker run --rm -v ./src:/app/src:ro ... sinergia_tests:latest vendor/bin/phpunit
+
+FROM sinergia_panel:latest
+
+WORKDIR /app
+
+# Las dependencias de desarrollo, desde el lock. Sin --no-dev: es justo lo que
+# esta imagen viene a aportar. Sin --optimize-autoloader: ver la nota de arriba.
+COPY composer.json composer.lock ./
+RUN composer install --no-interaction --no-scripts
+
+# El codigo NO se copia: lo monta deploy.sh en tiempo de ejecucion, para que la
+# suite corra contra lo que se va a desplegar y no contra una foto vieja
+# horneada en la imagen. Es el mismo razonamiento que ya usa deploy.sh para el
+# verificador de migraciones.
+
+CMD ["vendor/bin/phpunit"]
