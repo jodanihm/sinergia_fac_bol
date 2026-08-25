@@ -335,33 +335,108 @@ if (! adquirirCandado($pdo)) {
 $enCurso      = RegistroVeredictoSii::ESTADOS_EN_CURSO;
 $placeholders = implode(',', array_fill(0, count($enCurso), '?'));
 
+// ---------------------------------------------------------------------------
+//  LAS CUENTAS DE DEMOSTRACION NO SE CONSULTAN. NUNCA.
+//
+//  Su material criptografico es RELLENO a proposito -- sembrar_demo.php lo dice
+//  en su cabecera --, asi que intentar descifrarlo para autenticarse ante el SII
+//  no puede terminar bien: falla, y vuelve a fallar en la corrida siguiente, y
+//  en la siguiente, para siempre, porque nada saca al sobre de 'enviado'.
+//
+//  ESO YA PASO, y el dano no fue el fallo sino el ruido: entre el 05-08 y el
+//  25-08-2026, 36 de las ultimas 60 lineas de esta bitacora eran el mismo
+//  "Fallo descifrado AES-256-GCM" de la demo, tres por corrida, 96 corridas al
+//  dia. Un fallo NUEVO y real habria aterrizado en un log donde ya nadie mira.
+//  Este archivo se escribio entero alrededor de la idea de que sin evento no hay
+//  linea (ver el bloque de silencio total mas abajo); tres lineas falsas cada 15
+//  minutos son exactamente lo contrario.
+//
+//  POR QUE NO SE ARREGLA EN LA SIEMBRA. La opcion obvia era que sembrar_demo.php
+//  dejara esos tres documentos en un estado terminal, como los otros 280. Pero
+//  estan en 'enviado' A PROPOSITO: son los que le dan al panel de la demo unos
+//  documentos todavia sin veredicto. Cerrarlos apagaria esa parte de la demo
+//  para tapar un problema que no es suyo -- el que no debe consultar es este
+//  runner.
+//
+//  QUE CUENTA "ES DEMO": la que tiene algun usuario con demo = 1 Y NINGUNO sin
+//  esa marca. La segunda mitad no sobra: si manana alguien agrega un usuario de
+//  demostracion a una cuenta REAL para mostrarle el sistema a un cliente, esa
+//  cuenta no puede dejar de consultar sus veredictos en silencio. Es preferible
+//  consultar de mas que dejar de avisar un rechazo del SII.
+//
+//  El JOIN por (rut_emisor, ambiente) es posible desde la migracion 045: antes
+//  las dos tablas tenian collation distinta y la comparacion moria con el error
+//  1267.
+// ---------------------------------------------------------------------------
+$paresDemo = $pdo->query(
+    'SELECT e.rut_emisor, e.ambiente FROM dte_emisor e '
+    . 'WHERE EXISTS (SELECT 1 FROM usuario u WHERE u.cuenta_id = e.cuenta_id AND u.demo = 1) '
+    . '  AND NOT EXISTS (SELECT 1 FROM usuario u WHERE u.cuenta_id = e.cuenta_id AND u.demo = 0)'
+)->fetchAll(PDO::FETCH_ASSOC);
+
+$filtroDemo  = '';
+$paramsDemo  = [];
+if ($paresDemo !== []) {
+    $filtroDemo = '  AND (rut_emisor, ambiente) NOT IN ('
+        . implode(',', array_fill(0, count($paresDemo), '(?,?)')) . ') ';
+    foreach ($paresDemo as $par) {
+        $paramsDemo[] = $par['rut_emisor'];
+        $paramsDemo[] = $par['ambiente'];
+    }
+}
+
+// La exclusion va DENTRO del SQL y no despues de traer las filas, porque el tope
+// por corrida se aplica con LIMIT: filtrando en PHP, los sobres de la demo se
+// gastarian parte de los 30 y podrian desplazar sobres reales.
 $sqlPendientes =
     'SELECT rut_emisor, ambiente, track_id, COUNT(*) AS documentos, MIN(created_at) AS desde '
     . 'FROM dte_emitido '
     . "WHERE (estado = 'enviado' OR estado IN ({$placeholders})) "
     . "  AND track_id IS NOT NULL AND track_id <> '' "
     . '  AND created_at >= (NOW() - INTERVAL ? DAY) '
+    . $filtroDemo
     . 'GROUP BY rut_emisor, ambiente, track_id '
     . 'ORDER BY desde ASC';
 
 $stmt = $pdo->prepare($sqlPendientes . ' LIMIT ' . $tope);
-$stmt->execute([...$enCurso, $diasAtras]);
+$stmt->execute([...$enCurso, $diasAtras, ...$paramsDemo]);
 $sobres = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Cuantos sobres se dejaron fuera por ser de una cuenta de demostracion. NO se
+// escribe una linea por corrida con esto -- seria cambiar tres lineas de ruido
+// por una --, pero va en el RESUMEN, que solo sale cuando hubo algo que hacer, y
+// en el --dry-run, que lo corre una persona. Una exclusion invisible del todo
+// seria la proxima sorpresa de alguien.
+$sobresDemoOmitidos = 0;
+if ($paresDemo !== []) {
+    $sqlDemo = str_replace(
+        'NOT IN (' . implode(',', array_fill(0, count($paresDemo), '(?,?)')) . ')',
+        'IN (' . implode(',', array_fill(0, count($paresDemo), '(?,?)')) . ')',
+        $sqlPendientes
+    );
+    $stmtDemo = $pdo->prepare('SELECT COUNT(*) FROM (' . $sqlDemo . ') t');
+    $stmtDemo->execute([...$enCurso, $diasAtras, ...$paramsDemo]);
+    $sobresDemoOmitidos = (int) $stmtDemo->fetchColumn();
+}
 
 // Cuantos habria en total sin el tope, para que el resumen diga si quedo trabajo
 // para la corrida siguiente.
 $stmtTot = $pdo->prepare('SELECT COUNT(*) FROM (' . $sqlPendientes . ') t');
-$stmtTot->execute([...$enCurso, $diasAtras]);
+$stmtTot->execute([...$enCurso, $diasAtras, ...$paramsDemo]);
 $sobresTotales = (int) $stmtTot->fetchColumn();
 
-// Y cuantos quedan fuera por la ventana de dias: el tope que se declara.
+// Y cuantos quedan fuera por la ventana de dias: el tope que se declara. Lleva
+// el mismo filtro de demo que el de arriba -- si no, "fuera_de_ventana" contaria
+// sobres que este runner ya no va a mirar nunca, y el numero invitaria a ampliar
+// una ventana que no cambiaria nada.
 $stmtViejos = $pdo->prepare(
     'SELECT COUNT(DISTINCT track_id) FROM dte_emitido '
     . "WHERE (estado = 'enviado' OR estado IN ({$placeholders})) "
     . "  AND track_id IS NOT NULL AND track_id <> '' "
-    . '  AND created_at < (NOW() - INTERVAL ? DAY)'
+    . '  AND created_at < (NOW() - INTERVAL ? DAY) '
+    . $filtroDemo
 );
-$stmtViejos->execute([...$enCurso, $diasAtras]);
+$stmtViejos->execute([...$enCurso, $diasAtras, ...$paramsDemo]);
 $sobresFueraDeVentana = (int) $stmtViejos->fetchColumn();
 
 // ---------------------------------------------------------------------------
@@ -384,10 +459,11 @@ if ($sobres === []) {
     }
     linea(sprintf(
         'RESUMEN consultados=0 rechazados=0 fallidos=0 sobres_restantes=0 '
-        . '(sin pendientes; tope=%d ventana=%dd fuera_de_ventana=%d)',
+        . '(sin pendientes; tope=%d ventana=%dd fuera_de_ventana=%d omitidos_demo=%d)',
         $tope,
         $diasAtras,
-        $sobresFueraDeVentana
+        $sobresFueraDeVentana,
+        $sobresDemoOmitidos
     ));
     soltarCandado($pdo);
     exit(0);
@@ -414,12 +490,14 @@ if ($dryRun) {
         ));
     }
     linea(sprintf(
-        'RESUMEN(dry-run) consultaria=%d sobres (%d documentos) de %d; ventana=%dd fuera_de_ventana=%d',
+        'RESUMEN(dry-run) consultaria=%d sobres (%d documentos) de %d; '
+        . 'ventana=%dd fuera_de_ventana=%d omitidos_demo=%d',
         count($sobres),
         array_sum(array_map(static fn (array $s): int => (int) $s['documentos'], $sobres)),
         $sobresTotales,
         $diasAtras,
-        $sobresFueraDeVentana
+        $sobresFueraDeVentana,
+        $sobresDemoOmitidos
     ));
     soltarCandado($pdo);
     exit(0);
@@ -667,7 +745,7 @@ if ($sinAviso > 0) {
 linea(sprintf(
     'RESUMEN consultados=%d rechazados=%d (de_los_cuales_epr_con_problemas=%d) fallidos=%d '
     . 'sin_aviso=%d sobres_restantes=%d '
-    . '(tope=%d ventana=%dd fuera_de_ventana=%d tiempo=%ds)',
+    . '(tope=%d ventana=%dd fuera_de_ventana=%d omitidos_demo=%d tiempo=%ds)',
     $consultados,
     $rechazados,
     $eprConProblemas,
@@ -677,6 +755,7 @@ linea(sprintf(
     $tope,
     $diasAtras,
     $sobresFueraDeVentana,
+    $sobresDemoOmitidos,
     time() - $inicio
 ));
 

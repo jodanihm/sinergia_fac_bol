@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.32',
+        'titulo'  => 'La bitacora de veredictos del SII vuelve a servir para algo',
+        'tag'     => 'backend',
+        'items'   => [
+            'El proceso que cada 15 minutos le pregunta al SII como quedaron los documentos enviados dejo de intentarlo con la cuenta de demostracion, que tiene un certificado de mentira a proposito y por lo tanto no puede consultarse nunca.',
+            'Eso escribia tres lineas de error en la bitacora cada 15 minutos desde el 5 de agosto: 36 de las ultimas 60 lineas eran el mismo fallo falso. El problema no era el fallo, era que un problema NUEVO y de verdad iba a aparecer en una lista donde ya nadie miraba.',
+            'La cuenta de demostracion conserva sus documentos "sin veredicto", que es lo que muestra esa parte del panel. No se apago nada de la demo para arreglar esto.',
+            'El resumen de cada corrida ahora dice cuantos envios se dejaron fuera por ser de demostracion, para que la exclusion se vea y no sea una sorpresa para quien lea la bitacora dentro de un ano.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.31',
         'titulo'  => 'Los documentos tributarios ya no pueden quedar sin dueno',
         'tag'     => 'datos',
