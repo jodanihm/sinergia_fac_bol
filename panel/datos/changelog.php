@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.36',
+        'titulo'  => 'Una prueba automatica vigila que ninguna consulta pueda mezclar dos empresas',
+        'tag'     => 'datos',
+        'items'   => [
+            'Las tablas que guardan facturas, boletas, folios y certificados son compartidas por todas las empresas: lo unico que separa a una de otra es que cada consulta recuerde filtrar por su dueno. Desde la correccion de esta manana la base sabe de quien es cada fila, pero eso no impide que una consulta mal escrita lea las de otro.',
+            'Ahora hay una prueba que revisa las 116 consultas del sistema que tocan esas tablas y falla si alguna no filtra. Como el despliegue corre las pruebas, una consulta asi ya no puede llegar a produccion.',
+            'Al escribirla se revisaron todas una por una: ninguna estaba mal. Lo que protege es el futuro, no un problema existente.',
+            'Seis consultas ven los datos de todas las empresas a proposito -- un contador global del panel interno, un verificador de la estructura de la base, el proceso que consulta al SII por todos los emisores -- y estan declaradas una por una con su motivo escrito. Si alguna deja de corresponder, la prueba tambien avisa: una lista de excepciones que envejece en silencio seria peor que no tenerla.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.35',
         'titulo'  => 'El sistema ya no se despliega si no pasa sus propias pruebas',
         'tag'     => 'devops',
