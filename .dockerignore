@@ -28,8 +28,11 @@
 .claude
 
 # --- Dependencias regeneradas en el build ---
+# vendor/ si se regenera; composer.lock NO puede excluirse: es lo que fija que
+# version se instala. Excluirlo aqui volvia a dejar la construccion resolviendo
+# libre aunque el fichero estuviera versionado en git -- el COPY del Dockerfile
+# no lo habria visto nunca.
 vendor/
-composer.lock
 
 # --- LibreDTE: entra por bind mount :ro, no por la imagen ---
 # No esta versionado (nunca estuvo en git, ver .gitignore:71 /oracle/), asi que

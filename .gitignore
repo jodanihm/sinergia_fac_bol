@@ -4,7 +4,13 @@
 
 # --- Bloque 0: lo que el .gitignore anterior ya excluia (se conserva) ---
 /vendor/
-/composer.lock
+# composer.lock SI SE VERSIONA desde el 25-08-2026. Estaba aqui por herencia
+# -- este bloque conserva lo que excluia el .gitignore anterior --, no por una
+# decision. Sin el, cada construccion de imagen resolvia versiones frescas y el
+# VPS podia terminar con dependencias distintas a las de cualquier otra maquina.
+# No fue teorico: tecnickcom/tcpdf estaba declarado como "*", produccion corria
+# 6.11.3 y un install nuevo traia 7.0.6, que es otra libreria. Los PDF seguian
+# saliendo solo porque la capa de docker estaba cacheada desde el 26-07.
 /.phpunit.cache/
 /.phpunit.result.cache
 /coverage/
