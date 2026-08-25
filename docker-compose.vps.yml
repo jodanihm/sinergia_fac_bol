@@ -114,6 +114,29 @@ services:
       # (panel/public/index.php:7810). InformePdf NO: usa TCPDF de vendor/.
       - ./oracle:/app/oracle:ro
       - sinergia_debug:/app/debug
+      # Las bitacoras de los tres crones, para /admin/tareas/{id}. Son la salida
+      # estandar de los cron del HOST, que vive en /var/log y hasta aca no
+      # llegaba: la pantalla podia decir cuando le TOCA a cada tarea pero no si
+      # la ultima vez resulto.
+      #
+      # ARCHIVOS, NO EL DIRECTORIO. Montar /var/log entero le daria al proceso
+      # web los logs de auth, de nginx y de los otros cinco proyectos que
+      # comparten este host. Tres archivos concretos es todo lo que se necesita.
+      #
+      # :ro NO ES DECORATIVO. El panel las MUESTRA; el unico que escribe ahi es
+      # el cron del host. Sin :ro, un bug en el panel podria truncar la bitacora
+      # que se usa para diagnosticar ese mismo bug.
+      #
+      # SE MONTAN EN LA MISMA RUTA QUE TIENEN EN EL HOST, a proposito: asi el
+      # campo 'log' de panel/datos/tareas_programadas.php sirve a la vez para
+      # leerlas desde el panel y para ir a mirarlas por consola. Un solo dato.
+      #
+      # Si un archivo no existiera todavia, docker crearia un DIRECTORIO vacio
+      # en su lugar -- por eso los tres se crean con touch antes de levantar, y
+      # BitacoraTarea responde "no esta a la vista" en vez de caerse.
+      - /var/log/sinergia_correos.log:/var/log/sinergia_correos.log:ro
+      - /var/log/sinergia_ordenes_compra.log:/var/log/sinergia_ordenes_compra.log:ro
+      - /var/log/sinergia_veredictos.log:/var/log/sinergia_veredictos.log:ro
     ports:
       - "127.0.0.1:8086:80"              # SOLO loopback — lo consume cloudflared
     depends_on:

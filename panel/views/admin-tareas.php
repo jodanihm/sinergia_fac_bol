@@ -8,10 +8,11 @@
  * con la proxima corrida en hora de Chile, y la expresion queda al lado, en
  * chico, como respaldo para quien si la lee.
  *
- * ES UN CALENDARIO, NO UN MONITOR, y la pagina lo dice en voz alta. Proyecta lo
- * que cron VA a hacer; no sabe si la ultima corrida termino bien. Callarlo
- * seria peor que no tener la pantalla: alguien mirando una tabla verde daria
- * por sano un cron caido hace tres dias.
+ * ESTA LISTA ES UN CALENDARIO, NO UN MONITOR: proyecta lo que cron VA a hacer y
+ * no sabe si la ultima corrida termino bien. Quien quiera eso pincha el nombre
+ * y llega a admin-tarea-detalle.php, que abre la bitacora. Se mantienen
+ * separadas a proposito -- la lista se lee de un vistazo y no tiene por que
+ * pagar la lectura de tres archivos de log para dibujarse.
  *
  * SI UNA EXPRESION NO SE ENTIENDE no se cae la pagina: esa fila queda marcada y
  * las otras se siguen viendo. El archivo de datos esta versionado y hay un test
@@ -29,8 +30,8 @@ $ahora = new DateTimeImmutable('now');
 <p class="muted">
     <?= count($tareas); ?> tareas que corren solas en el servidor, sin que nadie apriete nada.
     Las horas son de Chile. Esta pagina es el <strong>calendario</strong>: dice cuando le toca a
-    cada una, no si la ultima vez resulto. Lo que efectivamente paso queda en el log de cada
-    tarea, en el servidor.
+    cada una. Para saber si la ultima vez resulto, <strong>pincha el nombre</strong> y se abre su
+    bitacora.
 </p>
 
 <div class="panel">
@@ -55,7 +56,7 @@ $ahora = new DateTimeImmutable('now');
             ?>
             <tr>
                 <td>
-                    <strong><?= htmlspecialchars((string) $t['nombre']); ?></strong>
+                    <a href="/admin/tareas/<?= htmlspecialchars((string) $t['id']); ?>"><strong><?= htmlspecialchars((string) $t['nombre']); ?></strong></a>
                     <div class="muted" style="font-size:.82em;margin-top:.2rem;">
                         <?= htmlspecialchars((string) $t['proposito']); ?>
                     </div>
