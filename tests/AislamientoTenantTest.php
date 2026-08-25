@@ -145,4 +145,93 @@ final class AislamientoTenantTest extends TestCase
 
         $this->assertSame(AislamientoTenant::GLOBAL, $r['suelta']['clase']);
     }
+
+    /**
+     * LA FORMA QUE DEJO LA MIGRACION 045, y el caso por el que 'restriccion'
+     * existe. Las tablas de DTE llegan a dte_emisor por una clave foranea
+     * COMPUESTA (rut_emisor, ambiente), que information_schema entrega como dos
+     * filas distintas. Si no se vuelven a juntar por el nombre de la
+     * constraint, el recorrido toma una sola de las dos y rotula el salto con
+     * la columna equivocada -- decia "dte_emitido.ambiente -> dte_emisor",
+     * que describe un camino real de una forma que no sirve para escribir el
+     * JOIN.
+     */
+    public function testUnaForaneaCompuestaEsUnSoloSaltoConSusDosColumnas(): void
+    {
+        $r = AislamientoTenant::clasificar(
+            ['cuenta', 'dte_emisor', 'dte_emitido'],
+            [
+                'cuenta'      => ['id'],
+                'dte_emisor'  => ['id', 'rut_emisor', 'cuenta_id', 'ambiente'],
+                'dte_emitido' => ['id', 'rut_emisor', 'ambiente', 'folio'],
+            ],
+            [
+                ['tabla' => 'dte_emisor',  'columna' => 'cuenta_id',  'refTabla' => 'cuenta',     'restriccion' => 'fk_emisor_cuenta'],
+                ['tabla' => 'dte_emitido', 'columna' => 'rut_emisor', 'refTabla' => 'dte_emisor', 'restriccion' => 'fk_emitido_emisor'],
+                ['tabla' => 'dte_emitido', 'columna' => 'ambiente',   'refTabla' => 'dte_emisor', 'restriccion' => 'fk_emitido_emisor'],
+            ]
+        );
+
+        // Deja de ser 'sin_ruta' aunque no tenga cuenta_id: ahora el motor
+        // impone el camino, que es exactamente lo que la 045 fue a comprar.
+        $this->assertSame(AislamientoTenant::INDIRECTO, $r['dte_emitido']['clase']);
+        $this->assertSame(
+            ['dte_emitido.(rut_emisor, ambiente) -> dte_emisor', 'dte_emisor.cuenta_id -> cuenta'],
+            $r['dte_emitido']['camino']
+        );
+    }
+
+    /**
+     * El reverso del anterior: agrupar por (tabla, tabla destino) a secas seria
+     * mas simple y estaria mal. Dos claves foraneas DISTINTAS de la misma tabla
+     * a la misma tabla destino son dos caminos, no una clave de dos columnas, y
+     * fundirlas inventaria un salto '(creador_id, aprobador_id)' que no existe.
+     */
+    public function testDosForaneasDistintasAlMismoDestinoNoSeFunden(): void
+    {
+        $r = AislamientoTenant::clasificar(
+            ['cuenta', 'usuario', 'documento'],
+            [
+                'cuenta'    => ['id'],
+                'usuario'   => ['id', 'cuenta_id'],
+                'documento' => ['id', 'creador_id', 'aprobador_id'],
+            ],
+            [
+                ['tabla' => 'usuario',   'columna' => 'cuenta_id',    'refTabla' => 'cuenta',  'restriccion' => 'fk_usuario_cuenta'],
+                ['tabla' => 'documento', 'columna' => 'creador_id',   'refTabla' => 'usuario', 'restriccion' => 'fk_doc_creador'],
+                ['tabla' => 'documento', 'columna' => 'aprobador_id', 'refTabla' => 'usuario', 'restriccion' => 'fk_doc_aprobador'],
+            ]
+        );
+
+        $this->assertSame(AislamientoTenant::INDIRECTO, $r['documento']['clase']);
+        // Una sola columna por salto, sin parentesis: son dos caminos de largo
+        // 2 y el BFS se queda con el primero.
+        $this->assertSame(
+            ['documento.creador_id -> usuario', 'usuario.cuenta_id -> cuenta'],
+            $r['documento']['camino']
+        );
+    }
+
+    /**
+     * La compatibilidad hacia atras que hace que este cambio no toque a nadie
+     * mas: sin 'restriccion', cada fila sigue siendo su propia clave foranea.
+     * Es lo correcto mientras todas sean de una columna, y es como llamaban a
+     * clasificar() los tests de mas arriba antes de que la 045 existiera.
+     */
+    public function testSinNombreDeConstraintCadaColumnaSigueSiendoUnaForanea(): void
+    {
+        $r = AislamientoTenant::clasificar(
+            ['cuenta', 'rol', 'permiso'],
+            ['cuenta' => ['id'], 'rol' => ['id', 'cuenta_id'], 'permiso' => ['rol_id']],
+            [
+                ['tabla' => 'rol',     'columna' => 'cuenta_id', 'refTabla' => 'cuenta'],
+                ['tabla' => 'permiso', 'columna' => 'rol_id',    'refTabla' => 'rol'],
+            ]
+        );
+
+        $this->assertSame(
+            ['permiso.rol_id -> rol', 'rol.cuenta_id -> cuenta'],
+            $r['permiso']['camino']
+        );
+    }
 }

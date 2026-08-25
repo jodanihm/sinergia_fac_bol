@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.31',
+        'titulo'  => 'Los documentos tributarios ya no pueden quedar sin dueno',
+        'tag'     => 'datos',
+        'items'   => [
+            'Once tablas del sistema -- las que guardan las facturas y boletas emitidas, los folios del SII, los certificados digitales y los libros -- guardaban informacion de una empresa sin que la base de datos pudiera decir de cual. Ahora cada una de esas filas queda amarrada a su empresa, y la empresa a la cuenta que la contrata.',
+            'Se acabo poder guardar un documento a nombre de una empresa que no esta registrada: antes entraba sin protestar y quedaba dando vueltas sin dueno.',
+            'Ya no se puede borrar una empresa que tiene documentos emitidos, ni cambiarle el RUT despues de haber emitido. Un documento tributario se emitio a nombre de un RUT y ese dato es parte del documento firmado ante el SII; cambiarlo despues seria alterar la historia. Si alguien lo intenta desde la pantalla de empresa, ahora recibe una explicacion en vez de que el cambio pase en silencio y deje los documentos huerfanos.',
+            'La pantalla de base de datos del panel de control lo refleja sola: donde antes marcaba once tablas en rojo, ahora muestra el camino exacto que lleva de cada documento a su cuenta.',
+            'Queda una tabla en rojo a proposito, la de los logos de empresa, porque su estructura no permite el mismo amarre. Es la de menor riesgo de todas -- guarda una imagen -- y la pantalla la sigue mostrando en rojo en vez de esconderla.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.30',
         'titulo'  => 'El menu del panel de control ahora tiene iconos',
         'tag'     => 'frontend',
