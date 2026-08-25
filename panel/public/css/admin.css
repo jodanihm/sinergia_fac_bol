@@ -86,12 +86,31 @@ button { font: inherit; cursor: pointer; }
     color: var(--muted);
 }
 .nav a {
-    display: block;
-    padding: .55rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    padding: .55rem 1.25rem .55rem 1.1rem;
     color: var(--muted);
     font-size: .92rem;
     border-left: 3px solid transparent;
 }
+
+/* El icono NO declara color: hereda el de <a> por stroke="currentColor", asi
+   que sigue solo al texto en reposo, en hover y en activo. Sin esto harian
+   falta tres reglas de color mas, una por estado.
+
+   flex-shrink:0 porque un nombre largo ("Tareas programadas") aplastaria el
+   icono en vez de partirse: sin esto el simbolo se deforma justo en los items
+   de nombre mas largo. */
+.nav .ico {
+    width: 17px;
+    height: 17px;
+    flex: 0 0 17px;
+    /* Los trazos finos a este tamano caen entre pixeles y se ven lavados; un
+       pelo de opacidad de menos iguala su peso visual al del texto. */
+    opacity: .85;
+}
+.nav a.active .ico, .nav a:hover .ico { opacity: 1; }
 .nav a:hover { color: var(--text); background: var(--panel-2); }
 .nav a.active { color: var(--text); border-left-color: var(--accent); background: var(--panel-2); }
 
