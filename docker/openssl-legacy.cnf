@@ -1,3 +1,26 @@
+#
+# Configuracion de OpenSSL de la imagen. La instala el Dockerfile en
+# /etc/ssl/openssl-legacy.cnf y la impone con OPENSSL_CONF, que la usa TODO
+# proceso OpenSSL del contenedor: PHP, el CLI, y cualquier libreria que llame a
+# OpenSSL por debajo.
+#
+# ESE "TODO" ES LA LETRA CHICA, y costo 34 errores de la suite. OPENSSL_CONF no
+# complementa la configuracion del sistema: la REEMPLAZA. Mientras este fichero
+# solo declaro los proveedores, todo lo demas que traia /etc/ssl/openssl.cnf
+# desaparecio del contenedor -- entre otras cosas la seccion [req], que es la
+# que openssl_csr_new() necesita para armar una peticion de certificado.
+#
+# El sintoma no señalaba a este archivo. openssl_pkey_new() seguia funcionando
+# (no mira [req]), asi que las guardas de los tests lo daban por bueno; el que
+# devolvia false era openssl_csr_new(), y el TypeError aparecia recien una linea
+# mas abajo, en openssl_csr_sign(), quejandose de recibir un bool. El error real
+# solo se ve pidiendo openssl_error_string():
+#     error:0700006C:configuration file routines::no value
+#
+# NO ES UN PROBLEMA "DE LOS TESTS". Cualquier codigo de esta imagen que genere
+# un CSR falla igual; que se notara en la suite es una casualidad afortunada.
+#
+
 openssl_conf = openssl_init
 
 [openssl_init]
@@ -7,8 +30,33 @@ providers = provider_sect
 default = default_sect
 legacy = legacy_sect
 
+# ---------------------------------------------------------------------------
+#  El motivo original del fichero: OpenSSL 3 desactiva RC2/3DES por defecto y
+#  sin el proveedor legacy openssl_pkcs12_read() falla con un "invalid password"
+#  enganoso al leer los .pfx/.p12 del SII, que en su mayoria usan esos
+#  algoritmos. Van los DOS proveedores: activar solo el legacy dejaria fuera
+#  todo lo moderno.
+# ---------------------------------------------------------------------------
 [default_sect]
 activate = 1
 
 [legacy_sect]
 activate = 1
+
+# ---------------------------------------------------------------------------
+#  Lo que se perdio al reemplazar la configuracion del sistema.
+#
+#  openssl_csr_new() exige una seccion [req] con distinguished_name apuntando a
+#  otra seccion; si no la encuentra devuelve false. La seccion apuntada puede
+#  estar VACIA -- el DN real lo pasa quien llama, en el array de argumentos --,
+#  asi que esto es lo minimo que hace falta y no fija ninguna politica.
+#
+#  No se usa ".include /etc/ssl/openssl.cnf" a proposito: ese fichero declara su
+#  propio openssl_conf y volver a entrar por ahi haria depender el arranque de
+#  cual de las dos directivas gana, que es precisamente la clase de sorpresa que
+#  este archivo ya provoco una vez.
+# ---------------------------------------------------------------------------
+[req]
+distinguished_name = req_distinguished_name
+
+[req_distinguished_name]

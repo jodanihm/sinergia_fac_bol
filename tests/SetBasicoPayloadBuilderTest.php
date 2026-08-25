@@ -17,10 +17,11 @@ use Plantiflex\FacturacionCl\Sii\SetPruebasParser;
  */
 final class SetBasicoPayloadBuilderTest extends TestCase
 {
+    use FixtureFueraDelRepo;
+
     public function testPayloadGeneradoEsEquivalenteAlAceptadoPorElSii(): void
     {
-        $bytes = file_get_contents(__DIR__ . '/../easyagenda/SIISetDePruebas781572438.txt');
-        self::assertNotFalse($bytes);
+        $bytes = $this->fixtureFueraDelRepo('easyagenda/SIISetDePruebas781572438.txt');
         $parseado = (new SetPruebasParser())->parse($bytes);
 
         // Misma fecha que el payload historico (payload_set_basico_v2.json,
@@ -32,8 +33,7 @@ final class SetBasicoPayloadBuilderTest extends TestCase
         self::assertSame([], $resultado->errores, 'El builder no debe reportar casos ambiguos para el archivo real de EASY AGENDA.');
         self::assertNotNull($resultado->payload);
 
-        $esperadoJson = file_get_contents(__DIR__ . '/../payload_set_basico_v2.json');
-        self::assertNotFalse($esperadoJson);
+        $esperadoJson = $this->fixtureFueraDelRepo('payload_set_basico_v2.json');
         $esperado = json_decode($esperadoJson, true, flags: JSON_THROW_ON_ERROR);
 
         // Desviacion CONOCIDA y documentada (ver comentario de la regla (a) en

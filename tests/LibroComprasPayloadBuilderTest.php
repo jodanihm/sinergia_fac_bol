@@ -17,10 +17,11 @@ use Plantiflex\FacturacionCl\Sii\SetPruebasParser;
  */
 final class LibroComprasPayloadBuilderTest extends TestCase
 {
+    use FixtureFueraDelRepo;
+
     public function testPayloadGeneradoEsEquivalenteAlAceptadoPorElSii(): void
     {
-        $bytes = file_get_contents(__DIR__ . '/../easyagenda/SIISetDePruebas781572438.txt');
-        self::assertNotFalse($bytes);
+        $bytes = $this->fixtureFueraDelRepo('easyagenda/SIISetDePruebas781572438.txt');
         $parseado = (new SetPruebasParser())->parse($bytes);
 
         // Misma fecha que el payload historico (fecha "2026-07-14" en las 7
@@ -31,8 +32,7 @@ final class LibroComprasPayloadBuilderTest extends TestCase
         self::assertSame([], $resultado->errores, 'El builder no debe reportar folios sin reconocer para el archivo real de EASY AGENDA.');
         self::assertNotNull($resultado->payload);
 
-        $esperadoJson = file_get_contents(__DIR__ . '/../payload_libro_compras_v2.json');
-        self::assertNotFalse($esperadoJson);
+        $esperadoJson = $this->fixtureFueraDelRepo('payload_libro_compras_v2.json');
         $esperado = json_decode($esperadoJson, true, flags: JSON_THROW_ON_ERROR);
 
         self::assertSame($esperado, $resultado->payload);
