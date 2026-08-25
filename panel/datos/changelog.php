@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.30',
+        'titulo'  => 'El menu del panel de control ahora tiene iconos',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Cada opcion del menu lateral lleva un simbolo al lado del nombre, para encontrarla de reojo sin leer la lista entera.',
+            'Los dibujos van dentro de la propia pagina: no se descargan de ningun servicio externo, asi que el menu se ve igual aunque no haya internet hacia afuera.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.29',
         'titulo'  => 'Ver de que servicios externos depende el sistema, y probarlos',
         'tag'     => 'devops',
