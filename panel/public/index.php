@@ -102,6 +102,7 @@ require __DIR__ . '/../src/AislamientoTenant.php';
 require __DIR__ . '/../src/RutasDelRouter.php';
 require __DIR__ . '/../src/DiagramaEr.php';
 require __DIR__ . '/../src/AgendaCron.php';
+require __DIR__ . '/../src/BitacoraTarea.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -11157,6 +11158,10 @@ if ($metodo === 'GET' && $ruta === '/admin/tareas') {
     handleAdminTareasGet();
 }
 
+if ($metodo === 'GET' && preg_match('#^/admin/tareas/([a-z0-9-]+)$#', $ruta, $mTarea)) {
+    handleAdminTareaDetalleGet($mTarea[1]);
+}
+
 http_response_code(404);
 echo '404 - ruta no encontrada';
 exit;
@@ -14061,10 +14066,10 @@ function clasificarRutaPatron(string $metodo, string $patron): array
 }
 
 // ===========================================================================
-//  Handlers: las cinco paginas de DOCUMENTACION del panel de control.
+//  Handlers: las seis paginas de DOCUMENTACION del panel de control.
 //
 //  GET /admin/changelog   GET /admin/pendientes   GET /admin/tareas
-//  GET /admin/flujos      GET /admin/documentos
+//  GET /admin/flujos      GET /admin/documentos   GET /admin/tareas/{id}
 //
 //  NO TOCAN LA BASE. Cada una lee un archivo de panel/datos/ que solo devuelve
 //  un array. Aun asi empiezan con exigirSuperadmin(), como todo /admin/*: el
@@ -14114,6 +14119,47 @@ function handleAdminTareasGet(): void
 {
     exigirSuperadmin(Db::conexion());
     vista('admin-tareas', ['tareas' => require __DIR__ . '/../datos/tareas_programadas.php']);
+}
+
+// ===========================================================================
+//  Handler: GET /admin/tareas/{id} -- la bitacora de UNA tarea.
+//
+//  LA UNICA DE LAS SEIS QUE LEE ALGO DE AFUERA. Las otras cinco se agotan en un
+//  archivo de panel/datos/; esta ademas abre el log del cron, que entra al
+//  contenedor por un bind mount de solo lectura (ver BitacoraTarea).
+//
+//  EL ID SE BUSCA EN EL CATALOGO, NO SE USA COMO RUTA. El patron del router ya
+//  acota a [a-z0-9-], pero la defensa que importa es otra: la ruta del archivo
+//  sale SIEMPRE del campo 'log' de la tarea encontrada, nunca de la URL. Aunque
+//  alguien lograra colar un id raro, lo peor que pasa es un 404, porque no hay
+//  ningun punto donde el texto del request se convierta en un nombre de
+//  archivo. Es la diferencia entre buscar en una lista blanca y sanear una
+//  entrada, y solo la primera se puede afirmar de un vistazo.
+// ===========================================================================
+function handleAdminTareaDetalleGet(string $id): void
+{
+    exigirSuperadmin(Db::conexion());
+
+    $tareas = require __DIR__ . '/../datos/tareas_programadas.php';
+    $tarea  = null;
+
+    foreach ($tareas as $t) {
+        if ($t['id'] === $id) {
+            $tarea = $t;
+            break;
+        }
+    }
+
+    if ($tarea === null) {
+        http_response_code(404);
+        vista('admin-tarea-detalle', ['tarea' => null, 'bitacora' => null]);
+        exit;
+    }
+
+    vista('admin-tarea-detalle', [
+        'tarea'    => $tarea,
+        'bitacora' => BitacoraTarea::leer((string) $tarea['log']),
+    ]);
 }
 
 // ===========================================================================

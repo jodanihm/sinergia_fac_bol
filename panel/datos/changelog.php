@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.26',
+        'titulo'  => 'Saber si una tarea programada corrio bien, sin entrar al servidor',
+        'tag'     => 'devops',
+        'items'   => [
+            'Al pinchar el nombre de una tarea en "Tareas programadas" se abre su bitacora: arriba, en una linea, si viene bien o hay que mirarla; abajo, el registro tal cual lo escribio el servidor, con los fallos destacados en rojo.',
+            'El veredicto entiende que las tres tareas no se comportan igual. La de correos solo escribe cuando tiene trabajo, asi que semanas sin una linea son normales y no se marcan como problema; las otras dos escriben en cada corrida, y ahi el silencio si es una alarma.',
+            'La pantalla dice lo que sabe y nada mas: la bitacora prueba lo que el programa alcanzo a escribir, no que el servidor lo haya llamado. Para eso queda indicado donde mirar.',
+            'Estos registros hasta ahora solo se podian leer entrando al servidor por consola.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.25',
         'titulo'  => 'Ver que tareas corren solas en el servidor y a que hora',
         'tag'     => 'devops',

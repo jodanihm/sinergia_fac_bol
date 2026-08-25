@@ -581,3 +581,55 @@ code {
     overflow-wrap: anywhere;
     user-select: all;
 }
+
+/* ---- Bitacora de una tarea programada ----------------------------------- */
+/* El log del cron, tal cual, con las lineas que importan destacadas.
+
+   SE MUESTRA MONOESPACIADO Y SIN CORTAR PALABRAS porque estas lineas estan
+   alineadas por columnas desde el script que las escribe ("fila 171  ENVIADO
+   a ..."): reflowear las rompe justo cuando alguien las esta comparando entre
+   si. El scroll horizontal queda dentro del bloque, no en la pagina.
+
+   El veredicto usa el mismo semaforo que .tag en el resto del panel, para que
+   verde y ambar signifiquen aqui lo mismo que en las otras pantallas. */
+.bitacora {
+    margin: 0;
+    padding: 0;
+    max-height: 30rem;
+    overflow: auto;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem;
+    line-height: 1.55;
+}
+.bitacora .ln {
+    display: block;
+    padding: .1rem .7rem;
+    white-space: pre;
+    color: var(--muted);
+}
+.bitacora .ln.resumen { color: var(--text); background: var(--panel-2); }
+.bitacora .ln.fallo   { color: var(--danger); background: rgba(224, 86, 75, .09); }
+
+.veredicto {
+    display: flex;
+    gap: .9rem;
+    align-items: flex-start;
+    padding: 1rem 1.1rem;
+    border: 1px solid var(--border);
+    border-left-width: 4px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    margin-bottom: 1.25rem;
+}
+.veredicto.ok        { border-left-color: var(--ok); }
+.veredicto.atencion  { border-left-color: var(--pk); }
+.veredicto.sin_datos { border-left-color: var(--muted); }
+.veredicto h3 { margin: 0 0 .3rem; font-size: 1rem; }
+.veredicto p  { margin: 0; font-size: .85rem; color: var(--muted); line-height: 1.55; }
+.veredicto .punto { font-size: 1.4rem; line-height: 1; }
+.veredicto.ok .punto        { color: var(--ok); }
+.veredicto.atencion .punto  { color: var(--pk); }
+.veredicto.sin_datos .punto { color: var(--muted); }

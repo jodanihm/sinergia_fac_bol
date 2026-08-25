@@ -32,7 +32,17 @@ declare(strict_types=1);
  *   archivo     el archivo de cron en el HOST donde vive la linea
  *   contenedor  donde entra por docker exec
  *   comando     lo que se ejecuta dentro del contenedor
- *   log         donde queda la bitacora, en el host
+ *   log         donde queda la bitacora. MISMA ruta en el host y dentro del
+ *               contenedor del panel: el bind mount de docker-compose.vps.yml
+ *               la monta en el mismo sitio, a proposito, para que este dato
+ *               sirva para leerla desde el panel y para ir a mirarla a mano
+ *   bitacora    'eventos' o 'cada_corrida'. QUE SIGNIFICA EL SILENCIO en ese
+ *               log, y no es un detalle: el de correos calla cuando no hay
+ *               trabajo (esta escrito y justificado en la cabecera de su
+ *               script), asi que semanas sin una linea son NORMALES. Los otros
+ *               dos escriben siempre, y ahi el silencio si es alarma. Sin este
+ *               campo, la pantalla tendria que elegir una regla unica y
+ *               equivocarse con una de las dos familias
  *   nota        lo que hay que saber ANTES de cambiarle la frecuencia
  *
  * VERIFICADO EL 25-08-2026 contra los tres archivos de /etc/cron.d/sinergia-*.
@@ -49,6 +59,7 @@ return [
         'contenedor' => 'sinergia_motor',
         'comando'    => 'php /app/scripts/enviar_correos_pendientes.php',
         'log'        => '/var/log/sinergia_correos.log',
+        'bitacora'   => 'eventos',
         'nota'       => 'El script esta escrito para correr cada 5 minutos: si encuentra otra corrida en '
             . 'curso se va sin hacer nada en vez de esperar, porque esperar solo apilaria procesos. '
             . 'Cambiar la frecuencia sin leer la cabecera del script rompe ese supuesto.',
@@ -62,6 +73,7 @@ return [
         'contenedor' => 'sinergia_panel',
         'comando'    => 'php scripts/enviar_ordenes_compra_pendientes.php',
         'log'        => '/var/log/sinergia_ordenes_compra.log',
+        'bitacora'   => 'cada_corrida',
         'nota'       => 'Es la unica de las tres que entra al contenedor del PANEL y no al del motor, y la '
             . 'unica con ruta relativa. Al mover o renombrar el script hay que mirar cual es cual.',
     ],
@@ -75,6 +87,7 @@ return [
         'contenedor' => 'sinergia_motor',
         'comando'    => 'php /app/scripts/consultar_veredictos_pendientes.php',
         'log'        => '/var/log/sinergia_veredictos.log',
+        'bitacora'   => 'cada_corrida',
         'nota'       => 'Trabaja con un presupuesto de 600 segundos, calculado para que quepa holgado en '
             . 'los 900 de su intervalo. Bajarle el intervalo a menos de 15 minutos sin bajarle el '
             . 'presupuesto hace que una corrida alcance a la siguiente.',
