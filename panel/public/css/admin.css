@@ -688,3 +688,25 @@ code {
 .backlog__titulo a { color: var(--text); text-decoration: none; }
 .backlog tbody tr:hover .backlog__titulo a { color: var(--accent); }
 .backlog td { vertical-align: middle; }
+
+/* ---- Integraciones (/admin/integraciones) ------------------------------- */
+/* Cada integracion ocupa DOS filas: la de datos y la de la nota. La nota
+   explica que significa el resultado de su sonda -- por que el SII solo se
+   puede probar por alcance, por que API Gateway no se sonda autenticado -- y
+   es texto que hay que poder leer completo, no un tooltip que aparece y se va.
+
+   Van pegadas: la de datos pierde el borde de abajo para que las dos se lean
+   como un solo bloque y no como dos entradas distintas. */
+.nota-fila td {
+    border-top: 0;
+    padding-bottom: 1.1rem;
+    line-height: 1.55;
+    max-width: 0; /* deja que el colspan respete el ancho de la tabla */
+}
+tbody tr:has(+ .nota-fila) td { border-bottom: 0; padding-bottom: .4rem; }
+
+/* La ultima probada queda marcada, porque el resultado se muestra ARRIBA de
+   todo y con ocho filas es facil perder de vista cual se apreto. Un borde
+   lateral alcanza: teñir la fila entera competiria con el semaforo de los
+   tags que ya viven adentro. */
+.recien-probada td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
