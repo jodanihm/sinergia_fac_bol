@@ -103,6 +103,7 @@ require __DIR__ . '/../src/RutasDelRouter.php';
 require __DIR__ . '/../src/DiagramaEr.php';
 require __DIR__ . '/../src/AgendaCron.php';
 require __DIR__ . '/../src/BitacoraTarea.php';
+require __DIR__ . '/../src/Pendientes.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -11150,6 +11151,18 @@ if ($metodo === 'GET' && $ruta === '/admin/pendientes') {
     handleAdminPendientesGet();
 }
 
+if ($metodo === 'GET' && preg_match('#^/admin/pendientes/(\d+)$#', $ruta, $mPend)) {
+    handleAdminPendienteDetalleGet((int) $mPend[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/admin/pendientes/(\d+)/estado$#', $ruta, $mPendEstado)) {
+    handleAdminPendienteEstadoPost((int) $mPendEstado[1]);
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/ideas') {
+    handleAdminIdeasGet();
+}
+
 if ($metodo === 'GET' && $ruta === '/admin/changelog') {
     handleAdminChangelogGet();
 }
@@ -14066,10 +14079,15 @@ function clasificarRutaPatron(string $metodo, string $patron): array
 }
 
 // ===========================================================================
-//  Handlers: las seis paginas de DOCUMENTACION del panel de control.
+//  Handlers: las paginas de DOCUMENTACION del panel de control.
 //
-//  GET /admin/changelog   GET /admin/pendientes   GET /admin/tareas
-//  GET /admin/flujos      GET /admin/documentos   GET /admin/tareas/{id}
+//  GET /admin/changelog   GET /admin/ideas       GET /admin/tareas
+//  GET /admin/flujos      GET /admin/documentos  GET /admin/tareas/{id}
+//
+//  /admin/pendientes SALIO de este grupo con la migracion 044: dejo de ser un
+//  archivo para pasar a la tabla pendiente, porque su estado cambia varias
+//  veces por semana sin que cambie el codigo y editarlo obligaba a desplegar.
+//  Sus handlers estan mas abajo, con los que escriben.
 //
 //  NO TOCAN LA BASE. Cada una lee un archivo de panel/datos/ que solo devuelve
 //  un array. Aun asi empiezan con exigirSuperadmin(), como todo /admin/*: el
@@ -14091,10 +14109,10 @@ function handleAdminChangelogGet(): void
     vista('admin-changelog', ['entradas' => require __DIR__ . '/../datos/changelog.php']);
 }
 
-function handleAdminPendientesGet(): void
+function handleAdminIdeasGet(): void
 {
     exigirSuperadmin(Db::conexion());
-    vista('admin-pendientes', ['items' => require __DIR__ . '/../datos/pendientes.php']);
+    vista('admin-ideas', ['ideas' => require __DIR__ . '/../datos/ideas.php']);
 }
 
 function handleAdminFlujosGet(): void
@@ -14160,6 +14178,128 @@ function handleAdminTareaDetalleGet(string $id): void
         'tarea'    => $tarea,
         'bitacora' => BitacoraTarea::leer((string) $tarea['log']),
     ]);
+}
+
+// ===========================================================================
+//  Handlers del BACKLOG (tabla pendiente, migracion 044).
+//
+//  GET  /admin/pendientes         el listado, con filtros y contadores
+//  GET  /admin/pendientes/{id}    la ficha
+//  POST /admin/pendientes/{id}/estado   cambiar el estado
+//
+//  SEGUNDA MUTACION DE ESTE PANEL, despues de suspender/reactivar una cuenta, y
+//  sigue el mismo camino que aquella: snapshot de la fila ANTES, UPDATE,
+//  registrarAuditoria() con el antes y el despues, y redirect. El CSRF no se
+//  valida aqui porque el router ya lo exige para TODO POST sin excepcion.
+//
+//  LO QUE SE PUEDE ESCRIBIR ES SOLO EL ESTADO. El titulo, el detalle y los
+//  cuatro ejes de clasificacion se siguen versionando en
+//  scripts/sembrar_pendientes.php: son texto que hay que pensar. El estado es
+//  lo contrario y era justo lo que obligaba a desplegar para anotar algo. Se
+//  resolvio eso y nada mas.
+// ===========================================================================
+function handleAdminPendientesGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $filtros          = Pendientes::filtros($_GET);
+    [$where, $params] = Pendientes::where($filtros);
+
+    $stmt = $pdo->prepare(
+        'SELECT id, area, categoria, prioridad, severidad, estado, titulo FROM pendiente'
+        . $where . Pendientes::ORDEN
+    );
+    $stmt->execute($params);
+
+    vista('admin-pendientes', [
+        'items'      => $stmt->fetchAll(PDO::FETCH_ASSOC),
+        'contadores' => Pendientes::contadores($pdo),
+        'filtros'    => $filtros,
+    ]);
+}
+
+function handleAdminPendienteDetalleGet(int $id): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $stmt = $pdo->prepare('SELECT * FROM pendiente WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $id]);
+    $item = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($item === false) {
+        http_response_code(404);
+        vista('admin-pendiente-detalle', ['item' => null, 'cerradoPor' => null]);
+        exit;
+    }
+
+    // El email de quien lo cerro se resuelve aqui y no con un JOIN en la
+    // consulta de arriba: cerrado_por no tiene FK a usuario (ver la cabecera de
+    // la migracion 044), asi que el usuario pudo haberse borrado y un JOIN
+    // simple haria desaparecer la fila entera del pendiente.
+    $cerradoPor = null;
+
+    if ($item['cerrado_por'] !== null) {
+        $stmtEmail = $pdo->prepare('SELECT email FROM usuario WHERE id = :id LIMIT 1');
+        $stmtEmail->execute([':id' => (int) $item['cerrado_por']]);
+        $cerradoPor = $stmtEmail->fetchColumn() ?: null;
+    }
+
+    vista('admin-pendiente-detalle', ['item' => $item, 'cerradoPor' => $cerradoPor]);
+}
+
+function handleAdminPendienteEstadoPost(int $id): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $nuevoEstado = (string) ($_POST['estado'] ?? '');
+
+    // Lista blanca, no saneado: $nuevoEstado solo puede ser una de las claves
+    // declaradas en Pendientes::ESTADOS, que son las mismas del ENUM. Sin esto,
+    // un valor fuera del ENUM llegaria al UPDATE y MySQL lo guardaria como
+    // cadena vacia en vez de fallar.
+    if (! array_key_exists($nuevoEstado, Pendientes::ESTADOS)) {
+        redirigir('/admin/pendientes/' . $id);
+    }
+
+    $stmt = $pdo->prepare('SELECT * FROM pendiente WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $id]);
+    $anterior = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($anterior === false) {
+        redirigir('/admin/pendientes');
+    }
+
+    // Cambiar al estado que ya tiene no escribe ni deja auditoria: seria una
+    // fila que dice que se paso de 'abierto' a 'abierto'. Puede pasar con el
+    // boton "atras" o con dos pestanas abiertas.
+    if ($anterior['estado'] === $nuevoEstado) {
+        redirigir('/admin/pendientes/' . $id);
+    }
+
+    // cerrado_at y cerrado_por se sellan y se limpian JUNTOS. Reabrir un item y
+    // dejarle la fecha de cierre puesta daria una fila que se contradice a si
+    // misma, y es el tipo de dato que despues alguien usa para contar.
+    $cierra = in_array($nuevoEstado, Pendientes::CERRADOS, true);
+
+    $pdo->prepare(
+        'UPDATE pendiente SET estado = :estado, '
+        . 'cerrado_at = ' . ($cierra ? 'CURRENT_TIMESTAMP' : 'NULL') . ', '
+        . 'cerrado_por = :por WHERE id = :id'
+    )->execute([
+        ':estado' => $nuevoEstado,
+        ':por'    => $cierra ? Auth::usuarioId() : null,
+        ':id'     => $id,
+    ]);
+
+    $stmt->execute([':id' => $id]);
+    $nuevo = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'pendiente.estado', 'pendiente', $id, $anterior, $nuevo);
+
+    redirigir('/admin/pendientes/' . $id);
 }
 
 // ===========================================================================

@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.28',
+        'titulo'  => 'Los pendientes pasan a ser un backlog de verdad, y las ideas se van aparte',
+        'tag'     => 'arquitectura',
+        'items'   => [
+            'La pantalla de pendientes ahora es una lista ordenada por prioridad, con contadores arriba (cuanto falta, cuantos urgentes, cuantos en curso) y filtros por area, categoria, prioridad, estado y texto.',
+            'Se pincha cualquier fila y se abre la ficha, donde el estado se cambia con un boton: tomarlo, pausarlo, bloquearlo, cerrarlo. Antes eso obligaba a editar un archivo y volver a publicar el sistema, o sea que en la practica nadie lo movia y la lista no reflejaba el trabajo real.',
+            'Lo que se cierra ya no se borra: queda con su fecha y quien lo cerro, y sale del listado por defecto. Se puede responder "que se hizo este mes" sin revisar el historial tecnico.',
+            'Las ideas tienen pantalla propia. Una idea no es trabajo comprometido sino una pregunta sin responder, y mezclarlas con lo pendiente inflaba la lista con cosas que quiza nunca se hagan.',
+            'Cada cambio de estado queda en la auditoria, con quien lo hizo y como estaba antes.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.27',
         'titulo'  => 'Anotado el fallo que la cuenta de demostracion provoca cada 15 minutos',
         'tag'     => 'datos',

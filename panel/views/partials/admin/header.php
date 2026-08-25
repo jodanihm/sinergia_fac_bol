@@ -27,9 +27,9 @@ $adminCssVersion = @filemtime($adminCssRuta);
 $adminCssHref    = '/css/admin.css' . ($adminCssVersion ? '?v=' . $adminCssVersion : '');
 
 // Email del superadmin de la sesion, para la topbar. Se lee aqui y no se le
-// pide a cada handler porque es identico en las 12 pantallas: pasarlo por
-// parametro seria repetir la misma linea doce veces y que la decimotercera se
-// olvide. Es una consulta por clave primaria del PROPIO usuario -- no cruza el
+// pide a cada handler porque es identico en todas las pantallas: pasarlo por
+// parametro seria repetir la misma linea en cada una y que la siguiente que se
+// agregue se olvide. Es una consulta por clave primaria del PROPIO usuario -- no cruza el
 // limite de tenant y no necesita el privilegio de superadmin para ser correcta.
 $adminStmtEmail = Db::conexion()->prepare('SELECT email FROM usuario WHERE id = :id LIMIT 1');
 $adminStmtEmail->execute([':id' => Auth::usuarioId()]);

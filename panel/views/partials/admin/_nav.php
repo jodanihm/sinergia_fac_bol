@@ -4,7 +4,7 @@
  *
  * Lista FIJA, no derivada de definicionMenu(). Aquel menu tiene dos ejes de
  * estado (construido / requiereProduccion) que existen porque el tenant puede
- * tener modulos que todavia no le sirven. Aqui no hay tal cosa: las 12
+ * tener modulos que todavia no le sirven. Aqui no hay tal cosa: las 13
  * pantallas estan disponibles siempre para quien ya paso exigirSuperadmin(),
  * asi que un item es un enlace y nada mas.
  *
@@ -29,7 +29,8 @@ $adminNavGrupos = [
         'roles-permisos' => ['/admin/roles-permisos', 'Roles y permisos'],
         'flujos'         => ['/admin/flujos',         'Flujos'],
         'documentos'     => ['/admin/documentos',     'Documentos'],
-        'pendientes'     => ['/admin/pendientes',     'Pendientes e ideas'],
+        'pendientes'     => ['/admin/pendientes',     'Pendientes'],
+        'ideas'          => ['/admin/ideas',          'Ideas'],
         'changelog'      => ['/admin/changelog',      'Changelog'],
     ],
 ];
