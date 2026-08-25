@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.27',
+        'titulo'  => 'Anotado el fallo que la cuenta de demostracion provoca cada 15 minutos',
+        'tag'     => 'datos',
+        'items'   => [
+            'Queda registrado en "Pendientes e ideas" que la cuenta de demostracion deja tres documentos en un estado del que nunca salen, y que eso hace fallar la consulta al SII en cada corrida desde el 5 de agosto.',
+            'No hay ningun dato de cliente en riesgo: los documentos y el certificado de esa cuenta son de relleno, puestos ahi para que la demostracion se vea completa.',
+            'Lo que si molesta es el ruido: casi todo lo que se registra de esa tarea es este mismo fallo, y eso hace que un problema nuevo pase desapercibido.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.26',
         'titulo'  => 'Saber si una tarea programada corrio bien, sin entrar al servidor',
         'tag'     => 'devops',

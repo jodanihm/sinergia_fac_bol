@@ -25,6 +25,25 @@ declare(strict_types=1);
 
 return [
     [
+        'titulo'  => 'La cuenta demo hace fallar la consulta de veredictos cada 15 minutos',
+        'detalle' => 'Desde el 05-08-2026 a las 12:00, cada corrida de consultar_veredictos_pendientes.php '
+            . 'registra tres FALLO con "Fallo descifrado AES-256-GCM" para el RUT 76543210-3, que es '
+            . 'DEMO_RUT en scripts/sembrar_demo.php. No es un dato corrupto ni una llave rotada: la siembra '
+            . 'de la demo inserta un certificado de RELLENO a proposito, y lo dice en su cabecera -- se '
+            . 'puede porque ninguna ruta GET del panel lo descifra, y el unico camino que descifra material '
+            . 'criptografico es el de emision, que es POST y esta bloqueado para la demo. Ese razonamiento '
+            . 'tiene un hueco: el CRON no es ninguna de las dos cosas. La siembra deja tres documentos en '
+            . 'estado "enviado" con track_id (folios 78, 79 y 80), el cron los toma como pendientes de '
+            . 'veredicto, intenta descifrar el certificado para autenticarse ante el SII y falla. Va a '
+            . 'seguir fallando para siempre, porque nada lo saca de ese estado. Cuesta poco -- que la '
+            . 'siembra deje esos tres en un estado terminal (EPR o RCT) como los otros 280, o que el cron '
+            . 'salte el RUT de la demo -- y lo caro es lo otro: 48 de las ultimas 60 lineas de esa bitacora '
+            . 'son este fallo, asi que un fallo NUEVO y real llega a un log donde ya nadie mira. Se vio al '
+            . 'estrenar /admin/tareas, que es justo para lo que se hizo.',
+        'tipo'    => 'pendiente',
+        'estado'  => 'nuevo',
+    ],
+    [
         'titulo'  => '12 tablas guardan documentos sin poder decir de que empresa son',
         'detalle' => 'Lo dejo a la vista la columna de aislamiento de /admin/base-datos: dte_emitido, '
             . 'dte_caf, dte_certificado, dte_folio, dte_libro, dte_idempotencia y companhia cuelgan de '
