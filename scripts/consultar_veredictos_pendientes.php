@@ -722,7 +722,13 @@ foreach ($sobres as $s) {
 // ---------------------------------------------------------------------------
 //  Resumen: una sola linea, pensada para leerse en un log de cron
 // ---------------------------------------------------------------------------
-$stmtTot->execute([...$enCurso, $diasAtras]);
+// Los MISMOS parametros que la primera vez que se ejecuto este statement, mas
+// arriba: $stmtTot se prepara una vez y se reutiliza aqui para saber cuanto
+// quedo sin consultar. Al agregarle el filtro de demo a la consulta hubo que
+// agregarselo tambien a esta segunda ejecucion -- olvidarlo tira un
+// "Invalid parameter number" y mata la corrida DESPUES de haber persistido los
+// veredictos, justo antes del resumen.
+$stmtTot->execute([...$enCurso, $diasAtras, ...$paramsDemo]);
 $restantes = (int) $stmtTot->fetchColumn();
 
 if ($tiempoAgotado) {
