@@ -11,14 +11,14 @@ use Plantiflex\FacturacionCl\Sii\SetPruebasParser;
 
 final class SetPruebasParserTest extends TestCase
 {
+    use FixtureFueraDelRepo;
+
     private static ?SetPruebasParseado $parseado = null;
 
     private function parseadoFixtureReal(): SetPruebasParseado
     {
         if (self::$parseado === null) {
-            $ruta = __DIR__ . '/../easyagenda/SIISetDePruebas781572438.txt';
-            $bytes = file_get_contents($ruta);
-            self::assertNotFalse($bytes, "No se pudo leer el fixture real: {$ruta}");
+            $bytes = $this->fixtureFueraDelRepo('easyagenda/SIISetDePruebas781572438.txt');
             self::$parseado = (new SetPruebasParser())->parse($bytes);
         }
 

@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.33',
+        'titulo'  => 'Los informes en PDF no se van a romper en el proximo despliegue',
+        'tag'     => 'arquitectura',
+        'items'   => [
+            'La libreria que genera los PDF estaba declarada sin version: "la que sea". El sistema funciona hoy con la version 6 solo porque quedo guardada en una cache de construccion del 26 de julio; el dia que esa cache se pierda -- basta con construir en otra maquina -- se habria instalado la version 7, que es una reescritura incompatible, y los informes en PDF habrian dejado de generarse en produccion sin que nadie tocara una linea de codigo.',
+            'Ahora la version esta fijada. Se descubrio al dejar la bateria de pruebas automaticas en verde: la prueba de PDF fallaba justo por eso.',
+            'La bateria de pruebas pasa de 43 errores y 16 fallos permanentes a cero. Mientras estuvo siempre en rojo no servia para nada: nadie podia mirarla y saber si un cambio nuevo habia roto algo.',
+            'Once pruebas quedan marcadas como omitidas, no como fallidas, porque comparan contra archivos reales del SII que no se guardan en el repositorio por contener datos de un contribuyente. Ahora dicen cual archivo falta y por que, en vez de aparecer en rojo como si el sistema estuviera mal.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.32',
         'titulo'  => 'La bitacora de veredictos del SII vuelve a servir para algo',
         'tag'     => 'backend',

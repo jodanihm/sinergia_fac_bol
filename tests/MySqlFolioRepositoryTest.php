@@ -44,6 +44,9 @@ final class MySqlFolioRepositoryTest extends TestCase
                 folio_desde     INTEGER NOT NULL,
                 folio_hasta     INTEGER NOT NULL,
                 caf_xml_cifrado TEXT    NOT NULL,
+                -- Migracion 004, igual que en dte_certificado: DEK por CAF,
+                -- envuelta con la KEK. NULL = cifrado directo con la KEK.
+                dek_envuelta    TEXT    NULL,
                 estado          TEXT    NOT NULL DEFAULT 'activo' CHECK (estado IN ('activo','agotado')),
                 created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE (rut_emisor, tipo_dte, ambiente, folio_desde, folio_hasta),

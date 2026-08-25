@@ -33,6 +33,12 @@ final class MySqlEmisorRepositoryTest extends TestCase
                 ambiente          TEXT    NOT NULL CHECK (ambiente IN ('certificacion','produccion')),
                 cert_data_cifrado TEXT    NOT NULL,
                 pkey_data_cifrado TEXT    NOT NULL,
+                -- La agrego la migracion 004 (envelope encryption: una DEK por
+                -- certificado, envuelta con la KEK). NULL = esquema anterior, el
+                -- dato se cifro directo con la KEK. Sin esta columna el SELECT
+                -- del repositorio no compila contra SQLite y el test moria con un
+                -- PDOException que no tenia nada que ver con lo que probaba.
+                dek_envuelta      TEXT    NULL,
                 created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE (rut_emisor, ambiente)
             );

@@ -14,10 +14,11 @@ use Plantiflex\FacturacionCl\Sii\LibroVentasPayloadBuilder;
  */
 final class LibroVentasPayloadBuilderTest extends TestCase
 {
+    use FixtureFueraDelRepo;
+
     public function testPayloadGeneradoEsEquivalenteAlAceptadoPorElSii(): void
     {
-        $esperadoJson = file_get_contents(__DIR__ . '/../payload_libro_ventas_v2.json');
-        self::assertNotFalse($esperadoJson);
+        $esperadoJson = $this->fixtureFueraDelRepo('payload_libro_ventas_v2.json');
         $esperado = json_decode($esperadoJson, true, flags: JSON_THROW_ON_ERROR);
 
         // "Documentos ya emitidos" reconstruidos desde el propio payload
