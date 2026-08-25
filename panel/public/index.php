@@ -104,6 +104,7 @@ require __DIR__ . '/../src/DiagramaEr.php';
 require __DIR__ . '/../src/AgendaCron.php';
 require __DIR__ . '/../src/BitacoraTarea.php';
 require __DIR__ . '/../src/Pendientes.php';
+require __DIR__ . '/../src/Integraciones.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -11131,6 +11132,14 @@ if ($metodo === 'GET' && $ruta === '/admin/auditoria') {
     handleAdminAuditoriaGet();
 }
 
+if ($metodo === 'GET' && $ruta === '/admin/integraciones') {
+    handleAdminIntegracionesGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/admin/integraciones/probar') {
+    handleAdminIntegracionProbarPost();
+}
+
 if ($metodo === 'GET' && $ruta === '/admin/base-datos') {
     handleAdminBaseDatosGet();
 }
@@ -14113,6 +14122,73 @@ function handleAdminIdeasGet(): void
 {
     exigirSuperadmin(Db::conexion());
     vista('admin-ideas', ['ideas' => require __DIR__ . '/../datos/ideas.php']);
+}
+
+// ===========================================================================
+//  Handlers: GET /admin/integraciones y POST /admin/integraciones/probar
+//
+//  EL GET NO SONDEA NADA. Dibuja el catalogo y lee si cada credencial esta
+//  puesta, que se sabe mirando el entorno y sin salir a la red. Sondear al
+//  cargar dejaria la pantalla a merced del servicio mas lento -- ocho por ocho
+//  segundos en el peor caso -- y mandaria trafico a terceros cada vez que
+//  alguien pasa por el menu.
+//
+//  EL POST ES POST AUNQUE NO ESCRIBA EN LA BASE, y el motivo no es el dogma de
+//  REST: hace una peticion de salida con una credencial del sistema. Eso no
+//  puede dispararse desde un <img src> de otra pagina ni quedar en el historial
+//  del navegador para repetirse con F5, y como POST hereda la validacion de
+//  CSRF que el router ya exige para todos.
+//
+//  EL RESULTADO VUELVE POR FLASH, patron PRG como el resto del panel: probar,
+//  redirigir, mostrar una vez. Asi un refresh no vuelve a golpear al tercero.
+// ===========================================================================
+function handleAdminIntegracionesGet(): void
+{
+    exigirSuperadmin(Db::conexion());
+
+    vista('admin-integraciones', [
+        'integraciones' => require __DIR__ . '/../datos/integraciones.php',
+        'flash'         => flashTomar(),
+    ]);
+}
+
+function handleAdminIntegracionProbarPost(): void
+{
+    exigirSuperadmin(Db::conexion());
+
+    $id            = (string) ($_POST['id'] ?? '');
+    $integraciones = require __DIR__ . '/../datos/integraciones.php';
+    $elegida       = null;
+
+    // La URL que se golpea sale SIEMPRE del catalogo, nunca del request: lo que
+    // llega por POST solo selecciona una entrada de una lista fija. Sin esto,
+    // este boton seria una puerta para que el servidor haga peticiones a donde
+    // le digan -- con las credenciales del sistema en la cabecera.
+    foreach ($integraciones as $i) {
+        if ($i['id'] === $id) {
+            $elegida = $i;
+            break;
+        }
+    }
+
+    if ($elegida === null) {
+        redirigir('/admin/integraciones');
+    }
+
+    $r = Integraciones::probar($elegida);
+
+    flashSet($r['estado'], $r['detalle'], [
+        'integracion'       => $elegida['id'],
+        'nombreIntegracion' => (string) $elegida['nombre'],
+        'titulo'            => $r['titulo'],
+        'ms'                => $r['ms'],
+        'estado'            => $r['estado'],
+    ]);
+
+    // La sonda NO se registra en la auditoria: no cambia nada del sistema y
+    // alguien diagnosticando aprieta el boton diez veces seguidas. Diez filas
+    // que dicen "se probo Brevo" empujan hacia abajo las que si importan.
+    redirigir('/admin/integraciones');
 }
 
 function handleAdminFlujosGet(): void

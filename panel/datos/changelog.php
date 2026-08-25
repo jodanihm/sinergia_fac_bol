@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.29',
+        'titulo'  => 'Ver de que servicios externos depende el sistema, y probarlos',
+        'tag'     => 'devops',
+        'items'   => [
+            'Pantalla nueva en el panel de control: los ocho servicios de los que depende el sistema (el SII por sus tres canales, Brevo para los correos, DeepSeek para el chat, API Gateway para consultar contribuyentes, LibreDTE y el motor interno), con lo que resuelve cada uno y que se rompe si se cae.',
+            'Cada uno tiene un boton que prueba la conexion en el momento y responde en segundos.',
+            'La pantalla distingue dos cosas que suelen confundirse: en algunos servicios la prueba usa la clave de verdad y un resultado correcto significa que la clave sirve; en otros solo se puede comprobar que el servicio conteste, y ahi lo dice con todas sus letras en vez de mostrar un visto bueno que no corresponde.',
+            'Ninguna prueba tiene consecuencias: no emite documentos, no manda correos, no consume tramites ante el SII ni gasta consultas de los planes que se pagan por uso.',
+            'Tambien se ve si cada clave esta configurada, sin mostrarla nunca.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.28',
         'titulo'  => 'Los pendientes pasan a ser un backlog de verdad, y las ideas se van aparte',
         'tag'     => 'arquitectura',
