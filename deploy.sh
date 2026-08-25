@@ -2,12 +2,22 @@
 #
 # deploy.sh -- sinergia_fac_bol (VPS)
 #
-# Despliegue por git: fetch -> pull -> MIGRACIONES -> build -> up -> verificar.
+# Despliegue por git:
+#   fetch -> pull -> MIGRACIONES -> SUITE -> build -> up -> verificar.
+#
+# LOS DOS ENGANCHES QUE PUEDEN ABORTAR van antes del build, para cortar sin
+# haber construido ni levantado nada: el arbol queda adelantado, pero los
+# contenedores viejos siguen corriendo y sirviendo.
 #
 # NO toca la base de datos ni los secretos: esos ya viven en el host y entran
 # a los contenedores por env_file y por mounts :ro. La comprobacion de
 # migraciones es SOLO LECTURA -- estado_migraciones.php no ejecuta ni una
 # sentencia que escriba -- y no aplica nada: aplicar sigue siendo humano.
+#
+# LA SUITE SE AGREGO EL 25-08-2026, cuando dejo de estar en rojo permanente (43
+# errores y 16 fallos de arrastre) y por fin sirvio como semaforo. Ese mismo dia
+# un cambio se desplego con un fallo que reventaba un cron, porque se habia
+# verificado a mano por un camino que no pasaba por la linea rota.
 #
 # Convenciones tomadas de /data/licitaalerta/deploy.sh, que es el patron que
 # ya funciona en este VPS: set -e, guarda temprana de prerequisitos,
@@ -245,12 +255,86 @@ verificar_migraciones() {
   esac
 }
 
+# ── Suite: la funcion, usada en dry-run y en el deploy real ──────────────────
+#
+# CORRE CONTRA EL CODIGO NUEVO, igual que el verificador de migraciones y por el
+# mismo motivo: en el VPS /app viene DE LA IMAGEN, asi que un contenedor del
+# stack viejo tiene los tests VIEJOS. La imagen de tests se construye una vez y
+# el codigo se le MONTA encima.
+#
+# POR QUE UNA IMAGEN APARTE (docker/Dockerfile.tests): la imagen del panel
+# instala con --no-dev y no trae PHPUnit. La de tests hereda de ella -- misma
+# base, mismas extensiones, misma configuracion de OpenSSL -- y solo agrega las
+# dependencias de desarrollo. Que herede importa: el 25-08-2026, 34 de los 43
+# errores de la suite venian de la configuracion de OpenSSL de la imagen. Una
+# suite que corre en un entorno distinto al de produccion no prueba lo que uno
+# cree que prueba.
+#
+# EL CRITERIO DE EXITO ES "CERO ERRORES Y CERO FALLOS", NO "CERO OMITIDOS". Once
+# tests comparan contra ficheros reales del SII que el .gitignore excluye por
+# tener datos de un contribuyente; en esta maquina se OMITEN, diciendo cual
+# falta. PHPUnit sale 0 con omitidos, que es justo lo que se quiere: un deploy
+# no puede quedar bloqueado por un fixture que nunca va a estar aqui.
+verificar_suite() {
+  local modo="$1"   # "dry-run" o "real"
+
+  docker image inspect sinergia_panel:latest >/dev/null 2>&1 \
+    || falla "no existe la imagen sinergia_panel:latest; la de tests hereda de ella"
+
+  # Construir es barato cuando no cambian composer.json/composer.lock: es su
+  # unica capa propia y queda cacheada. Se acota igual que el build real, que
+  # este VPS comparte 6 vCPU con los contenedores de otros cinco proyectos.
+  if ! DOCKER_BUILDKIT=0 docker build \
+        --memory "$BUILD_MEM" --cpuset-cpus "$BUILD_CPUSET" \
+        -f docker/Dockerfile.tests -t sinergia_tests:latest . >/dev/null 2>&1; then
+    falla "no se pudo construir la imagen de tests (docker/Dockerfile.tests)"
+  fi
+
+  # Se montan los directorios UNO A UNO y no el repo entero sobre /app: montar
+  # /app taparia el vendor/ de la imagen, que es lo unico que esta imagen
+  # aporta. La config de OpenSSL se monta tambien, para que la suite corra con
+  # la del arbol nuevo y no con la horneada en la imagen vieja -- si no, un
+  # deploy que venga a ARREGLAR esa config no podria pasar sus propios tests.
+  local salida rc
+  set +e
+  salida=$(docker run --rm \
+             -v "$APP_DIR/src:/app/src:ro" \
+             -v "$APP_DIR/tests:/app/tests:ro" \
+             -v "$APP_DIR/panel:/app/panel:ro" \
+             -v "$APP_DIR/integration:/app/integration:ro" \
+             -v "$APP_DIR/scripts:/app/scripts:ro" \
+             -v "$APP_DIR/phpunit.xml:/app/phpunit.xml:ro" \
+             -v "$APP_DIR/docker/openssl-legacy.cnf:/etc/ssl/openssl-legacy.cnf:ro" \
+             sinergia_tests:latest vendor/bin/phpunit 2>&1)
+  rc=$?
+  set -e
+
+  echo "$salida" | tail -n 6 | sed 's/^/    /'
+
+  if [ "$rc" -eq 0 ]; then
+    ok "la suite pasa (los omitidos son fixtures que no viajan en el repo)"
+    return 0
+  fi
+
+  # Con fallos se imprime TODO, no el resumen: quien lea el log del deploy tiene
+  # que poder ver que se rompio sin volver a correr nada.
+  echo "$salida" | sed 's/^/    /'
+  if [ "$modo" = "dry-run" ]; then
+    echo "    DRY-RUN: la suite fallo (exit $rc). En un deploy real esto ABORTARIA."
+    return 0
+  fi
+  falla "la suite fallo (exit $rc): no se despliega codigo que no pasa sus propias pruebas"
+}
+
 if [ "$DRY_RUN" -eq 1 ]; then
   # En dry-run se verifica contra el arbol ACTUAL: no hubo pull, asi que las
   # migraciones nuevas del remoto todavia no estan aqui. Igual sirve -- dice si
   # la base esta al dia con lo que ya hay -- y se avisa de la limitacion.
   paso "Verificando migraciones (arbol actual, SIN el pull)"
   verificar_migraciones "dry-run"
+
+  paso "Corriendo la suite (arbol actual, SIN el pull)"
+  verificar_suite "dry-run"
 
   echo
   echo "==> DRY-RUN: aqui se haria pull, build de motor y panel, y up -d."
@@ -275,6 +359,17 @@ ok "HEAD ahora en ${COMMIT_NUEVO:0:7}"
 #                        siguen corriendo y sirviendo.
 paso "Verificando migraciones de la base"
 verificar_migraciones "real"
+
+# ── 4c. Suite ─────────────────────────────────────────────────────────────────
+#
+# MISMAS DOS PUNTAS QUE LAS MIGRACIONES:
+#   DESPUES del pull  -> para probar el codigo que se va a desplegar, no el viejo.
+#   ANTES del build   -> para abortar sin haber construido ni levantado nada.
+#
+# Va DESPUES de las migraciones a proposito: si la base no esta al dia, eso se
+# arregla antes y no tiene sentido gastar una corrida de tests.
+paso "Corriendo la suite"
+verificar_suite "real"
 
 # ── 5. Build ──────────────────────────────────────────────────────────────────
 paso "Construyendo imagenes (memoria $BUILD_MEM, cpuset $BUILD_CPUSET)"

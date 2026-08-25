@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-25',
+        'version' => '1.35',
+        'titulo'  => 'El sistema ya no se despliega si no pasa sus propias pruebas',
+        'tag'     => 'devops',
+        'items'   => [
+            'El proceso de despliegue ahora corre las 453 pruebas automaticas ANTES de construir nada. Si alguna falla, se detiene y no toca el sistema en produccion: el servicio sigue corriendo con la version anterior.',
+            'Hasta hoy comprobaba muchas cosas -- que la base estuviera al dia, que los contenedores quedaran sanos, que no se hubieran tocado los otros proyectos del servidor -- todas menos si el codigo funcionaba. Habia que acordarse de mirar.',
+            'Las pruebas corren contra el codigo que se va a desplegar, no contra el que ya esta instalado, y en un entorno identico al de produccion: mismas extensiones y misma configuracion. Una prueba que pasa en otro entorno no prueba lo que uno cree.',
+            'Se verifico introduciendo un error a proposito: el despliegue se detuvo, como debia.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-25',
         'version' => '1.34',
         'titulo'  => 'Dos maquinas que instalen el sistema ahora obtienen exactamente lo mismo',
         'tag'     => 'arquitectura',
