@@ -443,6 +443,15 @@ Cada uno: `<?php return [ ... ];` — sin logica, sin consultas, sin salida. Se
 cargan con `require`. Asi quedan aislados y migrables a otro formato despues,
 sin tocar las vistas.
 
+> **Al dia de hoy esto cambio para UNO de los cuatro, y por la razon que este
+> mismo parrafo anticipaba.** `pendientes.php` ya no existe: la migracion 044
+> se llevo el backlog a la tabla `pendiente`, porque el estado de un pendiente
+> cambia varias veces por semana sin que cambie el codigo, y con el archivo cada
+> movimiento era editar PHP, commitear y reconstruir dos imagenes de docker. Las
+> ideas se separaron a `panel/datos/ideas.php` y ahi el archivo sigue siendo la
+> forma correcta: una idea se decide una sola vez y desaparece. Los otros tres
+> siguen tal cual describe esta seccion.
+
 **changelog.php** — lo mas nuevo arriba, ejemplo de un item:
 
 'fecha' => '2026-08-21', 'version' => '1.00', 'titulo' => '...', 'tag' => 'arquitectura|backend|frontend|datos|devops', 'items' => ['...', '...']

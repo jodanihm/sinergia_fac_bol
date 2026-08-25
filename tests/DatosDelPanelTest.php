@@ -176,7 +176,7 @@ final class DatosDelPanelTest extends TestCase
     /** Los cuatro archivos son datos puros: un array y nada mas. */
     public function testLosArchivosDeDatosSoloDevuelvenUnArray(): void
     {
-        foreach (['changelog', 'pendientes', 'flujos', 'documentos'] as $archivo) {
+        foreach (['changelog', 'ideas', 'flujos', 'documentos', 'tareas_programadas'] as $archivo) {
             $ruta = __DIR__ . '/../panel/datos/' . $archivo . '.php';
             $this->assertFileExists($ruta);
 
@@ -214,13 +214,22 @@ final class DatosDelPanelTest extends TestCase
         }
     }
 
-    /** Estados y tipos de pendientes.php, contra los valores que la vista sabe pintar. */
-    public function testLosPendientesUsanTiposYEstadosConocidos(): void
+    /**
+     * Estados de ideas.php, contra los valores que la vista sabe pintar.
+     *
+     * ESTE TEST APUNTABA A pendientes.php, que ya no existe: la migracion 044
+     * se llevo los pendientes a la tabla 'pendiente' porque su estado cambia
+     * varias veces por semana sin que cambie el codigo. Lo que quedo en archivo
+     * son las ideas, que no tienen ese problema -- una idea se decide una vez y
+     * desaparece -- y por eso siguen aca. Sus estados los valida PendientesTest
+     * para el backlog y este bloque para las ideas.
+     */
+    public function testLasIdeasUsanEstadosConocidos(): void
     {
-        foreach (require __DIR__ . '/../panel/datos/pendientes.php' as $item) {
-            $this->assertContains($item['tipo'], ['idea', 'pendiente'], "tipo raro en '{$item['titulo']}'");
-            $this->assertContains($item['estado'], ['nuevo', 'en_pausa', 'en_curso'], "estado raro en '{$item['titulo']}'");
-            $this->assertNotEmpty($item['detalle'], "'{$item['titulo']}' no explica por que quedo pendiente");
+        foreach (require __DIR__ . '/../panel/datos/ideas.php' as $item) {
+            $this->assertContains($item['estado'], ['nuevo', 'en_pausa'], "estado raro en '{$item['titulo']}'");
+            $this->assertNotEmpty($item['detalle'], "'{$item['titulo']}' no explica que hay que decidir");
+            $this->assertNotEmpty($item['titulo']);
         }
     }
 }

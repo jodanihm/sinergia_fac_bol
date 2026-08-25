@@ -508,6 +508,12 @@ const MIGRACIONES = [
              'columnas' => ['debe_cambiar_clave'], 'esperado' => 1],
         ],
     ],
+    [
+        'id' => '044', 'archivo' => '044_pendiente.sql', 'nota' => 'CREATE',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'pendiente', 'tablas' => ['pendiente'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

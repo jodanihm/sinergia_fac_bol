@@ -633,3 +633,58 @@ code {
 .veredicto.ok .punto        { color: var(--ok); }
 .veredicto.atencion .punto  { color: var(--pk); }
 .veredicto.sin_datos .punto { color: var(--muted); }
+
+/* ---- Backlog (/admin/pendientes) ---------------------------------------- */
+/* Barra de filtros: los cinco controles en una linea que se parte sola cuando
+   no cabe. Sin media queries porque no hacen falta -- flex-wrap resuelve el
+   mismo caso con una regla en vez de tres puntos de corte que hay que elegir
+   a dedo y despues mantener. */
+.filtros {
+    display: flex;
+    gap: .8rem;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin: 1.25rem 0;
+}
+.filtros .field { margin-bottom: 0; }
+.filtros__buscar { flex: 1 1 14rem; }
+.filtros__buscar input { width: 100%; }
+
+/* La prioridad es lo primero que se busca al recorrer la tabla, asi que va en
+   pastilla con color propio y no como texto suelto. P0 y P1 en los colores de
+   alarma que el resto del panel ya usa; P2 y P3 apagados, porque teñir de color
+   las cuatro dejaria la columna sin jerarquia. */
+.pri {
+    display: inline-block;
+    min-width: 2.1rem;
+    padding: .1rem .4rem;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--muted);
+    font-size: .72rem;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: .03em;
+}
+.pri--P0 { color: var(--danger); border-color: var(--danger); }
+.pri--P1 { color: var(--pk);     border-color: var(--pk); }
+
+/* SE PINCHA LA FILA ENTERA sin perder el enlace de verdad: el <a> del titulo se
+   estira por encima de toda la fila con un ::after posicionado. La fila es el
+   contexto (position:relative) y el pseudo-elemento la cubre. Asi el destino
+   sigue siendo un href -- boton del medio, barra de estado, click derecho --,
+   cosa que un onclick con data-href no da.
+
+   El z-index del contenido queda por encima para que el texto siga
+   seleccionable y los otros enlaces de la fila, si algun dia los hay, ganen. */
+.backlog tbody tr { position: relative; }
+.backlog tbody tr:hover { background: var(--panel-2); }
+.backlog__titulo a::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+}
+.backlog__titulo a { color: var(--text); text-decoration: none; }
+.backlog tbody tr:hover .backlog__titulo a { color: var(--accent); }
+.backlog td { vertical-align: middle; }
