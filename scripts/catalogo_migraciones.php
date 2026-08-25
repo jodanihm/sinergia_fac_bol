@@ -126,6 +126,54 @@ function huellaValoresEnum(PDO $pdo, string $tabla, string $columna, array $valo
     return $presentes;
 }
 
+/**
+ * 1 si $tabla.$columna esta en la collation $esperada; 0 si no (o si no existe).
+ *
+ * MISMO PROBLEMA QUE huellaNulabilidad(): la 045 no crea dte_emitido.rut_emisor
+ * -- existe desde el dump original --, le cambia la collation de
+ * utf8mb4_0900_ai_ci a utf8mb4_unicode_ci para que la clave foranea sea
+ * posible. Preguntar "existe la columna" daria la 045 por aplicada siempre.
+ */
+function huellaCollation(PDO $pdo, string $tabla, string $columna, string $esperada): int
+{
+    $stmt = $pdo->prepare(
+        'SELECT collation_name FROM information_schema.columns '
+        . 'WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1'
+    );
+    $stmt->execute([$tabla, $columna]);
+    $valor = $stmt->fetchColumn();
+
+    return ($valor !== false && (string) $valor === $esperada) ? 1 : 0;
+}
+
+/**
+ * Cuantas de $restricciones existen como CLAVE FORANEA en la base actual.
+ *
+ * HIZO FALTA UN TIPO PROPIO PARA LA 045, y no alcanzaba con ninguno de los
+ * anteriores: esa migracion no crea tablas ni columnas -- todo lo que deja son
+ * once claves foraneas sobre columnas que ya existian. Una huella de columnas
+ * daria la 045 por aplicada desde antes de correrla.
+ *
+ * Se busca por NOMBRE de constraint y en TABLE_CONSTRAINTS (no en
+ * KEY_COLUMN_USAGE) porque ahi cada FK es UNA fila: en KEY_COLUMN_USAGE una FK
+ * compuesta son dos, y contarlas daria el doble.
+ *
+ * Devuelve cuantas encontro, no un si/no, para que un ALTER que quedo a medias
+ * salga PARCIAL y no NO_APLICADA.
+ */
+function huellaClavesForaneas(PDO $pdo, array $restricciones): int
+{
+    $marcas = implode(',', array_fill(0, count($restricciones), '?'));
+    $stmt   = $pdo->prepare(
+        'SELECT COUNT(*) FROM information_schema.table_constraints '
+        . "WHERE constraint_schema = DATABASE() AND constraint_type = 'FOREIGN KEY' "
+        . "AND constraint_name IN ({$marcas})"
+    );
+    $stmt->execute($restricciones);
+
+    return (int) $stmt->fetchColumn();
+}
+
 /** 1 si existe el indice $indice en $tabla; 0 si no. */
 function huellaIndice(PDO $pdo, string $tabla, string $indice): int
 {
@@ -514,6 +562,29 @@ const MIGRACIONES = [
             ['tipo' => 'tablas', 'desc' => 'pendiente', 'tablas' => ['pendiente'], 'esperado' => 1],
         ],
     ],
+    [
+        // TRES HUELLAS PORQUE LA MIGRACION TIENE TRES EFECTOS SEPARABLES, y la
+        // que importa es la de las FK: es lo unico que hace que las tablas de
+        // DTE puedan decir de que empresa son. La collation y el NOT NULL son
+        // los pasos que la hacen posible, y se miran aparte justamente para
+        // poder distinguir "quedo a medias en el paso 2" de "no se corrio".
+        //
+        // La collation se comprueba en dte_emitido y no en las siete: es la
+        // ultima que se convierte de las grandes y la que mas tarda, asi que si
+        // esa quedo, quedaron todas. Es una huella, no una auditoria.
+        'id' => '045', 'archivo' => '045_dte_fk_emisor.sql', 'nota' => 'ALTER (11 FK + collation + NOT NULL)',
+        'huellas' => [
+            ['tipo' => 'claves_foraneas', 'desc' => 'las 11 FK a dte_emisor', 'restricciones' => [
+                'fk_boleta_rvd_emisor', 'fk_caf_emisor', 'fk_certificado_emisor', 'fk_emitido_emisor',
+                'fk_folio_emisor', 'fk_folio_log_emisor', 'fk_idempotencia_emisor', 'fk_intercambio_emisor',
+                'fk_libro_emisor', 'fk_set_basico_sok_emisor', 'fk_set_pruebas_emisor',
+            ], 'esperado' => 11],
+            ['tipo' => 'nulabilidad', 'desc' => 'dte_emisor.cuenta_id NOT NULL', 'tabla' => 'dte_emisor',
+             'columna' => 'cuenta_id', 'esperado_nulabilidad' => 'NO'],
+            ['tipo' => 'collation', 'desc' => 'dte_emitido.rut_emisor en utf8mb4_unicode_ci',
+             'tabla' => 'dte_emitido', 'columna' => 'rut_emisor', 'esperado_collation' => 'utf8mb4_unicode_ci'],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
@@ -534,6 +605,10 @@ function evaluarHuella(PDO $pdo, array $h): array
             return ['presente' => huellaNulabilidad($pdo, $h['tabla'], $h['columna'], $h['esperado_nulabilidad']), 'esperado' => 1];
         case 'valores_enum':
             return ['presente' => huellaValoresEnum($pdo, $h['tabla'], $h['columna'], $h['valores']), 'esperado' => $h['esperado']];
+        case 'collation':
+            return ['presente' => huellaCollation($pdo, $h['tabla'], $h['columna'], $h['esperado_collation']), 'esperado' => 1];
+        case 'claves_foraneas':
+            return ['presente' => huellaClavesForaneas($pdo, $h['restricciones']), 'esperado' => $h['esperado']];
     }
 
     throw new RuntimeException("tipo de huella desconocido: {$h['tipo']}");

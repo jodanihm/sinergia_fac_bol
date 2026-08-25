@@ -56,7 +56,14 @@ const SEMILLA = [
             . 'restriccion de la base impide que una consulta mal escrita mezcle dos contribuyentes. '
             . 'Agregarles cuenta_id es una migracion grande y con backfill; antes hay que decidir si '
             . 'conviene eso o una convencion verificada de otra forma. No es un bug abierto: es un riesgo '
-            . 'estructural que ahora se puede mirar.',
+            . 'estructural que ahora se puede mirar. '
+            . 'RESUELTO EL 25-08-2026 POR LA MIGRACION 045, que no agrego cuenta_id sino la clave foranea '
+            . 'compuesta (rut_emisor, ambiente) hacia dte_emisor: el camino a cuenta existe y lo impone el '
+            . 'motor, y no hubo que tocar ninguna de las 443 consultas. Dos errores del texto de arriba, '
+            . 'que se dejan a la vista en vez de reescribirlos: la tabla companhia no existe en esta base '
+            . 'ni en el repositorio, y las tablas afectadas eran 13, no 12. Quedan dos fuera '
+            . '(dte_logo y dte_emitido_bak_20260727) y sigue abierto lo que una clave foranea no puede '
+            . 'resolver: que un WHERE olvidado lea las filas de otro contribuyente.',
     ],
     [
         'area' => 'datos', 'categoria' => 'deuda', 'prioridad' => 'P2', 'severidad' => 'media',
@@ -90,12 +97,22 @@ const SEMILLA = [
     [
         'area' => 'transversal', 'categoria' => 'deuda', 'prioridad' => 'P2', 'severidad' => 'media',
         'estado' => 'abierto',
-        'titulo' => 'La suite tiene 38 errores y 5 fallos de arrastre',
+        // LA CIFRA SE CORRIGIO EL 25-08-2026 y el titulo cambio con ella. El
+        // titulo es la clave de idempotencia de este script, asi que tiene que
+        // seguir siendo IGUAL al que quedo en la base: si divergen, una siembra
+        // sobre una tabla poblada inserta un duplicado en vez de saltarse el
+        // item.
+        'titulo' => 'La suite tiene 43 errores y 16 fallos de arrastre',
         'detalle' => 'Vienen de antes de este trabajo y no los introdujo ningun cambio reciente: se usan '
             . 'como linea base para comparar antes y despues de cada entrega. Mientras esten, la suite no '
             . 'sirve como semaforo -- nadie puede mirar "esta en rojo" y sacar una conclusion --, asi que '
             . 'cada verificacion tiene que compararse contra el mismo numero a mano. Hay que revisarlos y '
-            . 'dejarlos en cero o declararlos ignorados con su motivo.',
+            . 'dejarlos en cero o declararlos ignorados con su motivo. CIFRA CORREGIDA EL 25-08-2026: la '
+            . 'linea base real es 450 tests con 43 errores y 16 fallos, no 38 y 5. El numero viejo llevaba '
+            . 'a concluir que un cambio habia roto cosas cuando no era asi. Para medirla hay que comparar '
+            . 'contra una copia del arbol de trabajo con solo los archivos modificados revertidos: un '
+            . '"git archive HEAD" no arrastra los ficheros ignorados que la suite necesita y da 261 '
+            . 'errores falsos.',
     ],
     [
         'area' => 'datos', 'categoria' => 'deuda', 'prioridad' => 'P3', 'severidad' => 'baja',

@@ -11836,10 +11836,34 @@ function handleEmpresaPost(): void
         }
     } catch (PDOException $e) {
         error_log('panel empresa guardar fallo: ' . $e->getMessage());
-        // 23000 = violacion de UNIQUE (uk_emisor: rut_emisor+ambiente ya usado por otra cuenta).
-        $mensaje = $e->getCode() === '23000'
-            ? 'Ese RUT ya esta registrado en el sistema.'
-            : 'No se pudo guardar. Intenta nuevamente.';
+
+        // 23000 llega ahora por DOS motivos distintos, y decirle al usuario el
+        // equivocado lo manda a arreglar algo que no esta roto. El SQLSTATE es
+        // el mismo para los dos; lo que los separa es el codigo del motor, que
+        // viene en errorInfo[1]:
+        //
+        //   1062  UNIQUE uk_emisor: ese RUT + ambiente ya es de otra cuenta.
+        //         Es el caso que este catch contemplaba desde siempre.
+        //
+        //   1451  Una de las FK de la migracion 045. Se intento CAMBIAR el RUT
+        //         de un emisor que ya tiene CAF, certificados o documentos
+        //         colgando. La base lo corta a proposito: un DTE se emitio a
+        //         nombre de un RUT y ese dato es parte del documento tributario
+        //         firmado, asi que arrastrarlo a un RUT nuevo seria reescribir
+        //         la historia. Antes de la 045 este UPDATE pasaba y dejaba los
+        //         documentos sin emisor, en silencio.
+        $codigoMotor = (int) ($e->errorInfo[1] ?? 0);
+
+        if ($codigoMotor === 1451) {
+            $mensaje = 'No se puede cambiar el RUT: esta empresa ya tiene folios, certificados o '
+                . 'documentos emitidos a nombre del RUT actual. Para operar con otro RUT hay que '
+                . 'registrar una empresa nueva.';
+        } elseif ($e->getCode() === '23000') {
+            $mensaje = 'Ese RUT ya esta registrado en el sistema.';
+        } else {
+            $mensaje = 'No se pudo guardar. Intenta nuevamente.';
+        }
+
         vista('empresa', ['errores' => ['rut_emisor' => $mensaje], 'emisor' => $datosForm]);
         return;
     }
@@ -13717,11 +13741,17 @@ function handleAdminBaseDatosGet(): void
         . 'ORDER BY TABLE_NAME, ORDINAL_POSITION'
     )->fetchAll(PDO::FETCH_ASSOC);
 
+    // CONSTRAINT_NAME y el orden por ORDINAL_POSITION son lo que permite volver
+    // a armar una FK COMPUESTA: information_schema la entrega como una fila por
+    // columna, y sin el nombre de la constraint no hay como saber cuales dos
+    // filas son la misma clave. Desde la 045 hay once de esas -- las tablas de
+    // DTE apuntan a dte_emisor por (rut_emisor, ambiente) --, y ordenarlas por
+    // COLUMN_NAME, como estaba, las dejaba al reves de como se declararon.
     $clavesForaneas = $pdo->query(
-        'SELECT TABLE_NAME, COLUMN_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME '
+        'SELECT TABLE_NAME, COLUMN_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME '
         . 'FROM information_schema.KEY_COLUMN_USAGE '
         . 'WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IS NOT NULL '
-        . 'ORDER BY TABLE_NAME, COLUMN_NAME'
+        . 'ORDER BY TABLE_NAME, CONSTRAINT_NAME, ORDINAL_POSITION'
     )->fetchAll(PDO::FETCH_ASSOC);
 
     // Un indice con varias columnas es UNA fila por columna en STATISTICS; se
@@ -13751,9 +13781,10 @@ function handleAdminBaseDatosGet(): void
         $fkPorColumna[$fk['TABLE_NAME'] . '.' . $fk['COLUMN_NAME']]
             = $fk['REFERENCED_TABLE_NAME'] . '.' . $fk['REFERENCED_COLUMN_NAME'];
         $fkParaGrafo[] = [
-            'tabla'    => (string) $fk['TABLE_NAME'],
-            'columna'  => (string) $fk['COLUMN_NAME'],
-            'refTabla' => (string) $fk['REFERENCED_TABLE_NAME'],
+            'tabla'       => (string) $fk['TABLE_NAME'],
+            'columna'     => (string) $fk['COLUMN_NAME'],
+            'refTabla'    => (string) $fk['REFERENCED_TABLE_NAME'],
+            'restriccion' => (string) $fk['CONSTRAINT_NAME'],
         ];
     }
 

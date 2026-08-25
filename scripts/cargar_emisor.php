@@ -6,13 +6,17 @@ declare(strict_types=1);
  * Carga los datos PUBLICOS de un emisor a la base de datos (tabla dte_emisor).
  *
  * USO:
- *   php scripts/cargar_emisor.php <ambiente> <rut> <razon_social> <giro> \
+ *   php scripts/cargar_emisor.php <cuenta_id> <ambiente> <rut> <razon_social> <giro> \
  *       <acteco> <dir> <comuna> <res_fecha> <res_numero>
  *
  * EJEMPLO:
  *   DB_HOST=localhost DB_NAME=plantiflex DB_USER=root DB_PASS=secreto \
- *   php scripts/cargar_emisor.php certificacion 77724622-4 "Plantiflex SpA" \
+ *   php scripts/cargar_emisor.php 2 certificacion 77724622-4 "Plantiflex SpA" \
  *       "Venta de plantas" 477310 "Av Siempre Viva 123" "Santiago" 2024-01-01 0
+ *
+ * EL PRIMER ARGUMENTO ES NUEVO (migracion 045) y rompe a proposito las llamadas
+ * viejas de nueve argumentos: una llamada antigua fallaria igual contra la base
+ * -- cuenta_id es NOT NULL --, y es mejor que falle con la linea de uso.
  *
  * VARIABLES DE ENTORNO:
  *   DB_HOST, DB_NAME, DB_USER, DB_PASS  -> conexion MySQL.
@@ -62,14 +66,24 @@ function conectarDb(): PDO
 // ---------------------------------------------------------------------------
 
 $args = array_slice($argv, 1);
-if (count($args) !== 9) {
+if (count($args) !== 10) {
     fail(
-        "Uso: php scripts/cargar_emisor.php <ambiente> <rut> <razon_social> <giro> "
+        "Uso: php scripts/cargar_emisor.php <cuenta_id> <ambiente> <rut> <razon_social> <giro> "
         . "<acteco> <dir> <comuna> <res_fecha> <res_numero>"
     );
 }
-[$ambiente, $rut, $razon, $giro, $acteco, $dir, $comuna, $resFecha, $resNumero] = $args;
+[$cuentaId, $ambiente, $rut, $razon, $giro, $acteco, $dir, $comuna, $resFecha, $resNumero] = $args;
 
+// LA CUENTA ES OBLIGATORIA DESDE LA MIGRACION 045. Este script nacio antes de
+// que el sistema fuera multi-tenant y cargaba el emisor sin dueno: la fila
+// quedaba con cuenta_id NULL y todos los documentos que colgaran de ella eran
+// de una empresa que la base no podia nombrar. Era el unico camino que todavia
+// podia crear ese agujero. Ahora cuenta_id es NOT NULL, asi que sin este
+// argumento el INSERT fallaria igual -- se pide aqui para que el error sea una
+// linea de uso y no una excepcion de PDO.
+if (! ctype_digit($cuentaId) || (int) $cuentaId <= 0) {
+    fail("cuenta_id debe ser el id numerico de una fila de la tabla cuenta (recibido: '{$cuentaId}').");
+}
 if (! in_array($ambiente, ['certificacion', 'produccion'], true)) {
     fail("ambiente debe ser 'certificacion' o 'produccion' (recibido: '{$ambiente}').");
 }
@@ -91,10 +105,11 @@ $pdo = conectarDb();
 try {
     $pdo->prepare(
         'INSERT INTO dte_emisor '
-        . '(rut_emisor, ambiente, razon_social, giro, acteco, dir_origen, cmna_origen, resolucion_fecha, resolucion_numero) '
-        . 'VALUES (:rut, :amb, :razon, :giro, :acteco, :dir, :cmna, :fecha, :numero)'
+        . '(rut_emisor, cuenta_id, ambiente, razon_social, giro, acteco, dir_origen, cmna_origen, resolucion_fecha, resolucion_numero) '
+        . 'VALUES (:rut, :cuenta, :amb, :razon, :giro, :acteco, :dir, :cmna, :fecha, :numero)'
     )->execute([
         ':rut'    => $rut,
+        ':cuenta' => (int) $cuentaId,
         ':amb'    => $ambiente,
         ':razon'  => $razon,
         ':giro'   => $giro,
@@ -105,6 +120,11 @@ try {
         ':numero' => (int) $resNumero,
     ]);
 } catch (PDOException $e) {
+    // 1452 = fk_emisor_cuenta: la cuenta_id que se paso no existe. Se separa del
+    // 1062 porque el arreglo es otro (crear la cuenta, no editar el emisor).
+    if ((int) ($e->errorInfo[1] ?? 0) === 1452) {
+        fail("No existe la cuenta {$cuentaId}. Revisa: SELECT id, nombre FROM cuenta;");
+    }
     if ($e->getCode() === '23000') {
         fail("Ya existe un emisor cargado para rut '{$rut}' ambiente '{$ambiente}'. Para cambiarlo, actualiza la fila existente.");
     }
