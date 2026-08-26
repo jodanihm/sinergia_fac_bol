@@ -729,3 +729,30 @@ tbody tr:has(+ .nota-fila) td { border-bottom: 0; padding-bottom: .4rem; }
    lateral alcanza: teñir la fila entera competiria con el semaforo de los
    tags que ya viven adentro. */
 .recien-probada td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* ---- Migraciones (/admin/migraciones) ----------------------------------- */
+/* El desajuste entre el catalogo y los .sql se pinta como bloque y no como una
+   linea mas: mientras exista, el resto de la pantalla informa de menos, asi que
+   tiene que verse antes que los numeros de abajo. */
+.desajuste { border-left: 3px solid var(--danger); }
+.desajuste p { font-size: .85rem; line-height: 1.55; }
+
+/* El .sql se muestra completo, con sus saltos y su sangria: son cabeceras de
+   ochenta columnas que explican por que existe cada migracion, y reflowear ese
+   texto lo vuelve ilegible. Por eso NO hay pre-wrap aqui -- se desplaza. */
+.sql-migracion {
+    overflow-x: auto;
+    margin: 0;
+    padding: .9rem 1rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: .78rem;
+    line-height: 1.5;
+    color: var(--text);
+}
+
+/* La fila cuyo .sql esta abierto arriba. Mismo recurso que la integracion
+   recien probada: un borde lateral, no un fondo, para no competir con el
+   semaforo de los tags que viven dentro de la fila. */
+.fila-abierta td:first-child { box-shadow: inset 3px 0 0 var(--accent); }

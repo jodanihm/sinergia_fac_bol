@@ -105,6 +105,7 @@ require __DIR__ . '/../src/AgendaCron.php';
 require __DIR__ . '/../src/BitacoraTarea.php';
 require __DIR__ . '/../src/Pendientes.php';
 require __DIR__ . '/../src/Integraciones.php';
+require __DIR__ . '/../src/Migraciones.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -11140,6 +11141,10 @@ if ($metodo === 'POST' && $ruta === '/admin/integraciones/probar') {
     handleAdminIntegracionProbarPost();
 }
 
+if ($metodo === 'GET' && $ruta === '/admin/migraciones') {
+    handleAdminMigracionesGet();
+}
+
 if ($metodo === 'GET' && $ruta === '/admin/base-datos') {
     handleAdminBaseDatosGet();
 }
@@ -13836,67 +13841,7 @@ function handleAdminBaseDatosGet(): void
         'busqueda'          => $busqueda,
         'vista'             => $vista,
         'diagramaEr'        => $diagramaEr,
-        'migraciones'       => estadoMigracionesAdmin($pdo),
     ]);
-}
-
-/**
- * Veredicto de cada migracion, reusando el catalogo de
- * scripts/catalogo_migraciones.php.
- *
- * NO REIMPLEMENTA NADA: las huellas y la regla de los tres veredictos son las
- * mismas funciones que corre el chequeo de despliegue. Si esta pantalla tuviera
- * su propia copia, el dia que se desincronizaran el deploy diria "al dia" y el
- * panel "falta la 043" -- o al reves, que es peor -- y nada indicaria cual de
- * los dos tiene razon.
- *
- * El require va aqui adentro y no en el bootstrap del panel porque este es el
- * unico handler que lo necesita, y el archivo declara 42 entradas y varias
- * funciones que no tienen por que cargarse en cada request del panel.
- *
- * @return list<array{id:string, archivo:string, nota:string, veredicto:string,
- *                    presentes:int, esperados:int, diferida:?string, huellas:list<array{desc:string, ok:bool}>}>
- */
-function estadoMigracionesAdmin(PDO $pdo): array
-{
-    require_once __DIR__ . '/../../scripts/catalogo_migraciones.php';
-
-    $salida = [];
-    foreach (MIGRACIONES as $migracion) {
-        $presentes = 0;
-        $esperados = 0;
-        $huellas   = [];
-
-        // evaluarHuella() devuelve las claves en SINGULAR ('presente' /
-        // 'esperado'): son el conteo de UNA huella, y se acumulan aqui para
-        // sacar el veredicto de la migracion completa.
-        foreach ($migracion['huellas'] as $huella) {
-            $evaluada   = evaluarHuella($pdo, $huella);
-            $presentes += $evaluada['presente'];
-            $esperados += $evaluada['esperado'];
-            $huellas[]  = [
-                'desc' => (string) $huella['desc'],
-                'ok'   => $evaluada['presente'] === $evaluada['esperado'],
-            ];
-        }
-
-        $salida[] = [
-            'id'        => (string) $migracion['id'],
-            'archivo'   => (string) $migracion['archivo'],
-            'nota'      => (string) ($migracion['nota'] ?? ''),
-            'veredicto' => veredicto($presentes, $esperados),
-            'presentes' => $presentes,
-            'esperados' => $esperados,
-            // 'diferida' es un STRING con el motivo y no un booleano, a
-            // proposito: obliga a escribir por que. Con un true la marca se
-            // pone en dos segundos y nadie recuerda la razon seis semanas
-            // despues.
-            'diferida'  => isset($migracion['diferida']) ? (string) $migracion['diferida'] : null,
-            'huellas'   => $huellas,
-        ];
-    }
-
-    return $salida;
 }
 
 // ===========================================================================
@@ -14220,6 +14165,162 @@ function handleAdminIntegracionProbarPost(): void
     // alguien diagnosticando aprieta el boton diez veces seguidas. Diez filas
     // que dicen "se probo Brevo" empujan hacia abajo las que si importan.
     redirigir('/admin/integraciones');
+}
+
+// ===========================================================================
+//  Handler: GET /admin/migraciones (SOLO SUPERADMIN) -- el registro de las
+//  migraciones de la base.
+//
+//  CRUZA TRES COSAS QUE HASTA AHORA NADIE MIRABA JUNTAS:
+//
+//    1. El CATALOGO (scripts/catalogo_migraciones.php): que migraciones se
+//       declaran y como se reconoce su efecto.
+//    2. La BASE de verdad: se evalua cada huella y sale el veredicto.
+//    3. Los ARCHIVOS .sql: lo que alguien escribio y ejecuto de verdad.
+//
+//  EL CRUCE ENTRE 1 Y 3 ES LA RAZON DE LA PANTALLA. Las dos listas se mantienen
+//  a mano y por separado, y el modo de fallar es siempre el mismo: se agrega el
+//  .sql, se corre, y nadie agrega la entrada al catalogo. Desde ese momento el
+//  deploy dice "todo al dia" sobre una migracion que no vigila nadie, y la
+//  unica forma de enterarse era comparar dos listas de cuarenta y cinco lineas
+//  a ojo. Por eso el desajuste se pinta arriba de todo: invalida lo que dice el
+//  resto de la pantalla.
+//
+//  ESTABA DENTRO DE /admin/base-datos y salio de ahi. Aquella pantalla describe
+//  el ESQUEMA -- que tablas hay hoy, que separa a un contribuyente de otro --
+//  y las migraciones son otra pregunta: como se llego hasta aqui y que falta
+//  por correr. Compartian pantalla por como se construyeron, no porque se
+//  miren juntas.
+//
+//  SOLO LECTURA, como todo el panel de control: se evalua contra
+//  information_schema y se leen archivos del repositorio. Esta pantalla NO
+//  aplica migraciones y no va a tener un boton que lo haga. Aplicar es una
+//  decision humana, con respaldo previo y a una hora elegida; un boton que
+//  corre un ALTER en produccion desde el navegador es exactamente el accidente
+//  que este proyecto evita en todas partes.
+//
+//  EL .sql QUE SE MUESTRA SE ELIGE POR ID, NUNCA POR RUTA. Lo que llega por la
+//  URL solo selecciona una entrada de la lista que devolvio el directorio; el
+//  nombre de archivo sale de ahi. Sin eso, un parametro de lectura de archivos
+//  seria una puerta para leer cualquier cosa del contenedor.
+// ===========================================================================
+const DIRECTORIO_MIGRACIONES = __DIR__ . '/../../integration/plantiflex/migrations';
+
+function handleAdminMigracionesGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $enDisco    = Migraciones::archivos(DIRECTORIO_MIGRACIONES);
+    $migraciones = estadoMigracionesAdmin($pdo);
+
+    // El titulo de cada una sale de la cabecera de su propio .sql y no de una
+    // columna del catalogo: una copia envejece sin avisar y esta no puede.
+    foreach ($migraciones as &$m) {
+        $archivoReal = $enDisco[$m['id']] ?? null;
+
+        $m['enDisco'] = $archivoReal;
+        $m['titulo']  = $archivoReal === null
+            ? ''
+            : Migraciones::titulo((string) file_get_contents(DIRECTORIO_MIGRACIONES . '/' . $archivoReal));
+    }
+    unset($m);
+
+    $cruce = Migraciones::cruzar(
+        array_map(static fn (array $m): string => $m['id'], $migraciones),
+        array_keys($enDisco)
+    );
+
+    // Un .sql renombrado no es ninguna de las dos faltas anteriores -- el id
+    // esta en las dos listas -- y aun asi deja al catalogo nombrando un archivo
+    // que no existe, que es lo unico que alguien tiene para ir a leerlo.
+    $renombradas = [];
+    foreach ($migraciones as $m) {
+        if ($m['enDisco'] !== null && $m['enDisco'] !== $m['archivo']) {
+            $renombradas[] = ['id' => $m['id'], 'catalogo' => $m['archivo'], 'disco' => $m['enDisco']];
+        }
+    }
+
+    // El SQL completo se sirve de a uno y a pedido. Mandar los cuarenta y cinco
+    // archivos en cada carga son 270 kB de HTML para que se lea, como mucho,
+    // uno.
+    $pedido      = (string) ($_GET['sql'] ?? '');
+    $sqlMostrado = null;
+    if (isset($enDisco[$pedido])) {
+        $sqlMostrado = [
+            'id'      => $pedido,
+            'archivo' => $enDisco[$pedido],
+            'sql'     => (string) file_get_contents(DIRECTORIO_MIGRACIONES . '/' . $enDisco[$pedido]),
+        ];
+    }
+
+    vista('admin-migraciones', [
+        'base'          => (string) $pdo->query('SELECT DATABASE()')->fetchColumn(),
+        'migraciones'   => $migraciones,
+        'totalEnDisco'  => count($enDisco),
+        'cruce'         => $cruce,
+        'renombradas'   => $renombradas,
+        'sqlMostrado'   => $sqlMostrado,
+    ]);
+}
+
+/**
+ * Veredicto de cada migracion, reusando el catalogo de
+ * scripts/catalogo_migraciones.php.
+ *
+ * NO REIMPLEMENTA NADA: las huellas y la regla de los tres veredictos son las
+ * mismas funciones que corre el chequeo de despliegue. Si esta pantalla tuviera
+ * su propia copia, el dia que se desincronizaran el deploy diria "al dia" y el
+ * panel "falta la 043" -- o al reves, que es peor -- y nada indicaria cual de
+ * los dos tiene razon.
+ *
+ * El require va aqui adentro y no en el bootstrap del panel porque esta es la
+ * unica pantalla que lo necesita, y el archivo declara una entrada por migracion
+ * y varias funciones que no tienen por que cargarse en cada request del panel.
+ *
+ * @return list<array{id:string, archivo:string, nota:string, veredicto:string,
+ *                    presentes:int, esperados:int, diferida:?string, huellas:list<array{desc:string, ok:bool}>}>
+ */
+function estadoMigracionesAdmin(PDO $pdo): array
+{
+    require_once __DIR__ . '/../../scripts/catalogo_migraciones.php';
+
+    $salida = [];
+    foreach (MIGRACIONES as $migracion) {
+        $presentes = 0;
+        $esperados = 0;
+        $huellas   = [];
+
+        // evaluarHuella() devuelve las claves en SINGULAR ('presente' /
+        // 'esperado'): son el conteo de UNA huella, y se acumulan aqui para
+        // sacar el veredicto de la migracion completa.
+        foreach ($migracion['huellas'] as $huella) {
+            $evaluada   = evaluarHuella($pdo, $huella);
+            $presentes += $evaluada['presente'];
+            $esperados += $evaluada['esperado'];
+            $huellas[]  = [
+                'desc' => (string) $huella['desc'],
+                'ok'   => $evaluada['presente'] === $evaluada['esperado'],
+            ];
+        }
+
+        $salida[] = [
+            'id'        => (string) $migracion['id'],
+            'archivo'   => (string) $migracion['archivo'],
+            'nota'      => (string) ($migracion['nota'] ?? ''),
+            'veredicto' => veredicto($presentes, $esperados),
+            'presentes' => $presentes,
+            'esperados' => $esperados,
+            // 'diferida' es un STRING con el motivo y no un booleano, a
+            // proposito: obliga a escribir por que. Con un true la marca se
+            // pone en dos segundos y nadie recuerda la razon seis semanas
+            // despues.
+            'diferida'  => isset($migracion['diferida']) ? (string) $migracion['diferida'] : null,
+            'huellas'   => $huellas,
+        ];
+    }
+
+    return $salida;
 }
 
 function handleAdminFlujosGet(): void
