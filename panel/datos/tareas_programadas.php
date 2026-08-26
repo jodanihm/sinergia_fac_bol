@@ -45,7 +45,7 @@ declare(strict_types=1);
  *               equivocarse con una de las dos familias
  *   nota        lo que hay que saber ANTES de cambiarle la frecuencia
  *
- * VERIFICADO EL 25-08-2026 contra los tres archivos de /etc/cron.d/sinergia-*.
+ * VERIFICADO EL 26-08-2026 contra los archivos de /etc/cron.d/sinergia-*.
  */
 
 return [
@@ -91,5 +91,29 @@ return [
         'nota'       => 'Trabaja con un presupuesto de 600 segundos, calculado para que quepa holgado en '
             . 'los 900 de su intervalo. Bajarle el intervalo a menos de 15 minutos sin bajarle el '
             . 'presupuesto hace que una corrida alcance a la siguiente.',
+    ],
+    [
+        'id'         => 'respaldos-tenants',
+        'nombre'     => 'Respaldar la informacion de cada cliente',
+        'proposito'  => 'Deja una copia por empresa: solo sus filas, recortadas de la base compartida. '
+            . 'Sin esto, devolverle a un cliente sus datos -- o recuperarlos despues de un borrado -- '
+            . 'obliga a restaurar la base entera en otro lado y separar a mano lo suyo de lo de los demas.',
+        'expresion'  => '40 3 * * *',
+        'archivo'    => '/etc/cron.d/sinergia-respaldos',
+        // LA UNICA DE LA LISTA QUE NO ENTRA A UN CONTENEDOR. Corre en el host
+        // porque ahi estan las tres cosas que necesita y que adentro no hay: el
+        // cliente de MySQL (via docker exec al contenedor de la base), el disco
+        // donde se guardan las copias y la salida a internet hacia Nextcloud.
+        'contenedor' => '(el host, como root)',
+        'comando'    => '/data/sinergia/facturacion/scripts/respaldar_tenants.sh',
+        'log'        => '/var/log/sinergia_respaldos.log',
+        'bitacora'   => 'cada_corrida',
+        'nota'       => 'Guarda 5 copias por cliente en el servidor y 10 en Nextcloud, y borra las mas '
+            . 'viejas -- pero NO borra nada si la corrida tuvo algun fallo. Si el respaldo de un cliente '
+            . 'pasa los 85 MB que admite el destino, se guarda igual y queda una alerta en el log y en un '
+            . 'correo: no se parte el archivo por su cuenta. Las 03:40 estan elegidas para caer despues '
+            . 'del respaldo COMPLETO de la base (03:17, /etc/cron.d/easyagenda-mysql-backup) y antes del '
+            . 'de licitaalerta (04:30); moverla sin mirar esos dos deja dos volcados peleando por el mismo '
+            . 'MySQL. No reemplaza al respaldo completo: aquel es el que levanta el sistema entero.',
     ],
 ];

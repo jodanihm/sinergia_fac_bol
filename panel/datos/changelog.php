@@ -33,6 +33,22 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.46',
+        'titulo'  => 'Todas las madrugadas queda un respaldo por cliente, en el servidor y en Nextcloud',
+        'tag'     => 'devops',
+        'items'   => [
+            'Nueva tarea programada, a las 03:40: arma un respaldo por cada empresa con SOLO sus datos y lo deja en dos lugares, el servidor y la nube de la empresa.',
+            'Hasta hoy existia un respaldo de la base completa, y sigue existiendo: es el que levanta el sistema entero si pasa algo grave. Lo que no habia era forma de responder "devolveme los datos de ESTA empresa" sin restaurar todo en otro lado y separar a mano lo suyo de lo de los demas.',
+            'Todas las empresas comparten las mismas tablas -- asi esta construido el sistema --, asi que el respaldo de un cliente hay que recortarlo. Ese recorte no esta escrito a mano en ninguna lista: se calcula siguiendo las relaciones reales de la base, para que una tabla nueva quede cubierta sola en vez de quedar afuera sin que nadie se entere. Si alguna vez apareciera una tabla que no se puede atribuir a un cliente, el proceso lo denuncia en vez de callarlo.',
+            'Se conservan 5 copias por cliente en el servidor y 10 en Nextcloud; las mas viejas se borran. Si una noche algo falla, NO se borra nada: es preferible acumular copias a quedarse sin ninguna.',
+            'Cada copia se verifica antes de darla por buena. Un respaldo cortado a la mitad que se da por bueno es peor que no tenerlo.',
+            'Si el respaldo de un cliente supera los 85 MB que admite el destino, se guarda igual y queda una alerta en la bitacora y en un correo. No se parte el archivo por su cuenta: eso convertiria la restauracion en un rompecabezas justo el dia peor.',
+            'Los datos internos de la casa -- la auditoria del panel, la bitacora de actividad, el backlog -- no viajan en el respaldo de ningun cliente.',
+            'La tarea se ve en Tareas programadas, con su horario, su bitacora y la explicacion de por que corre a esa hora y no a otra.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.45',
         'titulo'  => 'Nuevo tipo de cuenta: Cortesia',
         'tag'     => 'datos',
