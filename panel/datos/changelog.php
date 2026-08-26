@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.38',
+        'titulo'  => 'Correccion: la pantalla nueva de Migraciones no abria',
+        'tag'     => 'backend',
+        'items'   => [
+            'La pantalla que se acababa de publicar no cargaba: mostraba un error tecnico en vez del listado. Ya funciona.',
+            'La causa fue el ORDEN en que estaban escritas dos lineas del programa. Una de ellas define donde estan guardadas las migraciones, y quedo escrita mas abajo del punto en que el sistema decide que pantalla mostrar: cuando le tocaba abrir la pantalla, ese dato todavia no existia.',
+            'Se agrego una prueba automatica que revisa esa clase de desorden en todo el archivo de rutas, no solo en la pantalla nueva. Como el despliegue corre las pruebas, un error asi ya no puede volver a publicarse.',
+            'Se verifico abriendo la pantalla por el mismo camino que usa el navegador -- incluida la vista del contenido de una migracion --, no solo probando las piezas por separado, que fue justamente lo que dejo pasar el error.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.37',
         'titulo'  => 'El panel interno tiene una pantalla propia para las migraciones de la base',
         'tag'     => 'datos',

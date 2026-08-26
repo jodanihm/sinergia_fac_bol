@@ -14204,14 +14204,19 @@ function handleAdminIntegracionProbarPost(): void
 //  nombre de archivo sale de ahi. Sin eso, un parametro de lectura de archivos
 //  seria una puerta para leer cualquier cosa del contenedor.
 // ===========================================================================
-const DIRECTORIO_MIGRACIONES = __DIR__ . '/../../integration/plantiflex/migrations';
-
+//  EL DIRECTORIO ES UNA VARIABLE LOCAL Y NO UNA CONSTANTE DE ARCHIVO, porque
+//  aqui eso no es un detalle de estilo: el despacho de rutas de este mismo
+//  archivo esta MAS ARRIBA que esta linea, y un `const` de nivel de archivo no
+//  se declara hasta que la ejecucion pasa por el. Las funciones si se hoistean,
+//  asi que el handler existe y la constante no: fatal en cuanto alguien abre la
+//  pantalla. Salio en produccion, no en los tests.
 function handleAdminMigracionesGet(): void
 {
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
-    $enDisco    = Migraciones::archivos(DIRECTORIO_MIGRACIONES);
+    $directorio = __DIR__ . '/../../integration/plantiflex/migrations';
+    $enDisco    = Migraciones::archivos($directorio);
     $migraciones = estadoMigracionesAdmin($pdo);
 
     // El titulo de cada una sale de la cabecera de su propio .sql y no de una
@@ -14222,7 +14227,7 @@ function handleAdminMigracionesGet(): void
         $m['enDisco'] = $archivoReal;
         $m['titulo']  = $archivoReal === null
             ? ''
-            : Migraciones::titulo((string) file_get_contents(DIRECTORIO_MIGRACIONES . '/' . $archivoReal));
+            : Migraciones::titulo((string) file_get_contents($directorio . '/' . $archivoReal));
     }
     unset($m);
 
@@ -14250,7 +14255,7 @@ function handleAdminMigracionesGet(): void
         $sqlMostrado = [
             'id'      => $pedido,
             'archivo' => $enDisco[$pedido],
-            'sql'     => (string) file_get_contents(DIRECTORIO_MIGRACIONES . '/' . $enDisco[$pedido]),
+            'sql'     => (string) file_get_contents($directorio . '/' . $enDisco[$pedido]),
         ];
     }
 
