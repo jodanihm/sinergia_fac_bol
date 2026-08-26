@@ -106,6 +106,7 @@ require __DIR__ . '/../src/BitacoraTarea.php';
 require __DIR__ . '/../src/Pendientes.php';
 require __DIR__ . '/../src/Integraciones.php';
 require __DIR__ . '/../src/Migraciones.php';
+require __DIR__ . '/../src/ActividadAdmin.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -10291,6 +10292,35 @@ if ($metodo === 'POST' && preg_match('#^/activar/([0-9a-f]{64})$#', $ruta, $mAct
 // ===========================================================================
 exigirPermisoDeRuta($metodo, $ruta);
 
+// ===========================================================================
+//  BITACORA DEL PANEL DE CONTROL: una fila por peticion a /admin/*.
+//
+//  UN SOLO PUNTO, COMO EL CSRF Y EL CORTE POR DEMO, y por el mismo argumento
+//  que ya se demostro correcto para ellos: la propiedad que importa no es que
+//  hoy queden registradas todas las pantallas de /admin -- eso lo daria tambien
+//  una llamada por handler --, sino que la pantalla de superadmin que se
+//  escriba MANANA nazca registrada sin que su autor sepa que esto existe. Una
+//  auditoria a la que hay que acordarse de sumar cada pantalla nueva es una
+//  auditoria con agujeros, y los agujeros de una auditoria se descubren
+//  siempre el dia que hace falta mirarla.
+//
+//  VA JUSTO DESPUES DEL GATE Y ANTES DE CUALQUIER DESPACHO. Antes del gate no
+//  se sabria si la peticion siquiera tenia sesion; despues del despacho no
+//  habria donde ponerlo, porque cada handler termina en exit. Aqui se sabe la
+//  ruta y todavia no corrio nada.
+//
+//  SE REGISTRA TODO LO QUE CUELGA DE /admin, SIN EXCEPCIONES: las lecturas,
+//  las acciones, el intento de quien entro con una cuenta que no es superadmin
+//  y se llevo un 403 -- exigirSuperadmin() corta DESPUES de esta linea, asi que
+//  ese intento queda anotado --, y abrir la pantalla que muestra este mismo
+//  registro. Lo ultimo no es un descuido: consultar una auditoria tambien es un
+//  acto, y una bitacora con un agujero exactamente del tamano de quien la lee
+//  no sirve para lo que existe.
+// ===========================================================================
+if (ActividadAdmin::esDelPanel($ruta)) {
+    registrarActividadAdmin($metodo, $ruta);
+}
+
 // --- Maestros > Clientes ---
 if ($metodo === 'GET' && $ruta === '/maestros/clientes') {
     Auth::requerirSesion();
@@ -11131,6 +11161,10 @@ if ($metodo === 'POST' && $ruta === '/admin/tenants/revertir-etapa') {
 
 if ($metodo === 'GET' && $ruta === '/admin/auditoria') {
     handleAdminAuditoriaGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/admin/actividad') {
+    handleAdminActividadGet();
 }
 
 if ($metodo === 'GET' && $ruta === '/admin/integraciones') {
@@ -13156,6 +13190,52 @@ function exigirSuperadmin(PDO $pdo): void
 }
 
 /**
+ * Deja anotada esta peticion a /admin/* en la bitacora del panel.
+ *
+ * EL INSERT VA EN UN SHUTDOWN Y NO AQUI, y no es un detalle: aqui todavia no se
+ * sabe COMO va a terminar la peticion. El codigo HTTP -- que es lo que
+ * distingue "entro" de "lo rebotaron con un 403" -- solo existe cuando el
+ * handler ya respondio, y todos terminan en exit dentro de vista() o
+ * redirigir(). Un shutdown corre igual despues de cualquiera de esos exit, asi
+ * que es el unico lugar desde el que se puede anotar el final de verdad.
+ *
+ * EL USUARIO SE LEE TAMBIEN AL FINAL, por la misma razon y con un caso concreto:
+ * en POST /admin/login todavia no hay sesion cuando esta funcion corre. Leerlo
+ * en el shutdown hace que un ingreso exitoso quede a nombre de quien entro, y
+ * uno fallido quede sin usuario -- que es exactamente lo que paso.
+ *
+ * NINGUN ERROR DE AQUI PUEDE VOLTEAR EL PANEL. Se atrapa Throwable, no solo
+ * PDOException: si esta tabla no existe todavia, o la base se cayo justo, lo
+ * correcto es que la pantalla se haya servido igual y que el problema quede en
+ * el error_log. Que no se pueda registrar es malo; que no se pueda ENTRAR por
+ * eso seria peor. Como contrapartida, un fallo silencioso es un agujero en la
+ * auditoria: el mensaje lleva la ruta para que se pueda saber cual falto.
+ */
+function registrarActividadAdmin(string $metodo, string $ruta): void
+{
+    $inicio       = (float) ($_SERVER['REQUEST_TIME_FLOAT'] ?? microtime(true));
+    $queryString  = (string) ($_SERVER['QUERY_STRING'] ?? '');
+    $ip           = ActividadAdmin::ip($_SERVER);
+
+    register_shutdown_function(static function () use ($metodo, $ruta, $queryString, $ip, $inicio): void {
+        try {
+            ActividadAdmin::registrar(
+                Db::conexion(),
+                Auth::autenticado() ? Auth::usuarioId() : null,
+                $metodo,
+                $ruta,
+                $queryString,
+                (int) http_response_code(),
+                (int) round((microtime(true) - $inicio) * 1000),
+                $ip
+            );
+        } catch (Throwable $e) {
+            error_log(sprintf('actividad admin: no se pudo registrar %s %s -- %s', $metodo, $ruta, $e->getMessage()));
+        }
+    });
+}
+
+/**
  * Registra una fila en el changelog admin_auditoria (append-only: un solo
  * INSERT, ninguna fila se actualiza despues). Reutilizable desde cualquier
  * accion administrativa futura, no solo suspender/reactivar cuenta.
@@ -14165,6 +14245,149 @@ function handleAdminIntegracionProbarPost(): void
     // alguien diagnosticando aprieta el boton diez veces seguidas. Diez filas
     // que dicen "se probo Brevo" empujan hacia abajo las que si importan.
     redirigir('/admin/integraciones');
+}
+
+
+// ===========================================================================
+//  Handler: GET /admin/actividad (SOLO SUPERADMIN) -- la bitacora del panel.
+//
+//  NO SUSTITUYE A /admin/auditoria NI LA REPITE. Son dos preguntas distintas
+//  sobre la misma persona:
+//
+//    /admin/auditoria   QUE CAMBIO. Una fila por accion administrativa, con el
+//                       antes y el despues. Seis filas desde julio.
+//    /admin/actividad   QUE SE HIZO. Una fila por peticion a /admin/*, lecturas
+//                       incluidas. Decenas por dia.
+//
+//  Las lecturas son la mitad que faltaba, y en este panel no son inofensivas:
+//  abrir la ficha de una cuenta es ver los datos de un contribuyente ajeno.
+//
+//  SOLO LECTURA Y SIN BOTON DE BORRAR, hoy ni despues. Una auditoria que su
+//  auditado puede podar desde la pantalla no prueba nada. Si algun dia hay que
+//  archivarla por tamano, que sea una migracion con su motivo escrito.
+//
+//  LA PAGINACION ES OBLIGATORIA por la misma razon que en /admin/auditoria,
+//  pero mas: esta tabla crece con cada peticion, no con cada cambio.
+// ===========================================================================
+
+/**
+ * WHERE de la bitacora a partir de los cinco filtros de la pantalla.
+ *
+ * Cada valor se valida ANTES de llegar a la consulta, con el mismo criterio que
+ * filtroAuditoriaAdmin(): efecto contra la lista cerrada del ENUM, usuario y
+ * fechas por forma, y la ruta como LIKE ligado -- nunca concatenado.
+ *
+ * EL RANGO ES INCLUSIVO EN LOS DOS EXTREMOS, igual que alla: created_at es un
+ * datetime, asi que "hasta el 26-08" comparado con '2026-08-26' dejaria fuera
+ * el dia entero.
+ *
+ * @return array{0:string, 1:array<string,string>}
+ */
+function filtroActividadAdmin(string $efecto, string $usuarioId, string $ruta, string $desde, string $hasta): array
+{
+    $condiciones = [];
+    $parametros  = [];
+
+    if (in_array($efecto, ['lectura', 'accion'], true)) {
+        $condiciones[] = 'a.efecto = :efecto';
+        $parametros[':efecto'] = $efecto;
+    }
+    if ($usuarioId !== '' && ctype_digit($usuarioId)) {
+        $condiciones[] = 'a.usuario_id = :usuario_id';
+        $parametros[':usuario_id'] = $usuarioId;
+    }
+    if ($ruta !== '') {
+        // LIKE con el texto LIGADO: lo que llega por la URL es un valor, nunca
+        // un pedazo de SQL. Los comodines de LIKE que traiga el texto (% y _)
+        // se escapan para que buscar "100%" no traiga la tabla entera.
+        $condiciones[] = "a.ruta LIKE :ruta ESCAPE '!'";
+        $parametros[':ruta'] = '%' . str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $ruta) . '%';
+    }
+    if ($desde !== '' && fechaValida($desde)) {
+        $condiciones[] = 'a.created_at >= :desde';
+        $parametros[':desde'] = $desde . ' 00:00:00';
+    }
+    if ($hasta !== '' && fechaValida($hasta)) {
+        $condiciones[] = 'a.created_at < DATE_ADD(:hasta, INTERVAL 1 DAY)';
+        $parametros[':hasta'] = $hasta;
+    }
+
+    return [$condiciones === [] ? '' : ' WHERE ' . implode(' AND ', $condiciones), $parametros];
+}
+
+function handleAdminActividadGet(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $efecto    = trim((string) ($_GET['efecto'] ?? ''));
+    $usuarioId = trim((string) ($_GET['usuario'] ?? ''));
+    $rutaFiltro = trim((string) ($_GET['ruta'] ?? ''));
+    $desde     = trim((string) ($_GET['desde'] ?? ''));
+    $hasta     = trim((string) ($_GET['hasta'] ?? ''));
+
+    [$where, $parametros] = filtroActividadAdmin($efecto, $usuarioId, $rutaFiltro, $desde, $hasta);
+
+    $porPagina = 50;
+    $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
+    $offset    = ($pagina - 1) * $porPagina;
+
+    $stmtTotal = $pdo->prepare('SELECT COUNT(*) FROM admin_actividad a' . $where);
+    $stmtTotal->execute($parametros);
+    $total = (int) $stmtTotal->fetchColumn();
+
+    $stmt = $pdo->prepare(
+        'SELECT a.id, a.usuario_id, u.email AS usuario_email, a.metodo, a.ruta, a.parametros, '
+        . '       a.efecto, a.http, a.ms, a.ip, a.created_at '
+        . 'FROM admin_actividad a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id '
+        . $where
+        . ' ORDER BY a.created_at DESC, a.id DESC LIMIT :limit OFFSET :offset'
+    );
+    foreach ($parametros as $clave => $valor) {
+        $stmt->bindValue($clave, $valor);
+    }
+    // PARAM_INT explicito: con prepares emuladas un LIMIT ligado como string
+    // llega entrecomillado y MySQL lo rechaza por sintaxis (mismo motivo que en
+    // handleAdminAuditoriaGet).
+    $stmt->bindValue(':limit', $porPagina, PDO::PARAM_INT);
+    $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+    $stmt->execute();
+    $filas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // EL RESUMEN SE CUENTA SIN LOS FILTROS, a proposito: son las cifras de la
+    // bitacora entera, no del recorte que se este mirando. Un resumen que
+    // cambia con el filtro invita a leer "3 rechazadas" como "hay 3 rechazadas
+    // en total" cuando eran las de una busqueda.
+    $resumen = $pdo->query(
+        'SELECT COUNT(*) AS total, '
+        . '       SUM(created_at >= CURDATE()) AS hoy, '
+        . "       SUM(efecto = 'accion') AS acciones, "
+        . '       SUM(http >= 400) AS rechazadas, '
+        . '       MIN(created_at) AS desde_cuando '
+        . 'FROM admin_actividad'
+    )->fetch(PDO::FETCH_ASSOC);
+
+    // Las opciones del <select> salen de la propia tabla: si manana entra un
+    // superadmin nuevo, el filtro lo ofrece sin que nadie toque una lista.
+    $usuarios = $pdo->query(
+        'SELECT DISTINCT a.usuario_id, u.email FROM admin_actividad a '
+        . 'LEFT JOIN usuario u ON u.id = a.usuario_id ORDER BY u.email'
+    )->fetchAll(PDO::FETCH_ASSOC);
+
+    vista('admin-actividad', [
+        'filas'        => $filas,
+        'usuarios'     => $usuarios,
+        'efecto'       => $efecto,
+        'usuarioId'    => $usuarioId,
+        'rutaFiltro'   => $rutaFiltro,
+        'desde'        => $desde,
+        'hasta'        => $hasta,
+        'total'        => $total,
+        'resumen'      => $resumen === false ? [] : $resumen,
+        'pagina'       => $pagina,
+        'totalPaginas' => max(1, (int) ceil($total / $porPagina)),
+    ]);
 }
 
 // ===========================================================================

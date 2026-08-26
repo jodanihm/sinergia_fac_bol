@@ -27,6 +27,7 @@ $adminNavGrupos = [
         'cuentas'       => ['/admin/tenants',      'Cuentas'],
         'tareas'        => ['/admin/tareas',       'Tareas programadas'],
         'auditoria'     => ['/admin/auditoria',    'Auditoria'],
+        'actividad'     => ['/admin/actividad',    'Actividad del panel'],
         'integraciones' => ['/admin/integraciones', 'Integraciones'],
     ],
     'Sistema' => [
