@@ -42,6 +42,10 @@ final class TipoCuenta
                 'Cliente que paga por el servicio.'],
             'trial'       => ['Trial', 'tag warn',
                 'Cliente evaluando el producto. El sistema NO la caduca sola: no se guarda fecha de termino.'],
+            'cortesia'    => ['Cortesia', 'tag',
+                'No paga y no es de la casa: un socio, un contador aliado, una cuenta liberada por acuerdo. '
+                . 'Contesta POR QUE esta cuenta no factura, que es lo que "interna" o "de pago" esconderian. '
+                . 'No cuenta como cuenta comercial y no se le exige plan: puede tener uno liberado o ninguno.'],
             'demo'        => ['Demostracion', 'tag',
                 'La cuenta publica de demostracion, de solo lectura. Se reconoce ademas por la marca de su usuario.'],
             'interna'     => ['Interna', 'tag',

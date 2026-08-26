@@ -102,11 +102,23 @@ final class PlanCuentaTest extends TestCase
      */
     public function testElEnumDeLaMigracionDiceLoMismoQueEstaClase(): void
     {
-        $sql = (string) file_get_contents(__DIR__ . '/../integration/plantiflex/migrations/048_cuenta_plan.sql');
+        // La ULTIMA migracion que define la columna, no un archivo escrito a
+        // mano: el dia que se amplie el ENUM (como le paso a cuenta.tipo en la
+        // 049), este test tiene que comparar contra la definicion nueva y no
+        // seguir pasando en verde contra la vieja.
+        $ultima   = null;
+        $archivos = glob(__DIR__ . '/../integration/plantiflex/migrations/*.sql') ?: [];
+        sort($archivos);
 
-        self::assertSame(1, preg_match("/ADD COLUMN plan ENUM\(([^)]*)\)/", $sql, $m), 'no se reconocio el ENUM en la 048');
+        foreach ($archivos as $archivo) {
+            if (preg_match("/(?:ADD|MODIFY) COLUMN plan ENUM\(([^)]*)\)/", (string) file_get_contents($archivo), $m) === 1) {
+                $ultima = $m[1];
+            }
+        }
 
-        preg_match_all("/'([a-z_]+)'/", $m[1], $valores);
+        self::assertNotNull($ultima, 'ninguna migracion define el ENUM de cuenta.plan');
+
+        preg_match_all("/'([a-z_]+)'/", $ultima, $valores);
 
         // Como conjuntos: el orden del ENUM es el de guardado y el de esta clase
         // el de presentacion (ver TipoCuentaTest, mismo criterio).
@@ -115,7 +127,7 @@ final class PlanCuentaTest extends TestCase
         sort($delSql);
         sort($delPhp);
 
-        self::assertSame($delPhp, $delSql, 'el ENUM de la migracion 048 y PlanCuenta ya no declaran los mismos valores');
+        self::assertSame($delPhp, $delSql, 'la ultima migracion que define cuenta.plan y PlanCuenta ya no declaran los mismos valores');
     }
 
     /**

@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.45',
+        'titulo'  => 'Nuevo tipo de cuenta: Cortesia',
+        'tag'     => 'datos',
+        'items'   => [
+            'Se suma un sexto tipo de cuenta, "Cortesia": la que no paga y tampoco es de la casa. Un socio, un contador aliado, una cuenta liberada por un acuerdo.',
+            'Antes esas cuentas no tenian donde caer. Marcarlas "Interna" es falso -- no son de la casa -- y marcarlas "De pago" es peor, porque dice que se cobra algo que no se cobra.',
+            'Sirve sobre todo para contestar POR QUE una cuenta no factura, que es justo lo que los otros dos tipos escondian cuando alguien pregunta por que el ingreso no cuadra con el numero de clientes.',
+            'No cuenta como cuenta comercial en el resumen del listado, y no se le exige plan: puede tener uno liberado o ninguno, y las dos cosas son ciertas.',
+            'Requiere aplicar la migracion 049 en la base de datos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.44',
         'titulo'  => 'Correccion: en la ventana de Acciones no se sabia cual selector era cual',
         'tag'     => 'frontend',

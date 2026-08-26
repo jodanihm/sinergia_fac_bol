@@ -617,6 +617,18 @@ const MIGRACIONES = [
              'columna' => 'plan', 'valores' => ['sin_definir', 'ninguno', 'basico', 'pyme', 'pro'], 'esperado' => 5],
         ],
     ],
+    [
+        // La huella de la 047 sigue pidiendo SUS cinco valores y los cinco
+        // siguen ahi, asi que aquella no se vuelve PARCIAL por esto. Esta pide
+        // los seis: es la unica forma de distinguir una base con la 049 de una
+        // que se quedo en la 047.
+        'id' => '049', 'archivo' => '049_cuenta_tipo_cortesia.sql', 'nota' => 'ALTER (amplia el ENUM)',
+        'huellas' => [
+            ['tipo' => 'valores_enum', 'desc' => "cuenta.tipo incluye 'cortesia'", 'tabla' => 'cuenta',
+             'columna' => 'tipo',
+             'valores' => ['sin_definir', 'interna', 'demo', 'trial', 'pago', 'cortesia'], 'esperado' => 6],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

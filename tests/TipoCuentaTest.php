@@ -26,9 +26,12 @@ require_once __DIR__ . '/../panel/src/TipoCuenta.php';
  */
 final class TipoCuentaTest extends TestCase
 {
-    public function testLosCincoValoresEstanDeclarados(): void
+    public function testLosValoresEstanDeclaradosYEnOrdenDePantalla(): void
     {
-        self::assertSame(['sin_definir', 'pago', 'trial', 'demo', 'interna'], TipoCuenta::claves());
+        self::assertSame(
+            ['sin_definir', 'pago', 'trial', 'cortesia', 'demo', 'interna'],
+            TipoCuenta::claves()
+        );
     }
 
     public function testSoloPasaLoQueEstaDeclarado(): void
@@ -65,9 +68,10 @@ final class TipoCuentaTest extends TestCase
     {
         self::assertSame(['pago', 'trial'], TipoCuenta::comerciales());
 
-        // Las tres que NO son clientes, una por una: incluir cualquiera de
-        // ellas inflaria la unica cifra comercial que da el panel.
-        foreach (['sin_definir', 'demo', 'interna'] as $noCliente) {
+        // Las que NO son clientes, una por una: incluir cualquiera inflaria la
+        // unica cifra comercial que da el panel. 'cortesia' esta entre ellas a
+        // proposito -- no paga hoy y nada dice que vaya a pagar manana.
+        foreach (['sin_definir', 'cortesia', 'demo', 'interna'] as $noCliente) {
             self::assertNotContains($noCliente, TipoCuenta::comerciales());
         }
     }
@@ -80,15 +84,24 @@ final class TipoCuentaTest extends TestCase
      */
     public function testElEnumDeLaMigracionDiceLoMismoQueEstaClase(): void
     {
-        $sql = (string) file_get_contents(__DIR__ . '/../integration/plantiflex/migrations/047_cuenta_tipo.sql');
+        // NO SE LEE UN ARCHIVO FIJO: el ENUM lo define la 047 y lo amplia la
+        // 049, y manana puede ampliarlo otra. Vale la ULTIMA migracion que lo
+        // toco, que es lo que tiene la base. Con el nombre escrito a mano, este
+        // test seguiria comparando contra una definicion vieja y pasaria en
+        // verde mientras la pantalla ofrece un valor que MySQL rechaza.
+        $ultima = null;
+        $archivos = glob(__DIR__ . '/../integration/plantiflex/migrations/*.sql') ?: [];
+        sort($archivos);
 
-        self::assertSame(
-            1,
-            preg_match("/ADD COLUMN tipo ENUM\(([^)]*)\)/", $sql, $m),
-            'no se reconocio el ENUM en la migracion 047'
-        );
+        foreach ($archivos as $archivo) {
+            if (preg_match("/(?:ADD|MODIFY) COLUMN tipo ENUM\(([^)]*)\)/", (string) file_get_contents($archivo), $m) === 1) {
+                $ultima = $m[1];
+            }
+        }
 
-        preg_match_all("/'([a-z_]+)'/", $m[1], $valores);
+        self::assertNotNull($ultima, 'ninguna migracion define el ENUM de cuenta.tipo');
+
+        preg_match_all("/'([a-z_]+)'/", $ultima, $valores);
 
         // SE COMPARAN COMO CONJUNTOS, no como listas: los dos ordenes son
         // distintos a proposito. El del ENUM es el de guardado -- 'sin_definir'
@@ -103,7 +116,7 @@ final class TipoCuentaTest extends TestCase
         self::assertSame(
             $delPhp,
             $delSql,
-            'el ENUM de la migracion 047 y TipoCuenta ya no declaran los mismos valores'
+            'la ultima migracion que define cuenta.tipo y TipoCuenta ya no declaran los mismos valores'
         );
     }
 }
