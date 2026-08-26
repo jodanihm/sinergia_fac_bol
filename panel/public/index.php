@@ -108,6 +108,7 @@ require __DIR__ . '/../src/Integraciones.php';
 require __DIR__ . '/../src/Migraciones.php';
 require __DIR__ . '/../src/ActividadAdmin.php';
 require __DIR__ . '/../src/TipoCuenta.php';
+require __DIR__ . '/../src/PlanCuenta.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -11156,8 +11157,8 @@ if ($metodo === 'POST' && $ruta === '/admin/tenants/reactivar') {
     handleAdminTenantsReactivarPost();
 }
 
-if ($metodo === 'POST' && $ruta === '/admin/tenants/tipo') {
-    handleAdminTenantTipoPost();
+if ($metodo === 'POST' && $ruta === '/admin/tenants/clasificacion') {
+    handleAdminTenantClasificacionPost();
 }
 
 if ($metodo === 'POST' && $ruta === '/admin/tenants/revertir-etapa') {
@@ -13507,7 +13508,7 @@ function resumenEmisorCertificacion(PDO $pdo, int $cuentaId, string $rutEmisor):
  *
  * @return array{0:string, 1:array<string,string>} SQL del WHERE (vacio si no hay filtros) y sus parametros.
  */
-function filtroCuentasAdmin(string $busqueda, string $estado, string $tipo = ''): array
+function filtroCuentasAdmin(string $busqueda, string $estado, string $tipo = '', string $plan = ''): array
 {
     $condiciones = [];
     $parametros  = [];
@@ -13539,6 +13540,12 @@ function filtroCuentasAdmin(string $busqueda, string $estado, string $tipo = '')
         $parametros[':tipo'] = $tipo;
     }
 
+    // El plan es el segundo eje y filtra igual: la whitelist sale de PlanCuenta.
+    if (PlanCuenta::valido($plan)) {
+        $condiciones[] = 'c.plan = :plan';
+        $parametros[':plan'] = $plan;
+    }
+
     return [$condiciones === [] ? '' : ' WHERE ' . implode(' AND ', $condiciones), $parametros];
 }
 
@@ -13550,11 +13557,12 @@ function handleAdminTenantsGet(): void
     $busqueda = trim((string) ($_GET['q'] ?? ''));
     $estado   = (string) ($_GET['estado'] ?? '');
     $tipo     = (string) ($_GET['tipo'] ?? '');
+    $plan     = (string) ($_GET['plan'] ?? '');
 
-    [$where, $parametros] = filtroCuentasAdmin($busqueda, $estado, $tipo);
+    [$where, $parametros] = filtroCuentasAdmin($busqueda, $estado, $tipo, $plan);
 
     $stmtCuentas = $pdo->prepare(
-        'SELECT c.id, c.email, c.nombre, c.estado, c.tipo, c.created_at FROM cuenta c'
+        'SELECT c.id, c.email, c.nombre, c.estado, c.tipo, c.plan, c.created_at FROM cuenta c'
         . $where . ' ORDER BY c.created_at DESC'
     );
     $stmtCuentas->execute($parametros);
@@ -13569,6 +13577,11 @@ function handleAdminTenantsGet(): void
     $porTipo = [];
     foreach ($pdo->query('SELECT tipo, COUNT(*) AS n FROM cuenta GROUP BY tipo') as $filaTipo) {
         $porTipo[(string) $filaTipo['tipo']] = (int) $filaTipo['n'];
+    }
+
+    $porPlan = [];
+    foreach ($pdo->query('SELECT plan, COUNT(*) AS n FROM cuenta GROUP BY plan') as $filaPlan) {
+        $porPlan[(string) $filaPlan['plan']] = (int) $filaPlan['n'];
     }
 
     $resumen = [];
@@ -13610,7 +13623,9 @@ function handleAdminTenantsGet(): void
         'busqueda'     => $busqueda,
         'estado'       => $estado,
         'tipo'         => $tipo,
+        'plan'         => $plan,
         'porTipo'      => $porTipo,
+        'porPlan'      => $porPlan,
         'totalCuentas' => $totalCuentas,
     ]);
 }
@@ -13640,7 +13655,7 @@ function handleAdminTenantFichaGet(int $cuentaId): void
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
-    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, tipo, created_at FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, tipo, plan, created_at FROM cuenta WHERE id = :id LIMIT 1');
     $stmt->execute([':id' => $cuentaId]);
     $cuenta = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -14801,7 +14816,7 @@ function handleAdminPendienteEstadoPost(int $id): void
 function handleAdminTenantNuevaGet(): void
 {
     exigirSuperadmin(Db::conexion());
-    vista('admin-tenant-nueva', ['errores' => [], 'nombreCuenta' => '', 'email' => '', 'tipo' => '']);
+    vista('admin-tenant-nueva', ['errores' => [], 'nombreCuenta' => '', 'email' => '', 'tipo' => '', 'plan' => '']);
 }
 
 function handleAdminTenantNuevaPost(): void
@@ -14812,6 +14827,7 @@ function handleAdminTenantNuevaPost(): void
     $nombre = trim((string) ($_POST['nombre'] ?? ''));
     $email  = trim((string) ($_POST['email'] ?? ''));
     $tipo   = (string) ($_POST['tipo'] ?? '');
+    $plan   = (string) ($_POST['plan'] ?? '');
 
     $errores = [];
     if ($nombre === '') {
@@ -14826,6 +14842,11 @@ function handleAdminTenantNuevaPost(): void
     // campo vino a resolver. Son dos clics.
     if (! TipoCuenta::valido($tipo) || $tipo === 'sin_definir') {
         $errores[] = 'Elige que clase de cuenta es.';
+    }
+    // Mismo criterio para el plan, y 'ninguno' SI es una respuesta valida aqui:
+    // es lo que corresponde a una cuenta interna o a la de demostracion.
+    if (! PlanCuenta::valido($plan) || $plan === 'sin_definir') {
+        $errores[] = 'Elige que plan tiene (o "Sin plan" si no contrata ninguno).';
     }
 
     // Se comprueba en las DOS tablas, igual que handleRegistroPost(): cuenta y
@@ -14847,7 +14868,9 @@ function handleAdminTenantNuevaPost(): void
     }
 
     if ($errores !== []) {
-        vista('admin-tenant-nueva', ['errores' => $errores, 'nombreCuenta' => $nombre, 'email' => $email, 'tipo' => $tipo]);
+        vista('admin-tenant-nueva', [
+            'errores' => $errores, 'nombreCuenta' => $nombre, 'email' => $email, 'tipo' => $tipo, 'plan' => $plan,
+        ]);
     }
 
     // 8 bytes de random_bytes() = 64 bits, en hexadecimal y en grupos de cuatro
@@ -14860,9 +14883,9 @@ function handleAdminTenantNuevaPost(): void
         $pdo->beginTransaction();
 
         $pdo->prepare(
-            'INSERT INTO cuenta (email, nombre, estado, tipo, created_at) '
-            . "VALUES (:email, :nombre, 'activa', :tipo, NOW())"
-        )->execute([':email' => $email, ':nombre' => $nombre, ':tipo' => $tipo]);
+            'INSERT INTO cuenta (email, nombre, estado, tipo, plan, created_at) '
+            . "VALUES (:email, :nombre, 'activa', :tipo, :plan, NOW())"
+        )->execute([':email' => $email, ':nombre' => $nombre, ':tipo' => $tipo, ':plan' => $plan]);
         $cuentaId = (int) $pdo->lastInsertId();
 
         $pdo->prepare(
@@ -15170,37 +15193,46 @@ function handleAdminSalirVistaPost(): void
 //  aparte) -- hoy solo se deja el estado y su auditoria.
 // ===========================================================================
 /**
- * Handler: POST /admin/tenants/tipo -- cambiar que clase de cuenta es.
+ * Handler: POST /admin/tenants/clasificacion -- que clase de cuenta es y que
+ * plan tiene.
  *
- * ES LA UNICA MUTACION DE ESTE CAMPO, y por eso la validacion vive aqui y no
- * repartida: lo que llega por POST se compara contra TipoCuenta::valido() antes
- * de tocar la base. El ENUM de MySQL es la segunda barrera, no la primera -- un
- * valor invalido que llegara hasta alla seria un 500 en vez de un rebote
- * silencioso.
+ * LOS DOS EJES SE GUARDAN JUNTOS, en un solo submit y con una sola fila de
+ * auditoria. Son dos columnas porque responden preguntas distintas -- que
+ * relacion hay y que se contrato --, pero se deciden en el mismo momento y
+ * mirando lo mismo: partirlo en dos botones obligaria a apretar dos veces y
+ * dejaria dos filas de auditoria para un unico acto.
  *
- * QUEDA EN LA AUDITORIA COMO CUALQUIER OTRA ACCION ADMINISTRATIVA, con el antes
- * y el despues completos. No es burocracia: este campo decide si una cuenta
- * cuenta como cliente, o sea que un cambio aqui mueve las cifras comerciales, y
- * seis semanas despues nadie se acuerda de quien la paso de trial a interna ni
- * por que.
+ * (Esta ruta se llamaba /admin/tenants/tipo cuando el plan todavia no existia.
+ * Las filas de auditoria de entonces conservan su accion 'cuenta.tipo': una
+ * auditoria no se reescribe para que combine con el codigo de hoy.)
+ *
+ * LO QUE LLEGA POR POST SE COMPARA CONTRA TipoCuenta Y PlanCuenta antes de tocar
+ * la base. Los ENUM de MySQL son la segunda barrera, no la primera: un valor
+ * invalido que llegara hasta alla seria un 500 en vez de un rebote con mensaje.
+ *
+ * NO SE EXIGE COHERENCIA ENTRE LOS DOS y es deliberado: una cuenta interna puede
+ * llevar un plan asignado para probar algo, y prohibirlo obligaria a mentir en
+ * el tipo para poder hacerlo. Lo que si hace la pantalla es AVISAR cuando una
+ * cuenta comercial no declara plan (ver PlanCuenta::incoherente).
  *
  * MISMO PATRON PRG que suspender y reactivar: se escribe, se avisa por flash y
  * se redirige al listado, para que un refresh no repita la escritura.
  */
-function handleAdminTenantTipoPost(): void
+function handleAdminTenantClasificacionPost(): void
 {
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
     $cuentaId = (int) ($_POST['cuenta_id'] ?? 0);
     $tipo     = (string) ($_POST['tipo'] ?? '');
+    $plan     = (string) ($_POST['plan'] ?? '');
 
-    if ($cuentaId <= 0 || ! TipoCuenta::valido($tipo)) {
-        flashSet('error', 'No se pudo cambiar el tipo: falta la cuenta o el tipo no es uno de los declarados.');
+    if ($cuentaId <= 0 || ! TipoCuenta::valido($tipo) || ! PlanCuenta::valido($plan)) {
+        flashSet('error', 'No se pudo guardar: falta la cuenta, o el tipo o el plan no son de los declarados.');
         redirigir('/admin/tenants');
     }
 
-    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, tipo, created_at FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, tipo, plan, created_at FROM cuenta WHERE id = :id LIMIT 1');
     $stmt->execute([':id' => $cuentaId]);
     $anterior = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -15209,28 +15241,34 @@ function handleAdminTenantTipoPost(): void
         redirigir('/admin/tenants');
     }
 
-    // Sin cambio, sin fila de auditoria. Un "cambio" de trial a trial no es un
+    // Sin cambio, sin fila de auditoria. Guardar lo mismo que ya estaba no es un
     // hecho: anotarlo llenaria la auditoria de ruido y empujaria hacia abajo lo
     // que si importa (mismo criterio por el que la sonda de integraciones no se
     // registra).
-    if ((string) $anterior['tipo'] === $tipo) {
+    if ((string) $anterior['tipo'] === $tipo && (string) $anterior['plan'] === $plan) {
         redirigir('/admin/tenants');
     }
 
-    $pdo->prepare('UPDATE cuenta SET tipo = :tipo WHERE id = :id')
-        ->execute([':tipo' => $tipo, ':id' => $cuentaId]);
+    $pdo->prepare('UPDATE cuenta SET tipo = :tipo, plan = :plan WHERE id = :id')
+        ->execute([':tipo' => $tipo, ':plan' => $plan, ':id' => $cuentaId]);
 
     $nuevo = $anterior;
     $nuevo['tipo'] = $tipo;
+    $nuevo['plan'] = $plan;
 
-    registrarAuditoria($pdo, Auth::usuarioId(), 'cuenta.tipo', 'cuenta', $cuentaId, $anterior, $nuevo);
+    registrarAuditoria($pdo, Auth::usuarioId(), 'cuenta.clasificacion', 'cuenta', $cuentaId, $anterior, $nuevo);
 
-    flashSet('ok', sprintf(
-        '%s pasa de %s a %s.',
-        (string) $anterior['nombre'],
-        TipoCuenta::etiqueta((string) $anterior['tipo']),
-        TipoCuenta::etiqueta($tipo)
-    ));
+    // El mensaje nombra SOLO lo que cambio. "pasa de De pago a De pago" sobre el
+    // eje que no se toco se lee como si se hubiera cambiado algo mas.
+    $cambios = [];
+    if ((string) $anterior['tipo'] !== $tipo) {
+        $cambios[] = sprintf('de %s a %s', TipoCuenta::etiqueta((string) $anterior['tipo']), TipoCuenta::etiqueta($tipo));
+    }
+    if ((string) $anterior['plan'] !== $plan) {
+        $cambios[] = sprintf('del plan %s al plan %s', PlanCuenta::etiqueta((string) $anterior['plan']), PlanCuenta::etiqueta($plan));
+    }
+
+    flashSet('ok', sprintf('%s pasa %s.', (string) $anterior['nombre'], implode(' y ', $cambios)));
 
     redirigir('/admin/tenants');
 }

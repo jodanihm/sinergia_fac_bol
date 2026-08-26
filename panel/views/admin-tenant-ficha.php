@@ -41,6 +41,14 @@ $o = static fn ($v): string => ($v === null || $v === '') ? '&mdash;' : htmlspec
           title="<?= htmlspecialchars(TipoCuenta::ayuda((string) $cuenta['tipo'])); ?>">
         <?= htmlspecialchars(strtoupper(TipoCuenta::etiqueta((string) $cuenta['tipo']))); ?>
     </span>
+    <?php /* El plan solo cuando dice algo: en una cuenta interna, "Sin plan" es
+             ruido -- ya lo dice el tipo de al lado. */ ?>
+    <?php if ((string) $cuenta['plan'] !== 'ninguno'): ?>
+    <span class="<?= htmlspecialchars(PlanCuenta::clase((string) $cuenta['plan'])); ?>"
+          title="<?= htmlspecialchars(PlanCuenta::ayuda((string) $cuenta['plan'])); ?>">
+        <?= htmlspecialchars(strtoupper(PlanCuenta::etiqueta((string) $cuenta['plan']))); ?>
+    </span>
+    <?php endif; ?>
 </h2>
 
 <div class="cards">

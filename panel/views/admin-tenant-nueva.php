@@ -67,6 +67,26 @@ require __DIR__ . '/partials/admin/header.php';
             </small>
         </label>
 
+        <label class="field" for="cuenta-plan">
+            <span>Que plan tiene</span>
+            <?php /* 'Sin plan' SI se ofrece aqui -- es la respuesta correcta para una
+                     cuenta interna o de demostracion --, pero 'Sin definir' no: ese valor
+                     existe para las cuentas que ya estaban cuando el sistema no lo
+                     preguntaba, no para las que se crean ahora. */ ?>
+            <select name="plan" id="cuenta-plan" required>
+                <option value="">Elegir...</option>
+                <?php foreach (PlanCuenta::catalogo() as $clavePlan => [$etiquetaPlan, , $ayudaPlan]): ?>
+                <?php if ($clavePlan === 'sin_definir') { continue; } ?>
+                <option value="<?= htmlspecialchars($clavePlan); ?>" title="<?= htmlspecialchars($ayudaPlan); ?>"
+                    <?= $plan === $clavePlan ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaPlan); ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small class="muted">
+                Referencia de la pagina de venta. El sistema no cobra ni controla el tope de
+                facturas del plan.
+            </small>
+        </label>
+
         <div class="actions" style="margin-top:1rem;">
             <button type="submit" class="btn">Crear cuenta</button>
             <a class="btn ghost" href="/admin/tenants">Cancelar</a>

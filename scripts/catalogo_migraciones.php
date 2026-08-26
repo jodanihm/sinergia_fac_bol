@@ -609,6 +609,14 @@ const MIGRACIONES = [
              'columna' => 'tipo', 'valores' => ['sin_definir', 'interna', 'demo', 'trial', 'pago'], 'esperado' => 5],
         ],
     ],
+    [
+        'id' => '048', 'archivo' => '048_cuenta_plan.sql', 'nota' => 'ALTER + backfill de internas y demo',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'cuenta.plan', 'tabla' => 'cuenta', 'columnas' => ['plan'], 'esperado' => 1],
+            ['tipo' => 'valores_enum', 'desc' => 'los 5 valores de cuenta.plan', 'tabla' => 'cuenta',
+             'columna' => 'plan', 'valores' => ['sin_definir', 'ninguno', 'basico', 'pyme', 'pro'], 'esperado' => 5],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

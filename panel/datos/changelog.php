@@ -33,6 +33,21 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.43',
+        'titulo'  => 'Las cuentas ahora tambien dicen que plan tienen: Basico, Pyme o Pro',
+        'tag'     => 'datos',
+        'items'   => [
+            'Al tipo de cuenta se le suma el plan contratado, con los tres de la pagina de venta: Basico, Pyme y Pro. Mas dos respuestas que no son planes: "Sin plan", para una cuenta interna o la de demostracion, y "Sin definir", para las que todavia nadie clasifico.',
+            'Son dos datos separados a proposito. El tipo dice que relacion hay -- paga, esta evaluando, es de la casa -- y el plan dice que contrato. Una cuenta en periodo de prueba tambien esta evaluando un plan concreto, que es el dato que dice cuanto va a pagar si se queda; con un solo campo habria que elegir cual de las dos cosas guardar.',
+            'En el listado, el plan aparece debajo del tipo, y si una cuenta cobra o esta evaluando pero no declara plan, se marca en rojo. Es un aviso, no una regla: no impide guardarla asi.',
+            'Los dos se cambian juntos en la ventana de Acciones, con un solo boton, y quedan en Auditoria como un solo cambio con su antes y su despues.',
+            'Arriba del listado se puede filtrar por plan y ver cuantas cuentas hay en cada uno.',
+            'El precio y el tope de facturas de cada plan se muestran como referencia al pasar el mouse. El sistema NO cobra y NO controla esos topes: marcar una cuenta como Basico no la detiene en la factura 101. Una prueba automatica compara esos precios con los de la pagina de venta, para que el panel no informe un precio viejo.',
+            'Requiere aplicar la migracion 048 en la base de datos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.42',
         'titulo'  => 'Las acciones sobre una cuenta se agrupan en un boton "Acciones"',
         'tag'     => 'frontend',
