@@ -597,6 +597,18 @@ const MIGRACIONES = [
              'restricciones' => ['fk_actividad_usuario'], 'esperado' => 1],
         ],
     ],
+    [
+        'id' => '047', 'archivo' => '047_cuenta_tipo.sql', 'nota' => 'ALTER + backfill de la demo',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'cuenta.tipo', 'tabla' => 'cuenta', 'columnas' => ['tipo'], 'esperado' => 1],
+            // Los cinco valores del ENUM, no solo la columna: si manana se
+            // agrega uno (o se quita), esta huella lo nota y la 047 sale
+            // PARCIAL en vez de dar por buena una columna que ya no es la que
+            // describe su .sql.
+            ['tipo' => 'valores_enum', 'desc' => 'los 5 valores de cuenta.tipo', 'tabla' => 'cuenta',
+             'columna' => 'tipo', 'valores' => ['sin_definir', 'interna', 'demo', 'trial', 'pago'], 'esperado' => 5],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

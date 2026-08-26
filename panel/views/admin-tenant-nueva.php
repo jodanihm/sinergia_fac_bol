@@ -46,6 +46,27 @@ require __DIR__ . '/partials/admin/header.php';
                    value="<?= htmlspecialchars($email); ?>" autocomplete="off">
         </label>
 
+        <label class="field" for="cuenta-tipo">
+            <span>Que clase de cuenta es</span>
+            <?php /* SIN NINGUNO PRESELECCIONADO, a proposito. Un valor por defecto seria
+                     una respuesta que nadie dio, y a los dos dias se lee como un dato
+                     confirmado: es justo el problema que este campo vino a resolver.
+                     'Sin definir' tampoco se ofrece aqui -- existe para las cuentas que ya
+                     estaban cuando el sistema no lo preguntaba, no para las nuevas. */ ?>
+            <select name="tipo" id="cuenta-tipo" required>
+                <option value="">Elegir...</option>
+                <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , $ayudaTipo]): ?>
+                <?php if ($claveTipo === 'sin_definir') { continue; } ?>
+                <option value="<?= htmlspecialchars($claveTipo); ?>" title="<?= htmlspecialchars($ayudaTipo); ?>"
+                    <?= $tipo === $claveTipo ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaTipo); ?></option>
+                <?php endforeach; ?>
+            </select>
+            <small class="muted">
+                Separa lo comercial de lo interno. No cambia ningun permiso ni ningun limite:
+                es el dato con el que se puede contestar cuantos clientes hay de verdad.
+            </small>
+        </label>
+
         <div class="actions" style="margin-top:1rem;">
             <button type="submit" class="btn">Crear cuenta</button>
             <a class="btn ghost" href="/admin/tenants">Cancelar</a>

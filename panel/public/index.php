@@ -107,6 +107,7 @@ require __DIR__ . '/../src/Pendientes.php';
 require __DIR__ . '/../src/Integraciones.php';
 require __DIR__ . '/../src/Migraciones.php';
 require __DIR__ . '/../src/ActividadAdmin.php';
+require __DIR__ . '/../src/TipoCuenta.php';
 // Reutiliza el motor TAL CUAL (no se modifica): via el autoloader de Composer
 // del propio proyecto, que ya resuelve tanto Plantiflex\FacturacionCl\ (src/)
 // como Plantiflex\Integration\Facturacion\ (integration/plantiflex/) -- misma
@@ -11155,6 +11156,10 @@ if ($metodo === 'POST' && $ruta === '/admin/tenants/reactivar') {
     handleAdminTenantsReactivarPost();
 }
 
+if ($metodo === 'POST' && $ruta === '/admin/tenants/tipo') {
+    handleAdminTenantTipoPost();
+}
+
 if ($metodo === 'POST' && $ruta === '/admin/tenants/revertir-etapa') {
     handleAdminTenantsRevertirEtapaPost();
 }
@@ -13502,7 +13507,7 @@ function resumenEmisorCertificacion(PDO $pdo, int $cuentaId, string $rutEmisor):
  *
  * @return array{0:string, 1:array<string,string>} SQL del WHERE (vacio si no hay filtros) y sus parametros.
  */
-function filtroCuentasAdmin(string $busqueda, string $estado): array
+function filtroCuentasAdmin(string $busqueda, string $estado, string $tipo = ''): array
 {
     $condiciones = [];
     $parametros  = [];
@@ -13526,6 +13531,14 @@ function filtroCuentasAdmin(string $busqueda, string $estado): array
         $parametros[':estado'] = $estado;
     }
 
+    // Mismo criterio para el tipo, y la whitelist sale de TipoCuenta y no de
+    // una lista escrita aqui: el dia que se agregue un valor, este filtro lo
+    // acepta sin que nadie se acuerde de venir a tocarlo.
+    if (TipoCuenta::valido($tipo)) {
+        $condiciones[] = 'c.tipo = :tipo';
+        $parametros[':tipo'] = $tipo;
+    }
+
     return [$condiciones === [] ? '' : ' WHERE ' . implode(' AND ', $condiciones), $parametros];
 }
 
@@ -13536,17 +13549,27 @@ function handleAdminTenantsGet(): void
 
     $busqueda = trim((string) ($_GET['q'] ?? ''));
     $estado   = (string) ($_GET['estado'] ?? '');
+    $tipo     = (string) ($_GET['tipo'] ?? '');
 
-    [$where, $parametros] = filtroCuentasAdmin($busqueda, $estado);
+    [$where, $parametros] = filtroCuentasAdmin($busqueda, $estado, $tipo);
 
     $stmtCuentas = $pdo->prepare(
-        'SELECT c.id, c.email, c.nombre, c.estado, c.created_at FROM cuenta c'
+        'SELECT c.id, c.email, c.nombre, c.estado, c.tipo, c.created_at FROM cuenta c'
         . $where . ' ORDER BY c.created_at DESC'
     );
     $stmtCuentas->execute($parametros);
     $cuentas = $stmtCuentas->fetchAll(PDO::FETCH_ASSOC);
 
     $totalCuentas = (int) $pdo->query('SELECT COUNT(*) FROM cuenta')->fetchColumn();
+
+    // El conteo por tipo se hace SIN los filtros, a proposito: son las cifras
+    // de la cartera entera y no del recorte que se este mirando. Es la respuesta
+    // a "cuantas cuentas pagan", que hasta ahora no se podia contestar desde
+    // ninguna pantalla.
+    $porTipo = [];
+    foreach ($pdo->query('SELECT tipo, COUNT(*) AS n FROM cuenta GROUP BY tipo') as $filaTipo) {
+        $porTipo[(string) $filaTipo['tipo']] = (int) $filaTipo['n'];
+    }
 
     $resumen = [];
     foreach ($cuentas as $cuenta) {
@@ -13586,6 +13609,8 @@ function handleAdminTenantsGet(): void
         'flash'        => flashTomar(),
         'busqueda'     => $busqueda,
         'estado'       => $estado,
+        'tipo'         => $tipo,
+        'porTipo'      => $porTipo,
         'totalCuentas' => $totalCuentas,
     ]);
 }
@@ -13615,7 +13640,7 @@ function handleAdminTenantFichaGet(int $cuentaId): void
     $pdo = Db::conexion();
     exigirSuperadmin($pdo);
 
-    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, created_at FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, tipo, created_at FROM cuenta WHERE id = :id LIMIT 1');
     $stmt->execute([':id' => $cuentaId]);
     $cuenta = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -14776,7 +14801,7 @@ function handleAdminPendienteEstadoPost(int $id): void
 function handleAdminTenantNuevaGet(): void
 {
     exigirSuperadmin(Db::conexion());
-    vista('admin-tenant-nueva', ['errores' => [], 'nombreCuenta' => '', 'email' => '']);
+    vista('admin-tenant-nueva', ['errores' => [], 'nombreCuenta' => '', 'email' => '', 'tipo' => '']);
 }
 
 function handleAdminTenantNuevaPost(): void
@@ -14786,6 +14811,7 @@ function handleAdminTenantNuevaPost(): void
 
     $nombre = trim((string) ($_POST['nombre'] ?? ''));
     $email  = trim((string) ($_POST['email'] ?? ''));
+    $tipo   = (string) ($_POST['tipo'] ?? '');
 
     $errores = [];
     if ($nombre === '') {
@@ -14793,6 +14819,13 @@ function handleAdminTenantNuevaPost(): void
     }
     if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
         $errores[] = 'Email invalido.';
+    }
+    // SE EXIGE ELEGIRLO, y el formulario no trae ninguno preseleccionado. Un
+    // valor por defecto aqui seria una respuesta que nadie dio y que a los dos
+    // dias se lee como un dato confirmado -- exactamente el problema que este
+    // campo vino a resolver. Son dos clics.
+    if (! TipoCuenta::valido($tipo) || $tipo === 'sin_definir') {
+        $errores[] = 'Elige que clase de cuenta es.';
     }
 
     // Se comprueba en las DOS tablas, igual que handleRegistroPost(): cuenta y
@@ -14814,7 +14847,7 @@ function handleAdminTenantNuevaPost(): void
     }
 
     if ($errores !== []) {
-        vista('admin-tenant-nueva', ['errores' => $errores, 'nombreCuenta' => $nombre, 'email' => $email]);
+        vista('admin-tenant-nueva', ['errores' => $errores, 'nombreCuenta' => $nombre, 'email' => $email, 'tipo' => $tipo]);
     }
 
     // 8 bytes de random_bytes() = 64 bits, en hexadecimal y en grupos de cuatro
@@ -14827,9 +14860,9 @@ function handleAdminTenantNuevaPost(): void
         $pdo->beginTransaction();
 
         $pdo->prepare(
-            'INSERT INTO cuenta (email, nombre, estado, created_at) '
-            . "VALUES (:email, :nombre, 'activa', NOW())"
-        )->execute([':email' => $email, ':nombre' => $nombre]);
+            'INSERT INTO cuenta (email, nombre, estado, tipo, created_at) '
+            . "VALUES (:email, :nombre, 'activa', :tipo, NOW())"
+        )->execute([':email' => $email, ':nombre' => $nombre, ':tipo' => $tipo]);
         $cuentaId = (int) $pdo->lastInsertId();
 
         $pdo->prepare(
@@ -15136,6 +15169,72 @@ function handleAdminSalirVistaPost(): void
 //  que pasa si una cuenta suspendida sigue usando el resto del panel (tarea
 //  aparte) -- hoy solo se deja el estado y su auditoria.
 // ===========================================================================
+/**
+ * Handler: POST /admin/tenants/tipo -- cambiar que clase de cuenta es.
+ *
+ * ES LA UNICA MUTACION DE ESTE CAMPO, y por eso la validacion vive aqui y no
+ * repartida: lo que llega por POST se compara contra TipoCuenta::valido() antes
+ * de tocar la base. El ENUM de MySQL es la segunda barrera, no la primera -- un
+ * valor invalido que llegara hasta alla seria un 500 en vez de un rebote
+ * silencioso.
+ *
+ * QUEDA EN LA AUDITORIA COMO CUALQUIER OTRA ACCION ADMINISTRATIVA, con el antes
+ * y el despues completos. No es burocracia: este campo decide si una cuenta
+ * cuenta como cliente, o sea que un cambio aqui mueve las cifras comerciales, y
+ * seis semanas despues nadie se acuerda de quien la paso de trial a interna ni
+ * por que.
+ *
+ * MISMO PATRON PRG que suspender y reactivar: se escribe, se avisa por flash y
+ * se redirige al listado, para que un refresh no repita la escritura.
+ */
+function handleAdminTenantTipoPost(): void
+{
+    $pdo = Db::conexion();
+    exigirSuperadmin($pdo);
+
+    $cuentaId = (int) ($_POST['cuenta_id'] ?? 0);
+    $tipo     = (string) ($_POST['tipo'] ?? '');
+
+    if ($cuentaId <= 0 || ! TipoCuenta::valido($tipo)) {
+        flashSet('error', 'No se pudo cambiar el tipo: falta la cuenta o el tipo no es uno de los declarados.');
+        redirigir('/admin/tenants');
+    }
+
+    $stmt = $pdo->prepare('SELECT id, email, nombre, estado, tipo, created_at FROM cuenta WHERE id = :id LIMIT 1');
+    $stmt->execute([':id' => $cuentaId]);
+    $anterior = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($anterior === false) {
+        flashSet('error', 'Esa cuenta no existe.');
+        redirigir('/admin/tenants');
+    }
+
+    // Sin cambio, sin fila de auditoria. Un "cambio" de trial a trial no es un
+    // hecho: anotarlo llenaria la auditoria de ruido y empujaria hacia abajo lo
+    // que si importa (mismo criterio por el que la sonda de integraciones no se
+    // registra).
+    if ((string) $anterior['tipo'] === $tipo) {
+        redirigir('/admin/tenants');
+    }
+
+    $pdo->prepare('UPDATE cuenta SET tipo = :tipo WHERE id = :id')
+        ->execute([':tipo' => $tipo, ':id' => $cuentaId]);
+
+    $nuevo = $anterior;
+    $nuevo['tipo'] = $tipo;
+
+    registrarAuditoria($pdo, Auth::usuarioId(), 'cuenta.tipo', 'cuenta', $cuentaId, $anterior, $nuevo);
+
+    flashSet('ok', sprintf(
+        '%s pasa de %s a %s.',
+        (string) $anterior['nombre'],
+        TipoCuenta::etiqueta((string) $anterior['tipo']),
+        TipoCuenta::etiqueta($tipo)
+    ));
+
+    redirigir('/admin/tenants');
+}
+
 function handleAdminTenantsSuspenderPost(): void
 {
     $pdo = Db::conexion();
