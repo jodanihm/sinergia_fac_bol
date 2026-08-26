@@ -13,6 +13,13 @@
  * se pinta rojo cuando dice "Sin definir": eso es trabajo pendiente, no un
  * estado de reposo.
  *
+ * EL PLAN VA EN LA MISMA CELDA QUE EL TIPO, debajo y mas chico, no en una
+ * columna propia. Son dos datos de la misma pregunta -- que es esta cuenta
+ * comercialmente -- y separarlos en dos columnas los aleja justo cuando se leen
+ * juntos, ademas de sumar una octava columna a una tabla que ya es ancha. Si la
+ * cuenta cobra y no declara plan, el plan se pinta como falta (ver
+ * PlanCuenta::incoherente): no es una regla que bloquee nada, es un aviso.
+ *
  * LAS ACCIONES VIVEN EN UN MODAL, UNA POR FILA, y la tabla vuelve a ser solo
  * datos. Antes cada fila llevaba los controles a la vista: un <select> con su
  * boton en la columna del tipo y otro boton en la ultima. Con seis cuentas ya
@@ -64,7 +71,7 @@ require __DIR__ . '/partials/admin/header.php';
     // puede guardar, compartir o recargar. Un POST aqui obligaria ademas a
     // pasar por el CSRF central, que existe para las MUTACIONES; buscar no
     // muta nada.
-    $hayFiltro = $busqueda !== '' || $estado !== '' || $tipo !== '';
+    $hayFiltro = $busqueda !== '' || $estado !== '' || $tipo !== '' || $plan !== '';
 
     // Cuantas cuentas hay de cada tipo. Se dibuja siempre que haya alguna
     // cuenta, incluso con el filtro puesto, porque son las cifras de la cartera
@@ -88,6 +95,25 @@ require __DIR__ . '/partials/admin/header.php';
         <?= $comerciales; ?> de <?= (int) $totalCuentas; ?> son cuentas comerciales (de pago o en trial).
     </span>
 </div>
+
+<?php /* Los planes van en su propia linea y solo los CONTRATADOS: "sin plan" ya
+         se entiende por el tipo, y repetirlo aqui duplicaria el conteo de
+         arriba con otra etiqueta. */ ?>
+<?php $hayPlanes = false; foreach (PlanCuenta::contratados() as $p) { $hayPlanes = $hayPlanes || ($porPlan[$p] ?? 0) > 0; } ?>
+<?php if ($hayPlanes || ($porPlan['sin_definir'] ?? 0) > 0): ?>
+<div class="chips" style="margin-bottom:1rem;">
+    <?php foreach (PlanCuenta::catalogo() as $clavePlan => [$etiquetaPlan, $clasePlan, $ayudaPlan]): ?>
+    <?php if ($clavePlan === 'ninguno' || ($porPlan[$clavePlan] ?? 0) === 0) { continue; } ?>
+    <a class="<?= htmlspecialchars($clasePlan); ?>" title="<?= htmlspecialchars($ayudaPlan); ?>"
+       style="text-decoration:none;"
+       href="/admin/tenants?plan=<?= urlencode($clavePlan); ?>"><?= (int) $porPlan[$clavePlan]; ?> <?php
+        echo $clavePlan === 'sin_definir' ? 'sin plan definido' : 'plan ' . htmlspecialchars($etiquetaPlan); ?></a>
+    <?php endforeach; ?>
+    <span class="muted" style="font-size:.85rem;">
+        Los planes son una referencia de la pagina de venta: el sistema no cobra ni controla sus topes.
+    </span>
+</div>
+<?php endif; ?>
 <?php endif; ?>
 <div class="toolbar">
     <a class="btn" href="/admin/tenants/nueva">Nueva cuenta</a>
@@ -107,6 +133,14 @@ require __DIR__ . '/partials/admin/header.php';
         <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , ]): ?>
         <option value="<?= htmlspecialchars($claveTipo); ?>" <?= $tipo === $claveTipo ? 'selected' : ''; ?>>
             <?= htmlspecialchars($etiquetaTipo); ?>
+        </option>
+        <?php endforeach; ?>
+    </select>
+    <select name="plan" aria-label="Filtrar por plan" style="max-width:170px;">
+        <option value="">Todos los planes</option>
+        <?php foreach (PlanCuenta::catalogo() as $clavePlan => [$etiquetaPlan, , ]): ?>
+        <option value="<?= htmlspecialchars($clavePlan); ?>" <?= $plan === $clavePlan ? 'selected' : ''; ?>>
+            <?= htmlspecialchars($etiquetaPlan); ?>
         </option>
         <?php endforeach; ?>
     </select>
@@ -164,11 +198,30 @@ require __DIR__ . '/partials/admin/header.php';
                 </span>
             </td>
             <td>
-                <?php $tipoActual = (string) $c['tipo']; ?>
+                <?php
+                    $tipoActual = (string) $c['tipo'];
+                    $planActual = (string) $c['plan'];
+                    $faltaPlan  = PlanCuenta::incoherente($tipoActual, $planActual);
+                ?>
                 <span class="<?= htmlspecialchars(TipoCuenta::clase($tipoActual)); ?>"
                       title="<?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?>">
                     <?= htmlspecialchars(TipoCuenta::etiqueta($tipoActual)); ?>
                 </span>
+                <div style="margin-top:.3rem;font-size:.78rem;<?= $faltaPlan ? 'color:var(--danger);' : 'color:var(--muted);'; ?>"
+                     title="<?= htmlspecialchars($faltaPlan
+                        ? 'Esta cuenta es comercial y no declara plan.'
+                        : PlanCuenta::ayuda($planActual)); ?>">
+                    <?php if ($faltaPlan): ?>
+                    Sin plan declarado
+                    <?php elseif ($planActual === 'ninguno'): ?>
+                    <?php /* Una interna o la demo: no tener plan es lo correcto y no
+                             merece tinta. Se deja el guion para que la celda no quede
+                             desalineada respecto de las otras filas. */ ?>
+                    &mdash;
+                    <?php else: ?>
+                    Plan <?= htmlspecialchars(PlanCuenta::etiqueta($planActual)); ?>
+                    <?php endif; ?>
+                </div>
             </td>
             <td>
                 <?php if ($fila['emisores'] === []): ?>
@@ -242,12 +295,15 @@ require __DIR__ . '/partials/admin/header.php';
                     </div>
 
                     <div class="modal__accion">
-                        <h4>Tipo de cuenta</h4>
+                        <h4>Clasificacion comercial</h4>
                         <p>
-                            <?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?>
-                            Separa lo comercial de lo interno; no cambia permisos ni limites.
+                            <strong>Tipo:</strong> <?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?><br>
+                            <strong>Plan:</strong> <?= htmlspecialchars(PlanCuenta::ayuda($planActual)); ?>
                         </p>
-                        <form method="post" action="/admin/tenants/tipo">
+                        <?php /* LOS DOS EJES EN UN SOLO SUBMIT: se deciden en el mismo
+                                 momento y mirando lo mismo, y asi dejan una sola fila de
+                                 auditoria para un unico acto. */ ?>
+                        <form method="post" action="/admin/tenants/clasificacion">
                             <?= csrfInput(); ?>
                             <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
                             <select name="tipo" aria-label="Tipo de la cuenta <?= htmlspecialchars((string) $c['nombre']); ?>">
@@ -257,8 +313,20 @@ require __DIR__ . '/partials/admin/header.php';
                                     <?= $tipoActual === $claveTipo ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaTipo); ?></option>
                                 <?php endforeach; ?>
                             </select>
-                            <button type="submit" class="btn sm">Guardar tipo</button>
+                            <select name="plan" aria-label="Plan de la cuenta <?= htmlspecialchars((string) $c['nombre']); ?>">
+                                <?php foreach (PlanCuenta::catalogo() as $clavePlan => [$etiquetaPlan, , $ayudaPlan]): ?>
+                                <option value="<?= htmlspecialchars($clavePlan); ?>"
+                                        title="<?= htmlspecialchars($ayudaPlan); ?>"
+                                    <?= $planActual === $clavePlan ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaPlan); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <button type="submit" class="btn sm">Guardar</button>
                         </form>
+                        <?php if ($faltaPlan): ?>
+                        <p style="color:var(--danger);margin:.6rem 0 0;">
+                            Esta cuenta cobra o esta evaluando y no declara plan.
+                        </p>
+                        <?php endif; ?>
                     </div>
 
                     <div class="modal__accion modal__accion--riesgo">
