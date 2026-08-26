@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.42',
+        'titulo'  => 'Las acciones sobre una cuenta se agrupan en un boton "Acciones"',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En el listado de cuentas del panel interno, cada fila tiene ahora un boton "Acciones" que abre una ventana con todo lo que se puede hacer sobre esa cuenta: cambiar el tipo (de pago, trial, demostracion, interna) y suspenderla o reactivarla.',
+            'Antes los controles estaban sueltos en la tabla -- un selector con su boton en una columna y otro boton al final --, compitiendo con los datos que uno viene a leer. Con seis cuentas ya molestaba.',
+            'Ademas mezclaba cosas de peso muy distinto: corregir una etiqueta comercial no se parece en nada a cortarle el servicio a una empresa que esta emitiendo facturas. En la ventana cada accion tiene su bloque y su explicacion, y la peligrosa se distingue por el color y pide confirmacion nombrando la cuenta.',
+            'La ventana tambien lleva el email, el numero de cuenta, la fecha de alta y un acceso directo a la ficha completa, para no tener que cerrar y buscar.',
+            'Se cierra con la tecla Esc, con la X o haciendo clic afuera, y mientras esta abierta el teclado no se escapa al resto de la pagina.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.41',
         'titulo'  => 'Las cuentas ahora dicen si son de pago, de prueba o de la casa',
         'tag'     => 'datos',

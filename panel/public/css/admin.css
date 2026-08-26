@@ -756,3 +756,78 @@ tbody tr:has(+ .nota-fila) td { border-bottom: 0; padding-bottom: .4rem; }
    recien probada: un borde lateral, no un fondo, para no competir con el
    semaforo de los tags que viven dentro de la fila. */
 .fila-abierta td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* ---- Modal de acciones de una cuenta (/admin/tenants) -------------------- */
+/* <dialog> NATIVO Y NO UN DIV CON POSITION FIXED, y la diferencia no es de
+   estilo: el navegador da gratis lo que un div obliga a reimplementar mal --
+   el foco atrapado dentro del modal, Esc para cerrar, el resto de la pagina
+   inerte para un lector de pantalla y el backdrop propio. Una reimplementacion
+   casera de eso es siempre peor y ademas hay que mantenerla.
+
+   Lo que cuesta son ~10 lineas de JS en la vista (showModal). Es la segunda
+   pantalla del panel que lleva JS, despues del diagrama ER: la objecion de
+   este proyecto nunca fue al JS sino a traerse 3,3 MB de libreria para dibujar
+   una docena de simbolos. Y hay salida sin JS: ver el <noscript> de la vista,
+   que despliega los mismos formularios en la pagina. */
+dialog.modal {
+    width: min(560px, calc(100vw - 2rem));
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--panel);
+    color: var(--text);
+}
+dialog.modal::backdrop { background: rgba(5, 8, 11, .72); }
+
+.modal__cab {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 1.1rem 1.2rem .9rem;
+    border-bottom: 1px solid var(--border);
+}
+.modal__cab h3 { margin: 0 0 .2rem; font-size: 1rem; }
+.modal__cab p  { margin: 0; font-size: .8rem; color: var(--muted); }
+.modal__cerrar {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    font-size: 1.4rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 .2rem;
+}
+.modal__cerrar:hover { color: var(--text); }
+
+/* Cada accion es un bloque separado por una linea. Son cosas distintas --
+   cambiar la etiqueta comercial no se parece en nada a suspender el servicio --
+   y amontonarlas hace que se aprieten de apuro. */
+.modal__accion { padding: 1rem 1.2rem; border-bottom: 1px solid var(--border); }
+.modal__accion:last-of-type { border-bottom: 0; }
+.modal__accion h4 { margin: 0 0 .2rem; font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.modal__accion p  { margin: .1rem 0 .7rem; font-size: .82rem; color: var(--muted); line-height: 1.5; }
+.modal__accion form { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin: 0; }
+.modal__accion select { max-width: 220px; }
+
+/* La accion peligrosa se separa de las demas con el color, no solo con el
+   texto: suspender una cuenta le corta el servicio a un contribuyente que esta
+   emitiendo. */
+.modal__accion--riesgo { background: rgba(224, 86, 75, .06); }
+
+/* SIN JS los <dialog> quedarian ocultos y las acciones serian inalcanzables.
+   Estas reglas los despliegan en la pagina, uno debajo del otro, y esconden los
+   botones que no harian nada. Se pierde el modal, no la funcion.
+
+   LA MARCA LA PONE EL PROPIO JS (html.con-js) y no al reves. Con la marca
+   puesta en el HTML y quitada por script, los seis dialogos alcanzarian a
+   pintarse desplegados antes de que el script corra: la pantalla daria un salto
+   en cada carga. Asi, el navegador sin JS simplemente nunca ve la clase. */
+html:not(.con-js) dialog.modal {
+    display: block;
+    position: static;
+    margin: .8rem 0;
+    width: 100%;
+}
+html:not(.con-js) .modal__cerrar,
+html:not(.con-js) .abre-modal { display: none; }
