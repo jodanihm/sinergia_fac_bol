@@ -585,6 +585,18 @@ const MIGRACIONES = [
              'tabla' => 'dte_emitido', 'columna' => 'rut_emisor', 'esperado_collation' => 'utf8mb4_unicode_ci'],
         ],
     ],
+    [
+        // DOS HUELLAS PARA UN SOLO CREATE: la tabla y su clave foranea. La FK es
+        // separable del CREATE en la practica -- una base creada por un dump
+        // parcial, o un CREATE que fallo despues de la tabla, dejarian la tabla
+        // sin ella --, y sin esa segunda huella ese estado saldria APLICADA.
+        'id' => '046', 'archivo' => '046_admin_actividad.sql', 'nota' => 'CREATE',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'admin_actividad', 'tablas' => ['admin_actividad'], 'esperado' => 1],
+            ['tipo' => 'claves_foraneas', 'desc' => 'fk_actividad_usuario',
+             'restricciones' => ['fk_actividad_usuario'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

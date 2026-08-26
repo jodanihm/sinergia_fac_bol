@@ -64,6 +64,14 @@ return [
         . '<path d="M3 4v5h5"/>'
         . '<path d="M12 8v4l3 2"/>',
 
+    // Actividad del panel: una huella. Auditoria (el reloj hacia atras) es lo
+    // que CAMBIO; esto es el rastro de por donde se paso, que es otra cosa y a
+    // 17 px tiene que notarse de reojo que lo es.
+    'actividad' => '<path d="M4 19h16"/>'
+        . '<path d="M6.5 15.5c-1.4-1.4-1.4-3.6 0-5s3.6-1.4 5 0"/>'
+        . '<circle cx="14.5" cy="8.5" r="2.5"/>'
+        . '<path d="M17.5 15.5c1.4-1.4 1.4-3.6 0-5"/>',
+
     // Integraciones: dos eslabones. Lo que conecta con afuera.
     'integraciones' => '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>'
         . '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',

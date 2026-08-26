@@ -33,6 +33,20 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.40',
+        'titulo'  => 'Queda registro de todo lo que se hace en el panel de control',
+        'tag'     => 'datos',
+        'items'   => [
+            'El panel interno tiene una pantalla nueva, "Actividad del panel", que anota cada vez que alguien abre una de sus pantallas: quien, que pantalla, cuando, desde que direccion de internet y como termino.',
+            'No reemplaza a Auditoria, que sigue igual. Aquella responde QUE CAMBIO, con el antes y el despues de cada accion; esta responde QUE SE HIZO, incluyendo lo que solo se miro. La diferencia importa: en este panel abrir la ficha de una empresa cliente es ver sus datos, y hasta hoy eso no dejaba ningun rastro. Auditoria tiene 6 registros desde julio, no porque el panel se use poco, sino porque solo seis de las cosas que se hacen ahi cambian algo.',
+            'Tambien quedan anotados los intentos rechazados: si alguien entra con una cuenta que no es de administrador y golpea una pantalla del panel interno, se registra el intento y el rechazo.',
+            'Nunca se guarda lo que se escribio en un formulario ni lo que se mostro en pantalla: solo la pantalla visitada. Si algun dia una direccion llevara algo parecido a una clave, se guarda tachado.',
+            'El registro no se puede editar ni borrar desde el sistema, y abrir la propia pantalla de actividad tambien queda anotado: una bitacora con un hueco justo del tamano de quien la consulta no sirve para lo que existe.',
+            'Requiere aplicar la migracion 046 en la base de datos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.39',
         'titulo'  => 'La lista de migraciones ahora empieza por la mas reciente',
         'tag'     => 'frontend',
