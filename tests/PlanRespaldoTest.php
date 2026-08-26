@@ -142,6 +142,60 @@ final class PlanRespaldoTest extends TestCase
     }
 
     /**
+     * EL CASO QUE ROMPIO LA PRIMERA CORRIDA CONTRA LA BASE REAL. El esquema
+     * quedo partido en dos collations (ver la migracion 045) y el puente del
+     * discriminador es la unica comparacion que se hace sin una clave foranea
+     * que garantice que las dos puntas coinciden. Sin el COLLATE, MySQL corta
+     * con "Illegal mix of collations (1267)" y ese cliente se queda sin
+     * respaldo esa noche.
+     */
+    public function testElPuenteLlevaCollateCuandoLasDosColumnasNoCoinciden(): void
+    {
+        $plan = PlanRespaldo::construir(
+            ['cuenta', 'dte_emisor', 'dte_emitido_bak'],
+            [
+                'cuenta'          => ['id'],
+                'dte_emisor'      => ['id', 'cuenta_id', 'rut_emisor'],
+                'dte_emitido_bak' => ['id', 'rut_emisor'],
+            ],
+            [],
+            [
+                'dte_emisor.rut_emisor'      => 'utf8mb4_unicode_ci',
+                'dte_emitido_bak.rut_emisor' => 'utf8mb4_0900_ai_ci',
+            ]
+        );
+
+        self::assertSame(
+            '`rut_emisor` COLLATE utf8mb4_unicode_ci IN (SELECT `rut_emisor` FROM `dte_emisor` WHERE `cuenta_id` = %d)',
+            $plan['dte_emitido_bak']['where'],
+            'manda la collation de la tabla maestra, que es la que tiene el dato bueno'
+        );
+    }
+
+    /**
+     * Y no lo lleva cuando no hace falta: un COLLATE en todas las
+     * comparaciones ensuciaria el plan y escondería el caso raro entre el ruido.
+     */
+    public function testElPuenteNoLlevaCollateSiLasDosColumnasYaCoinciden(): void
+    {
+        $plan = PlanRespaldo::construir(
+            ['cuenta', 'dte_emisor', 'dte_logo'],
+            [
+                'cuenta'     => ['id'],
+                'dte_emisor' => ['id', 'cuenta_id', 'rut_emisor'],
+                'dte_logo'   => ['id', 'rut_emisor'],
+            ],
+            [],
+            [
+                'dte_emisor.rut_emisor' => 'utf8mb4_unicode_ci',
+                'dte_logo.rut_emisor'   => 'utf8mb4_unicode_ci',
+            ]
+        );
+
+        self::assertStringNotContainsString('COLLATE', (string) $plan['dte_logo']['where']);
+    }
+
+    /**
      * Datos de un contribuyente sin ninguna forma de saber de cual. No se
      * respalda y se denuncia: es el unico desenlace que no puede quedar callado.
      */
