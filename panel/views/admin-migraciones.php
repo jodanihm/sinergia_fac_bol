@@ -12,6 +12,11 @@
  * y por eso cuando NO lo hay queda una linea discreta y no un recuadro verde:
  * un cartel que siempre dice "todo bien" entrena a no mirarlo.
  *
+ * ORDEN DESCENDENTE, al reves que el catalogo y que la salida del chequeo de
+ * despliegue: alla se lee la lista entera de arriba abajo, aqui se viene a
+ * mirar la ultima que se corrio o la que falta, y en ascendente eso queda
+ * siempre al final detras de cuarenta y cuatro filas que ya no cambian.
+ *
  * TRES COLUMNAS DE ESTADO QUE NO SON LA MISMA:
  *   Veredicto  que dice la BASE (se evaluaron las huellas contra
  *              information_schema, aqui y ahora).
@@ -127,6 +132,9 @@ $desajustes = count($cruce['sinEntrada']) + count($cruce['sinArchivo']) + count(
 
 <div class="panel">
     <h3>El registro</h3>
+    <p class="muted" style="margin-top:-.5rem;">
+        De la mas nueva a la mas vieja: lo que se viene a mirar aqui es lo ultimo que se agrego.
+    </p>
     <div class="tabla-scroll">
     <table>
         <thead>

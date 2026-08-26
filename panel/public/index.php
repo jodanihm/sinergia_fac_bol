@@ -14246,6 +14246,18 @@ function handleAdminMigracionesGet(): void
         }
     }
 
+    // DE LA MAS NUEVA A LA MAS VIEJA, al reves que el catalogo y al reves que la
+    // salida del chequeo de despliegue. No es una inconsistencia: alla se lee
+    // una lista completa de arriba abajo, y aca se viene a mirar lo ultimo que
+    // se agrego -- la que se acaba de correr, la que falta. Con orden
+    // ascendente eso queda siempre al final, detras de cuarenta y cuatro filas
+    // que ya no cambian.
+    //
+    // Se invierte DESPUES del cruce y de las renombradas a proposito: esas dos
+    // comparaciones no dependen del orden, y hacerlo antes solo daria a
+    // entender que si.
+    $migraciones = array_reverse($migraciones);
+
     // El SQL completo se sirve de a uno y a pedido. Mandar los cuarenta y cinco
     // archivos en cada carga son 270 kB de HTML para que se lea, como mucho,
     // uno.

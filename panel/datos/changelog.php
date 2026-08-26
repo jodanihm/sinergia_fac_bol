@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.39',
+        'titulo'  => 'La lista de migraciones ahora empieza por la mas reciente',
+        'tag'     => 'frontend',
+        'items'   => [
+            'La pantalla de Migraciones ordenaba de la mas antigua a la mas nueva, asi que lo ultimo que se hizo en la base quedaba al final, detras de cuarenta y cuatro lineas que ya no cambian. Ahora la mas reciente aparece primero.',
+            'Es el orden que corresponde a lo que se va a mirar ahi: la migracion que se acaba de correr, o la que todavia falta.',
+            'El listado que imprime el proceso de despliegue sigue en orden ascendente, porque ahi la lista se lee entera de principio a fin.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.38',
         'titulo'  => 'Correccion: la pantalla nueva de Migraciones no abria',
         'tag'     => 'backend',
