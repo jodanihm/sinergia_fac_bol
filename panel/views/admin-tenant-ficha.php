@@ -35,6 +35,12 @@ $o = static fn ($v): string => ($v === null || $v === '') ? '&mdash;' : htmlspec
     <span class="tag <?= $cuenta['estado'] === 'activa' ? 'ok' : 'err'; ?>">
         <?= htmlspecialchars(strtoupper((string) $cuenta['estado'])); ?>
     </span>
+    <?php /* Se MUESTRA aqui y se CAMBIA en el listado, como suspender y revertir:
+             esta ficha no dibuja formularios (ver la cabecera del archivo). */ ?>
+    <span class="<?= htmlspecialchars(TipoCuenta::clase((string) $cuenta['tipo'])); ?>"
+          title="<?= htmlspecialchars(TipoCuenta::ayuda((string) $cuenta['tipo'])); ?>">
+        <?= htmlspecialchars(strtoupper(TipoCuenta::etiqueta((string) $cuenta['tipo']))); ?>
+    </span>
 </h2>
 
 <div class="cards">

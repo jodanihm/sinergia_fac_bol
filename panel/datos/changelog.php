@@ -33,6 +33,22 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.41',
+        'titulo'  => 'Las cuentas ahora dicen si son de pago, de prueba o de la casa',
+        'tag'     => 'datos',
+        'items'   => [
+            'El listado de cuentas del panel interno tiene una columna nueva: que clase de cuenta es. Cuatro valores -- De pago, Trial, Demostracion e Interna -- y un quinto, "Sin definir", para las que ya existian.',
+            'Hasta hoy el sistema no lo sabia. Habia que deducirlo mirando el email: cuatro de las seis cuentas se llaman prueba@algo y son de la casa, pero eso lo sabia quien miraba, no el sistema. Cualquier cifra que saliera de ese listado mezclaba las pruebas internas con los clientes reales.',
+            'Arriba del listado quedan los totales por tipo, y se puede filtrar por cualquiera de ellos. Ahi esta la cifra que antes no daba ninguna pantalla: cuantas cuentas son comerciales de verdad.',
+            'El alta de una cuenta nueva ahora obliga a elegirlo, sin ninguna opcion premarcada: un valor por defecto seria una respuesta que nadie dio y que a los dos dias se lee como confirmada.',
+            'Las cuentas que ya existian NO se etiquetaron a la fuerza: quedaron en "Sin definir", en rojo, para que se elija a mano. La unica excepcion es la cuenta de demostracion, que el sistema si podia deducir con certeza porque su usuario ya estaba marcado como tal.',
+            'Cambiar el tipo de una cuenta queda registrado en Auditoria con el antes y el despues: mueve las cifras comerciales, y seis semanas despues nadie se acuerda de quien lo cambio ni por que.',
+            'No cambia ningun permiso ni ningun limite: una cuenta marcada como Trial no caduca sola, y el tipo no toca el cupo diario del chat. Es un dato para mirar y filtrar.',
+            'Requiere aplicar la migracion 047 en la base de datos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.40',
         'titulo'  => 'Queda registro de todo lo que se hace en el panel de control',
         'tag'     => 'datos',

@@ -2,11 +2,16 @@
 /**
  * Cuentas del SaaS (GET /admin/tenants).
  *
- * SOLO CAMBIO DE PRESENTACION respecto de la version anterior: pasa del layout
- * del tenant al del panel de control. Los datos que recibe, la barra de 6
- * etapas, el mapa de campos revertibles y los tres formularios POST son
- * IDENTICOS -- handleAdminTenantsGet() y los handlers de suspender, reactivar
- * y revertir no se tocaron.
+ * Los datos que recibe, la barra de 6 etapas y el mapa de campos revertibles
+ * vienen de handleAdminTenantsGet(); suspender, reactivar y revertir etapa no
+ * se han tocado desde que se paso al layout del panel de control.
+ *
+ * LA COLUMNA "TIPO" ES LA UNICA QUE NO DESCRIBE EL ESTADO TECNICO DE LA CUENTA
+ * sino su relacion comercial: si paga, si esta evaluando, o si es de la casa.
+ * Va segunda, pegada al estado, porque las dos juntas son el resumen que se
+ * viene a buscar aqui -- "activa" no dice nada sobre si es un cliente. Su tag
+ * se pinta rojo cuando dice "Sin definir": eso es trabajo pendiente, no un
+ * estado de reposo.
  *
  * "Cuentas" y no "Tenants" en la interfaz: es como se llama la tabla, y es la
  * palabra que usa quien atiende el telefono.
@@ -18,8 +23,9 @@ require __DIR__ . '/partials/admin/header.php';
 
 <h2 class="page-title">Cuentas</h2>
 <p class="muted">
-    Todas las cuentas del SaaS, no solo la tuya. Solo lectura, salvo suspender
-    o reactivar una cuenta y revertir una etapa confirmada por error.
+    Todas las cuentas del SaaS, no solo la tuya. Solo lectura, salvo cambiar el tipo de cuenta,
+    suspender o reactivar una, y revertir una etapa confirmada por error. Los tres cambios quedan
+    en <a href="/admin/auditoria">Auditoria</a>.
 </p>
 
 <?php if ($flash !== null): ?>
@@ -35,8 +41,31 @@ require __DIR__ . '/partials/admin/header.php';
     // puede guardar, compartir o recargar. Un POST aqui obligaria ademas a
     // pasar por el CSRF central, que existe para las MUTACIONES; buscar no
     // muta nada.
-    $hayFiltro = $busqueda !== '' || $estado !== '';
+    $hayFiltro = $busqueda !== '' || $estado !== '' || $tipo !== '';
+
+    // Cuantas cuentas hay de cada tipo. Se dibuja siempre que haya alguna
+    // cuenta, incluso con el filtro puesto, porque son las cifras de la cartera
+    // ENTERA: el handler las cuenta sin filtros justamente para eso.
+    $comerciales = 0;
+    foreach (TipoCuenta::comerciales() as $claveComercial) {
+        $comerciales += $porTipo[$claveComercial] ?? 0;
+    }
 ?>
+
+<?php if ($totalCuentas > 0): ?>
+<div class="chips" style="margin-bottom:1rem;">
+    <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, $claseTipo, $ayudaTipo]): ?>
+    <?php if (($porTipo[$claveTipo] ?? 0) === 0) { continue; } ?>
+    <a class="<?= htmlspecialchars($claseTipo); ?>" title="<?= htmlspecialchars($ayudaTipo); ?>"
+       style="text-decoration:none;"
+       href="/admin/tenants?tipo=<?= urlencode($claveTipo); ?>"><?= (int) $porTipo[$claveTipo]; ?> <?= htmlspecialchars($etiquetaTipo); ?></a>
+    <?php endforeach; ?>
+    <span class="muted" style="font-size:.85rem;">
+        <?php /* La cifra que antes no se podia sacar de ninguna pantalla. */ ?>
+        <?= $comerciales; ?> de <?= (int) $totalCuentas; ?> son cuentas comerciales (de pago o en trial).
+    </span>
+</div>
+<?php endif; ?>
 <div class="toolbar">
     <a class="btn" href="/admin/tenants/nueva">Nueva cuenta</a>
     <span class="muted">Crea la cuenta y su propietario en un paso, con clave temporal.</span>
@@ -49,6 +78,14 @@ require __DIR__ . '/partials/admin/header.php';
         <option value="">Todos los estados</option>
         <option value="activa" <?= $estado === 'activa' ? 'selected' : ''; ?>>Activas</option>
         <option value="suspendida" <?= $estado === 'suspendida' ? 'selected' : ''; ?>>Suspendidas</option>
+    </select>
+    <select name="tipo" aria-label="Filtrar por tipo de cuenta" style="max-width:190px;">
+        <option value="">Todos los tipos</option>
+        <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , ]): ?>
+        <option value="<?= htmlspecialchars($claveTipo); ?>" <?= $tipo === $claveTipo ? 'selected' : ''; ?>>
+            <?= htmlspecialchars($etiquetaTipo); ?>
+        </option>
+        <?php endforeach; ?>
     </select>
     <button type="submit" class="btn sm">Buscar</button>
     <?php if ($hayFiltro): ?>
@@ -83,6 +120,7 @@ require __DIR__ . '/partials/admin/header.php';
         <tr>
             <th>Cuenta</th>
             <th>Estado</th>
+            <th>Tipo</th>
             <th>RUT(s) emisor</th>
             <th>Etapas de certificacion (factura)</th>
             <th>Produccion</th>
@@ -101,6 +139,29 @@ require __DIR__ . '/partials/admin/header.php';
                 <span class="tag <?= $c['estado'] === 'activa' ? 'ok' : 'err'; ?>">
                     <?= htmlspecialchars(strtoupper((string) $c['estado'])); ?>
                 </span>
+            </td>
+            <td>
+                <?php $tipoActual = (string) $c['tipo']; ?>
+                <span class="<?= htmlspecialchars(TipoCuenta::clase($tipoActual)); ?>"
+                      title="<?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?>">
+                    <?= htmlspecialchars(TipoCuenta::etiqueta($tipoActual)); ?>
+                </span>
+                <?php /* El cambio pide confirmacion y nombra el valor nuevo: es un dato
+                         con consecuencias comerciales, no una preferencia de pantalla. */ ?>
+                <form method="post" action="/admin/tenants/tipo" style="margin:.4rem 0 0;display:flex;gap:.3rem;flex-wrap:wrap;"
+                      onsubmit="return confirm('Cambiar el tipo de <?= htmlspecialchars((string) $c['nombre'], ENT_QUOTES); ?>? Queda registrado en la auditoria.');">
+                    <?= csrfInput(); ?>
+                    <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
+                    <select name="tipo" aria-label="Tipo de la cuenta <?= htmlspecialchars((string) $c['nombre']); ?>"
+                            style="max-width:150px;font-size:.8rem;">
+                        <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , ]): ?>
+                        <option value="<?= htmlspecialchars($claveTipo); ?>" <?= $tipoActual === $claveTipo ? 'selected' : ''; ?>>
+                            <?= htmlspecialchars($etiquetaTipo); ?>
+                        </option>
+                        <?php endforeach; ?>
+                    </select>
+                    <button type="submit" class="btn ghost sm">Cambiar</button>
+                </form>
             </td>
             <td>
                 <?php if ($fila['emisores'] === []): ?>
