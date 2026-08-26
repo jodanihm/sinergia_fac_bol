@@ -13,6 +13,22 @@
  * se pinta rojo cuando dice "Sin definir": eso es trabajo pendiente, no un
  * estado de reposo.
  *
+ * LAS ACCIONES VIVEN EN UN MODAL, UNA POR FILA, y la tabla vuelve a ser solo
+ * datos. Antes cada fila llevaba los controles a la vista: un <select> con su
+ * boton en la columna del tipo y otro boton en la ultima. Con seis cuentas ya
+ * competian con lo que se viene a leer, y son cosas de naturaleza distinta --
+ * corregir una etiqueta comercial no se parece en nada a cortarle el servicio a
+ * un contribuyente que esta emitiendo. Adentro del modal cada una tiene su
+ * bloque, su explicacion y su espacio, y la peligrosa se distingue por el
+ * color.
+ *
+ * ES UN <dialog> NATIVO. El navegador da gratis el foco atrapado adentro, Esc
+ * para cerrar, el resto de la pagina inerte y el backdrop; una version casera
+ * con un div reimplementa todo eso peor. Cuesta las diez lineas de JS del final
+ * -- la segunda pantalla del panel que lleva JS, despues del diagrama ER -- y
+ * hay salida sin JS: sin la marca html.con-js, los formularios se despliegan en
+ * la pagina (ver admin.css). Se pierde el modal, no la funcion.
+ *
  * "Cuentas" y no "Tenants" en la interfaz: es como se llama la tabla, y es la
  * palabra que usa quien atiende el telefono.
  */
@@ -21,11 +37,18 @@ $adminActivo = 'cuentas';
 require __DIR__ . '/partials/admin/header.php';
 ?>
 
+<?php /* VA AQUI ARRIBA Y NO AL FINAL: marca el documento como "hay JS" ANTES de
+         que el navegador pinte la tabla. Al final, los seis dialogos alcanzarian
+         a dibujarse desplegados -- que es como se ven sin JS -- y la pantalla
+         daria un salto en cada carga. */ ?>
+<script>document.documentElement.classList.add('con-js');</script>
+
 <h2 class="page-title">Cuentas</h2>
 <p class="muted">
-    Todas las cuentas del SaaS, no solo la tuya. Solo lectura, salvo cambiar el tipo de cuenta,
-    suspender o reactivar una, y revertir una etapa confirmada por error. Los tres cambios quedan
-    en <a href="/admin/auditoria">Auditoria</a>.
+    Todas las cuentas del SaaS, no solo la tuya. Solo lectura: lo que se puede cambiar esta en el
+    boton <strong>Acciones</strong> de cada fila &mdash; el tipo de cuenta y suspender o reactivar
+    &mdash;, mas revertir una etapa confirmada por error. Los tres cambios quedan en
+    <a href="/admin/auditoria">Auditoria</a>.
 </p>
 
 <?php if ($flash !== null): ?>
@@ -124,7 +147,7 @@ require __DIR__ . '/partials/admin/header.php';
             <th>RUT(s) emisor</th>
             <th>Etapas de certificacion (factura)</th>
             <th>Produccion</th>
-            <th></th>
+            <th>Acciones</th>
         </tr>
     </thead>
     <tbody>
@@ -146,22 +169,6 @@ require __DIR__ . '/partials/admin/header.php';
                       title="<?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?>">
                     <?= htmlspecialchars(TipoCuenta::etiqueta($tipoActual)); ?>
                 </span>
-                <?php /* El cambio pide confirmacion y nombra el valor nuevo: es un dato
-                         con consecuencias comerciales, no una preferencia de pantalla. */ ?>
-                <form method="post" action="/admin/tenants/tipo" style="margin:.4rem 0 0;display:flex;gap:.3rem;flex-wrap:wrap;"
-                      onsubmit="return confirm('Cambiar el tipo de <?= htmlspecialchars((string) $c['nombre'], ENT_QUOTES); ?>? Queda registrado en la auditoria.');">
-                    <?= csrfInput(); ?>
-                    <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
-                    <select name="tipo" aria-label="Tipo de la cuenta <?= htmlspecialchars((string) $c['nombre']); ?>"
-                            style="max-width:150px;font-size:.8rem;">
-                        <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , ]): ?>
-                        <option value="<?= htmlspecialchars($claveTipo); ?>" <?= $tipoActual === $claveTipo ? 'selected' : ''; ?>>
-                            <?= htmlspecialchars($etiquetaTipo); ?>
-                        </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <button type="submit" class="btn ghost sm">Cambiar</button>
-                </form>
             </td>
             <td>
                 <?php if ($fila['emisores'] === []): ?>
@@ -211,19 +218,81 @@ require __DIR__ . '/partials/admin/header.php';
                 <?php endif; ?>
             </td>
             <td>
-                <?php if ($c['estado'] === 'activa'): ?>
-                <form method="post" action="/admin/tenants/suspender" style="margin:0;" onsubmit="return confirm('Suspender esta cuenta?');">
-                    <?= csrfInput(); ?>
-                    <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
-                    <button type="submit" class="btn ghost sm">Suspender</button>
-                </form>
-                <?php else: ?>
-                <form method="post" action="/admin/tenants/reactivar" style="margin:0;" onsubmit="return confirm('Reactivar esta cuenta?');">
-                    <?= csrfInput(); ?>
-                    <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
-                    <button type="submit" class="btn sm">Reactivar</button>
-                </form>
-                <?php endif; ?>
+                <?php $idModal = 'acciones-cuenta-' . (int) $c['id']; ?>
+                <button type="button" class="btn ghost sm abre-modal" data-modal="<?= htmlspecialchars($idModal); ?>">
+                    Acciones
+                </button>
+
+                <dialog id="<?= htmlspecialchars($idModal); ?>" class="modal"
+                        aria-labelledby="<?= htmlspecialchars($idModal); ?>-titulo">
+                    <div class="modal__cab">
+                        <div>
+                            <h3 id="<?= htmlspecialchars($idModal); ?>-titulo"><?= htmlspecialchars((string) $c['nombre']); ?></h3>
+                            <p>
+                                <?= htmlspecialchars((string) $c['email']); ?>
+                                &middot; cuenta #<?= (int) $c['id']; ?>
+                                &middot; alta <?= htmlspecialchars(date('d-m-Y', strtotime((string) $c['created_at']))); ?>
+                            </p>
+                        </div>
+                        <?php /* method="dialog" cierra sin una linea de JS: es el propio
+                                 navegador el que lo hace. */ ?>
+                        <form method="dialog" style="margin:0;">
+                            <button class="modal__cerrar" aria-label="Cerrar">&times;</button>
+                        </form>
+                    </div>
+
+                    <div class="modal__accion">
+                        <h4>Tipo de cuenta</h4>
+                        <p>
+                            <?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?>
+                            Separa lo comercial de lo interno; no cambia permisos ni limites.
+                        </p>
+                        <form method="post" action="/admin/tenants/tipo">
+                            <?= csrfInput(); ?>
+                            <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
+                            <select name="tipo" aria-label="Tipo de la cuenta <?= htmlspecialchars((string) $c['nombre']); ?>">
+                                <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , $ayudaTipo]): ?>
+                                <option value="<?= htmlspecialchars($claveTipo); ?>"
+                                        title="<?= htmlspecialchars($ayudaTipo); ?>"
+                                    <?= $tipoActual === $claveTipo ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaTipo); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <button type="submit" class="btn sm">Guardar tipo</button>
+                        </form>
+                    </div>
+
+                    <div class="modal__accion modal__accion--riesgo">
+                        <h4>Estado del servicio</h4>
+                        <?php if ($c['estado'] === 'activa'): ?>
+                        <p>
+                            Suspender corta el acceso de esta cuenta. Si esta emitiendo documentos
+                            tributarios, deja de poder hacerlo.
+                        </p>
+                        <form method="post" action="/admin/tenants/suspender"
+                              onsubmit="return confirm('Suspender <?= htmlspecialchars((string) $c['nombre'], ENT_QUOTES); ?>? Le corta el acceso al sistema.');">
+                            <?= csrfInput(); ?>
+                            <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
+                            <button type="submit" class="btn ghost sm">Suspender cuenta</button>
+                        </form>
+                        <?php else: ?>
+                        <p>Esta cuenta esta suspendida: nadie puede entrar con ella.</p>
+                        <form method="post" action="/admin/tenants/reactivar"
+                              onsubmit="return confirm('Reactivar <?= htmlspecialchars((string) $c['nombre'], ENT_QUOTES); ?>?');">
+                            <?= csrfInput(); ?>
+                            <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
+                            <button type="submit" class="btn sm">Reactivar cuenta</button>
+                        </form>
+                        <?php endif; ?>
+                    </div>
+
+                    <div class="modal__accion">
+                        <h4>Ir a</h4>
+                        <p style="margin-bottom:0;">
+                            <a href="/admin/tenants/<?= (int) $c['id']; ?>">Ficha completa de la cuenta</a>
+                            &mdash; usuarios, emisores, certificados, folios y documentos emitidos.
+                        </p>
+                    </div>
+                </dialog>
             </td>
         </tr>
     <?php endforeach; ?>
@@ -232,5 +301,24 @@ require __DIR__ . '/partials/admin/header.php';
 </div>
 <?php endif; ?>
 </div>
+
+<script>
+// Abrir el modal de una fila. Todo lo demas -- Esc, el foco atrapado adentro, el
+// backdrop, cerrar con la X -- lo hace el navegador: la X es un <form
+// method="dialog"> y no necesita una linea de esto.
+document.querySelectorAll('.abre-modal').forEach(function (boton) {
+    var modal = document.getElementById(boton.dataset.modal);
+    if (!modal) { return; }
+
+    boton.addEventListener('click', function () { modal.showModal(); });
+
+    // Clic en el fondo. El evento llega al propio <dialog> solo cuando se
+    // apreto FUERA del contenido, asi que comparar el target alcanza para
+    // distinguirlo de un clic adentro.
+    modal.addEventListener('click', function (evento) {
+        if (evento.target === modal) { modal.close(); }
+    });
+});
+</script>
 
 <?php require __DIR__ . '/partials/admin/footer.php'; ?>
