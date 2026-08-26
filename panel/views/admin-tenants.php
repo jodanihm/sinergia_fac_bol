@@ -297,29 +297,42 @@ require __DIR__ . '/partials/admin/header.php';
                     <div class="modal__accion">
                         <h4>Clasificacion comercial</h4>
                         <p>
-                            <strong>Tipo:</strong> <?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?><br>
-                            <strong>Plan:</strong> <?= htmlspecialchars(PlanCuenta::ayuda($planActual)); ?>
+                            <strong>Tipo de cuenta:</strong> <?= htmlspecialchars(TipoCuenta::ayuda($tipoActual)); ?><br>
+                            <strong>Plan contratado:</strong> <?= htmlspecialchars(PlanCuenta::ayuda($planActual)); ?>
                         </p>
                         <?php /* LOS DOS EJES EN UN SOLO SUBMIT: se deciden en el mismo
                                  momento y mirando lo mismo, y asi dejan una sola fila de
                                  auditoria para un unico acto. */ ?>
+                        <?php /* CADA SELECTOR CON SU TITULO A LA VISTA, y no solo un
+                                 aria-label: los dos empiezan diciendo "Sin definir" y sin
+                                 el rotulo encima no hay forma de saber cual es cual. Un
+                                 nombre accesible que solo escucha un lector de pantalla no
+                                 resuelve el problema de quien esta mirando. El <label for>
+                                 los deja ademas asociados de verdad, asi que apretar el
+                                 texto abre su selector. */ ?>
                         <form method="post" action="/admin/tenants/clasificacion">
                             <?= csrfInput(); ?>
                             <input type="hidden" name="cuenta_id" value="<?= (int) $c['id']; ?>">
-                            <select name="tipo" aria-label="Tipo de la cuenta <?= htmlspecialchars((string) $c['nombre']); ?>">
-                                <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , $ayudaTipo]): ?>
-                                <option value="<?= htmlspecialchars($claveTipo); ?>"
-                                        title="<?= htmlspecialchars($ayudaTipo); ?>"
-                                    <?= $tipoActual === $claveTipo ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaTipo); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                            <select name="plan" aria-label="Plan de la cuenta <?= htmlspecialchars((string) $c['nombre']); ?>">
-                                <?php foreach (PlanCuenta::catalogo() as $clavePlan => [$etiquetaPlan, , $ayudaPlan]): ?>
-                                <option value="<?= htmlspecialchars($clavePlan); ?>"
-                                        title="<?= htmlspecialchars($ayudaPlan); ?>"
-                                    <?= $planActual === $clavePlan ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaPlan); ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                            <label class="field" for="tipo-<?= (int) $c['id']; ?>">
+                                <span>Tipo de cuenta</span>
+                                <select name="tipo" id="tipo-<?= (int) $c['id']; ?>">
+                                    <?php foreach (TipoCuenta::catalogo() as $claveTipo => [$etiquetaTipo, , $ayudaTipo]): ?>
+                                    <option value="<?= htmlspecialchars($claveTipo); ?>"
+                                            title="<?= htmlspecialchars($ayudaTipo); ?>"
+                                        <?= $tipoActual === $claveTipo ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaTipo); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
+                            <label class="field" for="plan-<?= (int) $c['id']; ?>">
+                                <span>Plan contratado</span>
+                                <select name="plan" id="plan-<?= (int) $c['id']; ?>">
+                                    <?php foreach (PlanCuenta::catalogo() as $clavePlan => [$etiquetaPlan, , $ayudaPlan]): ?>
+                                    <option value="<?= htmlspecialchars($clavePlan); ?>"
+                                            title="<?= htmlspecialchars($ayudaPlan); ?>"
+                                        <?= $planActual === $clavePlan ? 'selected' : ''; ?>><?= htmlspecialchars($etiquetaPlan); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </label>
                             <button type="submit" class="btn sm">Guardar</button>
                         </form>
                         <?php if ($faltaPlan): ?>

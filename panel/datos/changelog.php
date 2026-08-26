@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-08-26',
+        'version' => '1.44',
+        'titulo'  => 'Correccion: en la ventana de Acciones no se sabia cual selector era cual',
+        'tag'     => 'frontend',
+        'items'   => [
+            'La ventana de Acciones de una cuenta tiene dos selectores, tipo y plan, y cuando los dos estaban en "Sin definir" -- que es como quedan casi todas las cuentas hoy -- no habia forma de saber cual era cual: el nombre de cada uno existia solo para los lectores de pantalla, invisible para quien esta mirando.',
+            'Ahora cada uno lleva su titulo encima: "Tipo de cuenta" y "Plan contratado". Ademas quedan asociados de verdad, asi que apretar el texto abre su selector.',
+            'El formulario de alta de una cuenta nueva usa exactamente las mismas palabras, para no obligar a traducir entre una pantalla y otra.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-08-26',
         'version' => '1.43',
         'titulo'  => 'Las cuentas ahora tambien dicen que plan tienen: Basico, Pyme o Pro',
         'tag'     => 'datos',

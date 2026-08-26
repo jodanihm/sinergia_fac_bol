@@ -47,7 +47,7 @@ require __DIR__ . '/partials/admin/header.php';
         </label>
 
         <label class="field" for="cuenta-tipo">
-            <span>Que clase de cuenta es</span>
+            <span>Tipo de cuenta</span>
             <?php /* SIN NINGUNO PRESELECCIONADO, a proposito. Un valor por defecto seria
                      una respuesta que nadie dio, y a los dos dias se lee como un dato
                      confirmado: es justo el problema que este campo vino a resolver.
@@ -68,7 +68,7 @@ require __DIR__ . '/partials/admin/header.php';
         </label>
 
         <label class="field" for="cuenta-plan">
-            <span>Que plan tiene</span>
+            <span>Plan contratado</span>
             <?php /* 'Sin plan' SI se ofrece aqui -- es la respuesta correcta para una
                      cuenta interna o de demostracion --, pero 'Sin definir' no: ese valor
                      existe para las cuentas que ya estaban cuando el sistema no lo
