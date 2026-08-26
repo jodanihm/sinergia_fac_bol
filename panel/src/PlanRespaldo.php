@@ -91,10 +91,14 @@ final class PlanRespaldo
      *        Claves foraneas YA AGRUPADAS POR CONSTRAINT: una entrada por clave,
      *        con todas sus columnas. Una FK compuesta partida en dos entradas
      *        produciria un JOIN por la mitad de la clave, que trae filas de mas.
+     * @param array<string, string> $collations
+     *        Collation de cada columna, indexada por "tabla.columna". Solo se
+     *        usa para el puente del discriminador; ver whereDelDiscriminador().
+     *        Puede venir vacia: el plan sale igual, sin el COLLATE explicito.
      *
      * @return array<string, array{modo:string, where:?string, saltos:int}>
      */
-    public static function construir(array $tablas, array $columnasPorTabla, array $fks): array
+    public static function construir(array $tablas, array $columnasPorTabla, array $fks, array $collations = []): array
     {
         $salidas = [];
         foreach ($fks as $fk) {
@@ -106,7 +110,7 @@ final class PlanRespaldo
 
         $plan = [];
         foreach ($tablas as $tabla) {
-            $plan[$tabla] = self::planDeUna($tabla, $columnasPorTabla, $salidas, $tablas);
+            $plan[$tabla] = self::planDeUna($tabla, $columnasPorTabla, $salidas, $tablas, $collations);
         }
 
         return $plan;
@@ -119,8 +123,13 @@ final class PlanRespaldo
      *
      * @return array{modo:string, where:?string, saltos:int}
      */
-    private static function planDeUna(string $tabla, array $columnasPorTabla, array $salidas, array $tablas): array
-    {
+    private static function planDeUna(
+        string $tabla,
+        array $columnasPorTabla,
+        array $salidas,
+        array $tablas,
+        array $collations
+    ): array {
         $columnas = $columnasPorTabla[$tabla] ?? [];
 
         // Antes que cualquier recorrido: lo que es de la casa no es de nadie,
@@ -157,13 +166,7 @@ final class PlanRespaldo
             if ($puente !== null) {
                 return [
                     'modo'   => self::DISCRIMINADOR,
-                    'where'  => sprintf(
-                        '`%s` IN (SELECT `%s` FROM `%s` WHERE `%s` = %%d)',
-                        $discriminador,
-                        $discriminador,
-                        $puente,
-                        AislamientoTenant::COLUMNA_TENANT
-                    ),
+                    'where'  => self::whereDelDiscriminador($tabla, $discriminador, $puente, $collations),
                     'saltos' => 1,
                 ];
             }
@@ -173,6 +176,51 @@ final class PlanRespaldo
         }
 
         return ['modo' => self::GLOBAL, 'where' => null, 'saltos' => 0];
+    }
+
+    /**
+     * El WHERE que puentea por la tabla maestra del discriminador.
+     *
+     * LLEVA UN COLLATE EXPLICITO CUANDO LAS DOS COLUMNAS NO COINCIDEN, y esto
+     * no es prolijidad: sin el, MySQL corta la consulta con "Illegal mix of
+     * collations (1267)" y el respaldo de ESE cliente no se escribe. No es
+     * hipotetico -- se descubrio en la primera corrida contra la base real.
+     *
+     * El esquema de esta base quedo partido en dos collations: las tablas del
+     * dump original y las que agrego cada migracion usan utf8mb4_unicode_ci, y
+     * lo que nacio por el lado del motor usa utf8mb4_0900_ai_ci, el default de
+     * MySQL 8. La migracion 045 emparejo las columnas que necesitaban una clave
+     * foranea, y por eso los caminos indirectos no tienen este problema: una FK
+     * EXIGE la misma collation en las dos puntas, asi que ahi la comparacion
+     * siempre cierra. El puente del discriminador es la unica comparacion que
+     * se hace SIN una FK que la garantice.
+     *
+     * Manda la collation de la tabla MAESTRA: es la que representa el dato
+     * bueno, y la otra columna es la que quedo desalineada.
+     *
+     * @param array<string, string> $collations
+     */
+    private static function whereDelDiscriminador(
+        string $tabla,
+        string $discriminador,
+        string $puente,
+        array $collations
+    ): string {
+        $mia   = $collations[$tabla . '.' . $discriminador]  ?? null;
+        $suya  = $collations[$puente . '.' . $discriminador] ?? null;
+
+        // Solo cuando difieren: un COLLATE en todas las comparaciones ensuciaria
+        // el plan y escondería justamente el caso raro entre el ruido.
+        $collate = ($mia !== null && $suya !== null && $mia !== $suya) ? ' COLLATE ' . $suya : '';
+
+        return sprintf(
+            '`%s`%s IN (SELECT `%s` FROM `%s` WHERE `%s` = %%d)',
+            $discriminador,
+            $collate,
+            $discriminador,
+            $puente,
+            AislamientoTenant::COLUMNA_TENANT
+        );
     }
 
     /**

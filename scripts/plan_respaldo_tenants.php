@@ -77,11 +77,20 @@ $tablas = $pdo->query(
 )->fetchAll(PDO::FETCH_COLUMN);
 
 $columnasPorTabla = [];
+$collations       = [];
 foreach ($pdo->query(
-    'SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS '
+    'SELECT TABLE_NAME, COLUMN_NAME, COLLATION_NAME FROM information_schema.COLUMNS '
     . 'WHERE TABLE_SCHEMA = DATABASE() ORDER BY TABLE_NAME, ORDINAL_POSITION'
 ) as $fila) {
     $columnasPorTabla[$fila['TABLE_NAME']][] = (string) $fila['COLUMN_NAME'];
+
+    // La collation viaja porque hay comparaciones que se hacen SIN una clave
+    // foranea que garantice que las dos puntas coinciden. Esta base tiene el
+    // esquema partido en dos collations y una comparacion cruzada no devuelve
+    // filas de mas: corta la consulta con el error 1267.
+    if ($fila['COLLATION_NAME'] !== null) {
+        $collations[$fila['TABLE_NAME'] . '.' . $fila['COLUMN_NAME']] = (string) $fila['COLLATION_NAME'];
+    }
 }
 
 // LAS COLUMNAS DE CADA FK SE REAGRUPAN POR CONSTRAINT. information_schema
@@ -104,7 +113,7 @@ foreach ($pdo->query(
     $grupos[$clave]['refColumnas'][] = (string) $fila['REFERENCED_COLUMN_NAME'];
 }
 
-$plan = PlanRespaldo::construir($tablas, $columnasPorTabla, array_values($grupos));
+$plan = PlanRespaldo::construir($tablas, $columnasPorTabla, array_values($grupos), $collations);
 
 // --- Las cuentas. TODAS, incluidas las suspendidas y las internas: una cuenta
 //     suspendida es justamente la que mas urge tener respaldada, porque es la
