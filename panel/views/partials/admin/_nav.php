@@ -30,6 +30,7 @@ $adminNavGrupos = [
         'integraciones' => ['/admin/integraciones', 'Integraciones'],
     ],
     'Sistema' => [
+        'migraciones'    => ['/admin/migraciones',    'Migraciones'],
         'base-datos'     => ['/admin/base-datos',     'Base de datos'],
         'roles-permisos' => ['/admin/roles-permisos', 'Roles y permisos'],
         'flujos'         => ['/admin/flujos',         'Flujos'],

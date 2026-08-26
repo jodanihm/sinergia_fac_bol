@@ -68,6 +68,12 @@ return [
     'integraciones' => '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>'
         . '<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
 
+    // Migraciones: escalones que suben hacia una flecha. Es lo que son -- pasos
+    // que se aplican uno sobre otro y solo van hacia adelante -- y no se parece
+    // al cilindro de Base de datos, que esta justo debajo en el menu.
+    'migraciones' => '<path d="M3 20h5v-4h5v-4h5V8"/>'
+        . '<path d="M15.5 10.5 18 8l2.5 2.5"/>',
+
     // Base de datos: el cilindro de siempre.
     'base-datos' => '<ellipse cx="12" cy="5" rx="8" ry="3"/>'
         . '<path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/>'

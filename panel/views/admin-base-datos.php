@@ -198,90 +198,12 @@ $orden = [
     no para informar cifras.
 </p>
 <?php endif; ?>
-<?php endif; /* fin de la vista de detalle; el panel de migraciones va en las dos */ ?>
+<?php endif; /* fin de la vista de detalle */ ?>
 
-<div class="panel">
-    <h3>Migraciones</h3>
-    <p class="muted" style="margin-top:-.5rem;">
-        Mismo catalogo y mismas huellas que usa el chequeo de despliegue
-        (<code>scripts/catalogo_migraciones.php</code>): una sola lista que leen los dos.
-        La huella prueba que el <strong>efecto</strong> esta presente, no que la migracion
-        se haya ejecutado &mdash; una columna creada a mano es indistinguible de una
-        creada por su migracion.
-    </p>
-    <?php
-        $conteoMigr = ['APLICADA' => 0, 'PARCIAL' => 0, 'NO_APLICADA' => 0];
-        foreach ($migraciones as $m) {
-            $conteoMigr[$m['veredicto']]++;
-        }
-    ?>
-    <div class="chips" style="margin-bottom:1rem;">
-        <span class="tag ok"><?= $conteoMigr['APLICADA']; ?> aplicadas</span>
-        <?php if ($conteoMigr['PARCIAL'] > 0): ?>
-        <span class="tag err"><?= $conteoMigr['PARCIAL']; ?> parciales</span>
-        <?php endif; ?>
-        <?php if ($conteoMigr['NO_APLICADA'] > 0): ?>
-        <span class="tag warn"><?= $conteoMigr['NO_APLICADA']; ?> sin aplicar</span>
-        <?php endif; ?>
-    </div>
-    <?php if ($conteoMigr['PARCIAL'] > 0): ?>
-    <p class="error">
-        Hay migraciones a medio aplicar. Ese es el estado que ningun archivo describe:
-        las migraciones mixtas combinan <code>CREATE TABLE IF NOT EXISTS</code>, que se
-        puede repetir sin ruido, con <code>ALTER TABLE</code>, que revienta al repetirse.
-        Revisar a mano antes de volver a correr nada.
-    </p>
-    <?php endif; ?>
-    <div class="tabla-scroll">
-    <table>
-        <thead><tr><th>Id</th><th>Archivo</th><th>Que hace</th><th>Huellas</th><th>Veredicto</th></tr></thead>
-        <tbody>
-        <?php foreach ($migraciones as $m): ?>
-            <tr>
-                <td><?= htmlspecialchars($m['id']); ?></td>
-                <td><code style="font-size:.8em;"><?= htmlspecialchars($m['archivo']); ?></code></td>
-                <td class="muted" style="font-size:.85em;">
-                    <?= htmlspecialchars($m['nota']); ?>
-                    <?php if ($m['diferida'] !== null): ?>
-                    <details>
-                        <summary style="cursor:pointer;color:var(--pk);">Diferida a proposito</summary>
-                        <p class="muted" style="font-size:.95em;margin:.3rem 0 0;"><?= htmlspecialchars($m['diferida']); ?></p>
-                    </details>
-                    <?php endif; ?>
-                </td>
-                <td>
-                    <details>
-                        <summary class="muted" style="cursor:pointer;font-size:.82rem;">
-                            <?= (int) $m['presentes']; ?> de <?= (int) $m['esperados']; ?>
-                        </summary>
-                        <?php foreach ($m['huellas'] as $h): ?>
-                        <div style="font-size:.78rem;padding:.1rem 0;">
-                            <span style="color:<?= $h['ok'] ? 'var(--ok)' : 'var(--danger)'; ?>;"><?= $h['ok'] ? '&#10003;' : '&times;'; ?></span>
-                            <?= htmlspecialchars($h['desc']); ?>
-                        </div>
-                        <?php endforeach; ?>
-                    </details>
-                </td>
-                <td>
-                    <?php
-                        $claseVeredicto = match ($m['veredicto']) {
-                            'APLICADA' => 'tag ok',
-                            'PARCIAL'  => 'tag err',
-                            default    => 'tag warn',
-                        };
-                    ?>
-                    <span class="<?= $claseVeredicto; ?>"><?= htmlspecialchars($m['veredicto']); ?></span>
-                    <?php if ($m['veredicto'] === 'NO_APLICADA' && $m['diferida'] !== null): ?>*<?php endif; ?>
-                </td>
-            </tr>
-        <?php endforeach; ?>
-        </tbody>
-    </table>
-    </div>
-    <p class="muted" style="margin-bottom:0;font-size:.82rem;">
-        El asterisco marca las que estan sin aplicar <strong>a proposito</strong>, con su
-        motivo escrito. Diferida no es lo mismo que olvidada.
-    </p>
-</div>
+<p class="muted" style="font-size:.85rem;">
+    Las migraciones ya no se listan aqui: viven en <a href="/admin/migraciones">Migraciones</a>,
+    con su archivo, su veredicto contra esta misma base y el cruce entre el catalogo y los .sql del
+    repositorio. Esta pantalla describe el esquema que hay hoy; aquella, como se llego hasta el.
+</p>
 
 <?php require __DIR__ . '/partials/admin/footer.php'; ?>

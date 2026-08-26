@@ -32,6 +32,19 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-08-26',
+        'version' => '1.37',
+        'titulo'  => 'El panel interno tiene una pantalla propia para las migraciones de la base',
+        'tag'     => 'datos',
+        'items'   => [
+            'Cada cambio de estructura de la base de datos -- una tabla nueva, una columna que se agrega -- se hace con una migracion, y hoy hay 45. Hasta ahora la lista vivia dentro de la pantalla de Base de datos, mezclada con el detalle de las tablas de hoy. Ahora tiene su propio menu, "Migraciones", con su registro completo.',
+            'Para cada una dice que hizo, si su efecto ya esta presente en la base que el panel esta usando en este momento, y en que se basa para afirmarlo. La descripcion se lee del propio archivo de la migracion, asi que no puede quedar desactualizada.',
+            'Se puede abrir el contenido de cualquier migracion desde la misma pantalla, sin entrar al servidor: ahi esta escrito por que se hizo y que precauciones tomo.',
+            'Lo nuevo de verdad es la alerta de descuadre. Las migraciones se anotan en dos lugares que se mantienen por separado, y el error tipico es agregar una y olvidar anotarla: desde ese momento el sistema dice "todo al dia" sobre un cambio que no vigila nadie. Ahora la pantalla compara las dos listas y avisa arriba de todo si no coinciden, y ademas una prueba automatica lo verifica, asi que un descuido asi ya no puede llegar a produccion.',
+            'La pantalla solo informa: no aplica migraciones ni tiene un boton para hacerlo. Aplicar sigue siendo una decision humana, con respaldo previo y a una hora elegida.',
+        ],
+    ],
+    [
         'fecha'   => '2026-08-25',
         'version' => '1.36',
         'titulo'  => 'Una prueba automatica vigila que ninguna consulta pueda mezclar dos empresas',
