@@ -432,6 +432,8 @@ if ($ncEmitidas === []) {
         // mal formado ANTES de cualquier regla tributaria, y el folio ya se gasto.
         if ($nc['estado'] === 'RSC') {
             falla("la NC folio {$nc['folio']} fue RECHAZADA por el SII (RSC: error de schema) y su folio se gasto.");
+            dato('    Ese documento NO existe para el SII: hay que volver a emitirlo con un folio nuevo.');
+            dato('    Seguira apareciendo aqui en rojo mientras siga rechazado; es historia, no una averia de hoy.');
         }
 
         $previo = libxml_use_internal_errors(true);

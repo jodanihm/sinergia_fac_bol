@@ -33,6 +33,20 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-02',
+        'version' => '1.50',
+        'titulo'  => 'El RUT se limpia antes de emitir, no despues de que el SII rechace',
+        'tag'     => 'backend',
+        'items'   => [
+            'Escribir el RUT del receptor con puntos -- que es como se escribe un RUT en Chile -- hacia que el SII rechazara el documento por formato. El folio se gastaba igual: el SII no los devuelve. Asi se perdio la nota de credito folio 5.',
+            'El sistema si validaba el RUT, pero contestaba la pregunta equivocada: comprobaba que el numero EXISTIERA (digito verificador) quitando los puntos para la cuenta, y despues enviaba el RUT tal como venia, con los puntos. La pregunta que faltaba era si el SII iba a poder leerlo.',
+            'Ahora el RUT se deja escrito como corresponde en el punto por el que pasan TODOS los documentos, sea una factura, una boleta, una nota de credito o una linea de un libro. Ya no depende de que cada formulario se acuerde de limpiarlo.',
+            'Y si el RUT directamente no existe, el aviso sale en el propio campo del formulario ANTES de emitir nada, en vez de llegar como un error del motor cuando el documento ya se intento.',
+            'Esto afectaba a toda la emision de a uno, no solo a las notas de credito. La carga masiva no lo sufria porque sus RUT ya venian limpios.',
+            'La nota de credito folio 5 sigue rechazada y hay que volver a emitirla: un documento rechazado por el SII no existe para el SII.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-02',
         'version' => '1.49',
         'titulo'  => 'Ya se puede comprobar la emision de notas de credito sin gastar un folio',
         'tag'     => 'devops',

@@ -65,6 +65,7 @@ use Plantiflex\FacturacionCl\Sii\ImpuestoAdicional;
 use Plantiflex\FacturacionCl\Sii\LibroService;
 use Plantiflex\FacturacionCl\Sii\RcvConsultor;
 use Plantiflex\FacturacionCl\Sii\RegistroVeredictoSii;
+use Plantiflex\FacturacionCl\Sii\Rut;
 use Plantiflex\FacturacionCl\Sii\SiiAutenticador;
 use Plantiflex\FacturacionCl\Sii\SiiConsultor;
 use Plantiflex\FacturacionCl\Sii\XmlSigner;
@@ -224,24 +225,19 @@ function resolverRutSender(PDO $pdo, string $rutEmisor, Ambiente $ambiente): str
     return (string) $rutSender;
 }
 
-/** Valida RUT chileno con DV (modulo 11). */
+/**
+ * Valida RUT chileno con DV (modulo 11). Acepta el RUT como venga -- con
+ * puntos, con espacios, con la k minuscula -- porque normaliza antes de mirar.
+ *
+ * OJO CON LO QUE ESTA FUNCION *NO* HACE, que es de donde salio un documento
+ * rechazado: dice si el RUT EXISTE, no deja el RUT LISTO PARA ENVIAR. Quien la
+ * llama tiene que quedarse con el valor normalizado, no con el que le entro; si
+ * no, el RUT con puntos sigue su camino hasta el XML y el SII responde RSC con
+ * el folio ya gastado. Ver Rut::normalizar().
+ */
 function rutDvValido(string $rut): bool
 {
-    $rut = strtoupper(str_replace(['.', ' '], '', trim($rut)));
-    if (! preg_match('/^(\d{7,8})-([\dK])$/', $rut, $m)) {
-        return false;
-    }
-    [$num, $dv] = [$m[1], $m[2]];
-    $suma = 0;
-    $mul  = 2;
-    for ($i = strlen($num) - 1; $i >= 0; $i--) {
-        $suma += ((int) $num[$i]) * $mul;
-        $mul = $mul === 7 ? 2 : $mul + 1;
-    }
-    $resto = 11 - ($suma % 11);
-    $calc  = $resto === 11 ? '0' : ($resto === 10 ? 'K' : (string) $resto);
-
-    return $calc === $dv;
+    return Rut::valido(Rut::normalizar($rut));
 }
 
 /** Valida una fecha YYYY-MM-DD real (calendario). */
@@ -749,6 +745,13 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
     if (! rutDvValido($r['rut'])) {
         invalido("{$p}receptor.rut tiene DV invalido", "{$p}receptor.rut");
     }
+    // Y SE GUARDA EL NORMALIZADO. rutDvValido() responde sobre una copia
+    // limpia, asi que sin esta linea "78.159.082-7" pasa la validacion y sigue
+    // con los puntos hasta <RUTRecep>, donde el esquema del SII lo rechaza. El
+    // DTO Receptor tambien normaliza, pero esto ademas hace que el valor
+    // canonico sea el que se devuelve al panel y el que acaba guardado en
+    // dte_emitido.receptor_rut.
+    $r['rut'] = Rut::normalizar((string) $r['rut']);
 
     $detalles = $body['detalles'] ?? null;
     if (! is_array($detalles) || $detalles === []) {
@@ -1593,6 +1596,9 @@ function emitirBoleta(array $tenant): never
         $rutRecep = RUT_CONSUMIDOR_FINAL;
     } elseif (! rutDvValido($rutRecep)) {
         invalido('receptor.rut tiene DV invalido', 'receptor.rut');
+    } else {
+        // Mismo motivo que en el unitario: validar no deja el RUT escribible.
+        $rutRecep = Rut::normalizar($rutRecep);
     }
 
     // La razon social acompana al RUT: si no se informa ninguna, va la glosa
@@ -1851,7 +1857,7 @@ function consultarEstadoBoleta(array $tenant, int $folio): never
 // ===========================================================================
 function consultarContribuyente(string $rutCrudo): never
 {
-    $rut = strtoupper(str_replace(['.', ' '], '', trim($rutCrudo)));
+    $rut = Rut::normalizar($rutCrudo);
     if (! rutDvValido($rut)) {
         invalido('rut invalido (formato NNNNNNNN-DV, digito verificador incorrecto)', 'rut');
     }
@@ -2613,6 +2619,14 @@ function enviarLibroIecv(array $tenant): never
         if (! rutDvValido($l['rutContraparte'])) {
             invalido("lineas[{$i}].rutContraparte tiene DV invalido", "lineas[{$i}].rutContraparte");
         }
+        // Aqui NO se normaliza, y no es un olvido: este bucle recorre una copia
+        // (array_values($lineas)) y los DTO se construyen mas abajo en OTRO
+        // recorrido sobre $lineas, asi que escribir en $l no llegaria a ninguna
+        // parte. El RUT de la contraparte va a <RUTDoc> con el mismo patron de
+        // esquema que el receptor de un DTE, y quien lo deja escribible es el
+        // constructor de LineaLibro. A diferencia del receptor del DTE, este
+        // valor no se devuelve ni se guarda en ninguna tabla, asi que con eso
+        // basta.
         foreach (['mntExe', 'mntNeto', 'mntIva', 'mntTotal'] as $campo) {
             if (! isset($l[$campo]) || ! is_int($l[$campo]) || $l[$campo] < 0) {
                 invalido("lineas[{$i}].{$campo} debe ser un entero >= 0", "lineas[{$i}].{$campo}");

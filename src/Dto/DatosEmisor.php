@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Plantiflex\FacturacionCl\Dto;
 
 use Plantiflex\FacturacionCl\Exceptions\DocumentoInvalidoException;
+use Plantiflex\FacturacionCl\Sii\Rut;
 
 /**
  * Datos PUBLICOS del emisor necesarios para armar el encabezado de un DTE.
@@ -18,8 +19,11 @@ use Plantiflex\FacturacionCl\Exceptions\DocumentoInvalidoException;
  */
 final readonly class DatosEmisor
 {
+    /** RUT del emisor, siempre en forma canonica (ver el constructor). */
+    public string $rutEmisor;
+
     public function __construct(
-        public string $rutEmisor,
+        string $rutEmisor,
         public string $razonSocial,
         public string $giro,
         public int    $acteco,
@@ -28,9 +32,18 @@ final readonly class DatosEmisor
         public string $resolucionFecha, // YYYY-MM-DD
         public int    $resolucionNumero = 0,
     ) {
-        if (trim($this->rutEmisor) === '') {
+        if (trim($rutEmisor) === '') {
             throw new DocumentoInvalidoException('DatosEmisor: rutEmisor no puede ser vacio');
         }
+
+        // Mismo criterio que en Receptor: este DTO es el ultimo paso antes de
+        // <RUTEmisor>, <RE> y <RutEmisor> de la caratula. Hoy el RUT del emisor
+        // entra normalizado (el panel llama a Rut::normalizar en los tres
+        // formularios que lo escriben), asi que esto no cambia nada -- y
+        // justamente por eso conviene: cierra la puerta antes de que alguien
+        // agregue una cuarta via de alta que se olvide.
+        $this->rutEmisor = Rut::normalizar($rutEmisor);
+
         if (trim($this->razonSocial) === '') {
             throw new DocumentoInvalidoException('DatosEmisor: razonSocial no puede ser vacio');
         }

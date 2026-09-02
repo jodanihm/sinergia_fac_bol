@@ -6,6 +6,7 @@ namespace Plantiflex\FacturacionCl\Dto;
 
 use DateTimeImmutable;
 use Plantiflex\FacturacionCl\Exceptions\DocumentoInvalidoException;
+use Plantiflex\FacturacionCl\Sii\Rut;
 
 /**
  * Una linea (un documento) del Libro Electronico de Compra/Venta (IECV).
@@ -27,11 +28,14 @@ use Plantiflex\FacturacionCl\Exceptions\DocumentoInvalidoException;
  */
 final readonly class LineaLibro
 {
+    /** RUT de la contraparte, siempre en forma canonica (ver el constructor). */
+    public string $rutContraparte;
+
     public function __construct(
         public int               $tpoDoc,
         public int               $nroDoc,
         public DateTimeImmutable $fecha,
-        public string            $rutContraparte,
+        string                   $rutContraparte,
         public string            $razonSocial,
         public int               $mntExe,
         public int               $mntNeto,
@@ -51,9 +55,27 @@ final readonly class LineaLibro
         if ($this->nroDoc <= 0) {
             throw new DocumentoInvalidoException('LineaLibro: nroDoc debe ser > 0');
         }
-        if (trim($this->rutContraparte) === '') {
+        if (trim($rutContraparte) === '') {
             throw new DocumentoInvalidoException('LineaLibro: rutContraparte no puede ser vacio');
         }
+
+        // EL RUT SE NORMALIZA AQUI, Y AQUI ES EL SITIO.
+        //
+        // Este DTO es el ULTIMO punto por el que pasa el RUT de la contraparte antes de
+        // convertirse en <RUTDoc> del XML. Normalizar en cada llamador seria
+        // confiar en que ninguno se olvide -- y uno se olvido: el 02-09-2026 un
+        // RUT con puntos llego al SII y el documento volvio rechazado por
+        // esquema, con el folio ya gastado.
+        //
+        // NORMALIZA PERO NO LANZA SI EL RUT NO EXISTE. Rechazar aqui un DV malo
+        // seria un FATAL con traza, no un mensaje: en el motor este constructor
+        // se llama FUERA del try de emitirDte() y el archivo no tiene
+        // set_exception_handler (ver el comentario de las claves conocidas en
+        // public/index.php). Avisar al usuario es trabajo de validarDocumentoDte(),
+        // que responde 422 con el campo exacto y sin quemar folio. Aqui solo se
+        // garantiza que lo que salga hacia el SII este BIEN ESCRITO.
+        $this->rutContraparte = Rut::normalizar($rutContraparte);
+
         if ($this->mntTotal < 0) {
             throw new DocumentoInvalidoException('LineaLibro: mntTotal no puede ser negativo');
         }

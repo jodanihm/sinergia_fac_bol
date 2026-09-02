@@ -4817,7 +4817,14 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
 {
     $r        = is_array($post['receptor'] ?? null) ? $post['receptor'] : [];
     $receptor = [
-        'rut'         => trim((string) ($r['rut'] ?? '')),
+        // Rut::normalizar y NO trim() a secas. Un RUT tecleado con puntos --
+        // que es como se escribe un RUT en Chile -- llegaba tal cual a
+        // <RUTRecep>, y el esquema del SII no admite puntos: el documento
+        // volvia rechazado (RSC) con el folio ya gastado. Es lo mismo que ya
+        // hacian los otros formularios del panel al guardar un cliente o un
+        // proveedor; este era el unico camino que escribia hacia el SII sin
+        // hacerlo.
+        'rut'         => Rut::normalizar((string) ($r['rut'] ?? '')),
         'razonSocial' => trim((string) ($r['razonSocial'] ?? '')),
         'giro'        => trim((string) ($r['giro'] ?? '')),
         'direccion'   => trim((string) ($r['direccion'] ?? '')),
@@ -5133,6 +5140,28 @@ function handleEmisionPost(int $tipoDte): void
     $idemKey   = trim((string) ($_POST['idem_key'] ?? '')) !== '' ? trim((string) $_POST['idem_key']) : bin2hex(random_bytes(16));
     $documento = armarDocumentoEmision($tipoDte, $_POST);
 
+    // EL RUT SE COMPRUEBA ANTES DE LLAMAR AL MOTOR, para que el error salga
+    // como un error DEL CAMPO y no como una respuesta del motor.
+    //
+    // El motor tambien lo valida (responde 422 sin quemar folio), asi que esto
+    // no es lo que evita el desastre: lo que evita es que el usuario reciba un
+    // mensaje generico cuando lo que pasa es que ese RUT no existe. Se marca el
+    // campo, se conserva lo que escribio y se le dice que revise.
+    //
+    // El FORMATO ya no puede fallar aqui -- armarDocumentoEmision() normaliza --
+    // asi que lo unico que queda por avisar es un RUT inventado.
+    $rutReceptor = (string) ($documento['receptor']['rut'] ?? '');
+    if ($rutReceptor === '' || ! Rut::valido($rutReceptor)) {
+        renderEmisionForm(
+            $tipoDte,
+            $idemKey,
+            $_POST,
+            'receptor.rut',
+            'Revisa el RUT del receptor: no es un RUT valido. NO se emitio nada.',
+            null
+        );
+    }
+
     // LOS FOLIOS SE MIRAN ANTES DE LLAMAR AL MOTOR.
     //
     // Es el mismo criterio fail-fast que ya aplica la facturacion masiva unas
@@ -5373,7 +5402,7 @@ function armarDocumentoBoleta(array $post): array
     // vacias no es lo mismo que omitirlas: el motor pone el default de
     // Consumidor Final cuando NO vienen, y una cadena vacia recorreria la misma
     // rama pero dejando el dato ambiguo para quien lea la peticion despues.
-    $rut = trim((string) ($r['rut'] ?? ''));
+    $rut = Rut::normalizar((string) ($r['rut'] ?? ''));
     if ($rut !== '') {
         $receptor['rut'] = $rut;
     }
@@ -5428,6 +5457,22 @@ function handleBoletaPost(): void
         ? trim((string) $_POST['idem_key'])
         : bin2hex(random_bytes(16));
     $documento = armarDocumentoBoleta($_POST);
+
+    // En la boleta el RUT es OPCIONAL (sin el va Consumidor Final), asi que
+    // solo se comprueba cuando el usuario escribio algo. Escribir un RUT malo
+    // y que la boleta salga a nombre de Consumidor Final seria peor que el
+    // error: parece que se acepto lo que se tecleo.
+    $rutBoleta = (string) ($documento['receptor']['rut'] ?? '');
+    if ($rutBoleta !== '' && ! Rut::valido($rutBoleta)) {
+        renderEmisionForm(
+            39,
+            $idemKey,
+            $_POST,
+            'receptor.rut',
+            'Revisa el RUT del receptor: no es un RUT valido. Dejalo en blanco si la boleta va a Consumidor Final. NO se emitio nada.',
+            null
+        );
+    }
 
     // Folios antes del motor, igual que en handleEmisionPost() y por lo mismo:
     // la boleta gasta CAF de tipo 39 y se quedaba sin folios con el mismo
