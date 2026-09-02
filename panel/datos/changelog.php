@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-02',
+        'version' => '1.49',
+        'titulo'  => 'Ya se puede comprobar la emision de notas de credito sin gastar un folio',
+        'tag'     => 'devops',
+        'items'   => [
+            'Comprobar si la emision funciona costaba un folio: habia que emitir de verdad. Con dos folios de nota de credito disponibles, probar dos veces dejaba a la empresa sin poder emitir ninguna.',
+            'Ahora hay una comprobacion que recorre TODO el camino -- lee el CAF, revisa el certificado, arma la nota de credito, la timbra, la firma y la valida contra el esquema oficial del SII -- y se detiene justo antes de enviarla, que es lo unico que gasta el folio. Al terminar vuelve a mirar el contador y avisa si se movio.',
+            'Ademas revisa que dijo el SII de las notas de credito YA enviadas, y valida el archivo que de verdad se le mando. Esa parte es la que importa: comprobar solo la maquinaria puede dar todo verde mientras un documento real se rechaza.',
+            'Con esto quedo a la vista que la nota de credito folio 5 fue RECHAZADA por el SII por error de esquema, y por que. El folio se gasto igual: el SII no los devuelve.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-02',
         'version' => '1.48',
         'titulo'  => 'Cuando faltan folios, el sistema lo dice con esas palabras',
         'tag'     => 'backend',
