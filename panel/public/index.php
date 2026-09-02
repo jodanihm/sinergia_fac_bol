@@ -540,6 +540,8 @@ const PERMISOS_RUTA = [
     'GET /ventas/correos'                        => ['ventas', 'ver'],
     'POST /ventas/correos/reintentar-fallidos'   => ['ventas', 'gestionar'],
     'POST /ventas/correos/buscar-destinatarios'  => ['ventas', 'gestionar'],
+    'GET /configuracion/pagos'                   => ['config', 'ver'],
+    'POST /configuracion/pagos'                  => ['config', 'gestionar'],
 
     // --- maestros ---
     'GET /maestros/clientes'                     => ['maestros', 'ver'],
@@ -977,6 +979,10 @@ function definicionMenu(): array
         // quedaba al final de esa seccion, justo despues del bloque de
         // produccion, y se leia como si perteneciera a el. Aqui hace pareja con
         // Auditoria, que es lo que es: administracion transversal del tenant.
+        // Fuera de "Configuracion empresa" y junto a Usuarios, por el mismo
+        // motivo que aquel: no tiene ambiente. La cuenta de cobro de una empresa
+        // es una sola y mueve dinero de verdad; no hay una de certificacion.
+        ['clave' => 'config.pagos', 'label' => 'Cobro en linea', 'destino' => '/configuracion/pagos', 'icono' => 'apikeys', 'construido' => true, 'requiereProduccion' => false],
         ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'icono' => 'usuarios', 'construido' => true, 'requiereProduccion' => false],
         ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'icono' => 'auditoria', 'construido' => true, 'requiereProduccion' => false],
     ];
@@ -1031,6 +1037,11 @@ function validarCliente(array $post): array
         'comuna'       => $comuna,
         'email'        => $email,
         'telefono'     => $tel,
+        // UNA CASILLA DESMARCADA NO VIAJA EN EL POST, asi que su ausencia es la
+        // que significa "excluido". Se lee al reves de como se pinta -- la
+        // casilla dice "mandarle link" y la columna guarda lo mismo -- para que
+        // no haya una negacion de mas entre la pantalla y la base.
+        'pago_link'    => ! empty($post['pago_link']),
     ];
 
     return [$datos, $errores];
@@ -5938,6 +5949,136 @@ const CORREO_REBUSCA_MAX_CORREOS = 2000;
  * QUEDA AUDITADO porque tiene consecuencia comercial: esa factura ya no se va a
  * cobrar por link, y conviene saber quien lo decidio y cuando.
  */
+/**
+ * GET /configuracion/pagos -- la cuenta de cobro de la empresa.
+ *
+ * NUNCA devuelve el secreto a la pantalla, ni enmascarado. Solo dice SI hay uno
+ * guardado, con tieneSecreto. Mismo trato que las claves del resto del panel:
+ * un value con asteriscos volveria al POST tal cual y sobrescribiria el secreto
+ * bueno con asteriscos en cuanto alguien editara otro campo.
+ */
+function handlePagosConfigGet(): void
+{
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT proveedor, habilitado, credencial_publica, url_retorno, '
+        . 'CASE WHEN credencial_cifrada IS NULL OR credencial_cifrada = \'\' THEN 0 ELSE 1 END AS tieneSecreto '
+        . 'FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
+    );
+    $stmt->execute([':c' => Auth::cuentaId()]);
+    $config = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    vista('pagos-config', [
+        'config'      => $config,
+        'errores'     => [],
+        'proveedores' => FabricaPasarela::proveedores(),
+        'navActivo'   => 'config.pagos',
+    ]);
+}
+
+/**
+ * POST /configuracion/pagos.
+ *
+ * EL SECRETO EN BLANCO SIGNIFICA "NO LO CAMBIES", y por eso el UPDATE se arma en
+ * dos formas. Si se guardara la cadena vacia, editar la url de retorno borraria
+ * la llave con la que se cobra, y el sintoma seria correos retenidos sin motivo
+ * aparente horas despues.
+ *
+ * NO SE PUEDE ACTIVAR SIN LLAVES: encender el interruptor sin credenciales
+ * dejaria todos los correos de la empresa esperando un link que nunca va a
+ * llegar. Se rechaza aqui, con el motivo, en vez de dejar que se descubra
+ * mirando por que no sale ninguna factura.
+ */
+function handlePagosConfigPost(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    $proveedor  = trim((string) ($_POST['proveedor'] ?? 'flow'));
+    $apiKey     = trim((string) ($_POST['credencial_publica'] ?? ''));
+    $secreto    = trim((string) ($_POST['secreto'] ?? ''));
+    $urlRetorno = trim((string) ($_POST['url_retorno'] ?? ''));
+    $habilitado = ! empty($_POST['habilitado']);
+
+    $stmt = $pdo->prepare(
+        'SELECT credencial_cifrada FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    $anterior     = $stmt->fetchColumn();
+    $teniaSecreto = $anterior !== false && trim((string) $anterior) !== '';
+
+    $errores = [];
+    if (! in_array($proveedor, FabricaPasarela::proveedores(), true)) {
+        $errores['proveedor'] = 'Esa pasarela no esta disponible.';
+    }
+    if ($urlRetorno !== '' && ! str_starts_with($urlRetorno, 'https://')) {
+        $errores['url_retorno'] = 'La direccion tiene que empezar por https://';
+    }
+    if ($habilitado && ($apiKey === '' || (! $teniaSecreto && $secreto === ''))) {
+        $errores['secreto'] = 'Para activar el cobro hacen falta las dos llaves. '
+            . 'Sin ellas, todos tus correos se quedarian esperando un link que no llegaria.';
+    }
+
+    if ($errores !== []) {
+        vista('pagos-config', [
+            'config' => [
+                'proveedor'          => $proveedor,
+                'habilitado'         => $habilitado,
+                'credencial_publica' => $apiKey,
+                'url_retorno'        => $urlRetorno,
+                'tieneSecreto'       => $teniaSecreto,
+            ],
+            'errores'     => $errores,
+            'proveedores' => FabricaPasarela::proveedores(),
+            'navActivo'   => 'config.pagos',
+        ]);
+    }
+
+    $cifrado = null;
+    if ($secreto !== '') {
+        // Mismo cifrado que el certificado digital: AES-256-GCM con la llave
+        // maestra del entorno. El runner de correos la tiene (comparte
+        // sinergia.env con el motor), que es lo que le permite descifrarla para
+        // hablar con la pasarela.
+        $cifrado = (new CertificadoCrypto(kekMaestra()))->cifrar($secreto);
+    }
+
+    // Un solo UPSERT. El secreto entra en el SET solo si vino uno nuevo: sin
+    // esto, guardar el formulario con el campo vacio -- que es lo normal al
+    // editar cualquier otra cosa -- borraria la llave.
+    $sql = 'INSERT INTO pago_pasarela_cuenta '
+        . '(cuenta_id, proveedor, habilitado, credencial_publica, url_retorno' . ($cifrado !== null ? ', credencial_cifrada' : '') . ') '
+        . 'VALUES (:c, :p, :h, :k, :u' . ($cifrado !== null ? ', :s' : '') . ') '
+        . 'ON DUPLICATE KEY UPDATE proveedor = :p2, habilitado = :h2, '
+        . 'credencial_publica = :k2, url_retorno = :u2'
+        . ($cifrado !== null ? ', credencial_cifrada = :s2' : '');
+
+    $params = [
+        ':c' => $cuentaId, ':p' => $proveedor, ':h' => $habilitado ? 1 : 0,
+        ':k' => $apiKey, ':u' => $urlRetorno !== '' ? $urlRetorno : null,
+        ':p2' => $proveedor, ':h2' => $habilitado ? 1 : 0,
+        ':k2' => $apiKey, ':u2' => $urlRetorno !== '' ? $urlRetorno : null,
+    ];
+    if ($cifrado !== null) {
+        $params[':s']  = $cifrado;
+        $params[':s2'] = $cifrado;
+    }
+    $pdo->prepare($sql)->execute($params);
+
+    // Auditado: activar o desactivar el cobro tiene consecuencia comercial, y
+    // cambiar una llave puede retener correos. Sin el secreto, obviamente.
+    registrarAuditoria($pdo, Auth::usuarioId(), 'pago.pasarela.guardada', 'cuenta', $cuentaId, null, [
+        'proveedor'  => $proveedor,
+        'habilitado' => $habilitado ? 1 : 0,
+        'secreto'    => $secreto !== '' ? '(cambiado)' : '(sin cambios)',
+    ]);
+
+    flashSet('exito', $habilitado
+        ? 'Cobro en linea activado. Las facturas que emitas de ahora en adelante llevaran el boton de pago.'
+        : 'Guardado. El cobro en linea esta desactivado: tus correos salen sin boton de pago.');
+    redirigirPrg('/configuracion/pagos');
+}
+
 function handleCorreoEnviarSinLinkPost(int $envioId): void
 {
     $pdo      = Db::conexion();
@@ -6102,8 +6243,13 @@ function handleCorreosListadoGet(): void
 
     $stmt = $pdo->prepare(
         'SELECT q.id, q.destinatario, q.estado, q.intentos, q.ultimo_error, q.enviado_at, q.created_at, '
-        . '       e.tipo_dte, e.folio, e.receptor_rut '
+        . '       e.tipo_dte, e.folio, e.receptor_rut, '
+        // El estado del cobro de cada documento. LEFT JOIN por BIGINT, que no
+        // cruza collations. Sin fila = a ese documento no le toca link (o
+        // todavia no se ha intentado), y la vista lo pinta como un guion.
+        . '       p.estado AS pago_estado, p.ultimo_error AS pago_error, p.created_at AS pago_desde '
         . 'FROM dte_envio_correo q JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+        . 'LEFT JOIN dte_pago_link p ON p.dte_emitido_id = q.dte_emitido_id '
         . $where . ' ORDER BY q.created_at DESC, q.id DESC LIMIT :lim OFFSET :off'
     );
     foreach ($params as $k => $v) {
@@ -11117,6 +11263,16 @@ if ($metodo === 'POST' && $ruta === '/ventas/correos/buscar-destinatarios') {
 if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/buscar-destinatario$#', $ruta, $mBuscar)) {
     Auth::requerirSesion();
     handleCorreoBuscarDestinatarioPost((int) $mBuscar[1]);
+}
+
+if ($metodo === 'GET' && $ruta === '/configuracion/pagos') {
+    Auth::requerirSesion();
+    handlePagosConfigGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/configuracion/pagos') {
+    Auth::requerirSesion();
+    handlePagosConfigPost();
 }
 
 if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/enviar-sin-link$#', $ruta, $mSinLink)) {

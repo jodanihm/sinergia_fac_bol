@@ -42,7 +42,10 @@ return [
             'Solo va en factura y factura exenta. En una nota de credito no aparece nunca: esa DEVUELVE dinero, y un boton de pagar ahi haria que alguien pagara de mas.',
             'Si la pasarela de pago no responde, el correo ESPERA en vez de salir sin el boton, y se reintenta solo con esperas cada vez mas largas. Si el atasco pasa de 6 horas queda avisado, y desde Ventas > Correos se puede soltar una factura concreta para que salga sin link. Nunca se pierde un correo en silencio.',
             'A quien ya pago no se le vuelve a ofrecer pagar: la pasarela avisa del pago y el sistema lo anota. Ese aviso se comprueba de verdad -- se le pregunta a la pasarela por el estado real -- porque avisa igual cuando el pago se rechaza.',
-            'Falta la pantalla para configurarlo, que llega en la proxima entrega. Requiere aplicar las migraciones 050, 051 y 052.',
+            'Se configura en Configuracion > Cobro en linea: ahi van las llaves de Flow y el interruptor. La llave secreta se guarda cifrada y no se vuelve a mostrar nunca; para cambiarla se escribe una nueva, y dejarla en blanco significa "no la toques".',
+            'No se puede activar sin las llaves cargadas. Encenderlo sin ellas dejaria todos tus correos esperando un link que no llegaria, asi que el sistema no te deja hacerlo.',
+            'En la ficha de cada cliente hay una casilla para dejarlo fuera, y en Ventas > Correos una columna nueva que dice si cada factura salio con link, sin el, o esta esperando -- con el boton para soltarla.',
+            'Requiere aplicar las migraciones 050, 051 y 052.',
         ],
     ],
     [
