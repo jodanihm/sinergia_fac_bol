@@ -32,6 +32,20 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-09-02',
+        'version' => '1.47',
+        'titulo'  => 'La carga masiva ya no se cae con archivos que traen formato de mas',
+        'tag'     => 'backend',
+        'items'   => [
+            'Un Excel podia hacer caer la carga masiva de dos maneras, las dos sin explicar nada: un error tecnico en pantalla ("Allowed memory size exhausted"), o directamente la pagina de error de Cloudflare, como si el sistema estuviera caido.',
+            'La causa no estaba en los datos sino en el FORMATO. Pintar las filas enteras -- un fondo, un borde -- es un clic en Excel, y deja el archivo lleno de celdas vacias pero guardadas, mucho mas alla de las columnas de la plantilla. Al abrirlo habia que cargarlas todas igual, y el proceso se quedaba sin memoria a mitad de camino.',
+            'Ahora el sistema mide el archivo ANTES de abrirlo. Si no va a poder con el, lo dice al tiro y con instrucciones: que seleccione las filas y columnas sobrantes, las borre y guarde de nuevo. Eso arregla el archivo de verdad, en vez de dejar a la persona mirando un error.',
+            'Un archivo con mas filas de las permitidas tambien se rechaza al instante, con su mensaje de siempre. Antes el sistema se pasaba casi un minuto cargandolo para recien entonces decir que no.',
+            'Y un resto de texto olvidado a la derecha de la ultima columna ya no arruina el archivo completo. Antes corria el borde de todo el Excel y la carga se rechazaba entera por "los encabezados no coinciden", por algo que el usuario ni siquiera veia en pantalla.',
+            'Los archivos que ya funcionaban se cargan exactamente igual: no cambia nada de como se llena la plantilla ni de como se leen las fechas, los montos o las cantidades.',
+        ],
+    ],
+    [
         'fecha'   => '2026-08-26',
         'version' => '1.46',
         'titulo'  => 'Todas las madrugadas queda un respaldo por cliente, en el servidor y en Nextcloud',

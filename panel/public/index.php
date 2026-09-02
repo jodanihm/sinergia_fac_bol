@@ -90,6 +90,7 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
 use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
+use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use Plantiflex\Integration\Facturacion\ProductoDuplicadoException;
 
 require __DIR__ . '/../src/Db.php';
@@ -6370,6 +6371,27 @@ const NOTA_VENTA_FORMAS_PAGO = [
  *  IReadFilter al leer (ver leerFilasExcelCargaMasiva()). */
 const NOTA_VENTA_MAX_FILAS = 5000;
 
+/** Tope de XML descomprimido (hojas + sharedStrings) de un .xlsx de carga
+ *  masiva, en bytes. NO es un limite de negocio (ese es NOTA_VENTA_MAX_FILAS):
+ *  es lo que separa un archivo que se puede abrir de uno que mata al proceso.
+ *
+ *  SE MIDE CONTRA EL RSS DEL PROCESO, NO CONTRA memory_limit, y la diferencia
+ *  no es un detalle. PhpSpreadsheet parsea la hoja con simplexml, y libxml
+ *  reserva memoria POR FUERA del contador de PHP: memory_limit no la ve y no
+ *  la puede frenar. Por eso el sintoma no es el fatal error de PHP sino un
+ *  502: el cgroup del contenedor mata al worker (SIGKILL) antes de que PHP
+ *  llegue a quejarse, nginx se queda sin upstream y Cloudflare muestra su
+ *  pagina de error.
+ *
+ *  Medido en el VPS, RSS pico del proceso al leer:
+ *      3,3 MB de XML (plantilla llena, 5.000 filas x 16 cols) -> 220 MB
+ *      8,1 MB de XML (5.000 filas pintadas hasta la columna BH) -> 532 MB
+ *  o sea ~66 MB de RSS por cada MB de XML. Con el contenedor en 768 MB y 4
+ *  workers, 6 MB de XML (~400 MB) es lo que se puede permitir un worker sin
+ *  arrastrar a los demas; y deja casi el doble del peso de la plantilla llena,
+ *  que es el archivo mas grande que el producto acepta. */
+const NOTA_VENTA_MAX_BYTES_XML = 6 * 1024 * 1024;
+
 /** Documentos por sub-lote de facturacion masiva. Sin limite oficial menor
  *  encontrado (ver PASO 1 de M4); valor conservador por gestion de riesgo
  *  (el lote del motor es todo-o-nada), ajustable. */
@@ -6461,13 +6483,60 @@ function handlePlantillaExcelGet(): void
 }
 
 /**
+ * Suma el tamano DESCOMPRIMIDO de las partes de un .xlsx que PhpSpreadsheet
+ * convierte en arbol XML completo en memoria: las hojas y la tabla de textos
+ * (sharedStrings, donde viven los strings de todas las celdas). Se lee del
+ * indice del zip: statIndex() devuelve el dato de cabecera del archivo
+ * comprimido, no descomprime nada, asi que medir cuesta lo mismo para un
+ * archivo de 300 KB que para uno de 30 MB.
+ *
+ * Sirve para decidir ANTES de abrirlo si un archivo cabe en memoria. El peso
+ * del .xlsx en disco no sirve para eso: el XML comprime ~10:1 y ademas varia
+ * con el contenido, asi que un mismo tamano de archivo puede ser 5.000 filas
+ * o 200.000.
+ *
+ * Devuelve 0 si el archivo no se puede abrir como zip; en ese caso no se
+ * bloquea nada y el lector de PhpSpreadsheet da el error de "no es un .xlsx
+ * valido", que es el mensaje correcto para ese caso.
+ */
+function bytesXmlDelXlsx(string $rutaArchivo): int
+{
+    if (! class_exists(ZipArchive::class)) {
+        return 0;
+    }
+
+    $zip = new ZipArchive();
+    if ($zip->open($rutaArchivo) !== true) {
+        return 0;
+    }
+
+    $bytes = 0;
+    for ($i = 0; $i < $zip->numFiles; $i++) {
+        $entrada = $zip->statIndex($i);
+        if ($entrada === false) {
+            continue;
+        }
+        $nombre = (string) $entrada['name'];
+        $pesa   = (str_starts_with($nombre, 'xl/worksheets/') && str_ends_with($nombre, '.xml'))
+            || $nombre === 'xl/sharedStrings.xml';
+        if ($pesa) {
+            $bytes += (int) $entrada['size'];
+        }
+    }
+    $zip->close();
+
+    return $bytes;
+}
+
+/**
  * Lee un .xlsx de carga masiva desde su tmp_name (NUNCA se copia a disco
  * propio, se lee directo del archivo temporal que ya crea PHP para el
  * upload -- mismo criterio que file_get_contents($archivo['tmp_name']) en
  * CAF/certificado). El IReadFilter acota la memoria usada por PhpSpreadsheet
- * a NOTA_VENTA_MAX_FILAS+2 filas SIN IMPORTAR cuantas traiga el archivo real
- * -- la validacion de "demasiadas filas" ocurre ANTES de intentar leer todo
- * el contenido de cada fila.
+ * a un rectangulo de NOTA_VENTA_MAX_FILAS+2 filas por las columnas de la
+ * plantilla, SIN IMPORTAR cuanto traiga el archivo real -- la validacion de
+ * "demasiadas filas" ocurre ANTES de intentar leer todo el contenido de cada
+ * fila.
  *
  * @return list<array<string,string>> filas no vacias, como array asociativo
  *                                     clave=>valor segun NOTA_VENTA_ENCABEZADOS
@@ -6479,16 +6548,79 @@ function leerFilasExcelCargaMasiva(string $rutaArchivo): array
 {
     $limite = NOTA_VENTA_MAX_FILAS + 2; // +1 encabezado, +1 para poder detectar el excedente
 
-    $filtro = new class ($limite) implements IReadFilter {
-        public function __construct(private readonly int $limite)
+    // El ancho tambien se acota, y hace falta tanto como el alto.
+    //
+    // POR QUE: el filtro anterior solo miraba la FILA, asi que un archivo
+    // podia traer celdas hasta la columna que quisiera y todas se cargaban.
+    // No hace falta que tengan datos: basta con haber pintado las filas
+    // enteras (fondo, borde, ancho de columna) -- algo que se hace de un clic
+    // en Excel -- para que el .xlsx guarde miles de celdas VACIAS PERO CON
+    // ESTILO, y PhpSpreadsheet crea un objeto por cada una. Un archivo de
+    // 5.000 filas pintadas hasta la columna BH costaba 192 MB (justo el
+    // memory_limit del contenedor) y moria con "Allowed memory size
+    // exhausted" en Worksheet::createNewCell(); acotado a las columnas de la
+    // plantilla, el MISMO archivo cuesta 64 MB.
+    //
+    // Se deja pasar UNA columna de mas (la 17) a proposito: es la que permite
+    // seguir detectando un archivo con una columna extra CON NOMBRE y
+    // responder "los encabezados no coinciden" en vez de ignorarla en
+    // silencio.
+    $anchoMaximo = count(NOTA_VENTA_ENCABEZADOS) + 1;
+
+    $filtro = new class ($limite, $anchoMaximo) implements IReadFilter {
+        public function __construct(private readonly int $limite, private readonly int $ancho)
         {
         }
 
         public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
         {
-            return $row <= $this->limite;
+            return $row <= $this->limite
+                && Coordinate::columnIndexFromString($columnAddress) <= $this->ancho;
         }
     };
+
+    // DOS PORTEROS ANTES DE ABRIR EL ARCHIVO, y ninguno de los dos sobra.
+    //
+    // El filtro de arriba acota lo que se CONVIERTE EN OBJETOS, pero no lo que
+    // se PARSEA: PhpSpreadsheet arma el arbol XML completo de la hoja con
+    // simplexml antes de mirar celda por celda, y esa memoria la reserva
+    // libxml POR FUERA del contador de PHP. memory_limit no la ve, asi que no
+    // hay fatal error que valga: el cgroup del contenedor mata al worker con
+    // SIGKILL y el usuario recibe un 502 de Cloudflare, sin ninguna pista de
+    // que hacer. Por eso los dos controles ocurren ANTES de load().
+    //
+    // 1) EL PESO, del indice del zip (dato de cabecera, no descomprime nada).
+    //    Es lo unico que acota el gasto de memoria, porque el gasto lo manda
+    //    la CANTIDAD DE CELDAS que el archivo trae escritas -- con datos o
+    //    solo con formato --, y eso es justo lo que pesa el XML.
+    $bytesXml = bytesXmlDelXlsx($rutaArchivo);
+    if ($bytesXml > NOTA_VENTA_MAX_BYTES_XML) {
+        throw new RuntimeException(
+            'El archivo es demasiado pesado para abrirlo. Casi siempre es formato aplicado a filas o '
+            . 'columnas ENTERAS: aunque las celdas se vean vacias, quedan guardadas en el archivo y hay '
+            . 'que cargarlas igual. Selecciona las filas y columnas sobrantes (a la derecha y por debajo '
+            . 'de tus datos), borralas, guarda y vuelve a intentar. Si el archivo de verdad es enorme, '
+            . 'divide la carga en archivos mas chicos.'
+        );
+    }
+
+    // 2) EL LARGO, con listWorksheetInfo(), que recorre la hoja con XMLReader
+    //    en vez de armar el arbol: cuesta ~35 MB y menos de medio segundo,
+    //    contra los ~220 MB que cuesta abrirla. Asi un archivo con demasiadas
+    //    filas se rechaza con SU mensaje sin haber gastado esa memoria. El
+    //    mismo control queda repetido despues de leer, como red: ahi es exacto
+    //    porque ya ignoro las filas vacias del final, que aqui todavia cuentan.
+    try {
+        $info = (new XlsxReader())->listWorksheetInfo($rutaArchivo);
+    } catch (Throwable $e) {
+        throw new RuntimeException('El archivo no es un .xlsx valido.', 0, $e);
+    }
+    $filasDelArchivo = (int) ($info[0]['totalRows'] ?? 0);
+    if ($filasDelArchivo - 1 > NOTA_VENTA_MAX_FILAS) {
+        throw new RuntimeException(
+            'El archivo tiene mas de ' . NOTA_VENTA_MAX_FILAS . ' filas de datos. Divide la carga en archivos mas chicos.'
+        );
+    }
 
     try {
         $reader = new XlsxReader();
@@ -6519,8 +6651,30 @@ function leerFilasExcelCargaMasiva(string $rutaArchivo): array
     // en la ultima columna DE CADA FILA (dejaria filas de largo distinto y
     // array_combine fallaria). El min() con $limite conserva la deteccion de
     // "archivo demasiado grande": el IReadFilter ya no cargo mas alla de ahi.
-    $ultimaFila    = min($hoja->getHighestDataRow(), $limite);
-    $ultimaColumna = $hoja->getHighestDataColumn();
+    $ultimaFila = min($hoja->getHighestDataRow(), $limite);
+
+    // El ANCHO lo manda la fila de encabezados, no la hoja.
+    //
+    // Antes lo mandaba getHighestDataColumn(), que mira la hoja ENTERA: una
+    // celda pintada o un resto de texto en cualquier fila perdida corria el
+    // borde derecho, y entonces TODAS las filas se leian con una columna de
+    // mas. Eso rompia el archivo completo -- los encabezados dejaban de
+    // coincidir con la plantilla y la carga se rechazaba entera -- por algo
+    // que el usuario no podia ni ver.
+    //
+    // La fila 1 es el ancho correcto: es la que se compara con la plantilla y
+    // la que le da nombre a cada valor.
+    $ultimaColumna = null;
+    for ($i = $anchoMaximo; $i >= 1; $i--) {
+        $coordenada = Coordinate::stringFromColumnIndex($i) . '1';
+        if ($hoja->cellExists($coordenada) && trim((string) $hoja->getCell($coordenada)->getFormattedValue()) !== '') {
+            $ultimaColumna = Coordinate::stringFromColumnIndex($i);
+            break;
+        }
+    }
+    if ($ultimaColumna === null) {
+        throw new RuntimeException('El archivo esta vacio.');
+    }
 
     $filasCrudas = [];
     foreach ($hoja->getRowIterator(1, $ultimaFila) as $fila) {
