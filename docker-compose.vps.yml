@@ -151,6 +151,16 @@ services:
       retries: 3
       start_period: 20s
     # 4 workers php-fpm x 192M = 768M en el peor caso (ver zz-workers.conf).
+    #
+    # OJO CON ESA CUENTA: memory_limit NO acota el RSS de un worker. Al leer un
+    # .xlsx, PhpSpreadsheet parsea con simplexml y libxml reserva memoria por
+    # fuera del contador de PHP. El 02-09-2026 un worker llego a 774 MB con
+    # memory_limit=192M y lo mato el OOM killer del cgroup: nginx se quedo sin
+    # upstream y salio un 502 (la pagina de error de Cloudflare), sin fatal
+    # error de PHP en ningun log. La carga masiva ahora se defiende sola --
+    # mide el archivo antes de abrirlo, ver NOTA_VENTA_MAX_BYTES_XML -- y el
+    # peor caso legitimo (plantilla llena, 5.000 filas) son ~220 MB. Si vuelve
+    # a aparecer un 502 en una ruta que lee archivos, mirar esto primero.
     mem_limit: 768m
     memswap_limit: 768m
     logging:
