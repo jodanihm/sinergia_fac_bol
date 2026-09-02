@@ -34,13 +34,15 @@ return [
     [
         'fecha'   => '2026-09-02',
         'version' => '1.51',
-        'titulo'  => 'Preparado el terreno para cobrar en linea desde el correo de la factura',
-        'tag'     => 'datos',
+        'titulo'  => 'El correo de una factura puede llevar un boton para pagarla en linea',
+        'tag'     => 'backend',
         'items'   => [
-            'Primer paso de una funcion nueva: que el correo de una factura pueda llevar un boton para pagarla en linea, por el monto exacto y contra la cuenta de cobro de la propia empresa.',
-            'Esta entrega todavia NO cambia ningun correo. Solo prepara la base de datos: donde se guarda la cuenta de cobro de cada empresa, donde queda el link de cada documento, y el interruptor para dejar fuera a un cliente concreto.',
-            'De momento nadie tiene el cobro activo: arranca apagado y hay que configurarlo empresa por empresa. Los 87 clientes del maestro quedan incluidos por defecto, que es lo que corresponde: se excluye a quien haga falta, no al reves.',
-            'Requiere aplicar las migraciones 050, 051 y 052 en la base de datos.',
+            'Funcion nueva: el correo con el que se manda una factura puede incluir un boton para pagarla, por el monto exacto y contra la cuenta de cobro de la propia empresa. El dinero va a la empresa, no a nosotros.',
+            'Se activa empresa por empresa y arranca APAGADO: mientras nadie lo configure, todos los correos salen exactamente igual que hoy. Ademas se puede dejar fuera a clientes concretos, para los que pagan por transferencia o tienen convenio.',
+            'Solo va en factura y factura exenta. En una nota de credito no aparece nunca: esa DEVUELVE dinero, y un boton de pagar ahi haria que alguien pagara de mas.',
+            'Si la pasarela de pago no responde, el correo ESPERA en vez de salir sin el boton, y se reintenta solo con esperas cada vez mas largas. Si el atasco pasa de 6 horas queda avisado, y desde Ventas > Correos se puede soltar una factura concreta para que salga sin link. Nunca se pierde un correo en silencio.',
+            'A quien ya pago no se le vuelve a ofrecer pagar: la pasarela avisa del pago y el sistema lo anota. Ese aviso se comprueba de verdad -- se le pregunta a la pasarela por el estado real -- porque avisa igual cuando el pago se rechaza.',
+            'Falta la pantalla para configurarlo, que llega en la proxima entrega. Requiere aplicar las migraciones 050, 051 y 052.',
         ],
     ],
     [

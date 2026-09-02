@@ -11,6 +11,7 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
 use Plantiflex\FacturacionCl\Dto\SolicitudPago;
@@ -290,6 +291,76 @@ final class FlowPasarelaPagoTest extends TestCase
 
         self::assertStringNotContainsString(self::SECRETO, $volcado);
         self::assertStringContainsString('oculto', $volcado);
+    }
+
+    // -----------------------------------------------------------------------
+    //  consultarEstado: lo que decide si una factura se da por pagada
+    // -----------------------------------------------------------------------
+
+    public function testUnPagoConfirmadoSeReconoce(): void
+    {
+        $r = $this->pasarela([new Response(200, [], (string) json_encode([
+            'status'        => 2,          // 2 = pagada, en Flow
+            'commerceOrder' => 'SIN-7-33-745',
+            'amount'        => 49990,
+        ]))])->consultarEstado('TOK123', $this->credenciales());
+
+        self::assertTrue($r['pagada']);
+        self::assertSame('SIN-7-33-745', $r['referencia'], 'la referencia es NUESTRA clave, no la de Flow');
+        self::assertSame(49990, $r['monto']);
+    }
+
+    /** @return list<array{int}> */
+    public static function estadosQueNoSonPago(): array
+    {
+        return [[1], [3], [4], [0]];   // pendiente, rechazada, anulada, desconocido
+    }
+
+    #[DataProvider('estadosQueNoSonPago')]
+    public function testTodoLoQueNoSeaPagadaNoSeDaPorPagada(int $status): void
+    {
+        // ESTE ES EL TEST QUE IMPORTA DE TODO EL ARCHIVO. Flow avisa igual
+        // cuando el pago se RECHAZA; creerse que todo aviso es un pago marcaria
+        // como pagadas facturas que nadie pago, y eso no se descubre hasta que
+        // alguien reclama.
+        $r = $this->pasarela([new Response(200, [], (string) json_encode([
+            'status'        => $status,
+            'commerceOrder' => 'SIN-7-33-745',
+        ]))])->consultarEstado('TOK123', $this->credenciales());
+
+        self::assertFalse($r['pagada']);
+    }
+
+    public function testLaConsultaTambienVaFirmada(): void
+    {
+        $this->pasarela([new Response(200, [], (string) json_encode([
+            'status' => 2, 'commerceOrder' => 'SIN-7-33-745',
+        ]))])->consultarEstado('TOK123', $this->credenciales());
+
+        parse_str((string) $this->peticiones[0]['request']->getUri()->getQuery(), $q);
+        $firma = $q['s'];
+        unset($q['s']);
+
+        self::assertSame(hash_hmac('sha256', 'apiKey' . self::API_KEY . 'tokenTOK123', self::SECRETO), $firma);
+        self::assertSame($firma, FlowPasarelaPago::firmar(array_map('strval', $q), self::SECRETO));
+    }
+
+    public function testUnaConsultaSinCommerceOrderEsPermanente(): void
+    {
+        // Sin nuestra referencia no se sabe QUE factura marcar. Adivinarla seria
+        // peor que fallar.
+        $this->expectException(PasarelaPermanenteException::class);
+
+        $this->pasarela([new Response(200, [], (string) json_encode(['status' => 2]))])
+            ->consultarEstado('TOK123', $this->credenciales());
+    }
+
+    public function testUnaConsultaQueNoRespondeEsTransitoria(): void
+    {
+        $this->expectException(PasarelaTransitoriaException::class);
+
+        $this->pasarela([new Response(502, [], 'bad gateway')])
+            ->consultarEstado('TOK123', $this->credenciales());
     }
 
     public function testLaFabricaDevuelveFlow(): void

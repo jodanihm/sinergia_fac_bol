@@ -153,6 +153,57 @@ final class FlowPasarelaPago implements PasarelaPagoInterface
     }
 
     /**
+     * GET {base}/payment/getStatus?apiKey=..&token=..&s=..
+     *
+     * Flow llama a urlConfirmation por CUALQUIER desenlace, no solo por un pago
+     * bueno. Sin esta consulta no se puede distinguir "pago" de "rechazo", y
+     * marcar todo como pagado seria peor que no marcar nada.
+     *
+     * status = 2 es "pagada" en Flow (1 pendiente, 3 rechazada, 4 anulada).
+     */
+    public function consultarEstado(string $referenciaExterna, CredencialesPasarela $cred): array
+    {
+        $base   = $cred->sandbox ? self::URL_SANDBOX : self::URL_PRODUCCION;
+        $params = ['apiKey' => $cred->apiKey, 'token' => $referenciaExterna];
+        $params['s'] = self::firmar($params, $cred->secreto);
+
+        try {
+            $resp = $this->http->get($base . '/payment/getStatus', [
+                'query'       => $params,
+                'timeout'     => self::TIMEOUT,
+                'http_errors' => false,
+            ]);
+        } catch (GuzzleException $e) {
+            throw new PasarelaTransitoriaException('No se pudo consultar a Flow: ' . $e->getMessage(), 0, $e);
+        }
+
+        $status = $resp->getStatusCode();
+        $cuerpo = (string) $resp->getBody();
+
+        if ($status >= 500 || $status === 429) {
+            throw new PasarelaTransitoriaException(sprintf('Flow respondio %d al consultar', $status));
+        }
+        if ($status !== 200) {
+            throw new PasarelaPermanenteException(
+                sprintf('Flow rechazo la consulta (HTTP %d): %s', $status, self::recorte($cuerpo))
+            );
+        }
+
+        $datos = json_decode($cuerpo, true);
+        if (! is_array($datos) || ! isset($datos['commerceOrder'])) {
+            throw new PasarelaPermanenteException('Respuesta de getStatus sin commerceOrder: ' . self::recorte($cuerpo));
+        }
+
+        $monto = $datos['amount'] ?? null;
+
+        return [
+            'pagada'     => ((int) ($datos['status'] ?? 0)) === 2,
+            'referencia' => (string) $datos['commerceOrder'],
+            'monto'      => $monto === null ? null : (int) $monto,
+        ];
+    }
+
+    /**
      * Firma HMAC-SHA256 de los parametros, segun el algoritmo de Flow.
      *
      * Publica y estatica para que la pueda usar tambien quien VERIFIQUE la

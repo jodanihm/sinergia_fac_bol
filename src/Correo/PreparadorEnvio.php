@@ -56,6 +56,23 @@ final class PreparadorEnvio
      */
     public const TIPOS_CON_PDF = [33, 34, 61, 56, 39];
 
+    /**
+     * Los tipos que pueden llevar link de pago en el correo.
+     *
+     * SOLO LOS QUE SE COBRAN. La nota de credito (61) DEVUELVE dinero: mandarla
+     * con un boton de pagar seria, en el mejor caso, confuso, y en el peor haria
+     * que alguien pagara de mas. La nota de debito (56) es un ajuste que casi
+     * nunca se cobra por esta via. La boleta (39) queda fuera por otro motivo
+     * distinto: hoy el panel no encola correo de boletas, asi que no hay donde
+     * poner el link.
+     *
+     * ES LA SEGUNDA LINEA DE DEFENSA, no la primera: quien decide de verdad es
+     * ResolutorLinkPago, que ni siquiera crea la orden para un tipo que no
+     * corresponde. Esta se comprueba igual, aqui, porque es lo ultimo que pasa
+     * antes de que lo lea un tercero.
+     */
+    public const TIPOS_CON_LINK_PAGO = [33, 34];
+
     // El mapa de nombres que vivia aqui se elimino: ahora sale de
     // TipoDte::nombreDe($tipo, largo: true), que es la unica fuente del
     // proyecto. Este es el UNICO sitio que usa el nombre LARGO (con
@@ -88,6 +105,7 @@ final class PreparadorEnvio
         //     dte_envio_correo.dte_emitido_id -> dte_emitido.id
         //     dte_envio_correo.cuenta_id      -> dte_emisor.cuenta_id
         //     dte_envio_correo.cuenta_id      -> cuenta.id
+        //     dte_envio_correo.dte_emitido_id -> dte_pago_link.dte_emitido_id
         //
         // dte_envio_correo ya guarda cuenta_id y destinatario como FOTO, tomada
         // al encolar, justamente para no depender de esos cruces.
@@ -100,11 +118,19 @@ final class PreparadorEnvio
             // dos en NULL y no llevan la linea.
             . '       e.forma_pago, e.fecha_vencimiento, '
             . '       em.razon_social, '
-            . '       c.email AS cuenta_email '
+            . '       c.email AS cuenta_email, '
+            // La orden de pago del documento, si es que existe (migracion 050).
+            // AQUI SOLO SE LEE: esta clase no decide si corresponde cobrar ni
+            // llama a ninguna pasarela -- eso seria decidir politica, que su
+            // contrato dice que no hace, y ademas --dry-run ejecuta este metodo
+            // y crearia cobros de verdad. Quien crea la orden es
+            // ResolutorLinkPago, antes, desde el runner.
+            . '       p.url AS pago_url, p.estado AS pago_estado, p.monto AS pago_monto '
             . 'FROM dte_envio_correo q '
             . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
             . "LEFT JOIN dte_emisor em ON em.cuenta_id = q.cuenta_id AND em.ambiente = 'produccion' "
             . 'LEFT JOIN cuenta c ON c.id = q.cuenta_id '
+            . 'LEFT JOIN dte_pago_link p ON p.dte_emitido_id = q.dte_emitido_id '
             . 'WHERE q.id = :id LIMIT 1'
         );
         $stmt->execute([':id' => $envioId]);
@@ -216,12 +242,23 @@ final class PreparadorEnvio
             );
         }
 
+        // EL LINK DE PAGO. Va DESPUES del vencimiento y ANTES de los adjuntos, y
+        // ese orden es el que se lee bien: que documento es, cuando vence, como
+        // se paga, que viene adjunto.
+        $bloquePago = self::bloqueLinkPago(
+            $fila['pago_url'] ?? null,
+            $fila['pago_estado'] ?? null,
+            isset($fila['pago_monto']) ? (int) $fila['pago_monto'] : null,
+            $tipoDte
+        );
+
         // El correo se manda SOLO como HTML: BrevoMailer arma el payload con
         // 'htmlContent' y no envia parte de texto plano, asi que la linea va en un
         // unico lugar.
         $cuerpo = sprintf(
             "<p>Estimado(a),</p>\n"
             . "<p>Adjuntamos su <strong>%s N&deg; %d</strong>, emitida por <strong>%s</strong> (RUT %s).</p>\n"
+            . '%s'
             . '%s'
             . "<p>Se adjuntan dos archivos:</p>\n"
             . "<ul><li>El XML con firma electronica, valido ante el SII.</li>\n"
@@ -231,7 +268,8 @@ final class PreparadorEnvio
             $folio,
             htmlspecialchars($nombreVisible, ENT_QUOTES, 'UTF-8'),
             htmlspecialchars($rutEmisor, ENT_QUOTES, 'UTF-8'),
-            $lineaVencimiento
+            $lineaVencimiento,
+            $bloquePago
         );
 
         // Nombres que sirvan de verdad al abrir el correo: RUT_tipo_folio.
@@ -267,6 +305,61 @@ final class PreparadorEnvio
     }
 
     /** @return array{ok:false, motivo:string, canal:string, codigo:int} */
+    /**
+     * El bloque HTML del link de pago, o cadena vacia si no corresponde.
+     *
+     * ESTATICO Y PURO A PROPOSITO. preparar() necesita un PDO y genera PDF, asi
+     * que probarlo entero es caro; esto es lo unico del correo que lleva un dato
+     * venido de FUERA DE CASA -- una URL que devolvio un tercero -- y va dentro
+     * de un href que va a leer un cliente de nuestro cliente. Separado, se puede
+     * probar cada guarda por su cuenta y sin base de datos.
+     *
+     * LAS CUATRO CONDICIONES, Y NINGUNA SOBRA:
+     *
+     *   1. El tipo se cobra (33 o 34). Segunda linea de defensa; la primera es
+     *      el resolutor, que ni crea la orden.
+     *   2. estado === 'creado'. Ni 'pendiente' (la orden todavia no existe alla),
+     *      ni 'error', ni 'omitido' (una persona decidio soltar el correo sin
+     *      link), ni 'pagado' -- a quien ya pago no se le vuelve a ofrecer pagar.
+     *   3. La url empieza por https://. OrdenPagoCreada ya lo exige al construirse;
+     *      se repite aqui porque entre aquello y esto hay un viaje por la base, y
+     *      este es el ultimo punto antes de que lo vea un tercero. Dos cinturones
+     *      para el unico dato del correo que no es nuestro.
+     *   4. Hay monto. Sin el, el correo diria "paga" sin decir cuanto.
+     *
+     * EL MONTO SE ESCRIBE $1.234.567, con punto de miles y sin decimales. Misma
+     * razon que la fecha d-m-Y de mas arriba: esto lo lee un tercero en Chile, no
+     * el operador del panel.
+     *
+     * LA FRASE DEL FINAL no es relleno. Mientras no exista la conciliacion, un
+     * link sigue vivo aunque el cliente ya haya pagado por transferencia; hay que
+     * decirselo, o alguien va a pagar dos veces.
+     */
+    public static function bloqueLinkPago(?string $url, ?string $estado, ?int $monto, int $tipoDte): string
+    {
+        if (! in_array($tipoDte, self::TIPOS_CON_LINK_PAGO, true)) {
+            return '';
+        }
+        if ($estado !== 'creado') {
+            return '';
+        }
+        $url = trim((string) $url);
+        if ($url === '' || ! str_starts_with($url, 'https://')) {
+            return '';
+        }
+        if ($monto === null || $monto <= 0) {
+            return '';
+        }
+
+        return sprintf(
+            "<p>Puede pagarla en linea por <strong>$%s</strong>:</p>\n"
+            . "<p><a href=\"%s\">Pagar esta factura</a></p>\n"
+            . "<p>Si ya la pago por otro medio, ignore este mensaje.</p>\n",
+            number_format($monto, 0, ',', '.'),
+            htmlspecialchars($url, ENT_QUOTES, 'UTF-8')
+        );
+    }
+
     private static function no(string $motivo, string $canal, int $codigo): array
     {
         return ['ok' => false, 'motivo' => $motivo, 'canal' => $canal, 'codigo' => $codigo];

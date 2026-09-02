@@ -59,4 +59,24 @@ interface PasarelaPagoInterface
      * @throws PasarelaPermanenteException  reintentar no va a arreglar nada
      */
     public function crearOrden(SolicitudPago $solicitud, CredencialesPasarela $cred): OrdenPagoCreada;
+
+    /**
+     * Que paso con una orden. SOLO LECTURA: no cobra, no anula, no reembolsa.
+     *
+     * HACE FALTA Y NO ES UN EXTRA. La pasarela avisa de una operacion TANTO SI SE
+     * PAGO COMO SI SE RECHAZO, y su aviso no siempre dice cual de las dos.
+     * Creerse que todo aviso es un pago marcaria como pagadas facturas que
+     * nadie pago -- un error que no se ve hasta que alguien reclama.
+     *
+     * @param string $referenciaExterna lo que identifica la operacion en la
+     *                                  pasarela (para Flow, el token)
+     *
+     * @return array{pagada:bool, referencia:string, monto:?int}
+     *         referencia es NUESTRA clave (commerceOrder), que es por donde se
+     *         encuentra la fila sin depender de como la llame cada proveedor.
+     *
+     * @throws PasarelaTransitoriaException
+     * @throws PasarelaPermanenteException
+     */
+    public function consultarEstado(string $referenciaExterna, CredencialesPasarela $cred): array;
 }

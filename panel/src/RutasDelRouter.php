@@ -66,6 +66,20 @@ final class RutasDelRouter
     private const RE_CONSTANTE = "/^\\s*if \\(\\\$metodo === '([A-Z]+)' && \\\$ruta === ([A-Z][A-Z0-9_]*)\\)/m";
 
     /**
+     * Despacho con PATRON que viene de una constante:
+     *   if ($metodo === 'POST' && preg_match(PATRON_CONFIRMACION_PAGO, $ruta, $m)) {
+     *
+     * Es la version con regex de RE_CONSTANTE, y existe por el mismo motivo
+     * multiplicado: la confirmacion de pago de la pasarela tiene que nombrarse
+     * en TRES sitios que no pueden divergir -- el despacho, la lista de rutas
+     * publicas y la excepcion del CSRF --, asi que su patron vive en una
+     * constante. Sin reconocer esta forma, esa ruta desaparecia del inventario
+     * en silencio: justo la que menos conviene perder de vista, porque es la
+     * unica publica que acepta POST.
+     */
+    private const RE_PATRON_CONSTANTE = "/^\\s*if \\(\\\$metodo === '([A-Z]+)' && preg_match\\(([A-Z][A-Z0-9_]*), \\\$ruta/m";
+
+    /**
      * @return list<array{metodo:string, ruta:string, esPatron:bool}>
      *         'ruta' es la ruta literal, o el regex tal cual esta escrito.
      */
@@ -89,6 +103,22 @@ final class RutasDelRouter
                 'metodo'   => $m[1],
                 'ruta'     => defined($m[2]) ? (string) constant($m[2]) : $m[2],
                 'esPatron' => false,
+            ];
+        }
+
+        preg_match_all(self::RE_PATRON_CONSTANTE, $fuente, $patronesConst, PREG_SET_ORDER);
+        foreach ($patronesConst as $m) {
+            // Misma regla que RE_CONSTANTE, con un matiz que importa: si la
+            // constante NO esta definida (un test que solo lee el fuente), se
+            // deja el NOMBRE -- para no perder la ruta del inventario -- pero
+            // esPatron pasa a false. Un nombre no es un regex, y anunciarlo como
+            // tal haria que quien intente generarle una muestra se encuentre con
+            // algo que no compila.
+            $resuelta = defined($m[2]);
+            $rutas[]  = [
+                'metodo'   => $m[1],
+                'ruta'     => $resuelta ? (string) constant($m[2]) : $m[2],
+                'esPatron' => $resuelta,
             ];
         }
 

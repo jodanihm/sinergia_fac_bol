@@ -48,6 +48,8 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Plantiflex\FacturacionCl\Correo\BrevoMailer;
 use Plantiflex\FacturacionCl\Correo\PreparadorEnvio;
+use Plantiflex\FacturacionCl\Pago\ResolutorLinkPago;
+use Plantiflex\Integration\Facturacion\CertificadoCrypto;
 
 function fail(string $msg, int $code = 2): never
 {
@@ -95,6 +97,29 @@ function conectarDb(): PDO
 // ---------------------------------------------------------------------------
 //  Argumentos
 // ---------------------------------------------------------------------------
+/**
+ * Arma el resolutor del link de pago, o null si falta configuracion.
+ *
+ * Devuelve null en vez de lanzar para que el llamador decida: aqui se traduce a
+ * un fail(), porque este CLI lo corre una persona y tiene que enterarse.
+ */
+function resolutorLinkPago(PDO $pdo): ?ResolutorLinkPago
+{
+    $llaveHex = getenv('CRYPTO_MASTER_KEY');
+    $llave    = is_string($llaveHex) ? @hex2bin($llaveHex) : false;
+    $url      = trim((string) (getenv('PANEL_URL_PUBLICA') ?: ''));
+    if ($llave === false || strlen($llave) !== CertificadoCrypto::KEY_LENGTH || $url === '') {
+        return null;
+    }
+    $crypto = new CertificadoCrypto($llave);
+
+    return new ResolutorLinkPago(
+        $pdo,
+        static fn (string $cifrado): string => $crypto->descifrar($cifrado),
+        rtrim($url, '/') . '/pagos/flow/confirmacion',
+    );
+}
+
 $argumentos = array_slice($argv, 1);
 $dryRun     = in_array('--dry-run', $argumentos, true);
 $idCrudo    = null;
@@ -114,6 +139,25 @@ $pdo = conectarDb();
 // ---------------------------------------------------------------------------
 //  Preparacion: consulta, guardas, PDF y armado del mensaje
 // ---------------------------------------------------------------------------
+// EL LINK DE PAGO ANTES DE PREPARAR, igual que en el runner de la cola.
+//
+// Este CLI existe para mandar un documento suelto a mano, y tiene que seguir
+// exactamente la misma regla: si no hay puerta trasera, no hay forma de mandar
+// por error una factura sin el link que su empresa pidio. En --dry-run NO se
+// resuelve, por lo mismo de siempre: resolver crea una orden de cobro real.
+if (! $dryRun) {
+    $resolutor = resolutorLinkPago($pdo);
+    if ($resolutor === null) {
+        fail('No se puede resolver el link de pago (falta CRYPTO_MASTER_KEY o PANEL_URL_PUBLICA). '
+            . 'No se manda nada: el correo podria salir sin el link que la empresa pidio.');
+    }
+    $pago = $resolutor->resolver($envioId);
+    if ($pago['verdicto'] === 'esperar') {
+        fwrite(STDOUT, "Fila {$envioId}: esperando el link de pago ({$pago['motivo']}). NO se envia nada.\n");
+        exit(1);
+    }
+}
+
 $envio = PreparadorEnvio::preparar($pdo, $envioId);
 
 if ($envio['ok'] === false) {

@@ -91,6 +91,9 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
 use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
+use Plantiflex\FacturacionCl\Pago\FabricaPasarela;
+use Plantiflex\FacturacionCl\Providers\FlowPasarelaPago;
 use Plantiflex\Integration\Facturacion\ProductoDuplicadoException;
 
 require __DIR__ . '/../src/Db.php';
@@ -672,6 +675,11 @@ const PERMISOS_RUTA_PATRON = [
     ['POST', '#^/ventas/panel-emision/(\d+)/(\d+)/estado-sii$#', 'ventas', 'gestionar'],
     ['POST', '#^/ventas/correos/(\d+)/reintentar$#',            'ventas', 'gestionar'],
     ['POST', '#^/ventas/correos/(\d+)/buscar-destinatario$#',   'ventas', 'gestionar'],
+    // La valvula de escape del link de pago: soltar UN correo retenido porque la
+    // pasarela no responde. 'gestionar' y no 'emitir': no toca el SII ni quema
+    // folios, pero si decide que esa factura ya no se va a cobrar por link, asi
+    // que queda auditada.
+    ['POST', '#^/ventas/correos/(\d+)/enviar-sin-link$#',       'ventas', 'gestionar'],
 
     // informes: el slug es el nombre del informe; los tres son de lectura.
     ['GET',  '#^/informes/([a-z-]+)/(pdf|excel)$#', 'informes', 'ver'],
@@ -698,10 +706,35 @@ const RUTAS_PUBLICAS = [
     // (publicas) corre ANTES del paso 2 (espacios con gate propio), asi que
     // esta pasa sin sesion y el resto de /admin/* sigue exigiendola.
     'GET /admin/login', 'POST /admin/login',
+    // LA CONFIRMACION DE PAGO DE FLOW. Publica porque quien la llama es Flow,
+    // desde sus servidores: no hay sesion que exigir ni CSRF que validar -- un
+    // token de formulario no existe para quien no vino de un formulario.
+    //
+    // QUE NO SEA PUBLICA DE VERDAD lo garantiza la FIRMA: el cuerpo viene
+    // firmado con el secreto de la empresa, y el handler rehace esa firma antes
+    // de creerse una sola palabra. Sin secreto correcto no se toca ninguna fila.
+    //
+    // Lleva la cuenta en la url (/pagos/flow/confirmacion/7) porque para
+    // verificar la firma hay que saber de que empresa es el aviso ANTES de
+    // creerse nada. Por eso vive en PATRONES_PUBLICOS y no aqui.
 ];
 
+/**
+ * La confirmacion de pago de la pasarela, con la cuenta en la url.
+ *
+ * En una constante y no escrito tres veces porque se usa en tres sitios que
+ * TIENEN que coincidir: la lista de rutas publicas, la excepcion del CSRF y el
+ * despacho. Si divergieran, el sintoma seria un 403 o un 404 ante un aviso de
+ * pago -- y la pasarela reintenta un rato y se rinde.
+ */
+const PATRON_CONFIRMACION_PAGO = '#^/pagos/flow/confirmacion/(\d+)$#';
+
 /** @var list<string> Regex de rutas publicas con parametro. */
-const PATRONES_PUBLICOS = ['#^/activar/[0-9a-f]{64}$#'];
+const PATRONES_PUBLICOS = [
+    '#^/activar/[0-9a-f]{64}$#',
+    // La confirmacion de pago de la pasarela. Ver el comentario de RUTAS_PUBLICAS.
+    PATRON_CONFIRMACION_PAGO,
+];
 
 /**
  * MENSAJE UNICO DE FALLO DE ACCESO, para las dos pantallas de login.
@@ -5890,6 +5923,143 @@ const CORREO_REBUSCA_MAX_CORREOS = 2000;
  * resolverRazonSocialReceptores(). El destinatario -- que es el dato que importa
  * para diagnosticar un correo -- ya esta en la propia cola.
  */
+/**
+ * POST /ventas/correos/{id}/enviar-sin-link -- la valvula de escape.
+ *
+ * Suelta UN correo que lleva retenido esperando el link de pago. En la corrida
+ * siguiente sale sin el bloque de cobro.
+ *
+ * POR QUE EXISTE. El producto decidio que un correo espera al link en vez de
+ * salir sin el, que es lo correcto para no mandar una factura sin la forma de
+ * pagarla que la empresa prometio. Pero una pasarela caida mucho rato convierte
+ * esa espera en facturas que no llegan, y una factura que no llega el dia 30 no
+ * es un detalle. Este boton le devuelve la decision a una persona.
+ *
+ * QUEDA AUDITADO porque tiene consecuencia comercial: esa factura ya no se va a
+ * cobrar por link, y conviene saber quien lo decidio y cuando.
+ */
+function handleCorreoEnviarSinLinkPost(int $envioId): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    // cuenta_id en el WHERE y desde la SESION, nunca desde la peticion: es lo
+    // que impide soltar el correo de otro tenant escribiendo otro id en la url.
+    $stmt = $pdo->prepare(
+        "UPDATE dte_pago_link p "
+        . 'INNER JOIN dte_envio_correo q ON q.dte_emitido_id = p.dte_emitido_id '
+        . "SET p.estado = 'omitido', p.ultimo_error = NULL "
+        . "WHERE q.id = :id AND q.cuenta_id = :c AND p.estado <> 'pagado'"
+    );
+    $stmt->execute([':id' => $envioId, ':c' => $cuentaId]);
+
+    if ($stmt->rowCount() === 1) {
+        registrarAuditoria($pdo, Auth::usuarioId(), 'pago.link.omitido', 'dte_envio_correo', $envioId, null, null);
+        flashSet('exito', 'El correo saldra sin link de pago en la proxima pasada (cada 5 minutos).');
+    } else {
+        // No se encontro, es de otra cuenta, o ya estaba pagada. Un solo mensaje
+        // para los tres: distinguirlos le diria a quien sondea si ese id existe.
+        flashSet('advertencia', 'No se pudo soltar ese correo. Puede que ya no estuviera esperando.');
+    }
+
+    redirigirPrg('/ventas/correos');
+}
+
+/**
+ * POST /pagos/flow/confirmacion/{cuentaId} -- el aviso de pago de la pasarela.
+ *
+ * PUBLICA Y SIN CSRF, porque la llama Flow desde sus servidores. Lo que la
+ * protege es la FIRMA: se rehace el HMAC de lo recibido con el secreto de esa
+ * empresa y, si no coincide, no se toca absolutamente nada.
+ *
+ * NO SE CREE QUE TODO AVISO ES UN PAGO. Flow avisa igual cuando el pago se
+ * rechaza, y su aviso solo trae un token. Por eso se le vuelve a preguntar por
+ * el estado real antes de marcar nada: dar por pagada una factura que nadie
+ * pago es un error que no se descubre hasta que alguien reclama.
+ *
+ * RESPONDE 200 SIEMPRE QUE LA FIRMA SEA BUENA, incluso si el pago fue rechazado
+ * o si la orden no es nuestra: para la pasarela, 200 significa "recibido". Un
+ * error aqui la hace reintentar durante horas por algo que no va a cambiar.
+ */
+function handleConfirmacionPagoPost(int $cuentaId): void
+{
+    header('Content-Type: text/plain; charset=utf-8');
+
+    $pdo  = Db::conexion();
+    $stmt = $pdo->prepare(
+        'SELECT proveedor, credencial_publica, credencial_cifrada FROM pago_pasarela_cuenta '
+        . 'WHERE cuenta_id = :c AND habilitado = 1 LIMIT 1'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    $config = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    // Cuenta inexistente, sin pasarela o con el cobro apagado: se responde lo
+    // mismo que ante una firma mala. Distinguirlos diria si esa cuenta existe.
+    if ($config === false) {
+        http_response_code(403);
+        echo 'no';
+        return;
+    }
+
+    try {
+        $crypto  = new CertificadoCrypto(kekMaestra());
+        $secreto = $crypto->descifrar((string) $config['credencial_cifrada']);
+    } catch (Throwable $e) {
+        error_log('confirmacion de pago: no se pudo descifrar el secreto de la cuenta ' . $cuentaId);
+        http_response_code(500);
+        echo 'error';
+        return;
+    }
+
+    $recibido = $_POST;
+    $firma    = (string) ($recibido['s'] ?? '');
+    unset($recibido['s']);
+
+    // hash_equals y no ===: comparar firmas con == filtra por el tiempo que
+    // tarda en fallar cuantos caracteres iniciales acerto quien lo intenta.
+    $esperada = FlowPasarelaPago::firmar(array_map('strval', $recibido), $secreto);
+    if ($firma === '' || ! hash_equals($esperada, $firma)) {
+        error_log('confirmacion de pago: firma invalida para la cuenta ' . $cuentaId);
+        http_response_code(403);
+        echo 'no';
+        return;
+    }
+
+    $token = trim((string) ($recibido['token'] ?? ''));
+    if ($token === '') {
+        echo 'ok';
+        return;
+    }
+
+    try {
+        $pasarela = FabricaPasarela::crear((string) $config['proveedor']);
+        $estado   = $pasarela->consultarEstado($token, new CredencialesPasarela(
+            apiKey: (string) $config['credencial_publica'],
+            secreto: $secreto,
+        ));
+    } catch (Throwable $e) {
+        // No se pudo confirmar el estado. Se responde 200 igual -- el aviso SI
+        // llego -- y queda en el log: reintentar del lado de la pasarela no
+        // arreglaria que su propio getStatus no responda.
+        error_log('confirmacion de pago: no se pudo consultar el estado (cuenta ' . $cuentaId . '): ' . $e->getMessage());
+        echo 'ok';
+        return;
+    }
+
+    if ($estado['pagada'] === true) {
+        // Por referencia Y por cuenta: la referencia ya es unica, pero acotar por
+        // cuenta impide que un aviso firmado por una empresa pueda tocar la fila
+        // de otra si alguna vez dos referencias colisionaran.
+        $upd = $pdo->prepare(
+            "UPDATE dte_pago_link SET estado = 'pagado', pagado_at = NOW() "
+            . "WHERE referencia = :r AND cuenta_id = :c AND estado <> 'pagado'"
+        );
+        $upd->execute([':r' => $estado['referencia'], ':c' => $cuentaId]);
+    }
+
+    echo 'ok';
+}
+
 function handleCorreosListadoGet(): void
 {
     $pdo      = Db::conexion();
@@ -10360,8 +10530,28 @@ if ($ruta === '') {
 //  un front controller COMPLETAMENTE APARTE (public/index.php en la raiz del
 //  repo, no panel/public/index.php) y se autentica por X-Api-Key, nunca por
 //  cookie -- por eso no aplica CSRF ahi y no hay nada que excluir aqui.
+//
+//  LA UNICA EXCEPCION, Y POR QUE LO ES
+//  ---------------------------------------------------------------------------
+//  POST /pagos/flow/confirmacion. La llama la pasarela de pago desde SUS
+//  servidores para avisar de un pago: no viene de un formulario, no trae cookie
+//  de sesion y no puede traer un token que solo existe dentro de una sesion
+//  nuestra. Exigirle CSRF no la protege de nada -- la haria fallar siempre.
+//
+//  LO QUE LA PROTEGE ES LA FIRMA, no la ausencia de comprobacion. El handler
+//  rehace el HMAC del cuerpo con el secreto de la empresa antes de creerse una
+//  palabra, y sin coincidencia no toca ninguna fila. Es el mismo criterio que la
+//  API del motor: otra forma de autenticar, no ninguna.
+//
+//  La excepcion es UNA ruta escrita literal. Nada de prefijos ni de patrones:
+//  un '/pagos/' abierto seria una puerta por la que entraria cualquier POST
+//  futuro que alguien cuelgue ahi sin pensar en esto.
 // ===========================================================================
-if ($metodo === 'POST' && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))) {
+if (
+    $metodo === 'POST'
+    && ! preg_match(PATRON_CONFIRMACION_PAGO, $ruta)
+    && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))
+) {
     http_response_code(403);
     header('Content-Type: text/html; charset=utf-8');
     echo '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Solicitud invalida</title></head><body>'
@@ -10927,6 +11117,20 @@ if ($metodo === 'POST' && $ruta === '/ventas/correos/buscar-destinatarios') {
 if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/buscar-destinatario$#', $ruta, $mBuscar)) {
     Auth::requerirSesion();
     handleCorreoBuscarDestinatarioPost((int) $mBuscar[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/enviar-sin-link$#', $ruta, $mSinLink)) {
+    Auth::requerirSesion();
+    handleCorreoEnviarSinLinkPost((int) $mSinLink[1]);
+}
+
+// SIN Auth::requerirSesion(), y es lo unico de este router que lo omite a
+// proposito: la llama la pasarela de pago desde sus servidores. Lo que autentica
+// aqui es la firma del cuerpo, que comprueba el handler. Declarada en
+// PATRONES_PUBLICOS y exceptuada del CSRF con la MISMA constante, para que las
+// tres no puedan divergir.
+if ($metodo === 'POST' && preg_match(PATRON_CONFIRMACION_PAGO, $ruta, $mPago)) {
+    handleConfirmacionPagoPost((int) $mPago[1]);
 }
 
 if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)$#', $ruta, $mDoc)) {
