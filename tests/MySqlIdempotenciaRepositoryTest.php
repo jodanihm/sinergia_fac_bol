@@ -201,4 +201,56 @@ final class MySqlIdempotenciaRepositoryTest extends TestCase
     {
         self::assertNull($this->repo->obtener(self::RUT_A, Ambiente::Produccion, 'clave-inexistente'));
     }
+
+    // -----------------------------------------------------------------------
+    //  liberar(): soltar un claim de un intento que no consumio nada
+    // -----------------------------------------------------------------------
+
+    public function testLiberarDejaReclamarLaMismaClaveDeInmediato(): void
+    {
+        $this->repo->reclamar(self::RUT_A, Ambiente::Produccion, self::CLAVE);
+
+        // Sin liberar, el reintento choca contra el claim vivo (409) hasta que
+        // pase el TTL. Eso es lo que dejaba mudos 5 minutos a los fallos por
+        // falta de CAF, que no consumen ni folio ni envio al SII.
+        self::assertFalse($this->repo->reclamar(self::RUT_A, Ambiente::Produccion, self::CLAVE));
+
+        $this->repo->liberar(self::RUT_A, Ambiente::Produccion, self::CLAVE);
+
+        self::assertTrue(
+            $this->repo->reclamar(self::RUT_A, Ambiente::Produccion, self::CLAVE),
+            'Tras liberar, la misma clave vuelve a estar disponible sin esperar el TTL.'
+        );
+    }
+
+    public function testLiberarNoBorraUnClaimYaCompletado(): void
+    {
+        // LA GARANTIA QUE IMPORTA: un claim con resultado guardado es lo que
+        // hace que un reintento devuelva la emision anterior en vez de emitir
+        // otra vez. Si liberar() pudiera borrarlo, un F5 quemaria un segundo
+        // folio ante el SII.
+        $this->repo->reclamar(self::RUT_A, Ambiente::Produccion, self::CLAVE);
+        $this->repo->completar(self::RUT_A, Ambiente::Produccion, self::CLAVE, 33, 500, '{"folio":500}', 201);
+
+        $this->repo->liberar(self::RUT_A, Ambiente::Produccion, self::CLAVE);
+
+        $previo = $this->repo->obtener(self::RUT_A, Ambiente::Produccion, self::CLAVE);
+        self::assertNotNull($previo, 'Un claim completado NO se borra.');
+        self::assertSame(201, $previo['httpStatus']);
+        self::assertSame(500, $previo['folio']);
+    }
+
+    public function testLiberarNoTocaElClaimDeOtroEmisor(): void
+    {
+        $this->repo->reclamar(self::RUT_A, Ambiente::Produccion, self::CLAVE);
+        $this->repo->reclamar(self::RUT_B, Ambiente::Produccion, self::CLAVE);
+
+        $this->repo->liberar(self::RUT_A, Ambiente::Produccion, self::CLAVE);
+
+        self::assertNotNull(
+            $this->repo->obtener(self::RUT_B, Ambiente::Produccion, self::CLAVE),
+            'La PK es (rut_emisor, ambiente, clave): liberar no puede alcanzar a otro emisor.'
+        );
+        self::assertCount(1, $this->filas());
+    }
 }

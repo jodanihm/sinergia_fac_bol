@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-02',
+        'version' => '1.48',
+        'titulo'  => 'Cuando faltan folios, el sistema lo dice con esas palabras',
+        'tag'     => 'backend',
+        'items'   => [
+            'Emitir un documento de un tipo sin folios disponibles mostraba "Error del motor de emision. NO se emitio; intenta nuevamente". Ni decia cual era el problema, ni donde se arregla, y encima mandaba a reintentar algo que no podia funcionar: sin CAF cargado no hay folio que asignar, por muchas veces que se apriete el boton.',
+            'Ahora el mensaje nombra el tipo que falta -- "No quedan folios de Factura (33)" -- y manda derecho a Configuracion > Folios y CAF, con el detalle por tipo en Informes > Estado de folios.',
+            'Ademas el intento fallido bloqueaba el siguiente durante 5 minutos: quien hacia caso al mensaje y reintentaba recibia otro error igualmente mudo. La comprobacion ahora ocurre ANTES de arrancar la emision, asi que no queda nada bloqueado y el reintento entra limpio en cuanto se carga el CAF.',
+            'Es el mismo criterio que la facturacion masiva ya aplicaba desde antes: contar los folios antes de tocar nada. La emision de a uno decia seguirlo y no lo hacia; ahora las dos vias responden igual ante el mismo hecho.',
+            'Vale para factura, factura exenta, boleta y nota de credito, y tambien para quien llame al motor desde un script propio.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-02',
         'version' => '1.47',
         'titulo'  => 'La carga masiva ya no se cae con archivos que traen formato de mas',
         'tag'     => 'backend',

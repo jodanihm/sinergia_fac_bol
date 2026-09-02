@@ -43,6 +43,7 @@ use Plantiflex\FacturacionCl\Enums\TipoLibro;
 use Plantiflex\FacturacionCl\Enums\TipoOperacionLibro;
 use Plantiflex\FacturacionCl\Exceptions\DocumentoInvalidoException;
 use Plantiflex\FacturacionCl\Exceptions\EnvioRechazadoException;
+use Plantiflex\FacturacionCl\Exceptions\FoliosAgotadosException;
 use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
 use Plantiflex\FacturacionCl\Pdf\BoletaPdfGenerator;
 use Plantiflex\FacturacionCl\Pdf\DtePdfGenerator;
@@ -1090,6 +1091,31 @@ function emitirDte(array $tenant): never
         responder(502, ['error' => 'fallo de autenticacion con el SII', 'estadoSii' => $e->estadoSii, 'glosaSii' => $e->glosaSii]);
     } catch (EnvioRechazadoException $e) {
         responder(502, ['error' => 'el SII rechazo el envio', 'status' => $e->status, 'trackId' => $e->trackId]);
+    } catch (FoliosAgotadosException $e) {
+        // NO ES UN FALLO DEL MOTOR Y NO DEBE PARECERLO. Sin CAF cargado (o con
+        // sus folios gastados) no hay nada que emitir, y el 500 generico que
+        // salia de aqui lo contaba como una averia nuestra: el panel lo
+        // traducia a "Error del motor de emision; intenta nuevamente", que
+        // manda a repetir algo que no puede funcionar. Con 409 y un codigo
+        // propio el llamador puede decir QUE falta y DONDE se arregla.
+        //
+        // SE SUELTA LA RESERVA DE IDEMPOTENCIA. Esta excepcion se lanza al
+        // buscar el CAF o al pedir el folio, o sea antes de asignar folio
+        // alguno y antes de hablar con el SII: no hay nada que se pueda
+        // duplicar, y dejar la reserva tomada condenaria al usuario a 5
+        // minutos de 409 mudos justo despues de cargar el CAF que le faltaba.
+        // Es el mismo razonamiento que ya justifica reclamar DESPUES de
+        // validar el payload, unas lineas mas arriba.
+        if ($idem !== null) {
+            $idem->liberar($tenant['rut_emisor'], $ambiente, $clave);
+        }
+        responder(409, [
+            'error'    => 'sin folios disponibles',
+            'codigo'   => 'sin_folios',
+            'tipoDte'  => $doc->tipoDte->value,
+            'ambiente' => $ambiente->value,
+            'detalle'  => $e->getMessage(),
+        ]);
     } catch (Throwable $e) {
         responder(500, ['error' => 'fallo la emision', 'detalle' => $e->getMessage()]);
     }
@@ -1444,6 +1470,22 @@ function emitirDteLote(array $tenant): never
         responder(502, ['error' => 'fallo de autenticacion con el SII', 'estadoSii' => $e->estadoSii, 'glosaSii' => $e->glosaSii]);
     } catch (EnvioRechazadoException $e) {
         responder(502, ['error' => 'el SII rechazo el envio', 'status' => $e->status, 'trackId' => $e->trackId]);
+    } catch (FoliosAgotadosException $e) {
+        // Mismo diagnostico que en el unitario, pero LA RESERVA NO SE SUELTA.
+        // El lote asigna un folio por documento dentro del bucle, asi que
+        // cuando esto salta ya puede haber folios gastados en los documentos
+        // anteriores; soltar la reserva dejaria que un reintento se comiera
+        // otros tantos. Aqui expira por TTL, como cualquier otro fallo.
+        //
+        // El panel casi nunca llega hasta este punto: la facturacion masiva
+        // cuenta los folios de las tres cubetas antes de armar el sub-lote. Es
+        // la red por debajo de esa cuenta, y la respuesta para quien llame al
+        // motor por su cuenta.
+        responder(409, [
+            'error'   => 'sin folios disponibles',
+            'codigo'  => 'sin_folios',
+            'detalle' => $e->getMessage(),
+        ]);
     } catch (Throwable $e) {
         responder(502, ['error' => 'fallo la emision del lote', 'detalle' => $e->getMessage()]);
     }
@@ -1644,6 +1686,31 @@ function emitirBoleta(array $tenant): never
         responder(502, ['error' => 'fallo de autenticacion con el SII', 'estadoSii' => $e->estadoSii, 'glosaSii' => $e->glosaSii]);
     } catch (EnvioRechazadoException $e) {
         responder(502, ['error' => 'el SII rechazo el envio', 'status' => $e->status, 'trackId' => $e->trackId]);
+    } catch (FoliosAgotadosException $e) {
+        // NO ES UN FALLO DEL MOTOR Y NO DEBE PARECERLO. Sin CAF cargado (o con
+        // sus folios gastados) no hay nada que emitir, y el 500 generico que
+        // salia de aqui lo contaba como una averia nuestra: el panel lo
+        // traducia a "Error del motor de emision; intenta nuevamente", que
+        // manda a repetir algo que no puede funcionar. Con 409 y un codigo
+        // propio el llamador puede decir QUE falta y DONDE se arregla.
+        //
+        // SE SUELTA LA RESERVA DE IDEMPOTENCIA. Esta excepcion se lanza al
+        // buscar el CAF o al pedir el folio, o sea antes de asignar folio
+        // alguno y antes de hablar con el SII: no hay nada que se pueda
+        // duplicar, y dejar la reserva tomada condenaria al usuario a 5
+        // minutos de 409 mudos justo despues de cargar el CAF que le faltaba.
+        // Es el mismo razonamiento que ya justifica reclamar DESPUES de
+        // validar el payload, unas lineas mas arriba.
+        if ($idem !== null) {
+            $idem->liberar($tenant['rut_emisor'], $ambiente, $clave);
+        }
+        responder(409, [
+            'error'    => 'sin folios disponibles',
+            'codigo'   => 'sin_folios',
+            'tipoDte'  => $doc->tipoDte->value,
+            'ambiente' => $ambiente->value,
+            'detalle'  => $e->getMessage(),
+        ]);
     } catch (Throwable $e) {
         responder(500, ['error' => 'fallo la emision', 'detalle' => $e->getMessage()]);
     }

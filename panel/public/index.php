@@ -5133,6 +5133,27 @@ function handleEmisionPost(int $tipoDte): void
     $idemKey   = trim((string) ($_POST['idem_key'] ?? '')) !== '' ? trim((string) $_POST['idem_key']) : bin2hex(random_bytes(16));
     $documento = armarDocumentoEmision($tipoDte, $_POST);
 
+    // LOS FOLIOS SE MIRAN ANTES DE LLAMAR AL MOTOR.
+    //
+    // Es el mismo criterio fail-fast que ya aplica la facturacion masiva unas
+    // lineas mas abajo ("Resumen de folios ANTES DE TOCAR NADA"), y con la
+    // misma funcion, para que las dos vias respondan igual ante el mismo hecho.
+    // El camino unitario decia seguirlo y no lo hacia.
+    //
+    // QUE PASABA SIN ESTO. El motor lanza FoliosAgotadosException, que ningun
+    // endpoint captura: caia en el catch generico y salia como un 500 "fallo la
+    // emision", que el panel traduce a "Error del motor de emision; intenta
+    // nuevamente". Tres problemas de un golpe: no dice cual es el problema, no
+    // dice donde se arregla, y manda a reintentar algo que no puede funcionar.
+    // Encima el intento fallido dejaba tomada la reserva de idempotencia, asi
+    // que ese reintento chocaba 5 minutos contra un 409 igual de mudo.
+    //
+    // Mirandolo aqui no se llega a crear ninguna reserva, asi que el reintento
+    // -- ya con el CAF cargado -- entra limpio.
+    if (sumarFoliosDisponibles($pdo, $rutEmisor, $tipoDte) < 1) {
+        renderEmisionForm($tipoDte, $idemKey, $_POST, null, null, mensajeSinFolios($tipoDte));
+    }
+
     try {
         $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
         // Inalcanzable mientras el router corte los POST de las sesiones de solo
@@ -5407,6 +5428,14 @@ function handleBoletaPost(): void
         ? trim((string) $_POST['idem_key'])
         : bin2hex(random_bytes(16));
     $documento = armarDocumentoBoleta($_POST);
+
+    // Folios antes del motor, igual que en handleEmisionPost() y por lo mismo:
+    // la boleta gasta CAF de tipo 39 y se quedaba sin folios con el mismo
+    // mensaje mudo. Los dos caminos unitarios comparten criterio, que es lo que
+    // se pretendia desde el principio.
+    if (sumarFoliosDisponibles($pdo, $rutEmisor, 39) < 1) {
+        renderEmisionForm(39, $idemKey, $_POST, null, null, mensajeSinFolios(39));
+    }
 
     try {
         $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
@@ -7905,6 +7934,26 @@ function sumarFoliosDisponibles(PDO $pdo, string $rutEmisor, int $tipoDte): int
     }
 
     return $total;
+}
+
+/**
+ * El mensaje de "no hay folios" para la emision de UN documento.
+ *
+ * Dice las tres cosas que necesita quien lo lee: que no se emitio nada, de que
+ * tipo faltan folios, y donde se arregla. El tipo va con nombre y numero
+ * (nombreTipoDte) porque en el SII el numero es el que identifica al CAF, y es
+ * el que hay que pedir.
+ *
+ * NO dice "intenta nuevamente". Reintentar no puede funcionar: sin CAF cargado
+ * no hay folio que asignar, por muchas veces que se apriete el boton.
+ */
+function mensajeSinFolios(int $tipoDte): string
+{
+    return sprintf(
+        'No quedan folios de %s. NO se emitio nada. Pide el CAF de ese tipo al SII y cargalo en '
+        . 'Configuracion > Folios y CAF; el detalle por tipo se ve en Informes > Estado de folios.',
+        nombreTipoDte($tipoDte)
+    );
 }
 
 /** POST /api/v1/dte/lote del motor (facturacion masiva, M4). Mismo patron que
