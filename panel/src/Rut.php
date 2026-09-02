@@ -2,47 +2,56 @@
 
 declare(strict_types=1);
 
+use Plantiflex\FacturacionCl\Sii\Rut as RutSii;
+
 /**
- * Validacion y normalizacion de RUT chileno (modulo 11). Mismo algoritmo que
- * rutDvValido() en public/index.php.
+ * Validacion y normalizacion de RUT chileno, para el panel.
+ *
+ * YA NO IMPLEMENTA EL ALGORITMO: delega en Plantiflex\FacturacionCl\Sii\Rut,
+ * que es ahora la unica copia. Este envoltorio se conserva porque el panel lo
+ * llama por nombre corto en dieciseis sitios y porque vive fuera del autoload
+ * PSR-4 (panel/src/ se carga con require, igual que Auth/Db/Csrf).
+ *
+ * ESE require VA ANTES DEL AUTOLOADER DE COMPOSER y no pasa nada: la clase de
+ * src/ solo se resuelve al LLAMAR a estos metodos, no al declarar esta clase.
+ * Si algun dia esto pasara a extender la otra, habria que moverlo despues del
+ * autoload -- que es justo lo que documenta el require de InformePdf.
+ *
+ * POR QUE SE UNIFICO. El docblock anterior de esta clase ya decia "mismo
+ * algoritmo que rutDvValido() en public/index.php": dos copias que habia que
+ * mantener a la par. No se mantuvieron. Ninguna de las dos miraba el formato
+ * que se ENVIA, y un RUT con puntos llego al XML y el SII rechazo el documento
+ * -- con el folio ya gastado. La historia completa esta en el docblock de la
+ * clase de src/.
  */
 final class Rut
 {
     /** Normaliza a MAYUSCULA sin puntos/espacios: "12.345.678-k" -> "12345678-K". */
     public static function normalizar(string $rut): string
     {
-        return strtoupper(str_replace(['.', ' '], '', trim($rut)));
+        return RutSii::normalizar($rut);
     }
 
     /** Valida formato NNNNNNNN-DV y digito verificador (modulo 11). Espera el RUT ya normalizado. */
     public static function valido(string $rut): bool
     {
-        if (! preg_match('/^(\d{7,8})-([\dK])$/', $rut, $m)) {
-            return false;
-        }
-        [$num, $dv] = [$m[1], $m[2]];
-        $suma = 0;
-        $mul  = 2;
-        for ($i = strlen($num) - 1; $i >= 0; $i--) {
-            $suma += ((int) $num[$i]) * $mul;
-            $mul = $mul === 7 ? 2 : $mul + 1;
-        }
-        $resto = 11 - ($suma % 11);
-        $calc  = $resto === 11 ? '0' : ($resto === 10 ? 'K' : (string) $resto);
+        return RutSii::valido($rut);
+    }
 
-        return $calc === $dv;
+    /** True si el SII aceptaria este RUT en un documento. No mira el digito verificador. */
+    public static function bienFormado(string $rut): bool
+    {
+        return RutSii::bienFormado($rut);
     }
 
     /**
      * Valida solo la FORMA de un RUT ya reducido a digitos+K (sin puntos,
-     * espacios ni guion): 7 a 9 caracteres, todos digitos salvo el ultimo que
-     * puede ser digito o 'K'. NO valida el digito verificador (para eso esta
-     * valido()) -- se usa para reconocer un RUT embebido en texto libre (ej.
-     * el serialNumber de un certificado) sin exigir que el DV calce el
-     * modulo 11, ya que ese texto puede venir con formato no estandar.
+     * espacios ni guion). NO valida el digito verificador: se usa para
+     * reconocer un RUT embebido en texto libre, como el serialNumber de un
+     * certificado.
      */
     public static function formaValida(string $rutSinSeparadores): bool
     {
-        return (bool) preg_match('/^\d{6,8}[0-9K]$/', $rutSinSeparadores);
+        return RutSii::formaValida($rutSinSeparadores);
     }
 }
