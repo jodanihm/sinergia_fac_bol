@@ -130,6 +130,35 @@ final class MySqlIdempotenciaRepository
     }
 
     /**
+     * Suelta un claim SIN COMPLETAR de esta misma solicitud, para que un reintento
+     * inmediato con la misma clave no choque contra un 409 durante todo el TTL.
+     *
+     * SOLO PARA FALLOS QUE NO CONSUMIERON NADA. Un claim existe para que un
+     * reintento no emita dos veces, asi que soltarlo es seguro UNICAMENTE cuando
+     * consta que la solicitud no llego a asignar un folio ni a hablar con el SII
+     * -- el caso de "no hay CAF activo", que revienta antes de las dos cosas. Ante
+     * cualquier fallo posterior el claim se queda donde esta y expira por TTL: mas
+     * vale hacer esperar 5 minutos que arriesgar un documento duplicado, porque los
+     * folios no se devuelven.
+     *
+     * EL WHERE EXIGE http_status IS NULL para no borrar jamas un resultado ya
+     * guardado: si otra pasada alcanzo a completar el claim, su replay tiene que
+     * seguir funcionando. Y por eso mismo no hay riesgo en llamarlo de mas.
+     */
+    public function liberar(string $rutEmisor, Ambiente $ambiente, string $clave): void
+    {
+        $del = $this->pdo->prepare(
+            'DELETE FROM dte_idempotencia '
+            . 'WHERE rut_emisor = :rut AND ambiente = :amb AND clave = :clave AND http_status IS NULL'
+        );
+        $del->execute([
+            ':rut'   => $rutEmisor,
+            ':amb'   => $ambiente->value,
+            ':clave' => $clave,
+        ]);
+    }
+
+    /**
      * Guarda el resultado de una emision exitosa para reintentos con la misma clave.
      *
      * tipoDte y folio son NULLABLES porque un LOTE no tiene un tipo ni un folio: emite
