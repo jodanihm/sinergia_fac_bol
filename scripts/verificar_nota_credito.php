@@ -72,6 +72,7 @@ use Plantiflex\FacturacionCl\Enums\Ambiente;
 use Plantiflex\FacturacionCl\Enums\TipoDte;
 use Plantiflex\FacturacionCl\Sii\DteXmlBuilder;
 use Plantiflex\FacturacionCl\Sii\EnvioDteBuilder;
+use Plantiflex\FacturacionCl\Sii\Rut;
 use Plantiflex\FacturacionCl\Sii\SiiAutenticador;
 use Plantiflex\FacturacionCl\Sii\TedBuilder;
 use Plantiflex\FacturacionCl\Sii\XmlSigner;
@@ -338,9 +339,25 @@ if (! is_array($parsed)) {
     } else {
         ok('el certificado esta vigente con margen.');
     }
-    $sn        = $parsed['subject']['serialNumber'] ?? null;
-    $rutSender = is_string($sn) && $sn !== '' ? $sn : $rut;
-    dato("rutSender (firmante): {$rutSender}");
+    // EL rutSender SE LEE DE dte_certificado, que es de donde lo saca el motor
+    // (resolverRutSender()). Deducirlo aqui del serialNumber del certificado
+    // seria verificar un valor que produccion no usa: el que se guardo paso por
+    // CertificadoRutSenderExtractor, que lo reconstruye desde digitos+K, y ahi
+    // puede haber diferencias con el texto crudo del campo.
+    $q = $pdo->prepare('SELECT rut_sender FROM dte_certificado WHERE rut_emisor = ? AND ambiente = ? LIMIT 1');
+    $q->execute([$rut, $ambienteArg]);
+    $rutSender = trim((string) ($q->fetchColumn() ?: ''));
+    if ($rutSender === '') {
+        falla('el certificado no tiene rut_sender guardado: el motor respondería 409 al emitir.');
+        $sn        = $parsed['subject']['serialNumber'] ?? null;
+        $rutSender = is_string($sn) && $sn !== '' ? Rut::normalizar($sn) : $rut;
+        dato("se seguira la prueba con {$rutSender}, deducido del certificado.");
+    } else {
+        ok("rutSender (firmante) guardado: {$rutSender}");
+        Rut::bienFormado($rutSender)
+            ? ok('el rutSender esta bien escrito para el SII.')
+            : falla("el rutSender '{$rutSender}' no cumple el patron del esquema: la caratula saldria rechazada.");
+    }
 }
 
 // ---------------------------------------------------------------------------
