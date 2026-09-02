@@ -629,6 +629,43 @@ const MIGRACIONES = [
              'valores' => ['sin_definir', 'interna', 'demo', 'trial', 'pago', 'cortesia'], 'esperado' => 6],
         ],
     ],
+    [
+        'id' => '050', 'archivo' => '050_dte_pago_link.sql', 'nota' => 'CREATE TABLE (orden de pago por documento)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'dte_pago_link', 'tablas' => ['dte_pago_link'], 'esperado' => 1],
+            // El UNIQUE se comprueba aparte de la tabla, y no por prolijidad:
+            // es lo unico que impide crear dos ordenes de cobro para el mismo
+            // documento. Una tabla presente sin ese indice cobraria dos veces.
+            ['tipo' => 'indice', 'desc' => 'uk_pago_link_documento (unico)', 'tabla' => 'dte_pago_link',
+             'indice' => 'uk_pago_link_documento', 'esperado' => 1],
+            // La otra mitad de la defensa contra el doble cobro: la referencia
+            // estable que se le manda a la pasarela. Ver la cabecera del .sql.
+            ['tipo' => 'indice', 'desc' => 'uk_pago_link_referencia (unico)', 'tabla' => 'dte_pago_link',
+             'indice' => 'uk_pago_link_referencia', 'esperado' => 1],
+            ['tipo' => 'valores_enum', 'desc' => 'los 5 estados de dte_pago_link.estado', 'tabla' => 'dte_pago_link',
+             'columna' => 'estado',
+             'valores' => ['pendiente', 'creado', 'error', 'omitido', 'pagado'], 'esperado' => 5],
+            ['tipo' => 'claves_foraneas', 'desc' => 'fk_pago_link_documento y fk_pago_link_cuenta',
+             'restricciones' => ['fk_pago_link_documento', 'fk_pago_link_cuenta'], 'esperado' => 2],
+        ],
+    ],
+    [
+        'id' => '051', 'archivo' => '051_pago_pasarela_cuenta.sql', 'nota' => 'CREATE TABLE (credenciales por empresa)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'pago_pasarela_cuenta', 'tablas' => ['pago_pasarela_cuenta'], 'esperado' => 1],
+            ['tipo' => 'indice', 'desc' => 'uk_pasarela_cuenta (unico)', 'tabla' => 'pago_pasarela_cuenta',
+             'indice' => 'uk_pasarela_cuenta', 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'las dos credenciales y el interruptor', 'tabla' => 'pago_pasarela_cuenta',
+             'columnas' => ['habilitado', 'credencial_publica', 'credencial_cifrada'], 'esperado' => 3],
+        ],
+    ],
+    [
+        'id' => '052', 'archivo' => '052_cliente_pago_link.sql', 'nota' => 'ALTER (opt-out por cliente)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'cliente.pago_link', 'tabla' => 'cliente',
+             'columnas' => ['pago_link'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

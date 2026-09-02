@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-02',
+        'version' => '1.51',
+        'titulo'  => 'Preparado el terreno para cobrar en linea desde el correo de la factura',
+        'tag'     => 'datos',
+        'items'   => [
+            'Primer paso de una funcion nueva: que el correo de una factura pueda llevar un boton para pagarla en linea, por el monto exacto y contra la cuenta de cobro de la propia empresa.',
+            'Esta entrega todavia NO cambia ningun correo. Solo prepara la base de datos: donde se guarda la cuenta de cobro de cada empresa, donde queda el link de cada documento, y el interruptor para dejar fuera a un cliente concreto.',
+            'De momento nadie tiene el cobro activo: arranca apagado y hay que configurarlo empresa por empresa. Los 87 clientes del maestro quedan incluidos por defecto, que es lo que corresponde: se excluye a quien haga falta, no al reves.',
+            'Requiere aplicar las migraciones 050, 051 y 052 en la base de datos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-02',
         'version' => '1.50',
         'titulo'  => 'El RUT se limpia antes de emitir, no despues de que el SII rechace',
         'tag'     => 'backend',
