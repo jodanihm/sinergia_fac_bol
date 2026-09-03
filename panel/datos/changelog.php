@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-02',
+        'version' => '1.52',
+        'titulo'  => 'Quien paga una factura por internet ahora vuelve a una pagina que le dice como quedo',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al terminar de pagar, la pasarela devuelve a tu cliente a una pagina nuestra. Esa pagina no existia: quien acababa de pagar se encontraba con un error del sistema. Ahora ve una pantalla clara, con el logo, que le dice si el pago quedo confirmado, si no se completo, o si todavia se esta verificando.',
+            'Lo normal es que diga "estamos verificando": el aviso de la pasarela y el regreso de tu cliente viajan por caminos separados y el segundo suele llegar primero. La pagina lo explica y le pide esperar un momento, en vez de dejarlo con la duda.',
+            'La pagina NUNCA da un pago por bueno solo porque alguien volvio de la pasarela. Solo dice "confirmado" cuando el cobro ya se comprobo contra la pasarela por nuestro propio canal. Es la diferencia entre creerle al navegador de quien paga y preguntarle a quien cobra.',
+            'Tampoco muestra nada de la factura -- ni el monto, ni el numero, ni el nombre de tu empresa -- porque es una pagina publica que se abre sin contrasena.',
+            'No lleva boton de "pagar de nuevo", a proposito: es la forma mas facil de que alguien pague dos veces por error.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-02',
         'version' => '1.51',
         'titulo'  => 'El correo de una factura puede llevar un boton para pagarla en linea',
         'tag'     => 'backend',

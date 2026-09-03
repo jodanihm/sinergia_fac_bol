@@ -93,6 +93,7 @@ use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
 use Plantiflex\FacturacionCl\Pago\ConfirmacionPago;
+use Plantiflex\FacturacionCl\Pago\EstadoRetornoPago;
 use Plantiflex\FacturacionCl\Pago\FabricaPasarela;
 use Plantiflex\Integration\Facturacion\ProductoDuplicadoException;
 
@@ -6206,6 +6207,60 @@ function handleConfirmacionPagoPost(int $cuentaId): void
 
     http_response_code($resultado['codigo']);
     echo $resultado['cuerpo'];
+}
+
+
+/**
+ * La pagina a la que vuelve el PAGADOR desde la pasarela.
+ *
+ * NO CONFIRMA NADA, y esa es toda su razon de ser. La confirmacion la deciden
+ * Flow -> /pagos/flow/confirmacion/{cuenta} -> ConfirmacionPago, y el barrido de
+ * ReconciliadorPagos; los dos preguntan a la pasarela con credenciales y cuadran
+ * el monto. Esto de aqui solo LEE lo que ellos ya escribieron y lo traduce a una
+ * frase. No hay un solo UPDATE en este camino.
+ *
+ *
+ * POR QUE SE LLAMA ...Get SI EL ROUTER LA DESPACHA TAMBIEN EN POST
+ * -----------------------------------------------------------------------------
+ * Por la convencion del archivo: Get es el handler que PINTA y Post el que MUTA.
+ * Este pinta en los dos metodos, asi que Get es el sufijo correcto -- llamarlo
+ * Post prometeria un efecto que no tiene.
+ *
+ * EL METODO DE VERDAD ES POST. Flow redirige el navegador a la url de retorno
+ * con un POST que lleva el token; su cliente PHP oficial lee exactamente
+ * filter_input(INPUT_POST, 'token'). GET se mantiene por dos motivos concretos,
+ * no por simetria: el pagador puede recargar la pagina (y el navegador rehacer
+ * la peticion como GET), o pegar la direccion. Sin la rama GET, alguien que
+ * acaba de pagar veria un 404. Es una pagina de solo lectura: admitir los dos
+ * metodos no abre nada.
+ *
+ * ESTA RUTA ESTA EXENTA DE CSRF a proposito (ver el bloque del gate): el POST lo
+ * origina Flow, no un formulario nuestro, asi que no puede llevar nuestro token.
+ * La exencion es inofensiva porque no hay nada que falsificar: la peticion no
+ * cambia estado.
+ *
+ * NUNCA MUESTRA UN ERROR PHP. Quien mira esta pantalla acaba de darnos dinero;
+ * un stack trace ahi es lo peor que le puede pasar a esa persona. Cualquier
+ * fallo cae en la pagina neutra de "estamos verificando", que ademas es cierta.
+ */
+function handleRetornoPagoGet(): void
+{
+    $token = EstadoRetornoPago::tokenDeLaPeticion($_POST, $_GET);
+
+    try {
+        $estadoRetorno = EstadoRetornoPago::resolver(Db::conexion(), $token);
+    } catch (Throwable $e) {
+        // Ni siquiera se pudo abrir la base. Se registra para nosotros y el
+        // pagador ve la pagina neutra, que en ese momento es literalmente cierta.
+        error_log('retorno de pago: ' . $e->getMessage());
+        $estadoRetorno = EstadoRetornoPago::VERIFICANDO;
+    }
+
+    // Esta pagina depende del token de un pago concreto: cachearla en un proxy
+    // compartido serviria el estado de una persona a la siguiente.
+    header('Cache-Control: no-store, private');
+
+    vista('pago-retorno', ['estadoRetorno' => $estadoRetorno]);
 }
 
 
