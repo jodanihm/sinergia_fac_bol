@@ -66,6 +66,11 @@ PREFIJO_BASE_PRUEBAS='pruebamig_'
 # --fail-on-skipped, porque en la suite general un skip pasa desapercibido.
 TESTS_DE_MIGRACION='BackfillAmbiente054|VeredictoMigraciones'
 
+# Crons del host que administra el repo. Solo uno, a proposito: ver
+# infra/cron.d/README.md.
+CRONS_ADMINISTRADOS=('sinergia-pagos')
+DESTINO_CRON='/etc/cron.d'
+
 BUILD_MEM="2g"
 BUILD_CPUSET="0,1"
 
@@ -397,6 +402,74 @@ SQL
 
 trap 'limpiar_mysql_de_pruebas' EXIT
 
+# ── Crons del host, versionados ──────────────────────────────────────────────
+#
+# POR QUE ESTO ESTA AQUI. /etc/cron.d/sinergia-pagos se creo a mano cuando se
+# puso en marcha el cobro en linea. Funcionaba, pero no vivia en ninguna parte:
+# si el host se reconstruye o se migra, ese archivo no viaja y el conciliador
+# desaparece SIN QUE NADIE SE ENTERE -- no falla nada, simplemente deja de correr.
+# Y el conciliador es la unica red que recupera un pago que Flow cobro y cuyo
+# aviso se perdio. Un modulo que mueve dinero no puede depender de un archivo que
+# solo existe en un servidor.
+#
+# EL CONTENIDO MANDA DESDE EL REPO. Si alguien edita el archivo en el servidor,
+# el siguiente despliegue lo revierte. Es justamente lo que se quiere: que la
+# unica forma de cambiar un cron sea cambiarlo aqui.
+#
+# NO SE REINICIA NADA: cron relee /etc/cron.d por su cuenta.
+verificar_crons() {
+  local modo="$1"   # "dry-run" o "real"
+  local nombre origen destino
+
+  for nombre in "${CRONS_ADMINISTRADOS[@]}"; do
+    origen="$APP_DIR/infra/cron.d/$nombre"
+    destino="$DESTINO_CRON/$nombre"
+
+    [ -f "$origen" ] || falla "falta $origen: el repo tiene que traer el cron que dice administrar"
+
+    if [ -f "$destino" ] && cmp -s "$origen" "$destino"; then
+      # Existe y coincide. Se comprueban igual dueno y permisos: un archivo de
+      # /etc/cron.d con el contenido bueno pero mal dueno NO lo ejecuta cron, y
+      # el sintoma seria el mismo que si no existiera -- silencio.
+      local propietario permisos
+      propietario=$(stat -c '%U:%G' "$destino")
+      permisos=$(stat -c '%a' "$destino")
+
+      if [ "$propietario" = "root:root" ] && [ "$permisos" = "644" ]; then
+        ok "cron $nombre al dia (root:root 0644)"
+        continue
+      fi
+
+      echo "    $nombre: contenido correcto pero $propietario $permisos (se espera root:root 644)"
+    elif [ -f "$destino" ]; then
+      echo "    $nombre: el instalado DIFIERE del repo"
+      diff -u "$destino" "$origen" 2>/dev/null | sed 's/^/      /' || true
+    else
+      echo "    $nombre: no esta instalado"
+    fi
+
+    if [ "$modo" = "dry-run" ]; then
+      echo "    DRY-RUN: aqui se instalaria $destino desde el repo (root:root 0644). No se toca nada."
+      continue
+    fi
+
+    # install en vez de cp: pone contenido, dueno y permisos en una sola
+    # operacion, y escribe a un temporal que renombra -- cron nunca ve un archivo
+    # a medio escribir.
+    install -o root -g root -m 0644 "$origen" "$destino" \
+      || falla "no se pudo instalar $destino"
+
+    # SE VERIFICA DESPUES DE ESCRIBIR, no se da por hecho. install puede volver 0
+    # y dejar algo distinto de lo esperado (un umask raro, un /etc montado de
+    # otra forma), y aqui el fallo es silencioso por naturaleza.
+    cmp -s "$origen" "$destino" || falla "$destino quedo con contenido distinto del repo"
+    [ "$(stat -c '%U:%G' "$destino")" = "root:root" ] || falla "$destino no quedo root:root"
+    [ "$(stat -c '%a' "$destino")" = "644" ] || falla "$destino no quedo con permisos 0644"
+
+    ok "cron $nombre instalado y verificado (root:root 0644)"
+  done
+}
+
 # ── Los tests que EJECUTAN migraciones, aparte y obligatorios ────────────────
 #
 # POR QUE SE CORREN SOLOS Y NO SE CONFIA EN LA SUITE GENERAL. Porque la suite
@@ -443,6 +516,7 @@ verificar_tests_de_migracion() {
              -v "$APP_DIR/scripts:/app/scripts:ro" \
              -v "$APP_DIR/phpunit.xml:/app/phpunit.xml:ro" \
              -v "$APP_DIR/deploy.sh:/app/deploy.sh:ro" \
+             -v "$APP_DIR/infra:/app/infra:ro" \
              sinergia_tests:latest \
              vendor/bin/phpunit --no-coverage --testdox \
                --fail-on-skipped --fail-on-empty-test-suite \
@@ -511,6 +585,7 @@ verificar_suite() {
              -v "$APP_DIR/phpunit.xml:/app/phpunit.xml:ro" \
              -v "$APP_DIR/docker/openssl-legacy.cnf:/etc/ssl/openssl-legacy.cnf:ro" \
              -v "$APP_DIR/deploy.sh:/app/deploy.sh:ro" \
+             -v "$APP_DIR/infra:/app/infra:ro" \
              sinergia_tests:latest vendor/bin/phpunit 2>&1)
   rc=$?
   set -e
@@ -547,6 +622,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
 
   paso "Corriendo la suite (arbol actual, SIN el pull)"
   verificar_suite "dry-run"
+
+  paso "Crons del host administrados por el repo"
+  verificar_crons "dry-run"
 
   echo
   echo "==> DRY-RUN: aqui se haria pull, build de motor y panel, y up -d."
@@ -588,6 +666,11 @@ verificar_tests_de_migracion
 
 paso "Corriendo la suite"
 verificar_suite "real"
+
+# VA DESPUES DE LA SUITE Y ANTES DEL BUILD, como los otros enganches: si algo va
+# a abortar, que aborte sin haber construido ni levantado nada.
+paso "Crons del host administrados por el repo"
+verificar_crons "real"
 
 # ── 5. Build ──────────────────────────────────────────────────────────────────
 paso "Construyendo imagenes (memoria $BUILD_MEM, cpuset $BUILD_CPUSET)"
