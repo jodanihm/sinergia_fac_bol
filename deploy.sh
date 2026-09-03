@@ -56,6 +56,12 @@ SERVICIOS=(mysql motor panel)
 #   DOCKER_BUILDKIT=0 es necesario porque BuildKit ignora --memory (lo dice el
 #   propio help de compose: "Not supported by BuildKit"). Usa el legacy
 #   builder, que avisa que esta deprecado pero funciona en Docker 29.1.3.
+# Prefijo de las bases desechables que se crean para los tests que EJECUTAN
+# migraciones. Tiene que coincidir con BackfillAmbiente054Test::PREFIJO -- hay un
+# test que lo comprueba -- porque el usuario de pruebas se crea con permisos
+# limitados EXACTAMENTE a este patron.
+PREFIJO_BASE_PRUEBAS='pruebamig_'
+
 BUILD_MEM="2g"
 BUILD_CPUSET="0,1"
 
@@ -83,6 +89,7 @@ ok()    { echo "    OK: $*"; }
 falla() { echo "    ERROR: $*"; exit 1; }
 
 trap 'echo; echo "*** DEPLOY ABORTADO en la linea $LINENO. Log: $LOG_FILE ***"' ERR
+
 
 echo "======================================================================"
 echo " deploy sinergia_fac_bol  --  $(date '+%Y-%m-%d %H:%M:%S %Z')"
@@ -275,6 +282,114 @@ verificar_migraciones() {
 # tener datos de un contribuyente; en esta maquina se OMITEN, diciendo cual
 # falta. PHPUnit sale 0 con omitidos, que es justo lo que se quiere: un deploy
 # no puede quedar bloqueado por un fixture que nunca va a estar aqui.
+# ── MySQL desechable para los tests que ejecutan migraciones ─────────────────
+#
+# POR QUE HACE FALTA. tests/BackfillAmbiente054Test.php EJECUTA la migracion 054
+# contra MySQL de verdad, porque lo que hay que comprobar -- que aborte, que no
+# rellene, que la columna acabe NOT NULL sin default -- son SIGNAL,
+# PREPARE/EXECUTE e information_schema, que no existen fuera de MySQL. Un test
+# sobre el texto del .sql habria dado por buena una version en la que la guarda
+# no podia dispararse nunca.
+#
+# Sin base, ese test se salta. Y una migracion que mueve la estructura donde se
+# cobra dinero no puede validarse con quince tests en gris.
+#
+# LO QUE SE PREPARA AQUI: un usuario temporal con contrasena aleatoria y permisos
+# limitados a `pruebamig\_%`.*, y una base con ese prefijo. El test cuelga de ahi
+# las suyas, una por caso.
+#
+# LA GUARDA DE VERDAD ES EL GRANT, no el nombre. Aunque la comprobacion del lado
+# de PHP fallara, este usuario no puede tocar sinergia_fac_bol: MySQL se lo
+# impide. Por eso no se usa root ni el usuario de la aplicacion.
+#
+# LA CONTRASENA NO SE IMPRIME NI SE ESCRIBE EN NINGUN ARCHIVO. Se genera aqui, se
+# pasa al contenedor por -e y muere con la corrida. La de root ni siquiera se
+# lee: se referencia dentro del propio contenedor de mysql.
+MYSQL_PRUEBAS_BASE=""
+MYSQL_PRUEBAS_USER=""
+MYSQL_PRUEBAS_PASS=""
+
+preparar_mysql_de_pruebas() {
+  if ! docker inspect sinergia_mysql >/dev/null 2>&1; then
+    echo "    sin sinergia_mysql: los tests que ejecutan migraciones se saltaran"
+    return 0
+  fi
+
+  local sufijo
+  sufijo=$(head -c8 /dev/urandom | od -An -tx1 | tr -d ' \n')
+
+  MYSQL_PRUEBAS_BASE="${PREFIJO_BASE_PRUEBAS}${sufijo}"
+  MYSQL_PRUEBAS_USER="pruebas_${sufijo}"
+  MYSQL_PRUEBAS_PASS=$(head -c18 /dev/urandom | od -An -tx1 | tr -d ' \n')
+
+  # EL SQL VA POR STDIN Y NO EN -e "...", y no es preferencia: anidar comillas
+  # dentro de docker exec sh -c "mysql -e \"...\"" son tres capas de escape, y la
+  # del GRANT salio mal la primera vez -- el patron acabo con doble barra y MySQL
+  # denegaba el acceso a la base que el propio script acababa de crear. Con
+  # heredoc, lo que se escribe es lo que llega.
+  #
+  # sh -c EN COMILLAS SIMPLES para que $MYSQL_ROOT_PASSWORD lo expanda el shell
+  # DE DENTRO del contenedor: la contrasena de root no pasa por el host, no
+  # aparece en el log y no queda en el historial.
+  #
+  # EL GRANT ES LA GUARDA, y el patron se DERIVA del prefijo en vez de escribirse
+  # a mano. Escrito a mano salio mal: el prefijo ya termina en '_', asi que
+  # anadirle otro '\_' daba `pruebamig_\_%` -- "pruebamig", un caracter
+  # cualquiera, un guion bajo literal -- que no casa con pruebamig_a7b5... y
+  # MySQL denegaba el acceso a la base que el propio script acababa de crear.
+  #
+  # Lo que hace falta es escapar el guion bajo que YA ESTA en el prefijo: sin
+  # escapar, '_' es el comodin de un caracter en LIKE y el permiso se ampliaria a
+  # cualquier base que empiece por "pruebami" + un caracter.
+  local patron_grant="${PREFIJO_BASE_PRUEBAS//_/\\_}%"
+
+  if ! docker exec -i sinergia_mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1 <<SQL
+CREATE DATABASE \`${MYSQL_PRUEBAS_BASE}\`;
+CREATE USER '${MYSQL_PRUEBAS_USER}'@'%' IDENTIFIED BY '${MYSQL_PRUEBAS_PASS}';
+GRANT ALL PRIVILEGES ON \`${patron_grant}\`.* TO '${MYSQL_PRUEBAS_USER}'@'%';
+FLUSH PRIVILEGES;
+SQL
+  then
+    MYSQL_PRUEBAS_BASE=""
+    MYSQL_PRUEBAS_USER=""
+    MYSQL_PRUEBAS_PASS=""
+    echo "    no se pudo preparar el MySQL de pruebas: esos tests se saltaran"
+    return 0
+  fi
+
+  ok "MySQL de pruebas listo (base ${MYSQL_PRUEBAS_BASE}, usuario acotado a ${PREFIJO_BASE_PRUEBAS}%)"
+}
+
+# Se llama desde un trap EXIT: tiene que correr aunque la suite falle, aunque el
+# deploy aborte y aunque alguien mate el script. Sin esto, cada corrida fallida
+# dejaria una base colgando dentro del MySQL de produccion.
+limpiar_mysql_de_pruebas() {
+  [ -n "$MYSQL_PRUEBAS_USER" ] || return 0
+  docker inspect sinergia_mysql >/dev/null 2>&1 || return 0
+
+  # Se borran TODAS las bases de esta corrida -- la base y las que el test colgo
+  # de ella -- buscandolas por prefijo en information_schema, no con una lista
+  # que habria que mantener. El DROP USER va con IF EXISTS para que la limpieza
+  # se pueda repetir sin ruido.
+  docker exec -i sinergia_mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -N -B \
+      | mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1 <<SQL || true
+SELECT CONCAT('DROP DATABASE \`', SCHEMA_NAME, '\`;')
+  FROM information_schema.SCHEMATA
+ WHERE SCHEMA_NAME LIKE '${MYSQL_PRUEBAS_BASE}%';
+SQL
+
+  docker exec -i sinergia_mysql sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' >/dev/null 2>&1 <<SQL || true
+DROP USER IF EXISTS '${MYSQL_PRUEBAS_USER}'@'%';
+SQL
+
+  MYSQL_PRUEBAS_BASE=""
+  MYSQL_PRUEBAS_USER=""
+  MYSQL_PRUEBAS_PASS=""
+}
+
+
+trap 'limpiar_mysql_de_pruebas' EXIT
+
 verificar_suite() {
   local modo="$1"   # "dry-run" o "real"
 
@@ -295,9 +410,28 @@ verificar_suite() {
   # aporta. La config de OpenSSL se monta tambien, para que la suite corra con
   # la del arbol nuevo y no con la horneada en la imagen vieja -- si no, un
   # deploy que venga a ARREGLAR esa config no podria pasar sus propios tests.
+    # Los tests que EJECUTAN migraciones necesitan alcanzar a MySQL. Se les da la
+    # red del contenedor que ya corre -- derivada y no escrita a mano, igual que
+    # en verificar_migraciones -- y un DSN que apunta SOLO a la base desechable.
+    # Si no se pudo preparar, no se pasa nada y esos tests se saltan solos.
+    local extra=()
+    if [ -n "$MYSQL_PRUEBAS_BASE" ]; then
+      local red_mysql
+      red_mysql=$(docker inspect sinergia_mysql \
+                    --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
+                  | grep -v '^$' | head -n1 || true)
+      if [ -n "$red_mysql" ]; then
+        extra=(--network "$red_mysql"
+               -e "TEST_MYSQL_DSN=mysql:host=sinergia_mysql;dbname=${MYSQL_PRUEBAS_BASE};charset=utf8mb4"
+               -e "TEST_MYSQL_USER=${MYSQL_PRUEBAS_USER}"
+               -e "TEST_MYSQL_PASS=${MYSQL_PRUEBAS_PASS}")
+      fi
+    fi
+
   local salida rc
   set +e
   salida=$(docker run --rm \
+               "${extra[@]}" \
              -v "$APP_DIR/src:/app/src:ro" \
              -v "$APP_DIR/tests:/app/tests:ro" \
              -v "$APP_DIR/panel:/app/panel:ro" \
@@ -305,6 +439,7 @@ verificar_suite() {
              -v "$APP_DIR/scripts:/app/scripts:ro" \
              -v "$APP_DIR/phpunit.xml:/app/phpunit.xml:ro" \
              -v "$APP_DIR/docker/openssl-legacy.cnf:/etc/ssl/openssl-legacy.cnf:ro" \
+             -v "$APP_DIR/deploy.sh:/app/deploy.sh:ro" \
              sinergia_tests:latest vendor/bin/phpunit 2>&1)
   rc=$?
   set -e
@@ -332,6 +467,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
   # la base esta al dia con lo que ya hay -- y se avisa de la limitacion.
   paso "Verificando migraciones (arbol actual, SIN el pull)"
   verificar_migraciones "dry-run"
+
+  paso "Preparando MySQL desechable para los tests que ejecutan migraciones"
+  preparar_mysql_de_pruebas
 
   paso "Corriendo la suite (arbol actual, SIN el pull)"
   verificar_suite "dry-run"
@@ -368,6 +506,9 @@ verificar_migraciones "real"
 #
 # Va DESPUES de las migraciones a proposito: si la base no esta al dia, eso se
 # arregla antes y no tiene sentido gastar una corrida de tests.
+paso "Preparando MySQL desechable para los tests que ejecutan migraciones"
+preparar_mysql_de_pruebas
+
 paso "Corriendo la suite"
 verificar_suite "real"
 

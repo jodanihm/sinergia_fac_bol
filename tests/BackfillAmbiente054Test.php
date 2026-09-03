@@ -50,6 +50,21 @@ final class BackfillAmbiente054Test extends TestCase
 {
     private const MIGRACION = __DIR__ . '/../integration/plantiflex/migrations/054_pago_credenciales_por_ambiente.sql';
 
+    /**
+     * El prefijo que TODA base de este test tiene que llevar.
+     *
+     * No es una convencion de nombres: es la guarda. deploy.sh crea el usuario de
+     * pruebas con GRANT limitado a `pruebamig\_%`.*, asi que el propio MySQL
+     * impide tocar cualquier otra base; y el test comprueba el prefijo antes de
+     * conectar, para que un DSN mal apuntado falle aqui y no a mitad de un DROP.
+     * Dos capas, porque la de abajo -- el GRANT -- depende de que quien prepare
+     * el entorno lo haya hecho bien.
+     */
+    public const PREFIJO = 'pruebamig_';
+
+    /** Bases que este test NUNCA puede tocar, pase lo que pase. */
+    private const PROHIBIDAS = ['sinergia_fac_bol', 'preview_fac', 'mysql', 'information_schema'];
+
     private ?PDO $pdo = null;
     private string $base = '';
 
@@ -58,27 +73,48 @@ final class BackfillAmbiente054Test extends TestCase
         $dsn = getenv('TEST_MYSQL_DSN');
         if ($dsn === false || $dsn === '') {
             self::markTestSkipped(
-                'Sin MySQL desechable (TEST_MYSQL_DSN). Este test EJECUTA la migracion: '
-                . 'no se apunta a una base real a proposito.'
+                'Sin MySQL desechable (TEST_MYSQL_DSN). Este test EJECUTA la migracion. '
+                . 'deploy.sh lo prepara solo; a mano, ver la cabecera de esta clase.'
             );
         }
+
+        // --- LA GUARDA, ANTES DE ABRIR NADA ---------------------------------
+        //
+        // FALLA, NO SE SALTA. Un DSN ausente es "aqui no hay MySQL" y saltarse el
+        // test es razonable. Un DSN que apunta a donde no debe es un error de
+        // configuracion del que hay que enterarse: saltarlo lo dejaria pasar en
+        // silencio, y este test crea y BORRA bases enteras.
+        $base = self::baseDelDsn($dsn);
+
+        self::assertNotSame('', $base, "TEST_MYSQL_DSN tiene que traer dbname. DSN recibido sin base: {$dsn}");
+        self::assertNotContains(
+            $base,
+            self::PROHIBIDAS,
+            "TEST_MYSQL_DSN apunta a '{$base}', que es una base REAL. Este test crea y borra bases."
+        );
+        self::assertStringStartsWith(
+            self::PREFIJO,
+            $base,
+            "TEST_MYSQL_DSN apunta a '{$base}', que no lleva el prefijo '" . self::PREFIJO . "'. "
+            . 'Solo se opera sobre bases desechables.'
+        );
 
         try {
             $raiz = new PDO($dsn, (string) getenv('TEST_MYSQL_USER'), (string) getenv('TEST_MYSQL_PASS'), [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             ]);
         } catch (PDOException $e) {
-            self::markTestSkipped('No se pudo conectar al MySQL de pruebas: ' . $e->getMessage());
+            // El mensaje de PDO puede traer el DSN pero nunca la contrasena.
+            self::fail('No se pudo conectar al MySQL de pruebas: ' . $e->getMessage());
         }
 
-        // Base propia por caso. El nombre lleva un aleatorio para que dos
-        // corridas simultaneas no se pisen, y para que sea imposible confundirla
-        // con una base de verdad.
-        $this->base = 'mig054_' . bin2hex(random_bytes(6));
+        // Base propia por caso, colgando de la que dio el entorno: asi dos casos
+        // no se pisan y el nombre sigue casando con el GRANT del usuario.
+        $this->base = $base . '_' . bin2hex(random_bytes(4));
         $raiz->exec('CREATE DATABASE ' . $this->base);
 
         $this->pdo = new PDO(
-            $dsn . ';dbname=' . $this->base,
+            self::dsnSinBase($dsn) . ';dbname=' . $this->base,
             (string) getenv('TEST_MYSQL_USER'),
             (string) getenv('TEST_MYSQL_PASS'),
             [
@@ -260,6 +296,20 @@ final class BackfillAmbiente054Test extends TestCase
             array_map('trim', $sentencias),
             static fn (string $s): bool => $s !== ''
         ));
+    }
+
+    /** El dbname de un DSN de PDO, o cadena vacia si no lo trae. */
+    private static function baseDelDsn(string $dsn): string
+    {
+        return preg_match('/(?:^|;)dbname=([^;]*)/', $dsn, $m) === 1 ? trim($m[1]) : '';
+    }
+
+    /** El mismo DSN sin su dbname, para conectar a la base que crea cada caso. */
+    private static function dsnSinBase(string $dsn): string
+    {
+        $limpio = (string) preg_replace('/(?:^|;)dbname=[^;]*/', '', $dsn);
+
+        return rtrim(str_replace(';;', ';', $limpio), ';');
     }
 
     private function ambienteDe(int $dteId): ?string
