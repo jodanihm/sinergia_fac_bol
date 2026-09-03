@@ -6000,21 +6000,63 @@ const CORREO_REBUSCA_MAX_CORREOS = 2000;
  */
 function handlePagosConfigGet(): void
 {
-    $pdo  = Db::conexion();
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    // LA ELECCION ACTIVA: una fila, un ambiente. Ya no trae credenciales.
     $stmt = $pdo->prepare(
-        'SELECT proveedor, ambiente, habilitado, credencial_publica, url_retorno, '
-        . 'CASE WHEN credencial_cifrada IS NULL OR credencial_cifrada = \'\' THEN 0 ELSE 1 END AS tieneSecreto '
+        'SELECT proveedor, ambiente_activo, habilitado, url_retorno '
         . 'FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
     );
-    $stmt->execute([':c' => Auth::cuentaId()]);
+    $stmt->execute([':c' => $cuentaId]);
     $config = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
 
     vista('pagos-config', [
         'config'      => $config,
+        // EL LLAVERO, UNA ENTRADA POR AMBIENTE. El secreto NUNCA vuelve a la
+        // pantalla: solo si esta cargado o no.
+        'credenciales' => credencialesPorAmbiente($pdo, $cuentaId, (string) ($config['proveedor'] ?? 'flow')),
         'errores'     => [],
         'proveedores' => FabricaPasarela::proveedores(),
         'navActivo'   => 'config.pagos',
     ]);
+}
+
+/**
+ * El llavero de una cuenta para un proveedor, indexado por ambiente.
+ *
+ * Devuelve SIEMPRE las dos entradas, existan o no, para que la pantalla pueda
+ * pintar "sandbox: sin cargar / produccion: configurado" sin tener que adivinar.
+ * El secreto no sale de aqui: solo su presencia.
+ *
+ * @return array<string, array{apiKey:string, tieneSecreto:bool}>
+ */
+function credencialesPorAmbiente(PDO $pdo, int $cuentaId, string $proveedor): array
+{
+    $llavero = [
+        'sandbox'    => ['apiKey' => '', 'tieneSecreto' => false],
+        'produccion' => ['apiKey' => '', 'tieneSecreto' => false],
+    ];
+
+    $stmt = $pdo->prepare(
+        'SELECT ambiente, credencial_publica, '
+        . 'CASE WHEN credencial_cifrada IS NULL OR credencial_cifrada = \'\' THEN 0 ELSE 1 END AS tieneSecreto '
+        . 'FROM pago_pasarela_credencial WHERE cuenta_id = :c AND proveedor = :p'
+    );
+    $stmt->execute([':c' => $cuentaId, ':p' => $proveedor]);
+
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+        $amb = (string) $fila['ambiente'];
+        if (! isset($llavero[$amb])) {
+            continue;
+        }
+        $llavero[$amb] = [
+            'apiKey'       => (string) ($fila['credencial_publica'] ?? ''),
+            'tieneSecreto' => (int) $fila['tieneSecreto'] === 1,
+        ];
+    }
+
+    return $llavero;
 }
 
 /**
@@ -6036,105 +6078,168 @@ function handlePagosConfigPost(): void
     $cuentaId = Auth::cuentaId();
 
     $proveedor  = trim((string) ($_POST['proveedor'] ?? 'flow'));
-    // AmbientePasarela::desde() manda a sandbox cualquier cosa que no sea
-    // exactamente 'produccion', asi que un POST manipulado no puede promover una
-    // cuenta a cobro real por accidente: tiene que decirlo con esa palabra.
-    $ambiente   = AmbientePasarela::desde($_POST['ambiente'] ?? null);
-    $apiKey     = trim((string) ($_POST['credencial_publica'] ?? ''));
-    $secreto    = trim((string) ($_POST['secreto'] ?? ''));
+    $ambiente   = AmbientePasarela::desde($_POST['ambiente_activo'] ?? null);
     $urlRetorno = trim((string) ($_POST['url_retorno'] ?? ''));
     $habilitado = ! empty($_POST['habilitado']);
 
-    $stmt = $pdo->prepare(
-        'SELECT credencial_cifrada, ambiente FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
-    );
-    $stmt->execute([':c' => $cuentaId]);
-    $filaPrevia      = $stmt->fetch(PDO::FETCH_ASSOC);
-    $teniaSecreto    = $filaPrevia !== false && trim((string) $filaPrevia['credencial_cifrada']) !== '';
-    $ambienteAnterior = $filaPrevia === false ? null : (string) $filaPrevia['ambiente'];
+    // UNA PAREJA POR AMBIENTE, Y LAS DOS LLEGAN JUNTAS O NO LLEGAN.
+    //
+    // Aqui estaba el fallo mas probable del modelo viejo: la apiKey se
+    // sobrescribia SIEMPRE y el secreto solo si se escribia. El camino natural al
+    // pasar a produccion -- pegar la apiKey nueva y dejar el secreto en blanco,
+    // porque la pantalla ensena que en blanco significa "no la toques" --
+    // producia apiKey de produccion con secretKey de sandbox: todas las firmas
+    // invalidas y ningun mensaje que lo explicara. Ahora cada ambiente tiene su
+    // fila y su par: mezclarlos es imposible.
+    $entradas = [
+        'sandbox' => [
+            'apiKey'  => trim((string) ($_POST['apikey_sandbox'] ?? '')),
+            'secreto' => trim((string) ($_POST['secreto_sandbox'] ?? '')),
+        ],
+        'produccion' => [
+            'apiKey'  => trim((string) ($_POST['apikey_produccion'] ?? '')),
+            'secreto' => trim((string) ($_POST['secreto_produccion'] ?? '')),
+        ],
+    ];
 
+    $llaveroPrevio = credencialesPorAmbiente($pdo, $cuentaId, $proveedor);
+
+    $stmt = $pdo->prepare('SELECT ambiente_activo FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1');
+    $stmt->execute([':c' => $cuentaId]);
+    $filaPrevia       = $stmt->fetch(PDO::FETCH_ASSOC);
+    $ambienteAnterior = $filaPrevia === false ? null : (string) $filaPrevia['ambiente_activo'];
+
+    // --- validacion ---------------------------------------------------------
     $errores = [];
+
     if (! in_array($proveedor, FabricaPasarela::proveedores(), true)) {
         $errores['proveedor'] = 'Esa pasarela no esta disponible.';
     }
     if ($urlRetorno !== '' && ! str_starts_with($urlRetorno, 'https://')) {
         $errores['url_retorno'] = 'La direccion tiene que empezar por https://';
     }
-    if ($habilitado && ($apiKey === '' || (! $teniaSecreto && $secreto === ''))) {
-        $errores['secreto'] = 'Para activar el cobro hacen falta las dos llaves. '
-            . 'Sin ellas, todos tus correos se quedarian esperando un link que no llegaria.';
+
+    foreach ($entradas as $amb => $dato) {
+        $yaTenia = $llaveroPrevio[$amb]['tieneSecreto'];
+
+        // SECRETO EN BLANCO AL EDITAR = conservar el de ESE ambiente. Nunca el
+        // del otro: viven en filas distintas y no hay forma de confundirlos.
+        // SECRETO EN BLANCO AL CREAR = rechazar. Una apiKey sin su secreto no
+        // sirve para nada y guardarla daria la impresion de que ya esta.
+        if ($dato['apiKey'] !== '' && $dato['secreto'] === '' && ! $yaTenia) {
+            $errores['secreto_' . $amb] = 'Falta la Secret Key de ' . $amb . '. '
+                . 'Las dos llaves van juntas: una API Key sin su secreto no sirve para cobrar.';
+        }
+        if ($dato['apiKey'] === '' && $dato['secreto'] !== '') {
+            $errores['apikey_' . $amb] = 'Falta la API Key de ' . $amb . '.';
+        }
+    }
+
+    // ACTIVAR PRODUCCION EXIGE LAS LLAVES DE PRODUCCION. No se hereda nada de
+    // sandbox: si no hay fila de produccion, no hay cobro en produccion.
+    if ($habilitado && $errores === []) {
+        $ambClave    = $ambiente->value;
+        $tendraApi   = $entradas[$ambClave]['apiKey'] !== '' || $llaveroPrevio[$ambClave]['apiKey'] !== '';
+        $tendraSecre = $entradas[$ambClave]['secreto'] !== '' || $llaveroPrevio[$ambClave]['tieneSecreto'];
+
+        if (! $tendraApi || ! $tendraSecre) {
+            $errores['ambiente_activo'] = sprintf(
+                'Para cobrar en %s hacen falta la API Key Y la Secret Key de %s. '
+                . 'Sin ellas, todos tus correos se quedarian esperando un link que no llegaria.',
+                $ambClave,
+                $ambClave
+            );
+        }
     }
 
     if ($errores !== []) {
+        $llaveroVista = $llaveroPrevio;
+        foreach ($entradas as $amb => $dato) {
+            if ($dato['apiKey'] !== '') {
+                $llaveroVista[$amb]['apiKey'] = $dato['apiKey'];
+            }
+        }
+
         vista('pagos-config', [
             'config' => [
-                'proveedor'          => $proveedor,
-                'ambiente'           => $ambiente->value,
-                'habilitado'         => $habilitado,
-                'credencial_publica' => $apiKey,
-                'url_retorno'        => $urlRetorno,
-                'tieneSecreto'       => $teniaSecreto,
+                'proveedor'       => $proveedor,
+                'ambiente_activo' => $ambiente->value,
+                'habilitado'      => $habilitado,
+                'url_retorno'     => $urlRetorno,
             ],
-            'errores'     => $errores,
-            'proveedores' => FabricaPasarela::proveedores(),
-            'navActivo'   => 'config.pagos',
+            'credenciales' => $llaveroVista,
+            'errores'      => $errores,
+            'proveedores'  => FabricaPasarela::proveedores(),
+            'navActivo'    => 'config.pagos',
         ]);
     }
 
-    $cifrado = null;
-    if ($secreto !== '') {
-        // Mismo cifrado que el certificado digital: AES-256-GCM con la llave
-        // maestra del entorno. El runner de correos la tiene (comparte
-        // sinergia.env con el motor), que es lo que le permite descifrarla para
-        // hablar con la pasarela.
-        $cifrado = (new CertificadoCrypto(kekMaestra()))->cifrar($secreto);
+    // --- guardado -----------------------------------------------------------
+    //
+    // CAMBIAR EL AMBIENTE ACTIVO NO TOCA NINGUNA CREDENCIAL: son dos tablas y
+    // dos escrituras independientes. Pasar a produccion y volver a sandbox deja
+    // las dos parejas intactas.
+    $pdo->prepare(
+        'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, ambiente_activo, habilitado, url_retorno) '
+        . 'VALUES (:c, :p, :a, :h, :u) '
+        . 'ON DUPLICATE KEY UPDATE proveedor = :p2, ambiente_activo = :a2, habilitado = :h2, url_retorno = :u2'
+    )->execute([
+        ':c' => $cuentaId, ':p' => $proveedor, ':a' => $ambiente->value,
+        ':h' => $habilitado ? 1 : 0, ':u' => $urlRetorno !== '' ? $urlRetorno : null,
+        ':p2' => $proveedor, ':a2' => $ambiente->value,
+        ':h2' => $habilitado ? 1 : 0, ':u2' => $urlRetorno !== '' ? $urlRetorno : null,
+    ]);
+
+    $cambiados = [];
+    foreach ($entradas as $amb => $dato) {
+        if ($dato['apiKey'] === '' && $dato['secreto'] === '') {
+            continue;   // ese ambiente no se toco
+        }
+
+        $cifrado = $dato['secreto'] !== ''
+            ? (new CertificadoCrypto(kekMaestra()))->cifrar($dato['secreto'])
+            : null;
+
+        $sql = 'INSERT INTO pago_pasarela_credencial (cuenta_id, proveedor, ambiente, credencial_publica'
+            . ($cifrado !== null ? ', credencial_cifrada' : '') . ') '
+            . 'VALUES (:c, :p, :a, :k' . ($cifrado !== null ? ', :s' : '') . ') '
+            . 'ON DUPLICATE KEY UPDATE credencial_publica = :k2'
+            . ($cifrado !== null ? ', credencial_cifrada = :s2' : '');
+
+        $params = [
+            ':c' => $cuentaId, ':p' => $proveedor, ':a' => $amb,
+            ':k' => $dato['apiKey'], ':k2' => $dato['apiKey'],
+        ];
+        if ($cifrado !== null) {
+            $params[':s']  = $cifrado;
+            $params[':s2'] = $cifrado;
+        }
+        $pdo->prepare($sql)->execute($params);
+
+        $cambiados[$amb] = $cifrado !== null ? '(apiKey y secreto)' : '(solo apiKey)';
     }
 
-    // Un solo UPSERT. El secreto entra en el SET solo si vino uno nuevo: sin
-    // esto, guardar el formulario con el campo vacio -- que es lo normal al
-    // editar cualquier otra cosa -- borraria la llave.
-    $sql = 'INSERT INTO pago_pasarela_cuenta '
-        . '(cuenta_id, proveedor, ambiente, habilitado, credencial_publica, url_retorno' . ($cifrado !== null ? ', credencial_cifrada' : '') . ') '
-        . 'VALUES (:c, :p, :a, :h, :k, :u' . ($cifrado !== null ? ', :s' : '') . ') '
-        . 'ON DUPLICATE KEY UPDATE proveedor = :p2, ambiente = :a2, habilitado = :h2, '
-        . 'credencial_publica = :k2, url_retorno = :u2'
-        . ($cifrado !== null ? ', credencial_cifrada = :s2' : '');
-
-    $params = [
-        ':c' => $cuentaId, ':p' => $proveedor, ':a' => $ambiente->value, ':h' => $habilitado ? 1 : 0,
-        ':k' => $apiKey, ':u' => $urlRetorno !== '' ? $urlRetorno : null,
-        ':p2' => $proveedor, ':a2' => $ambiente->value, ':h2' => $habilitado ? 1 : 0,
-        ':k2' => $apiKey, ':u2' => $urlRetorno !== '' ? $urlRetorno : null,
-    ];
-    if ($cifrado !== null) {
-        $params[':s']  = $cifrado;
-        $params[':s2'] = $cifrado;
-    }
-    $pdo->prepare($sql)->execute($params);
-
-    // Auditado: activar o desactivar el cobro tiene consecuencia comercial, y
-    // cambiar una llave puede retener correos. Sin el secreto, obviamente.
-    // El AMBIENTE va en la auditoria con su valor anterior y el nuevo: pasar de
-    // sandbox a produccion es el momento en que esta empresa empieza a cobrar
-    // dinero de verdad, y tiene que quedar con nombre y hora. El secreto no, por
-    // razones obvias: solo si cambio o no.
+    // Pasar de sandbox a produccion es el momento en que esta empresa empieza a
+    // cobrar dinero de verdad, y tiene que quedar con nombre y hora. Los secretos
+    // no, por razones obvias: solo que ambiente se toco.
     registrarAuditoria(
         $pdo,
         Auth::usuarioId(),
         'pago.pasarela.guardada',
         'cuenta',
         $cuentaId,
-        $ambienteAnterior === null ? null : ['ambiente' => $ambienteAnterior],
+        $ambienteAnterior === null ? null : ['ambiente_activo' => $ambienteAnterior],
         [
-            'proveedor'  => $proveedor,
-            'ambiente'   => $ambiente->value,
-            'habilitado' => $habilitado ? 1 : 0,
-            'secreto'    => $secreto !== '' ? '(cambiado)' : '(sin cambios)',
+            'proveedor'       => $proveedor,
+            'ambiente_activo' => $ambiente->value,
+            'habilitado'      => $habilitado ? 1 : 0,
+            'credenciales'    => $cambiados === [] ? '(sin cambios)' : $cambiados,
         ]
     );
 
     if (! $habilitado) {
-        flashSet('exito', 'Guardado. El cobro en linea esta desactivado: tus correos salen sin boton de pago.');
+        flashSet('exito', 'Guardado. El cobro en linea esta desactivado: tus correos salen sin boton de pago. '
+            . 'Los links ya enviados siguen funcionando y sus pagos se siguen registrando.');
     } elseif ($ambiente->esProduccion()) {
         flashSet('exito', 'Cobro en linea activado EN PRODUCCION: los pagos son reales. '
             . 'Las facturas que emitas de ahora en adelante llevaran el boton de pago.');

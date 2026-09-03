@@ -101,7 +101,7 @@ final class ResolutorLinkPago
 
     public function __construct(
         private readonly PDO $pdo,
-        /** Descifra pago_pasarela_cuenta.credencial_cifrada. */
+        /** Descifra pago_pasarela_credencial.credencial_cifrada. */
         private readonly \Closure $descifrar,
         /**
          * La raiz publica del panel, tal cual (https://facturacion.ejemplo.cl).
@@ -244,6 +244,12 @@ final class ResolutorLinkPago
             return self::v('no_aplica', 'la empresa no tiene el cobro en linea activo');
         }
 
+        // LA FUENTE UNICA DEL AMBIENTE PARA UNA ORDEN NUEVA. Sale de la eleccion
+        // activa, que es una sola fila por empresa: no hay dos configuraciones
+        // compitiendo, porque el esquema no permite escribirlas.
+        $proveedor = (string) $config['proveedor'];
+        $ambiente  = (string) $config['ambiente_activo'];
+
         if ($this->clienteExcluido((int) $fila['cuenta_id'], (string) $fila['receptor_rut'])) {
             return self::v('no_aplica', 'a este cliente no se le manda link');
         }
@@ -270,18 +276,35 @@ final class ResolutorLinkPago
         // sentido tomar el reclamo ni gastar un intento por ella. La direccion
         // viaja DENTRO de la orden, asi que si esta mal el cliente paga igual y
         // el aviso no llega nunca -- cobro real sin registrar.
-        $ambiente = AmbientePasarela::desde($config['ambiente'] ?? null);
         try {
-            $urlBase = UrlPublica::validar(($this->urlPublicaPanel)(), $ambiente);
+            $urlBase = UrlPublica::validar(($this->urlPublicaPanel)(), AmbientePasarela::desde($ambiente));
         } catch (PasarelaNoConfiguradaException $e) {
             return self::v('esperar', $e->getMessage());
+        }
+
+        // LAS LLAVES DEL AMBIENTE ACTIVO, Y SI NO ESTAN NO SE RECLAMA NADA.
+        //
+        // Va ANTES del reclamo por lo mismo que la url: que falten llaves es
+        // configuracion nuestra, no un fallo de la pasarela, asi que no tiene
+        // sentido tomar el reclamo ni gastar un intento por ello. Y sobre todo:
+        // NO SE CAE AL OTRO AMBIENTE. Sin fila de produccion no se crea la orden
+        // con el secreto de sandbox -- eso firmaria mal, o peor, cobraria de
+        // verdad algo que la empresa pidio en pruebas.
+        $credencial = $this->credencialDe((int) $fila['cuenta_id'], $proveedor, $ambiente);
+        if ($credencial === null) {
+            return self::v('esperar', sprintf(
+                'faltan las llaves de %s en %s: cargalas en Configuracion > Cobro en linea',
+                $proveedor,
+                $ambiente
+            ));
         }
 
         $referencia = self::referencia((int) $fila['cuenta_id'], $tipoDte, (int) $fila['folio']);
         $linkId     = $this->reclamar(
             (int) $fila['dte_emitido_id'],
             (int) $fila['cuenta_id'],
-            (string) $config['proveedor'],
+            $proveedor,
+            $ambiente,
             $referencia,
             $total
         );
@@ -294,7 +317,7 @@ final class ResolutorLinkPago
         }
 
         try {
-            $cred = $this->credenciales($config);
+            $cred = $this->credenciales($credencial, $config, $ambiente);
             $orden = FabricaPasarela::crear((string) $config['proveedor'], $this->http)->crearOrden(
                 new SolicitudPago(
                     referencia: $referencia,
@@ -334,10 +357,34 @@ final class ResolutorLinkPago
     /**
      * La clave de la orden que viaja a la pasarela.
      *
-     * DETERMINISTA, NUNCA ALEATORIA. Es la mitad de la defensa contra el doble
-     * cobro: si la orden se creo alla y la respuesta se perdio, el reintento
-     * manda ESTA MISMA y la pasarela devuelve la que ya existe en vez de crear
-     * otra. Con un valor aleatorio, ese caso genera dos cobros.
+     * DETERMINISTA, PERO NO DA IDEMPOTENCIA. Aqui decia que era "la mitad de la
+     * defensa contra el doble cobro" porque "el reintento manda ESTA MISMA y la
+     * pasarela devuelve la que ya existe en vez de crear otra". Se probo contra
+     * Flow Sandbox y es FALSO:
+     *
+     *     payment/create con DIAG-IDEMPOTENCIA-1788454686  -> HTTP 200, flowOrder 10123622
+     *     payment/create con la MISMA commerceOrder         -> HTTP 200, flowOrder 10123623
+     *
+     * Dos ordenes, dos tokens distintos, sin error ni aviso. Flow no deduplica
+     * por commerceOrder.
+     *
+     * PARA QUE SIRVE ENTONCES: para identificar la orden en el panel de Flow y
+     * para cuadrar contra su campo commerceOrder al conciliar. Nada mas.
+     *
+     * QUE PASA DE VERDAD SI EL PROCESO MUERE entre crearOrden() y confirmar():
+     * queda una orden huerfana en Flow. No es un doble cobro, porque su url de
+     * checkout no se guardo en ninguna parte y el correo no llego a salir: nadie
+     * puede pagarla. El reintento crea otra, esa si se guarda y esa si se envia.
+     * El cliente recibe un link y paga una vez.
+     *
+     * Y NO SE ARREGLA CON getStatusByCommerceId. Se comprobo tambien: su
+     * respuesta trae flowOrder, commerceOrder, requestDate, status, subject,
+     * currency, amount, payer, optional, pending_info, paymentData y merchantId
+     * -- NI token NI url. No sirve para reconstruir el checkout de la orden
+     * huerfana. Peor: ante commerceOrder duplicada contesta por UNA sola de las
+     * ordenes (devolvio la segunda) y no informa de que hay varias, asi que
+     * conciliar por esa via podria acreditar una orden distinta de la que el
+     * cliente pago. Por eso NO se usa.
      */
     public static function referencia(int $cuentaId, int $tipoDte, int $folio): string
     {
@@ -366,11 +413,21 @@ final class ResolutorLinkPago
         return $fila === false ? null : $fila;
     }
 
-    /** @return array<string,mixed>|null */
+    /**
+     * LA ELECCION ACTIVA de la empresa: que proveedor, en que ambiente, si cobra.
+     *
+     * YA NO TRAE CREDENCIALES, y esa es la separacion entera. Esta fila responde
+     * "que hace esta empresa hoy" y es UNA (UNIQUE(cuenta_id)); las llaves
+     * responden "con que se habla con tal proveedor en tal ambiente" y son
+     * varias. Mezclarlas era lo que hacia imposible tener sandbox y produccion a
+     * la vez: pasar de uno a otro sobrescribia el secreto del anterior.
+     *
+     * @return array<string,mixed>|null
+     */
     private function configuracionPasarela(int $cuentaId): ?array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT proveedor, ambiente, habilitado, credencial_publica, credencial_cifrada, url_retorno '
+            'SELECT proveedor, ambiente_activo, habilitado, url_retorno '
             . 'FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
         );
         $stmt->execute([':c' => $cuentaId]);
@@ -379,20 +436,45 @@ final class ResolutorLinkPago
         return $fila === false ? null : $fila;
     }
 
-    /** @param array<string,mixed> $config */
-    private function credenciales(array $config): CredencialesPasarela
+    /**
+     * Las llaves de UN proveedor en UN ambiente, o null si no hay.
+     *
+     * SIN FALLBACK, NUNCA. Si no hay credenciales para el ambiente pedido, esto
+     * devuelve null y el llamador para. Caer al otro ambiente seria firmar con el
+     * secreto equivocado, o peor: crear en produccion una orden que la empresa
+     * pidio en sandbox.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function credencialDe(int $cuentaId, string $proveedor, string $ambiente): ?array
     {
-        $secreto = ($this->descifrar)((string) ($config['credencial_cifrada'] ?? ''));
+        $stmt = $this->pdo->prepare(
+            'SELECT credencial_publica, credencial_cifrada FROM pago_pasarela_credencial '
+            . 'WHERE cuenta_id = :c AND proveedor = :p AND ambiente = :a LIMIT 1'
+        );
+        $stmt->execute([':c' => $cuentaId, ':p' => $proveedor, ':a' => $ambiente]);
+        $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return $fila === false ? null : $fila;
+    }
+
+    /**
+     * @param array<string,mixed> $credencial fila de pago_pasarela_credencial
+     * @param array<string,mixed> $config     fila de pago_pasarela_cuenta
+     */
+    private function credenciales(array $credencial, array $config, string $ambiente): CredencialesPasarela
+    {
+        $secreto = ($this->descifrar)((string) ($credencial['credencial_cifrada'] ?? ''));
 
         return new CredencialesPasarela(
-            apiKey: (string) ($config['credencial_publica'] ?? ''),
+            apiKey: (string) ($credencial['credencial_publica'] ?? ''),
             secreto: $secreto,
-            // DESDE LA CONFIGURACION, nunca fijo. Aqui habia un `sandbox: false`
-            // escrito a mano que mandaba TODA orden al Flow real y dejaba las
-            // constantes de sandbox como codigo inalcanzable: no habia forma de
-            // probar sin cobrarle a alguien. AmbientePasarela::desde() manda a
-            // sandbox cualquier valor que no sea exactamente 'produccion'.
-            ambiente: AmbientePasarela::desde($config['ambiente'] ?? null),
+            // EL AMBIENTE LLEGA COMO PARAMETRO y ya no se relee de la fila,
+            // porque quien llama tiene que haber decidido con cual esta
+            // trabajando: el activo si crea, el de la orden si consulta. Aqui
+            // habia un `sandbox: false` escrito a mano que mandaba TODA orden al
+            // Flow real y dejaba las constantes de sandbox inalcanzables.
+            ambiente: AmbientePasarela::desde($ambiente),
             urlRetorno: trim((string) ($config['url_retorno'] ?? '')) ?: null,
         );
     }
@@ -474,18 +556,29 @@ final class ResolutorLinkPago
      *
      * @return int|null id de la fila si se gano el reclamo; null si lo tiene otro
      */
-    private function reclamar(int $dteEmitidoId, int $cuentaId, string $proveedor, string $referencia, int $monto): ?int
-    {
+    private function reclamar(
+        int $dteEmitidoId,
+        int $cuentaId,
+        string $proveedor,
+        string $ambiente,
+        string $referencia,
+        int $monto
+    ): ?int {
         $ahora = date('Y-m-d H:i:s');
 
         try {
+            // AQUI SE CONGELA LA HISTORIA DE LA ORDEN: proveedor y ambiente se
+            // escriben UNA vez, en este INSERT, y ningun UPDATE del modulo los
+            // vuelve a tocar. Es lo que permite que una callback tardia de una
+            // orden de sandbox se resuelva contra sandbox aunque la empresa ya
+            // este cobrando en produccion.
             $ins = $this->pdo->prepare(
                 'INSERT INTO dte_pago_link '
-                . '(dte_emitido_id, cuenta_id, proveedor, referencia, monto, estado, intentos, reclamado_at) '
-                . "VALUES (:d, :c, :p, :r, :m, 'pendiente', 1, :ahora)"
+                . '(dte_emitido_id, cuenta_id, proveedor, ambiente, referencia, monto, estado, intentos, reclamado_at) '
+                . "VALUES (:d, :c, :p, :a, :r, :m, 'pendiente', 1, :ahora)"
             );
             $ins->execute([
-                ':d' => $dteEmitidoId, ':c' => $cuentaId, ':p' => $proveedor,
+                ':d' => $dteEmitidoId, ':c' => $cuentaId, ':p' => $proveedor, ':a' => $ambiente,
                 ':r' => $referencia, ':m' => $monto, ':ahora' => $ahora,
             ]);
 

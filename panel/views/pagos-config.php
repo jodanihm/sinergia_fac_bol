@@ -2,8 +2,9 @@
 /**
  * Configuracion > Cobro en linea.
  *
- * Recibe: $config (array|null con proveedor, habilitado, credencial_publica,
- * url_retorno y tieneSecreto), $errores (array<string,string>) y $proveedores
+ * Recibe: $config (array|null con proveedor, ambiente_activo, habilitado y
+ * url_retorno), $credenciales (el llavero: una entrada por ambiente, con apiKey
+ * y si hay secreto -- NUNCA el secreto), $errores (array<string,string>) y $proveedores
  * (list<string>).
  *
  * EL SECRETO NO SE PINTA NUNCA, NI SIQUIERA ENMASCARADO. El campo va vacio
@@ -28,11 +29,17 @@ $err = static function (string $campo) use ($errores): string {
         : '';
 };
 $habilitado   = ! empty($config['habilitado']);
-$tieneSecreto = ! empty($config['tieneSecreto']);
+// El llavero llega SIEMPRE con las dos entradas, existan o no: la pantalla
+// tiene que poder decir "sandbox: configurado / produccion: sin cargar" sin
+// adivinar. El secreto no viaja hasta aqui, solo si esta puesto.
+$llavero = $credenciales ?? [
+    'sandbox'    => ['apiKey' => '', 'tieneSecreto' => false],
+    'produccion' => ['apiKey' => '', 'tieneSecreto' => false],
+];
 // Sin fila todavia -> sandbox, igual que el default de la columna. Que la
 // pantalla y la base digan lo mismo evita que alguien crea que esta en
 // produccion porque el formulario venia en blanco.
-$ambiente     = ($config['ambiente'] ?? 'sandbox') === 'produccion' ? 'produccion' : 'sandbox';
+$ambiente     = ($config['ambiente_activo'] ?? 'sandbox') === 'produccion' ? 'produccion' : 'sandbox';
 $enProduccion = $ambiente === 'produccion';
 ?>
 
@@ -68,7 +75,7 @@ $enProduccion = $ambiente === 'produccion';
     </div>
 <?php endif; ?>
 
-<?php if (! $tieneSecreto): ?>
+<?php if (! $llavero['sandbox']['tieneSecreto'] && ! $llavero['produccion']['tieneSecreto']): ?>
     <div class="panel-info">
         <p class="panel-info__titulo">
             <span class="panel-info__icono" aria-hidden="true">&#9432;</span>
@@ -129,38 +136,65 @@ $enProduccion = $ambiente === 'produccion';
         </div>
 
         <div class="form-campo">
-            <label for="ambiente">Ambiente</label>
-            <select name="ambiente" id="ambiente">
+            <label for="ambiente_activo">Ambiente activo</label>
+            <select name="ambiente_activo" id="ambiente_activo">
                 <option value="sandbox" <?= $enProduccion ? '' : 'selected'; ?>>Sandbox (pruebas, no cobra)</option>
                 <option value="produccion" <?= $enProduccion ? 'selected' : ''; ?>>Produccion (cobra de verdad)</option>
             </select>
+            <?= $err('ambiente_activo'); ?>
             <small class="form-ayuda">
-                Empieza siempre en <strong>Sandbox</strong> con las llaves de prueba de Flow: los links funcionan
-                igual pero no mueven dinero. Cambia a Produccion solo cuando hayas comprobado el circuito completo,
-                y acuerdate de poner entonces las llaves reales: las de sandbox no sirven en produccion.
+                Decide donde se crean las facturas <strong>nuevas</strong>. Las ya enviadas no cambian: cada link
+                recuerda donde nacio, asi que un pago de una prueba se sigue registrando aunque ya estes cobrando
+                de verdad. Cambiar de ambiente <strong>no borra</strong> las llaves del otro.
             </small>
         </div>
 
-        <div class="form-campo">
-            <label for="credencial_publica">API key</label>
-            <input type="text" name="credencial_publica" id="credencial_publica"
-                   value="<?= $val('credencial_publica'); ?>" autocomplete="off">
-            <?= $err('credencial_publica'); ?>
-            <small class="form-ayuda">Identifica tu comercio. No es secreta.</small>
-        </div>
+        <?php
+            /* LAS DOS PAREJAS, CADA UNA EN SU BLOQUE. Antes habia un solo par de
+               campos y el ambiente decidia cual se usaba, asi que pasar a
+               produccion sobrescribia las llaves de sandbox -- y dejar el secreto
+               en blanco (lo que la propia pantalla recomienda al editar) juntaba
+               la API key de un ambiente con la Secret key del otro. Separadas,
+               eso no se puede escribir. */
+        ?>
+        <?php foreach (['sandbox' => 'Sandbox (pruebas)', 'produccion' => 'Produccion (dinero real)'] as $amb => $rotulo): ?>
+            <fieldset class="form-campo" style="border:1px solid #d6dee8;border-radius:6px;padding:0.75rem 1rem;">
+                <legend style="padding:0 0.4rem;font-weight:600;">
+                    Llaves de <?= htmlspecialchars($rotulo, ENT_QUOTES, 'UTF-8'); ?>
+                    <?php if ($llavero[$amb]['tieneSecreto']): ?>
+                        <span class="badge badge--ok">configuradas</span>
+                    <?php else: ?>
+                        <span class="badge badge--neutro">sin cargar</span>
+                    <?php endif; ?>
+                </legend>
 
-        <div class="form-campo">
-            <label for="secreto">Secret key</label>
-            <input type="password" name="secreto" id="secreto" value="" autocomplete="new-password">
-            <?= $err('secreto'); ?>
-            <small class="form-ayuda">
-                <?php if ($tieneSecreto): ?>
-                    Ya hay una guardada y cifrada. <strong>Dejalo en blanco para no cambiarla.</strong>
-                <?php else: ?>
-                    Se guarda cifrada y no se vuelve a mostrar nunca.
-                <?php endif; ?>
-            </small>
-        </div>
+                <div class="form-campo">
+                    <label for="apikey_<?= $amb; ?>">API key</label>
+                    <input type="text" name="apikey_<?= $amb; ?>" id="apikey_<?= $amb; ?>"
+                           value="<?= htmlspecialchars($llavero[$amb]['apiKey'], ENT_QUOTES, 'UTF-8'); ?>"
+                           autocomplete="off">
+                    <?= $err('apikey_' . $amb); ?>
+                    <small class="form-ayuda">Identifica tu comercio en <?= $amb; ?>. No es secreta.</small>
+                </div>
+
+                <div class="form-campo">
+                    <label for="secreto_<?= $amb; ?>">Secret key</label>
+                    <input type="password" name="secreto_<?= $amb; ?>" id="secreto_<?= $amb; ?>"
+                           value="" autocomplete="new-password">
+                    <?= $err('secreto_' . $amb); ?>
+                    <small class="form-ayuda">
+                        <?php if ($llavero[$amb]['tieneSecreto']): ?>
+                            Ya hay una guardada y cifrada para <?= $amb; ?>.
+                            <strong>Dejalo en blanco para no cambiarla.</strong>
+                            Solo afecta a <?= $amb; ?>: la del otro ambiente no se toca.
+                        <?php else: ?>
+                            Se guarda cifrada y no se vuelve a mostrar nunca.
+                            Va junto con la API key de <?= $amb; ?>: las dos o ninguna.
+                        <?php endif; ?>
+                    </small>
+                </div>
+            </fieldset>
+        <?php endforeach; ?>
 
         <div class="form-campo">
             <label for="url_retorno">A donde vuelve el cliente despues de pagar</label>

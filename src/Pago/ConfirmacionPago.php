@@ -60,71 +60,24 @@ final class ConfirmacionPago
         Closure $descifrar,
         ?Client $http = null,
     ): array {
-        // SIN "AND habilitado = 1", Y ES UNA CORRECCION.
+        // PRIMERO LA ORDEN, DESPUES LAS LLAVES. Esta orden esta invertido
+        // respecto de como estaba, y la inversion ES el arreglo.
         //
-        // El interruptor gobierna la CREACION de links nuevos, no la recepcion de
-        // avisos de links ya creados. Con el filtro puesto, una empresa que
-        // desactivara el cobro -- algo que la propia pantalla recomienda para
-        // desatascar la cola -- empezaba a responder 403 a la pasarela: sus
-        // clientes seguian pudiendo pagar los links ya emitidos y esos pagos no
-        // se registraban jamas. Apagar el grifo no tira el agua que ya salio.
-        $stmt = $pdo->prepare(
-            'SELECT proveedor, ambiente, credencial_publica, credencial_cifrada '
-            . 'FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
-        );
-        $stmt->execute([':c' => $cuentaId]);
-        $config = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        // Una cuenta sin pasarela nunca pudo emitir un link, asi que un aviso
-        // para ella no existe. Se responde 403 y no 200 porque aqui no hay nada
-        // que consultar ni que recuperar mas tarde: no es un aviso perdido, es
-        // una url que no corresponde a ninguna empresa con cobro configurado.
-        if ($config === false) {
-            return self::r(403, 'no', 'cuenta sin pasarela configurada');
-        }
-
-        try {
-            $secreto = $descifrar((string) $config['credencial_cifrada']);
-        } catch (Throwable $e) {
-            return self::r(500, 'error', 'no se pudo descifrar el secreto');
-        }
-
-        // EL AVISO DE FLOW NO VIENE FIRMADO, Y ANTES SE EXIGIA QUE LO ESTUVIERA.
+        // Antes se leia la configuracion de la cuenta ANTES de saber de que orden
+        // hablaba el aviso, asi que se resolvia con el proveedor y el ambiente
+        // VIGENTES. En cuanto una empresa pasaba de sandbox a produccion, toda
+        // orden suya que siguiera viva se consultaba contra
+        // https://www.flow.cl/api con la apiKey de produccion y un token de
+        // sandbox: Flow no lo conoce, fallo permanente en bucle, y el pago no se
+        // registraba jamas.
         //
-        // Esta clase pedia un parametro 's' y lo comparaba con un HMAC del resto
-        // del cuerpo. Flow no manda ese parametro: su documentacion de
-        // "Confirmacion de orden" dice que la llamada llega por POST con
-        // Content-Type application/x-www-form-urlencoded y el cuerpo es
-        // UNICAMENTE token=<token de la transaccion>. La firma 's' es de las
-        // peticiones que SALEN hacia su API (payment/create, payment/getStatus),
-        // no de las que entran.
+        // Ahora la orden dice con que nacio -- proveedor y ambiente congelados en
+        // el INSERT de ResolutorLinkPago::reclamar() -- y con eso se buscan las
+        // llaves. Una callback tardia de sandbox se resuelve contra sandbox
+        // aunque la empresa ya este cobrando de verdad.
         //
-        // Consecuencia medida en produccion: Flow llamo a
-        // /pagos/flow/confirmacion/1, se le respondio 403 "firma invalida", y el
-        // pago del DTE 241 quedo sin registrar -- estado 'creado',
-        // estado_pasarela NULL. Con la firma exigida, NINGUN aviso real podia
-        // pasar nunca: el 100% de los pagos dependia del conciliador.
-        //
-        // NO SE PONE UNA FIRMA ALTERNATIVA en su lugar. Inventar un esquema que
-        // Flow no implementa solo reproduciria el mismo 403 con otro nombre.
-        //
-        //
-        // ENTONCES QUE AUTENTICA ESTO, SI CUALQUIERA PUEDE POSTEAR AQUI
-        // ---------------------------------------------------------------------
-        // El aviso no se cree: se usa como AVISO, no como fuente. Del cuerpo solo
-        // sale un token, y con el token no se marca nada. Lo que decide es la
-        // consulta a payment/getStatus que hacemos nosotros, con la apiKey y el
-        // secreto de ESTA cuenta y firmada con secretKey, y despues el monto
-        // tiene que cuadrar al peso. Un tercero que postee un token cualquiera
-        // consigue, en el mejor de los casos para el, que le preguntemos a Flow
-        // por una orden que no cambiara de estado.
-        //
-        // Es el modelo que Flow prescribe, y es el mismo que ya usa la pagina de
-        // retorno (ver EstadoRetornoPago): el navegador y la callback son
-        // punteros; la verdad se pide por el canal con credenciales.
-        //
-        // is_scalar filtra arrays anidados: strval() sobre un array emite warning
-        // y produce "Array", que aqui acabaria buscando una orden llamada "Array".
+        // is_scalar filtra arrays anidados: (string) sobre un array produce
+        // "Array", que aqui acabaria buscando una orden con ese token.
         $recibido = array_filter($post, 'is_scalar');
 
         $token = trim((string) ($recibido['token'] ?? ''));
@@ -135,16 +88,20 @@ final class ConfirmacionPago
             return self::r(200, 'ok', 'aviso sin token');
         }
 
-        // LA FILA SE BUSCA POR TOKEN Y POR CUENTA, antes de preguntar nada.
+        // EL AVISO DE FLOW NO VIENE FIRMADO, y exigirlo rechazaba todos los
+        // pagos: su documentacion dice POST con el cuerpo token=<token> y nada
+        // mas; la firma HMAC es de las peticiones que SALEN hacia su API. Lo que
+        // sostiene esta ruta no es autenticar al que llama, es no creerle: del
+        // cuerpo sale un token, y con el token no se marca nada. Decide la
+        // consulta a payment/getStatus que hacemos nosotros, firmada, y el monto
+        // exacto.
         //
-        // cuenta_id en el WHERE es lo que impide que un aviso dirigido a una
-        // empresa toque la orden de otra, y con la firma fuera es la unica
-        // defensa que queda en este punto: sin el, un token de la cuenta 5
-        // posteado a /pagos/flow/confirmacion/1 encontraria su fila. El token es
-        // lo unico que trae el aviso, asi que es por donde hay que entrar -- y
-        // por eso la orden se guarda con el token como identificador externo.
+        // cuenta_id en el WHERE es la unica defensa que queda en este punto: sin
+        // el, un token de una empresa posteado a la url de otra encontraria su
+        // fila. Por eso la cuenta va en el path de la url de confirmacion.
         $stmt = $pdo->prepare(
-            'SELECT id, monto FROM dte_pago_link WHERE cuenta_id = :c AND orden_externa = :t LIMIT 1'
+            'SELECT id, monto, proveedor, ambiente FROM dte_pago_link '
+            . 'WHERE cuenta_id = :c AND orden_externa = :t LIMIT 1'
         );
         $stmt->execute([':c' => $cuentaId, ':t' => $token]);
         $link = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -160,6 +117,54 @@ final class ConfirmacionPago
             // alarmaria al comerciante por algo que no puede arreglar. Si era la
             // carrera, el conciliador barre esa orden mas tarde igualmente.
             return self::r(200, 'ok', 'orden desconocida para esta cuenta');
+        }
+
+        // LAS LLAVES DEL AMBIENTE DE LA ORDEN, jamas las del ambiente activo.
+        //
+        // SIN "AND habilitado = 1", Y ES UNA CORRECCION QUE SE MANTIENE. El
+        // interruptor gobierna la CREACION de links nuevos, no la recepcion de
+        // avisos de links ya creados. Con el filtro puesto, una empresa que
+        // desactivara el cobro -- algo que la propia pantalla recomienda para
+        // desatascar la cola -- empezaba a responder 403 a la pasarela: sus
+        // clientes seguian pudiendo pagar los links ya emitidos y esos pagos no
+        // se registraban jamas. Apagar el grifo no tira el agua que ya salio.
+        // Por eso aqui no se consulta pago_pasarela_cuenta en absoluto.
+        $stmt = $pdo->prepare(
+            'SELECT credencial_publica, credencial_cifrada FROM pago_pasarela_credencial '
+            . 'WHERE cuenta_id = :c AND proveedor = :p AND ambiente = :a LIMIT 1'
+        );
+        $stmt->execute([
+            ':c' => $cuentaId,
+            ':p' => (string) $link['proveedor'],
+            ':a' => (string) $link['ambiente'],
+        ]);
+        $credencial = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($credencial === false) {
+            // SE RETIRARON LAS LLAVES DE ESE AMBIENTE. No se inventa otra ni se
+            // cae al ambiente activo: firmar con el secreto equivocado no
+            // resolveria nada y consultar el otro endpoint daria "token
+            // desconocido", que es una respuesta falsa disfrazada de verdadera.
+            //
+            // 200 y SIN marcar confirmacion_pendiente_at: esto no es un aviso
+            // irresuelto que el conciliador deba reintentar, es un ambiente que
+            // ya no existe. Dejar la marca lo pondria en la cola para siempre.
+            return self::r(200, 'ok', sprintf(
+                'no hay llaves de %s en %s para esta cuenta: la orden no se puede consultar',
+                (string) $link['proveedor'],
+                (string) $link['ambiente']
+            ));
+        }
+
+        $config = [
+            'proveedor' => (string) $link['proveedor'],
+            'ambiente'  => (string) $link['ambiente'],
+        ] + $credencial;
+
+        try {
+            $secreto = $descifrar((string) $credencial['credencial_cifrada']);
+        } catch (Throwable $e) {
+            return self::r(500, 'error', 'no se pudo descifrar el secreto');
         }
 
         $desenlace = self::resolverOrden(
@@ -187,7 +192,8 @@ final class ConfirmacionPago
      * respuesta distinta segun por donde llegara la noticia -- y una de las dos
      * seria la equivocada.
      *
-     * @param array<string,mixed> $config fila de pago_pasarela_cuenta
+     * @param array<string,mixed> $config proveedor + ambiente DE LA ORDEN, mas su fila
+     *                                    de pago_pasarela_credencial
      *
      * @return array{cambio:string, motivo:string}
      *         cambio: 'pagado' | 'no_pagado' | 'monto_distinto' | 'transitorio' | 'permanente'

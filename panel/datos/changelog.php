@@ -33,6 +33,21 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-03',
+        'version' => '1.58',
+        'titulo'  => 'Las llaves de prueba y las de cobro real se guardan por separado',
+        'tag'     => 'backend',
+        'items'   => [
+            'Configuracion > Cobro en linea ahora tiene DOS bloques de llaves: uno para pruebas y otro para cobro real. Antes habia uno solo, asi que pasar a cobrar de verdad borraba las llaves de prueba y no habia vuelta atras.',
+            'Y algo que era facil de hacer mal: como el campo del secreto se deja en blanco para "no cambiarlo", al pasar a cobro real podias acabar con la llave publica nueva y el secreto viejo. Eso dejaba todos los cobros fallando sin decir por que. Ahora cada bloque lleva su pareja y no se pueden mezclar.',
+            'Arriba eliges en cual de los dos estas cobrando. Cambiar de uno a otro NO borra las llaves del otro, y no afecta a las facturas ya enviadas: cada link recuerda donde nacio.',
+            'Eso es lo que arregla el problema de fondo: si pagabas una factura de prueba despues de que la empresa pasara a cobro real, el pago no se registraba nunca. Ahora se consulta siempre donde corresponde.',
+            'El aviso de PRUEBA del correo tambien pasa a depender del link, no de lo que la empresa este haciendo hoy.',
+            'Para activar el cobro real hacen falta sus dos llaves. No se hereda ninguna de las de prueba.',
+            'Requiere aplicar la migracion 054.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-03',
         'version' => '1.57',
         'titulo'  => 'La respuesta que el sistema le da a Flow al confirmar un pago sale limpia',
         'tag'     => 'backend',

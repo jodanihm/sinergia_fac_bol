@@ -126,22 +126,25 @@ final class PreparadorEnvio
             // y crearia cobros de verdad. Quien crea la orden es
             // ResolutorLinkPago, antes, desde el runner.
             . '       p.url AS pago_url, p.estado AS pago_estado, p.monto AS pago_monto, '
-            // EL AMBIENTE DE LA PASARELA, EXPLICITO Y NO ADIVINADO.
+            // EL AMBIENTE DE LA ORDEN, NO EL DE LA CUENTA.
             //
-            // La tentacion era mirar si la url contiene "sandbox". Seria un aviso
-            // de "esto no cobra de verdad" que depende de como Flow decida
-            // nombrar sus dominios manana, y equivocarse en el sentido peligroso
-            // -- no avisar en una prueba -- es hacer que alguien crea que pago.
-            // La columna es de la migracion 053 y dice lo que la empresa
-            // configuro. El JOIN va por cuenta_id (BIGINT) por lo mismo que
-            // todos los de aqui arriba.
-            . '       pas.ambiente AS pago_ambiente '
+            // Sale de dte_pago_link (migracion 054), donde se congelo al crear la
+            // orden. Antes salia de pago_pasarela_cuenta, o sea de la
+            // configuracion del momento del ENVIO: un correo de una orden creada
+            // en sandbox que se mandara despues de pasar a produccion habria
+            // perdido su aviso de PRUEBA. El aviso tiene que hablar del link que
+            // lleva el correo, no de lo que la empresa este haciendo hoy.
+            //
+            // Y no se adivina mirando si la url dice "sandbox": eso ataria un
+            // aviso de "esto no cobra de verdad" a como Flow decida nombrar sus
+            // dominios manana, y equivocarse en el sentido peligroso -- no avisar
+            // en una prueba -- es hacer que alguien crea que pago.
+            . '       p.ambiente AS pago_ambiente '
             . 'FROM dte_envio_correo q '
             . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
             . "LEFT JOIN dte_emisor em ON em.cuenta_id = q.cuenta_id AND em.ambiente = 'produccion' "
             . 'LEFT JOIN cuenta c ON c.id = q.cuenta_id '
             . 'LEFT JOIN dte_pago_link p ON p.dte_emitido_id = q.dte_emitido_id '
-            . 'LEFT JOIN pago_pasarela_cuenta pas ON pas.cuenta_id = q.cuenta_id '
             . 'WHERE q.id = :id LIMIT 1'
         );
         $stmt->execute([':id' => $envioId]);
@@ -478,7 +481,7 @@ final class PreparadorEnvio
      * este proyecto. Un null o un valor raro aqui NO pinta el aviso de prueba: el
      * aviso dice "no se te va a cobrar", y decirlo sobre un cobro real es el unico
      * error de los dos que le cuesta dinero a alguien. Quien tiene una orden
-     * creada tiene fila en pago_pasarela_cuenta, asi que el null no es un caso
+     * creada tiene su ambiente congelado en dte_pago_link, asi que el null no es un caso
      * normal sino un dato roto, y ante un dato roto se avisa de menos.
      */
     private static function esSandbox(?string $ambiente): bool

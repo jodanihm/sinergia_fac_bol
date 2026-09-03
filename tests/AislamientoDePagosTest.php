@@ -83,6 +83,7 @@ final class AislamientoDePagosTest extends TestCase
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 dte_emitido_id BIGINT NOT NULL UNIQUE,
                 cuenta_id BIGINT NOT NULL, proveedor TEXT NOT NULL,
+                ambiente TEXT NOT NULL DEFAULT 'sandbox',
                 referencia TEXT NOT NULL UNIQUE, orden_externa TEXT, url TEXT,
                 monto INT NOT NULL DEFAULT 0, estado TEXT NOT NULL DEFAULT 'pendiente',
                 intentos INT NOT NULL DEFAULT 0, reclamado_at TEXT, ultimo_error TEXT,
@@ -94,9 +95,18 @@ final class AislamientoDePagosTest extends TestCase
             CREATE TABLE pago_pasarela_cuenta (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, cuenta_id BIGINT NOT NULL UNIQUE,
                 proveedor TEXT NOT NULL DEFAULT 'flow',
-                ambiente TEXT NOT NULL DEFAULT 'sandbox',
+                ambiente_activo TEXT NOT NULL DEFAULT 'sandbox',
                 habilitado INT NOT NULL DEFAULT 0,
-                credencial_publica TEXT, credencial_cifrada TEXT, url_retorno TEXT
+                url_retorno TEXT
+            );
+        SQL);
+        $this->pdo->exec(<<<'SQL'
+            CREATE TABLE pago_pasarela_credencial (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, cuenta_id BIGINT NOT NULL,
+                proveedor TEXT NOT NULL DEFAULT 'flow',
+                ambiente TEXT NOT NULL DEFAULT 'sandbox',
+                credencial_publica TEXT, credencial_cifrada TEXT,
+                UNIQUE (cuenta_id, proveedor, ambiente)
             );
         SQL);
         $this->pdo->exec(<<<'SQL'
@@ -135,13 +145,26 @@ final class AislamientoDePagosTest extends TestCase
         return $envioId;
     }
 
+    /**
+     * Siembra la eleccion activa Y las llaves de ese ambiente.
+     *
+     * SON DOS TABLAS DESDE LA 054: pago_pasarela_cuenta dice que hace la empresa
+     * hoy (una fila), pago_pasarela_credencial guarda las llaves de cada ambiente
+     * (varias). Sembrar solo la primera deja una empresa "activa" sin llaves, que
+     * es un estado legitimo y que el resolutor rechaza -- util para probarlo, no
+     * para el caso normal.
+     */
     private function pasarela(int $cuentaId, int $habilitado): void
     {
         $this->pdo->prepare(
-            'INSERT INTO pago_pasarela_cuenta '
-            . '(cuenta_id, proveedor, ambiente, habilitado, credencial_publica, credencial_cifrada) '
-            . "VALUES (:c, 'flow', 'sandbox', :h, 'apikey-publica', 'cifrado')"
+            'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, ambiente_activo, habilitado) '
+            . "VALUES (:c, 'flow', 'sandbox', :h)"
         )->execute([':c' => $cuentaId, ':h' => $habilitado]);
+
+        $this->pdo->prepare(
+            'INSERT INTO pago_pasarela_credencial (cuenta_id, proveedor, ambiente, credencial_publica, credencial_cifrada) '
+            . "VALUES (:c, 'flow', 'sandbox', 'apikey-publica', 'cifrado')"
+        )->execute([':c' => $cuentaId]);
     }
 
     private function entorno(?string $llave, ?string $url): void

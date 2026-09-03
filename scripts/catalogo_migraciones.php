@@ -687,6 +687,47 @@ const MIGRACIONES = [
              'esperado' => 3],
         ],
     ],
+    [
+        'id' => '054', 'archivo' => '054_pago_credenciales_por_ambiente.sql',
+        'nota' => 'CREATE (llavero) + ALTER x3 (ambiente_activo, ambiente historico, indice)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'tabla pago_pasarela_credencial',
+             'tablas' => ['pago_pasarela_credencial'], 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'pago_pasarela_cuenta.ambiente_activo',
+             'tabla' => 'pago_pasarela_cuenta', 'columnas' => ['ambiente_activo'], 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'dte_pago_link.ambiente (historico de la orden)',
+             'tabla' => 'dte_pago_link', 'columnas' => ['ambiente'], 'esperado' => 1],
+            // NULABILIDAD Y NO SOLO EXISTENCIA. La 054 agrega la columna nullable,
+            // hace el backfill y solo entonces la pone NOT NULL. Si el backfill
+            // fallara y la migracion se cortara ahi, la columna existiria igual y
+            // una huella de existencia daria la migracion por buena -- con ordenes
+            // sin ambiente, que es justo lo que rompe la callback.
+            ['tipo' => 'nulabilidad', 'desc' => 'dte_pago_link.ambiente quedo NOT NULL tras el backfill',
+             'tabla' => 'dte_pago_link', 'columna' => 'ambiente', 'esperado_nulabilidad' => 'NO'],
+            ['tipo' => 'valores_enum', 'desc' => 'los 2 ambientes del llavero',
+             'tabla' => 'pago_pasarela_credencial', 'columna' => 'ambiente',
+             'valores' => ['sandbox', 'produccion'], 'esperado' => 2],
+        ],
+    ],
+    [
+        'id' => '055', 'archivo' => '055_pago_pasarela_cuenta_retirar_credenciales.sql',
+        'nota' => 'DROP x3 (las columnas que la 054 movio al llavero)',
+        // DIFERIDA A PROPOSITO, no olvidada. Un DROP de credencial_cifrada es lo
+        // unico de este modulo que no se puede deshacer: todo lo demas se
+        // regenera, un secreto borrado hay que ir a pedirlo otra vez a Flow y
+        // mientras tanto la empresa no cobra. El razonamiento completo y las dos
+        // condiciones para aplicarla estan en la cabecera de su .sql.
+        'diferida' => 'Se aplica SOLO cuando el modelo de la 054 lleve tiempo corriendo en produccion '
+            . 'y se haya comprobado que pago_pasarela_credencial tiene una fila por cada credencial que '
+            . 'estuviera en uso. La consulta de comprobacion y el porque de partirlo en dos estan en la '
+            . 'cabecera de su .sql. Hasta entonces las columnas viejas son un respaldo que nadie lee, no '
+            . 'una segunda fuente de verdad.',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'pago_pasarela_cuenta ya NO tiene las columnas viejas',
+             'tabla' => 'pago_pasarela_cuenta',
+             'columnas' => ['credencial_publica', 'credencial_cifrada', 'ambiente'], 'esperado' => 0],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

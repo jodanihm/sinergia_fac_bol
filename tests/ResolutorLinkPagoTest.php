@@ -55,6 +55,7 @@ final class ResolutorLinkPagoTest extends TestCase
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 dte_emitido_id BIGINT NOT NULL UNIQUE,
                 cuenta_id BIGINT NOT NULL, proveedor TEXT NOT NULL,
+                ambiente TEXT NOT NULL DEFAULT 'sandbox',
                 referencia TEXT NOT NULL UNIQUE, orden_externa TEXT, url TEXT,
                 monto INT NOT NULL DEFAULT 0, estado TEXT NOT NULL DEFAULT 'pendiente',
                 intentos INT NOT NULL DEFAULT 0, reclamado_at TEXT, ultimo_error TEXT,
@@ -66,9 +67,18 @@ final class ResolutorLinkPagoTest extends TestCase
             CREATE TABLE pago_pasarela_cuenta (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, cuenta_id BIGINT NOT NULL UNIQUE,
                 proveedor TEXT NOT NULL DEFAULT 'flow',
-                ambiente TEXT NOT NULL DEFAULT 'sandbox',
+                ambiente_activo TEXT NOT NULL DEFAULT 'sandbox',
                 habilitado INT NOT NULL DEFAULT 0,
-                credencial_publica TEXT, credencial_cifrada TEXT, url_retorno TEXT
+                url_retorno TEXT
+            );
+        SQL);
+        $this->pdo->exec(<<<'SQL'
+            CREATE TABLE pago_pasarela_credencial (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, cuenta_id BIGINT NOT NULL,
+                proveedor TEXT NOT NULL DEFAULT 'flow',
+                ambiente TEXT NOT NULL DEFAULT 'sandbox',
+                credencial_publica TEXT, credencial_cifrada TEXT,
+                UNIQUE (cuenta_id, proveedor, ambiente)
             );
         SQL);
         $this->pdo->exec(<<<'SQL'
@@ -97,13 +107,32 @@ final class ResolutorLinkPagoTest extends TestCase
         return 1;
     }
 
+    /**
+     * Siembra la eleccion activa Y las llaves de ese ambiente.
+     *
+     * SON DOS TABLAS DESDE LA 054: pago_pasarela_cuenta dice que hace la empresa
+     * hoy (una fila), pago_pasarela_credencial guarda las llaves de cada ambiente
+     * (varias). Sembrar solo la primera deja una empresa "activa" sin llaves, que
+     * es un estado legitimo y que el resolutor rechaza -- util para probarlo, no
+     * para el caso normal.
+     */
     private function pasarelaActiva(int $habilitado = 1, string $ambiente = 'sandbox'): void
     {
         $this->pdo->prepare(
-            'INSERT INTO pago_pasarela_cuenta '
-            . '(cuenta_id, proveedor, ambiente, habilitado, credencial_publica, credencial_cifrada) '
-            . "VALUES (:c, 'flow', :a, :h, 'apikey-publica', 'cifrado')"
+            'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, ambiente_activo, habilitado) '
+            . "VALUES (:c, 'flow', :a, :h)"
         )->execute([':c' => self::CUENTA, ':a' => $ambiente, ':h' => $habilitado]);
+
+        $this->credencial(self::CUENTA, $ambiente);
+    }
+
+    /** Una pareja de llaves para un ambiente concreto. */
+    private function credencial(int $cuentaId, string $ambiente, string $secreto = 'cifrado'): void
+    {
+        $this->pdo->prepare(
+            'INSERT INTO pago_pasarela_credencial (cuenta_id, proveedor, ambiente, credencial_publica, credencial_cifrada) '
+            . "VALUES (:c, 'flow', :a, 'apikey-publica', :s)"
+        )->execute([':c' => $cuentaId, ':a' => $ambiente, ':s' => $secreto]);
     }
 
     private function resolutor(array $respuestas = []): ResolutorLinkPago
@@ -351,8 +380,12 @@ final class ResolutorLinkPagoTest extends TestCase
         // 'no_aplica' aqui mandaria la factura sin cobro y en silencio.
         $envio = $this->documento();
         $this->pdo->prepare(
-            'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, habilitado, credencial_publica, credencial_cifrada) '
-            . "VALUES (:c, 'pasarela-que-no-existe', 1, 'k', 'c')"
+            'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, ambiente_activo, habilitado) '
+            . "VALUES (:c, 'pasarela-que-no-existe', 'sandbox', 1)"
+        )->execute([':c' => self::CUENTA]);
+        $this->pdo->prepare(
+            'INSERT INTO pago_pasarela_credencial (cuenta_id, proveedor, ambiente, credencial_publica, credencial_cifrada) '
+            . "VALUES (:c, 'pasarela-que-no-existe', 'sandbox', 'k', 'c')"
         )->execute([':c' => self::CUENTA]);
 
         self::assertSame('esperar', $this->resolutor()->resolver($envio)['verdicto']);
@@ -362,8 +395,12 @@ final class ResolutorLinkPagoTest extends TestCase
     {
         $envio = $this->documento();
         $this->pdo->prepare(
-            'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, habilitado, credencial_publica, credencial_cifrada) '
-            . "VALUES (:c, 'flow', 1, '', '')"
+            'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, ambiente_activo, habilitado) '
+            . "VALUES (:c, 'flow', 'sandbox', 1)"
+        )->execute([':c' => self::CUENTA]);
+        $this->pdo->prepare(
+            'INSERT INTO pago_pasarela_credencial (cuenta_id, proveedor, ambiente, credencial_publica, credencial_cifrada) '
+            . "VALUES (:c, 'flow', 'sandbox', '', '')"
         )->execute([':c' => self::CUENTA]);
 
         $r = $this->resolutor()->resolver($envio);

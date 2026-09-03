@@ -247,12 +247,26 @@ final class ReconciliadorPagos
         );
 
         $sql = 'SELECT p.id, p.monto, p.orden_externa, p.conciliacion_intentos, '
-            . '       c.proveedor, c.ambiente, c.credencial_publica, c.credencial_cifrada '
+            . '       p.proveedor, p.ambiente, cr.credencial_publica, cr.credencial_cifrada '
             . 'FROM dte_pago_link p '
-            // EL JOIN TRAE LAS CREDENCIALES DE LA MISMA CUENTA DE LA ORDEN. Es lo
-            // que hace imposible, por construccion, usar el secreto de un tenant
-            // contra la orden de otro: viajan en la misma fila.
-            . 'INNER JOIN pago_pasarela_cuenta c ON c.cuenta_id = p.cuenta_id '
+            // EL JOIN VA POR LA HISTORIA DE LA ORDEN, NO POR LA ELECCION ACTIVA.
+            //
+            // cuenta_id sigue haciendo imposible, por construccion, usar el
+            // secreto de un tenant contra la orden de otro: viajan en la misma
+            // fila. Pero ahora ademas proveedor y ambiente salen de p, o sea de
+            // lo que se congelo al crear la orden. Antes se tomaban de la
+            // configuracion vigente, y en cuanto una empresa pasaba a produccion
+            // sus ordenes vivas de sandbox se consultaban contra el Flow real
+            // con un token que alli no existe: fallo permanente, cada cinco
+            // minutos, para siempre.
+            //
+            // Y AL SER INNER, una orden cuyo ambiente ya no tiene llaves
+            // cargadas sale del barrido en vez de fallar en bucle. Es el
+            // comportamiento que se queria y sale gratis.
+            . 'INNER JOIN pago_pasarela_credencial cr '
+            . '        ON cr.cuenta_id = p.cuenta_id '
+            . '       AND cr.proveedor = p.proveedor '
+            . '       AND cr.ambiente  = p.ambiente '
             . "WHERE p.estado = 'creado' "
             . '  AND p.orden_externa IS NOT NULL '
             . '  AND (p.conciliacion_ultimo_intento_at IS NULL '
