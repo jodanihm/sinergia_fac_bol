@@ -6199,7 +6199,7 @@ function handleCorreoEnviarSinLinkPost(int $envioId): void
  * conciliador. Solo se sale del 200 cuando la cuenta de la url no tiene pasarela
  * configurada (403) o no se pudo descifrar su secreto (500).
  */
-function handleConfirmacionPagoPost(int $cuentaId): void
+function handleConfirmacionPagoPost(int $cuentaId): never
 {
     header('Content-Type: text/plain; charset=utf-8');
 
@@ -6234,6 +6234,25 @@ function handleConfirmacionPagoPost(int $cuentaId): void
 
     http_response_code($resultado['codigo']);
     echo $resultado['cuerpo'];
+
+    // EL exit NO ES DECORACION: SIN EL, LA RESPUESTA A LA PASARELA SALIA ROTA.
+    //
+    // Los `if` del despacho no llevan exit porque los handlers de este router
+    // terminan solos: casi todos acaban en vista() o en redirigir(), que estan
+    // declaradas `never`. Este hace echo directo y volvia, asi que la ejecucion
+    // seguia bajando por el front controller hasta el 404 final y le concatenaba
+    // su cuerpo. Flow recibia, textualmente:
+    //
+    //     ok404 - ruta no encontrada
+    //
+    // El pago SI se procesaba -- por eso costo verlo --, pero la respuesta era un
+    // 200 con basura pegada. Y el http_response_code(404) de ahi abajo no se
+    // notaba solo porque este echo ya habia mandado los headers; en el camino de
+    // 403 el cuerpo tambien salia contaminado.
+    //
+    // Misma forma que handleOrdenCompraPdfGet(), el otro handler que escribe su
+    // propio cuerpo: `never` en la firma y exit al final.
+    exit;
 }
 
 
@@ -11378,10 +11397,20 @@ if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/enviar-sin-link$#'
 }
 
 // SIN Auth::requerirSesion(), y es lo unico de este router que lo omite a
-// proposito: la llama la pasarela de pago desde sus servidores. Lo que autentica
-// aqui es la firma del cuerpo, que comprueba el handler. Declarada en
-// PATRONES_PUBLICOS y exceptuada del CSRF con la MISMA constante, para que las
-// tres no puedan divergir.
+// proposito: la llama la pasarela de pago desde sus servidores.
+//
+// Y NO LA AUTENTICA NINGUNA FIRMA. Aqui decia que lo hacia la firma del cuerpo;
+// era falso, y mientras se comprobo, todo aviso real de Flow se respondio con un
+// 403. Flow manda POST con el cuerpo token=<token de la transaccion> y nada mas.
+//
+// LO QUE SOSTIENE ESTA RUTA ES QUE EL TOKEN NO ACREDITA NADA. Con el se busca la
+// orden acotando por la cuenta de la url, y el estado se le pregunta a Flow por
+// nuestro propio canal -- payment/getStatus con la apiKey y el secretKey de ESA
+// cuenta, esa peticion si firmada --; solo un 'pagada' con el MONTO EXACTO marca
+// la factura. Un POST inventado no mueve ninguna fila.
+//
+// Declarada en PATRONES_PUBLICOS y exceptuada del CSRF con la MISMA constante,
+// para que las tres no puedan divergir.
 if ($metodo === 'POST' && preg_match(PATRON_CONFIRMACION_PAGO, $ruta, $mPago)) {
     handleConfirmacionPagoPost((int) $mPago[1]);
 }

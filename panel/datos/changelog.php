@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-03',
+        'version' => '1.57',
+        'titulo'  => 'La respuesta que el sistema le da a Flow al confirmar un pago sale limpia',
+        'tag'     => 'backend',
+        'items'   => [
+            'Al recibir un aviso de pago, el sistema le contestaba a Flow con un texto mal formado: la palabra de confirmacion mas un mensaje de error pegado detras. El pago se procesaba bien, asi que no se perdio ningun cobro, pero la respuesta que veia Flow era incorrecta.',
+            'Corregido: ahora la respuesta termina donde debe. Se agrego una comprobacion automatica para que no vuelva a pasar en esta ni en la pagina de retorno del pagador.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-03',
         'version' => '1.56',
         'titulo'  => 'Un pago correcto ya no se marca como descuadre por como Flow escribe el monto',
         'tag'     => 'backend',
