@@ -185,10 +185,24 @@ final class ConfirmacionPago
             return ['cambio' => 'permanente', 'motivo' => 'consulta de estado fallo de forma permanente'];
         }
 
+        // EL ESTADO DE LA PASARELA SE GUARDA SIEMPRE que se pudo preguntar, haya
+        // pago o no. Es lo que le permite al conciliador decidir cada cuanto
+        // volver por esta orden: una rechazada no merece la misma frecuencia que
+        // una que sigue pendiente de pago.
+        self::guardarEstadoPasarela($pdo, $linkId, (string) ($estado['estado'] ?? 'desconocido'));
+
         if ($estado['pagada'] !== true) {
-            // Pendiente, rechazada o anulada. No se toca el estado -- el link
+            // Pendiente, rechazada o anulada. No se toca NUESTRO estado -- el link
             // sigue vivo y pagable, que es lo correcto -- pero SI se limpia la
-            // marca: la pregunta se pudo hacer y se contesto.
+            // marca de aviso sin resolver.
+            //
+            // POR QUE SE LIMPIA AUNQUE NO HAYA PAGO, que es la parte discutible:
+            // esa marca no significa "hubo un pago". Significa "llego un aviso y
+            // NO PUDIMOS RESOLVERLO". Aqui si se pudo: se pregunto y la pasarela
+            // contesto. Que la respuesta sea "todavia no esta pagada" es una
+            // respuesta, no una falta de respuesta. Dejarla puesta convertiria la
+            // marca en "hubo un aviso alguna vez", que es otra cosa y ya la
+            // cuenta conciliacion_intentos.
             self::limpiarPendiente($pdo, $linkId);
 
             return ['cambio' => 'no_pagado', 'motivo' => 'el pago no esta confirmado'];
@@ -262,6 +276,23 @@ final class ConfirmacionPago
         } catch (Throwable $e) {
             // Si ni siquiera se puede anotar, no se puede hacer mas desde aqui.
             // El codigo de respuesta ya le dice a la pasarela que reintente.
+        }
+    }
+
+    /**
+     * Guarda lo ultimo que contesto la pasarela sobre esta orden.
+     *
+     * Es INFORMATIVO y separado de nuestro estado: una orden puede ser 'creado'
+     * para nosotros y 'rechazada' para la pasarela al mismo tiempo. Mezclarlos
+     * seria decir que una factura rechazada esta pagada.
+     */
+    private static function guardarEstadoPasarela(PDO $pdo, int $linkId, string $estado): void
+    {
+        try {
+            $pdo->prepare('UPDATE dte_pago_link SET estado_pasarela = :e WHERE id = :id')
+                ->execute([':e' => mb_substr($estado, 0, 30), ':id' => $linkId]);
+        } catch (Throwable $e) {
+            // Sin consecuencia: solo afecta a la frecuencia del proximo barrido.
         }
     }
 

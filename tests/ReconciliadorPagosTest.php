@@ -62,7 +62,8 @@ final class ReconciliadorPagosTest extends TestCase
                 monto INT NOT NULL DEFAULT 0, estado TEXT NOT NULL DEFAULT 'pendiente',
                 intentos INT NOT NULL DEFAULT 0, reclamado_at TEXT, ultimo_error TEXT,
                 reintentar_despues_at TEXT, confirmacion_pendiente_at TEXT,
-                conciliado_at TEXT, conciliacion_intentos INT NOT NULL DEFAULT 0,
+                conciliacion_ultimo_intento_at TEXT, conciliacion_intentos INT NOT NULL DEFAULT 0,
+                estado_pasarela TEXT,
                 creado_at TEXT, pagado_at TEXT
             );
         SQL);
@@ -89,18 +90,19 @@ final class ReconciliadorPagosTest extends TestCase
         ?string $conciliadoAt = null,
         int $intentos = 0,
         ?string $pendienteAt = null,
+        ?string $estadoPasarela = null,
     ): int {
         $this->pdo->prepare(
             'INSERT INTO dte_pago_link '
             . '(dte_emitido_id, cuenta_id, proveedor, referencia, orden_externa, url, monto, estado, '
-            . ' conciliado_at, conciliacion_intentos, confirmacion_pendiente_at) '
-            . "VALUES (:d, :c, 'flow', :r, :t, 'https://pay/x', :m, :e, :ca, :ci, :p)"
+            . ' conciliacion_ultimo_intento_at, conciliacion_intentos, confirmacion_pendiente_at, estado_pasarela) '
+            . "VALUES (:d, :c, 'flow', :r, :t, 'https://pay/x', :m, :e, :ca, :ci, :p, :ep)"
         )->execute([
             ':d' => $dteId, ':c' => $cuentaId,
             ':r' => sprintf('SIN-%d-33-%d', $cuentaId, $dteId),
             ':t' => sprintf('TOK-%d-%d', $cuentaId, $dteId),
             ':m' => $monto, ':e' => $estado,
-            ':ca' => $conciliadoAt, ':ci' => $intentos, ':p' => $pendienteAt,
+            ':ca' => $conciliadoAt, ':ci' => $intentos, ':p' => $pendienteAt, ':ep' => $estadoPasarela,
         ]);
 
         return (int) $this->pdo->lastInsertId();
@@ -291,13 +293,145 @@ final class ReconciliadorPagosTest extends TestCase
         self::assertSame('pagado', $this->link($id)['estado']);
     }
 
-    public function testAlLlegarAlTopeDeIntentosSeDejaEnPaz(): void
-    {
-        // Una orden que nadie va a pagar no puede preguntarse para siempre.
-        $this->pasarela(self::CUENTA_A);
-        $this->orden(conciliadoAt: date('Y-m-d H:i:s', time() - 999999), intentos: 20);
+    // -----------------------------------------------------------------------
+    //  N-1: una orden NUNCA queda ciega para siempre
+    // -----------------------------------------------------------------------
 
-        self::assertSame(0, $this->conciliar()['miradas']);
+    public function testPasadoElAntiguoTopeDe20LaOrdenSIGUE_siendoMirada(): void
+    {
+        // EL FALLO QUE ARREGLA ESTE CAMBIO. Antes, conciliacion_intentos >= 20
+        // excluia la orden definitivamente, y ese presupuesto lo gastaba el
+        // barrido NORMAL de facturas impagadas. Una factura impagada dos semanas
+        // agotaba sus consultas; si el cliente pagaba despues, ese cobro quedaba
+        // fuera del sistema para siempre.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(conciliadoAt: date('Y-m-d H:i:s', time() - 999999), intentos: 25);
+
+        $r = $this->conciliar([self::estado(2)]);
+
+        self::assertSame(1, $r['miradas'], 'con 25 intentos sigue entrando');
+        self::assertSame('pagado', $this->link($id)['estado']);
+    }
+
+    public function testPasadoElTramoRapidoBajaACadenciaDeMantenimiento(): void
+    {
+        // Tras el ultimo tramo (1440 min) la espera pasa a una semana. Con dos
+        // dias transcurridos NO toca todavia.
+        $this->pasarela(self::CUENTA_A);
+        $this->orden(conciliadoAt: date('Y-m-d H:i:s', time() - (2 * 86400)), intentos: 25);
+
+        self::assertSame(0, $this->conciliar()['miradas'], 'dos dias no alcanzan la cadencia semanal');
+    }
+
+    public function testPasadaLaSemanaLaOrdenDeMantenimientoSeVuelveAMirar(): void
+    {
+        $this->pasarela(self::CUENTA_A);
+        $this->orden(conciliadoAt: date('Y-m-d H:i:s', time() - (8 * 86400)), intentos: 25);
+
+        self::assertSame(1, $this->conciliar([self::estado(1)])['miradas']);
+    }
+
+    public function testUnAvisoSinResolverSeMiraAunqueTengaMuchisimosIntentos(): void
+    {
+        // De estas SI sabemos que la pasarela intento decirnos algo: nunca bajan
+        // a la cadencia de mantenimiento. Con una hora transcurrida ya toca,
+        // aunque lleve 300 intentos.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(
+            conciliadoAt: date('Y-m-d H:i:s', time() - 3700),
+            intentos: 300,
+            pendienteAt: date('Y-m-d H:i:s', time() - 3700)
+        );
+
+        $r = $this->conciliar([self::estado(2)]);
+
+        self::assertSame(1, $r['miradas']);
+        self::assertSame('pagado', $this->link($id)['estado']);
+    }
+
+    public function testElCasoSinCallbackNuncaRecibidoSigueSiendoRecuperable(): void
+    {
+        // Escenario B de la revision: el aviso NO llego nunca, asi que no hay
+        // marca. El barrido por estado lo cubre igual, que es justo por lo que no
+        // filtra por confirmacion_pendiente_at.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(conciliadoAt: date('Y-m-d H:i:s', time() - (30 * 86400)), intentos: 60);
+
+        self::assertNull($this->link($id)['confirmacion_pendiente_at']);
+        $this->conciliar([self::estado(2)]);
+
+        self::assertSame('pagado', $this->link($id)['estado']);
+    }
+
+    // -----------------------------------------------------------------------
+    //  Estados de la pasarela
+    // -----------------------------------------------------------------------
+
+    public function testUnaOrdenTerminadaAllaBajaAMantenimientoPeroNoSeApaga(): void
+    {
+        // Rechazada/anulada no se apagan del todo: NO hemos verificado si una
+        // orden rechazada puede pagarse mas tarde con el mismo link, asi que
+        // apagarlas podria dejarnos ciegos otra vez.
+        $this->pasarela(self::CUENTA_A);
+        $this->orden(
+            conciliadoAt: date('Y-m-d H:i:s', time() - 7200),
+            intentos: 1,
+            estadoPasarela: 'rechazada'
+        );
+
+        self::assertSame(0, $this->conciliar()['miradas'], 'dos horas no alcanzan la semanal');
+
+        $this->pdo->exec("UPDATE dte_pago_link SET conciliacion_ultimo_intento_at = '" . date('Y-m-d H:i:s', time() - (8 * 86400)) . "'");
+        self::assertSame(1, $this->conciliar([self::estado(3)])['miradas'], 'pasada la semana si');
+    }
+
+    public function testElEstadoDeLaPasarelaSeGuarda(): void
+    {
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden();
+
+        $this->conciliar([self::estado(3)]);
+
+        self::assertSame('rechazada', $this->link($id)['estado_pasarela']);
+        self::assertSame('creado', $this->link($id)['estado'], 'nuestro estado es otra cosa');
+    }
+
+    /** @return list<array{int,string}> */
+    public static function estadosDeFlow(): array
+    {
+        return [
+            [1, 'pendiente'],
+            [2, 'pagada'],
+            [3, 'rechazada'],
+            [4, 'anulada'],
+            [7, 'desconocido:7'],
+            [0, 'desconocido:0'],
+        ];
+    }
+
+    #[DataProvider('estadosDeFlow')]
+    public function testCadaStatusSeTraduceYSoloElDosPaga(int $status, string $nombre): void
+    {
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden();
+
+        $this->conciliar([self::estado($status)]);
+
+        self::assertSame($nombre, $this->link($id)['estado_pasarela']);
+        self::assertSame(
+            $status === 2 ? 'pagado' : 'creado',
+            $this->link($id)['estado'],
+            'solo el 2 puede pagar; un estado desconocido JAMAS'
+        );
+    }
+
+    public function testUnStatusDesconocidoNoApagaLaOrden(): void
+    {
+        // No es terminal: se sigue preguntando por la cadencia normal.
+        $this->pasarela(self::CUENTA_A);
+        $this->orden(conciliadoAt: date('Y-m-d H:i:s', time() - 7200), intentos: 1, estadoPasarela: 'desconocido:7');
+
+        self::assertSame(1, $this->conciliar([self::estado(7)])['miradas']);
     }
 
     public function testElIntentoSeAnotaAntesDePreguntar(): void
@@ -310,7 +444,7 @@ final class ReconciliadorPagosTest extends TestCase
         $this->conciliar([new Response(500, [], 'x')]);
 
         self::assertSame(1, (int) $this->link($id)['conciliacion_intentos']);
-        self::assertNotNull($this->link($id)['conciliado_at']);
+        self::assertNotNull($this->link($id)['conciliacion_ultimo_intento_at']);
     }
 
     // -----------------------------------------------------------------------

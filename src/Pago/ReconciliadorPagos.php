@@ -54,27 +54,49 @@ use Throwable;
 final class ReconciliadorPagos
 {
     /**
-     * Espera creciente entre preguntas por la misma orden, en minutos.
+     * Espera creciente entre preguntas por una orden que sigue sin resolverse,
+     * en minutos, segun cuantas veces se ha preguntado ya.
      *
-     * La mayoria de las ordenes que este proceso mira NO son un problema: son
-     * facturas que el cliente todavia no ha pagado, o no va a pagar nunca.
-     * Preguntar por todas cada cinco minutos seria castigar a la pasarela y a
-     * nosotros para no enterarnos de nada. La espera crece hasta un dia.
+     * PASADO EL ULTIMO TRAMO NO SE DEJA DE MIRAR: se pasa a la cadencia de
+     * mantenimiento, y ahi se queda para siempre.
+     *
+     * ESA DIFERENCIA ARREGLA UN FALLO DEMOSTRADO. La version anterior excluia la
+     * orden al llegar a 20 intentos, y ese presupuesto lo gastaba el barrido
+     * NORMAL de facturas impagadas, no los errores. Consecuencia: una factura
+     * impagada dos semanas agotaba sus consultas; si el cliente pagaba el dia 20
+     * y el aviso de la pasarela fallaba, esa orden quedaba fuera del sistema PARA
+     * SIEMPRE. Dinero cobrado que no aparecia nunca -- justo el fallo que este
+     * conciliador existe para eliminar.
      */
     private const BACKOFF_MINUTOS = [5, 15, 60, 360, 1440];
 
     /**
-     * Cuantas veces se pregunta por una orden antes de dejarla en paz.
+     * Cadencia de mantenimiento: una vez por semana, sin fin.
      *
-     * Con el backoff de arriba, veinte intentos cubren mas de dos semanas. Pasado
-     * eso, una orden que sigue sin pagarse casi con seguridad no se va a pagar, y
-     * seguir preguntando para siempre seria un bucle que solo consume cuota.
-     *
-     * DEJARLA EN PAZ NO ES PERDERLA: la fila sigue ahi, en estado 'creado', y su
-     * conciliacion_intentos dice que se intento hasta el final. Quien quiera
-     * revisarla la encuentra con un SELECT.
+     * El coste de no apagar nunca una orden es bajo -- una consulta semanal por
+     * orden viva, con tope global por corrida -- y el coste de apagarla ya se
+     * midio: se pierde un cobro entero.
      */
-    private const MAX_INTENTOS = 20;
+    private const MANTENIMIENTO_MINUTOS = 10080;
+
+    /**
+     * Espera para las ordenes que dejaron un AVISO SIN RESOLVER.
+     *
+     * De esas SI sabemos que la pasarela intento decirnos algo, asi que nunca
+     * bajan a mantenimiento: se quedan en una hora como maximo. Son pocas por
+     * definicion y cada una representa, probablemente, dinero ya cobrado.
+     */
+    private const BACKOFF_AVISO_MINUTOS = [5, 15, 60];
+
+    /**
+     * Estados en los que la pasarela ya dio la orden por terminada.
+     *
+     * Pasan directas a mantenimiento en vez de dejar de mirarse. Es conservador a
+     * proposito: NO hemos verificado si una orden rechazada puede pagarse mas
+     * tarde con el mismo link. Mientras no se sepa, una consulta semanal cuesta
+     * casi nada y apagarlas del todo podria dejarnos ciegos otra vez.
+     */
+    private const ESTADOS_TERMINALES = ['rechazada', 'anulada'];
 
     /** Cuantas ordenes se miran por corrida, para no alargarla sin limite. */
     private const TOPE_POR_CORRIDA = 100;
@@ -155,31 +177,74 @@ final class ReconciliadorPagos
      */
     private static function candidatas(PDO $pdo, int $tope): array
     {
-        // EL BACKOFF SE EXPRESA EN EL WHERE, no filtrando en PHP lo que ya vino.
+        // LA ESPERA SE EXPRESA EN EL WHERE, no filtrando en PHP lo que ya vino.
         // Si se filtrara despues, el LIMIT contaria filas que van a descartarse y
         // una corrida podria volver de vacio teniendo trabajo pendiente detras.
         //
-        // Se arma como una cadena de OR generada desde BACKOFF_MINUTOS -- una
-        // sola fuente de verdad -- y con marcas de tiempo YA CALCULADAS en PHP.
-        // Nada de DATE_SUB ni de INTERVAL: los tests corren en SQLite, que no
-        // tiene ninguna de las dos, y una consulta que solo funciona en MySQL no
-        // se puede probar.
-        $ahora   = time();
-        $tramos  = [];
-        $tiempos = [];
-        $ultimo  = count(self::BACKOFF_MINUTOS) - 1;
+        // Marcas de tiempo YA CALCULADAS en PHP: nada de DATE_SUB ni de INTERVAL,
+        // que no existen en SQLite y dejarian esta consulta sin poder probarse.
+        //
+        // TRES CADENCIAS, y el orden de los OR es el orden de prioridad:
+        //
+        //   1. aviso sin resolver  -> rapida y con tope de 1 h, nunca mas lenta
+        //   2. terminada alla      -> mantenimiento (semanal)
+        //   3. el resto            -> progresiva y luego mantenimiento
+        //
+        // NINGUNA RAMA EXCLUYE UNA ORDEN PARA SIEMPRE. Ese era el fallo anterior.
+        $ahora = time();
+        $liga  = [];
 
-        foreach (self::BACKOFF_MINUTOS as $i => $minutos) {
-            $clave           = ':t' . $i;
-            $tiempos[$clave] = date('Y-m-d H:i:s', $ahora - ($minutos * 60));
-            $comparador      = $i === $ultimo ? '>=' : '=';
-            $tramos[]        = sprintf(
-                '(p.conciliacion_intentos %s %d AND p.conciliado_at < %s)',
-                $comparador,
+        $marca = static function (string $clave, int $minutos) use (&$liga, $ahora): string {
+            $liga[$clave] = date('Y-m-d H:i:s', $ahora - ($minutos * 60));
+
+            return $clave;
+        };
+
+        // 1. Con aviso sin resolver.
+        $ramaAviso = [];
+        $ultimoAv  = count(self::BACKOFF_AVISO_MINUTOS) - 1;
+        foreach (self::BACKOFF_AVISO_MINUTOS as $i => $min) {
+            $ramaAviso[] = sprintf(
+                '(p.conciliacion_intentos %s %d AND p.conciliacion_ultimo_intento_at < %s)',
+                $i === $ultimoAv ? '>=' : '=',
                 $i,
-                $clave
+                $marca(':av' . $i, $min)
             );
         }
+        $rama1 = '(p.confirmacion_pendiente_at IS NOT NULL AND (' . implode(' OR ', $ramaAviso) . '))';
+
+        // 2. Terminada segun la pasarela: solo mantenimiento.
+        $marcasTerm = [];
+        foreach (self::ESTADOS_TERMINALES as $j => $terminal) {
+            $liga[':term' . $j] = $terminal;
+            $marcasTerm[]       = ':term' . $j;
+        }
+        $rama2 = sprintf(
+            '(p.confirmacion_pendiente_at IS NULL AND p.estado_pasarela IN (%s) AND p.conciliacion_ultimo_intento_at < %s)',
+            implode(', ', $marcasTerm),
+            $marca(':mant', self::MANTENIMIENTO_MINUTOS)
+        );
+
+        // 3. El resto: progresiva y, agotada, mantenimiento.
+        $ramaNormal = [];
+        $ultimoN    = count(self::BACKOFF_MINUTOS) - 1;
+        foreach (self::BACKOFF_MINUTOS as $i => $min) {
+            $ramaNormal[] = sprintf(
+                '(p.conciliacion_intentos = %d AND p.conciliacion_ultimo_intento_at < %s)',
+                $i,
+                $marca(':n' . $i, $min)
+            );
+        }
+        $ramaNormal[] = sprintf(
+            '(p.conciliacion_intentos > %d AND p.conciliacion_ultimo_intento_at < %s)',
+            $ultimoN,
+            ':mant'
+        );
+        $rama3 = sprintf(
+            '(p.confirmacion_pendiente_at IS NULL AND (p.estado_pasarela IS NULL OR p.estado_pasarela NOT IN (%s)) AND (%s))',
+            implode(', ', $marcasTerm),
+            implode(' OR ', $ramaNormal)
+        );
 
         $sql = 'SELECT p.id, p.monto, p.orden_externa, p.conciliacion_intentos, '
             . '       c.proveedor, c.ambiente, c.credencial_publica, c.credencial_cifrada '
@@ -190,17 +255,16 @@ final class ReconciliadorPagos
             . 'INNER JOIN pago_pasarela_cuenta c ON c.cuenta_id = p.cuenta_id '
             . "WHERE p.estado = 'creado' "
             . '  AND p.orden_externa IS NOT NULL '
-            . '  AND p.conciliacion_intentos < :max '
-            . '  AND (p.conciliado_at IS NULL OR ' . implode(' OR ', $tramos) . ') '
-            // Las que dejaron marca de un aviso sin resolver van primero: de esas
-            // SI sabemos que hubo movimiento.
+            . '  AND (p.conciliacion_ultimo_intento_at IS NULL '
+            . '       OR ' . $rama1 . ' OR ' . $rama2 . ' OR ' . $rama3 . ') '
+            // Las que dejaron aviso sin resolver van primero: de esas SI sabemos
+            // que hubo movimiento.
             . 'ORDER BY (p.confirmacion_pendiente_at IS NOT NULL) DESC, p.id ASC '
             . 'LIMIT :lim';
 
         $stmt = $pdo->prepare($sql);
-        $stmt->bindValue(':max', self::MAX_INTENTOS, PDO::PARAM_INT);
         $stmt->bindValue(':lim', $tope, PDO::PARAM_INT);
-        foreach ($tiempos as $clave => $valor) {
+        foreach ($liga as $clave => $valor) {
             $stmt->bindValue($clave, $valor);
         }
         $stmt->execute();
@@ -212,7 +276,7 @@ final class ReconciliadorPagos
     {
         $pdo->prepare(
             'UPDATE dte_pago_link SET conciliacion_intentos = conciliacion_intentos + 1, '
-            . 'conciliado_at = :ahora WHERE id = :id'
+            . 'conciliacion_ultimo_intento_at = :ahora WHERE id = :id'
         )->execute([':ahora' => date('Y-m-d H:i:s'), ':id' => $linkId]);
     }
 

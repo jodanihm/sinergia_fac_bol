@@ -217,14 +217,46 @@ final class FlowPasarelaPago implements PasarelaPagoInterface
         // MontoPasarela devuelve null cuando el valor no representa una cantidad
         // entera de pesos, y el crudo viaja aparte para que el incidente se pueda
         // investigar sin adivinar que llego.
-        $crudo = $datos['amount'] ?? null;
+        $crudo  = $datos['amount'] ?? null;
+        $status = (int) ($datos['status'] ?? 0);
 
         return [
-            'pagada'     => ((int) ($datos['status'] ?? 0)) === 2,
+            // 'pagada' SIGUE SIENDO status === 2 Y NADA MAS. Es la unica
+            // comprobacion que puede llevar a marcar una factura como cobrada, y
+            // por eso no se deriva de 'estado' ni de ninguna traduccion: se lee
+            // del numero. Un estado que no conozcamos jamas puede colarse aqui.
+            'pagada'     => $status === 2,
             'referencia' => (string) $datos['commerceOrder'],
             'monto'      => MontoPasarela::normalizar($crudo),
             'montoCrudo' => $crudo,
+            // El estado en nuestro vocabulario, para poder decidir CADA CUANTO
+            // volver a preguntar por esta orden. Es informativo: quien decide si
+            // hay pago es 'pagada'.
+            'estado'     => self::nombreEstado($status),
         ];
+    }
+
+    /**
+     * Traduce el status numerico de Flow a nuestro vocabulario.
+     *
+     * Los cuatro que Flow documenta: 1 pendiente, 2 pagada, 3 rechazada,
+     * 4 anulada.
+     *
+     * UN VALOR QUE NO CONOZCAMOS NO SE INVENTA NI SE APROXIMA: se devuelve como
+     * 'desconocido:N', con el numero dentro. Asi queda registrado que aparecio
+     * algo nuevo -- se puede encontrar con un LIKE -- sin que el sistema tenga
+     * que fingir que lo entiende. Y sobre todo: 'desconocido' nunca es 'pagada',
+     * porque eso lo decide el === 2 de arriba y no esta traduccion.
+     */
+    public static function nombreEstado(int $status): string
+    {
+        return match ($status) {
+            1       => 'pendiente',
+            2       => 'pagada',
+            3       => 'rechazada',
+            4       => 'anulada',
+            default => 'desconocido:' . $status,
+        };
     }
 
     /**

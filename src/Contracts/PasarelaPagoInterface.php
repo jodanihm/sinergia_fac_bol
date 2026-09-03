@@ -71,7 +71,7 @@ interface PasarelaPagoInterface
      * @param string $referenciaExterna lo que identifica la operacion en la
      *                                  pasarela (para Flow, el token)
      *
-     * @return array{pagada:bool, referencia:string, monto:?int, montoCrudo:mixed}
+     * @return array{pagada:bool, referencia:string, monto:?int, montoCrudo:mixed, estado:string}
      *         referencia es NUESTRA clave (commerceOrder), que es por donde se
      *         encuentra la fila sin depender de como la llame cada proveedor.
      *
@@ -80,6 +80,11 @@ interface PasarelaPagoInterface
      *         null NO significa cero: significa "no se puede usar este dato".
      *         montoCrudo lleva lo que llego tal cual, solo para poder investigar
      *         un descuadre sin tener que adivinar.
+     *
+     *         estado es el estado de la orden EN LA PASARELA, en vocabulario
+     *         propio ('pendiente', 'pagada', 'rechazada', 'anulada', o
+     *         'desconocido:N'). Sirve para decidir cada cuanto volver a
+     *         preguntar. NO decide si hubo pago: eso es 'pagada', y solo 'pagada'.
      *
      * @throws PasarelaTransitoriaException
      * @throws PasarelaPermanenteException

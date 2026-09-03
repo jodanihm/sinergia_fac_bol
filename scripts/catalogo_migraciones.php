@@ -668,7 +668,7 @@ const MIGRACIONES = [
     ],
     [
         'id' => '053', 'archivo' => '053_pago_ambiente_y_reclamo.sql',
-        'nota' => 'ALTER x3 (ambiente de la pasarela, reclamo exclusivo, aviso sin resolver)',
+        'nota' => 'ALTER x6 (ambiente, reclamo exclusivo, conciliacion)',
         'huellas' => [
             ['tipo' => 'columnas', 'desc' => 'pago_pasarela_cuenta.ambiente', 'tabla' => 'pago_pasarela_cuenta',
              'columnas' => ['ambiente'], 'esperado' => 1],
@@ -683,7 +683,8 @@ const MIGRACIONES = [
              'columnas' => ['reclamado_at', 'confirmacion_pendiente_at'], 'esperado' => 2],
             ['tipo' => 'columnas', 'desc' => 'dte_pago_link: columnas del conciliador',
              'tabla' => 'dte_pago_link',
-             'columnas' => ['conciliado_at', 'conciliacion_intentos'], 'esperado' => 2],
+             'columnas' => ['conciliacion_ultimo_intento_at', 'conciliacion_intentos', 'estado_pasarela'],
+             'esperado' => 3],
         ],
     ],
 ];

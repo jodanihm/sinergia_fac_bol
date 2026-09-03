@@ -58,7 +58,7 @@
 -- esperando respuesta.
 --
 --
--- 3) LA CONCILIACION: confirmacion_pendiente_at, conciliado_at, conciliacion_intentos
+-- 3) LA CONCILIACION, QUE NO PUEDE DEJAR UNA ORDEN CIEGA PARA SIEMPRE
 -- -----------------------------------------------------------------------------
 -- FLOW NO REINTENTA EL AVISO DE PAGO. Es el hecho del que cuelga todo este
 -- bloque, y conviene dejarlo escrito porque es contraintuitivo: su documentacion
@@ -79,18 +79,40 @@
 --                              pista para priorizar, no la unica fuente: el
 --                              conciliador barre TODAS las ordenes creadas,
 --                              tambien aquellas cuyo aviso nunca llego.
---   conciliado_at              cuando se le pregunto por ultima vez a la
---                              pasarela. Sin esto, un barrido preguntaria por
---                              cada orden en cada pasada.
---   conciliacion_intentos      cuantas veces se ha preguntado. Es el tope que
---                              impide un bucle eterno sobre una orden que
---                              simplemente nadie va a pagar nunca.
+--   conciliacion_ultimo_intento_at
+--                              cuando se le PREGUNTO por ultima vez a la
+--                              pasarela. NO significa "conciliada": una fila con
+--                              este campo puesto puede seguir sin resolverse. Se
+--                              llamaba conciliado_at y el nombre mentia; se
+--                              renombro antes de aplicar nada.
+--   conciliacion_intentos      cuantas veces se ha preguntado. Ya NO es un tope
+--                              que apague la orden: es lo que hace crecer la
+--                              espera hasta una cadencia de mantenimiento.
+--   estado_pasarela            lo ultimo que contesto la pasarela sobre esa
+--                              orden, en nuestro vocabulario.
 --
 -- POR QUE EL CONCILIADOR NO SE LIMITA A LAS MARCADAS. Porque el peor caso no
 -- deja marca: si el aviso no llega nunca -- se perdio en la red, nuestro panel
 -- estaba caido esos 15 segundos -- no hay nada que marcar, y esa orden pagada
 -- quedaria invisible para siempre. Barrer por estado='creado' cubre los dos
 -- casos con la misma consulta.
+--
+--
+-- POR QUE estado_pasarela ES VARCHAR Y NO UN ENUM
+-- -----------------------------------------------------------------------------
+-- Guarda lo que contesto la pasarela, no lo que nosotros decidimos: eso ultimo ya
+-- vive en la columna estado. Hacen falta las dos porque significan cosas
+-- distintas -- una orden puede estar 'creado' para nosotros y 'rechazada' para
+-- Flow -- y confundirlas seria decir que una factura rechazada esta pagada.
+--
+-- VARCHAR porque un ENUM obliga a una migracion cada vez que la pasarela invente
+-- un estado, y mientras tanto rechaza la fila. Aqui un valor que no conocemos se
+-- guarda como 'desconocido:N' y se sigue preguntando por esa orden: lo unico que
+-- NUNCA puede pasar es que un estado desconocido cuente como pagado, y de eso se
+-- encarga el codigo, que solo mira si status == 2.
+--
+-- Los cuatro que Flow documenta hoy: 1 pendiente, 2 pagada, 3 rechazada,
+-- 4 anulada.
 --
 --
 -- SOBRE EL ESTADO 'error', QUE HASTA HOY NO LO ESCRIBIA NADIE
@@ -103,7 +125,7 @@
 --
 -- IDEMPOTENCIA
 -- -----------------------------------------------------------------------------
--- Las cinco columnas se agregan con el patron information_schema + PREPARE, uno
+-- Las seis columnas se agregan con el patron information_schema + PREPARE, uno
 -- por columna, porque ADD COLUMN IF NOT EXISTS no existe en el MySQL de Oracle.
 -- No toca ningun dato.
 -- =============================================================================
@@ -165,20 +187,20 @@ PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
--- --- 4. Conciliacion: cuando se pregunto por ultima vez y cuantas veces -------
+-- --- 4. Conciliacion: cuando se pregunto, cuantas veces, y que contesto -------
 SET @sql := (
     SELECT IF(
         COUNT(*) = 0,
         'ALTER TABLE dte_pago_link
-            ADD COLUMN conciliado_at TIMESTAMP NULL DEFAULT NULL
-                COMMENT ''ultima vez que se le pregunto el estado a la pasarela''
+            ADD COLUMN conciliacion_ultimo_intento_at TIMESTAMP NULL DEFAULT NULL
+                COMMENT ''cuando se le pregunto por ultima vez a la pasarela; NO significa resuelta''
                 AFTER confirmacion_pendiente_at',
         'SELECT 1'
     )
     FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME   = 'dte_pago_link'
-      AND COLUMN_NAME  = 'conciliado_at'
+      AND COLUMN_NAME  = 'conciliacion_ultimo_intento_at'
 );
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
@@ -190,13 +212,32 @@ SET @sql := (
         'ALTER TABLE dte_pago_link
             ADD COLUMN conciliacion_intentos INT UNSIGNED NOT NULL DEFAULT 0
                 COMMENT ''cuantas veces se pregunto; su tope evita un bucle eterno''
-                AFTER conciliado_at',
+                AFTER conciliacion_ultimo_intento_at',
         'SELECT 1'
     )
     FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME   = 'dte_pago_link'
       AND COLUMN_NAME  = 'conciliacion_intentos'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- --- 5. Lo ultimo que contesto la pasarela -----------------------------------
+SET @sql := (
+    SELECT IF(
+        COUNT(*) = 0,
+        'ALTER TABLE dte_pago_link
+            ADD COLUMN estado_pasarela VARCHAR(30) NULL DEFAULT NULL
+                COMMENT ''ultimo estado informado por la pasarela: pendiente, pagada, rechazada, anulada, desconocido:N''
+                AFTER conciliacion_intentos',
+        'SELECT 1'
+    )
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'dte_pago_link'
+      AND COLUMN_NAME  = 'estado_pasarela'
 );
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
