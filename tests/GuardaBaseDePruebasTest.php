@@ -150,15 +150,24 @@ final class GuardaBaseDePruebasTest extends TestCase
         $deploy = self::deploySh();
 
         self::assertMatchesRegularExpression(
-            "/TESTS_DE_MIGRACION='([A-Za-z0-9_]+)'/",
+            "/TESTS_DE_MIGRACION='([A-Za-z0-9_|]+)'/",
             $deploy
         );
-        preg_match("/TESTS_DE_MIGRACION='([A-Za-z0-9_]+)'/", $deploy, $m);
+        preg_match("/TESTS_DE_MIGRACION='([A-Za-z0-9_|]+)'/", $deploy, $m);
 
-        self::assertTrue(
-            class_exists('Plantiflex\\FacturacionCl\\Tests\\' . $m[1] . 'Test'),
-            "deploy.sh filtra por '{$m[1]}', que no corresponde a ninguna clase de test"
-        );
+        // El filtro es un regex con alternativas: cada una tiene que
+        // corresponder a una clase que exista. Si alguien renombra un test y no
+        // toca deploy.sh, --fail-on-empty-test-suite lo cazaria en la corrida;
+        // esto lo caza antes y sin necesitar MySQL.
+        $nombres = explode('|', $m[1]);
+        self::assertNotEmpty($nombres);
+
+        foreach ($nombres as $nombre) {
+            self::assertTrue(
+                class_exists('Plantiflex\\FacturacionCl\\Tests\\' . $nombre . 'Test'),
+                "deploy.sh filtra por '{$nombre}', que no corresponde a ninguna clase de test"
+            );
+        }
     }
 
     public function testLosTestsDeMigracionSeExigenTambienEnDryRun(): void

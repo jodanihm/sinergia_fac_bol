@@ -70,6 +70,34 @@ function huellaColumnas(PDO $pdo, string $tabla, array $columnas): int
 }
 
 /**
+ * Cuantas de $columnas YA NO existen en $tabla.
+ *
+ * ES LA HUELLA DE UNA MIGRACION DESTRUCTIVA, y hacia falta porque el resto del
+ * verificador da por hecho que las migraciones AGREGAN. veredicto() compara
+ * "presentes" contra "esperados" y llama NO_APLICADA a presentes === 0: eso
+ * funciona mientras "presente" cuente rasgos que la migracion CREA.
+ *
+ * Una migracion que BORRA no encaja ahi. Con la huella normal y esperado = 0, la
+ * 055 -- que retira tres columnas que hoy tienen que seguir existiendo -- daba
+ * "PARCIAL 3/0", y una PARCIAL aborta el despliegue aunque este diferida. O sea
+ * que una migracion correctamente NO aplicada bloqueaba deploys.
+ *
+ * La solucion no es una excepcion para la 055 ni maquillar la salida: es contar
+ * el rasgo que esa migracion SI produce, que es la AUSENCIA. Asi "presente"
+ * vuelve a significar lo mismo que en todas las demas -- cuanto de lo que la
+ * migracion tenia que dejar hecho esta hecho -- y veredicto() no cambia:
+ *
+ *   las 3 columnas todavia ahi  -> 0 de 3 -> NO_APLICADA
+ *   ninguna                     -> 3 de 3 -> APLICADA
+ *   una o dos borradas          -> 1|2 de 3 -> PARCIAL, que es exactamente lo que
+ *                                 hay que mirar a mano: un DROP a medias.
+ */
+function huellaColumnasAusentes(PDO $pdo, string $tabla, array $columnas): int
+{
+    return count($columnas) - huellaColumnas($pdo, $tabla, $columnas);
+}
+
+/**
  * 1 si $tabla.$columna existe Y su nulabilidad es la pedida; 0 si no.
  *
  * ES LA HUELLA QUE SEPARA LA 022 DE LA 023. Las dos tocan la MISMA columna
@@ -723,9 +751,14 @@ const MIGRACIONES = [
             . 'cabecera de su .sql. Hasta entonces las columnas viejas son un respaldo que nadie lee, no '
             . 'una segunda fuente de verdad.',
         'huellas' => [
-            ['tipo' => 'columnas', 'desc' => 'pago_pasarela_cuenta ya NO tiene las columnas viejas',
+            // HUELLA DE AUSENCIA, no de presencia. Con la huella normal y
+            // esperado = 0 esto daba "PARCIAL 3/0" mientras las columnas
+            // siguieran existiendo -- que es justo lo que tiene que pasar hasta
+            // que esta migracion se aplique -- y una PARCIAL aborta el
+            // despliegue aunque este diferida. Ver huellaColumnasAusentes().
+            ['tipo' => 'columnas_ausentes', 'desc' => 'pago_pasarela_cuenta ya NO tiene las columnas viejas',
              'tabla' => 'pago_pasarela_cuenta',
-             'columnas' => ['credencial_publica', 'credencial_cifrada', 'ambiente'], 'esperado' => 0],
+             'columnas' => ['credencial_publica', 'credencial_cifrada', 'ambiente']],
         ],
     ],
 ];
@@ -740,6 +773,11 @@ function evaluarHuella(PDO $pdo, array $h): array
             return ['presente' => huellaTablas($pdo, $h['tablas']), 'esperado' => $h['esperado']];
         case 'columnas':
             return ['presente' => huellaColumnas($pdo, $h['tabla'], $h['columnas']), 'esperado' => $h['esperado']];
+        case 'columnas_ausentes':
+            return [
+                'presente' => huellaColumnasAusentes($pdo, $h['tabla'], $h['columnas']),
+                'esperado' => count($h['columnas']),
+            ];
         case 'indice':
             return ['presente' => huellaIndice($pdo, $h['tabla'], $h['indice']), 'esperado' => 1];
         case 'pk':

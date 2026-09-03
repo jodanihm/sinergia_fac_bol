@@ -64,7 +64,7 @@ PREFIJO_BASE_PRUEBAS='pruebamig_'
 
 # Los tests que EJECUTAN migraciones contra MySQL. Se corren aparte y con
 # --fail-on-skipped, porque en la suite general un skip pasa desapercibido.
-TESTS_DE_MIGRACION='BackfillAmbiente054'
+TESTS_DE_MIGRACION='BackfillAmbiente054|VeredictoMigraciones'
 
 BUILD_MEM="2g"
 BUILD_CPUSET="0,1"

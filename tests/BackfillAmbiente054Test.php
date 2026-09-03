@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace Plantiflex\FacturacionCl\Tests;
 
 use PDO;
-use PDOException;
 use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\TestCase;
 
 /**
  * Que la migracion 054 no invente el ambiente de ninguna orden.
@@ -46,108 +44,12 @@ use PHPUnit\Framework\TestCase;
  * podria tocar datos de alguien. Se le pasa por TEST_MYSQL_DSN / _USER / _PASS.
  * Cada caso crea su propia base con nombre unico y la borra al terminar.
  */
-final class BackfillAmbiente054Test extends TestCase
+final class BackfillAmbiente054Test extends MysqlDesechableTestCase
 {
     private const MIGRACION = __DIR__ . '/../integration/plantiflex/migrations/054_pago_credenciales_por_ambiente.sql';
 
-    /**
-     * El prefijo que TODA base de este test tiene que llevar.
-     *
-     * No es una convencion de nombres: es la guarda. deploy.sh crea el usuario de
-     * pruebas con GRANT limitado a `pruebamig\_%`.*, asi que el propio MySQL
-     * impide tocar cualquier otra base; y el test comprueba el prefijo antes de
-     * conectar, para que un DSN mal apuntado falle aqui y no a mitad de un DROP.
-     * Dos capas, porque la de abajo -- el GRANT -- depende de que quien prepare
-     * el entorno lo haya hecho bien.
-     */
-    public const PREFIJO = 'pruebamig_';
-
-    /** Bases que este test NUNCA puede tocar, pase lo que pase. */
-    private const PROHIBIDAS = ['sinergia_fac_bol', 'preview_fac', 'mysql', 'information_schema'];
-
-    private ?PDO $pdo = null;
-    private string $base = '';
-
-    protected function setUp(): void
-    {
-        $dsn = getenv('TEST_MYSQL_DSN');
-        if ($dsn === false || $dsn === '') {
-            self::markTestSkipped(
-                'Sin MySQL desechable (TEST_MYSQL_DSN). Este test EJECUTA la migracion. '
-                . 'deploy.sh lo prepara solo; a mano, ver la cabecera de esta clase.'
-            );
-        }
-
-        // --- LA GUARDA, ANTES DE ABRIR NADA ---------------------------------
-        //
-        // FALLA, NO SE SALTA. Un DSN ausente es "aqui no hay MySQL" y saltarse el
-        // test es razonable. Un DSN que apunta a donde no debe es un error de
-        // configuracion del que hay que enterarse: saltarlo lo dejaria pasar en
-        // silencio, y este test crea y BORRA bases enteras.
-        $base = self::baseDelDsn($dsn);
-
-        self::assertNotSame('', $base, "TEST_MYSQL_DSN tiene que traer dbname. DSN recibido sin base: {$dsn}");
-        self::assertNotContains(
-            $base,
-            self::PROHIBIDAS,
-            "TEST_MYSQL_DSN apunta a '{$base}', que es una base REAL. Este test crea y borra bases."
-        );
-        self::assertStringStartsWith(
-            self::PREFIJO,
-            $base,
-            "TEST_MYSQL_DSN apunta a '{$base}', que no lleva el prefijo '" . self::PREFIJO . "'. "
-            . 'Solo se opera sobre bases desechables.'
-        );
-
-        try {
-            $raiz = new PDO($dsn, (string) getenv('TEST_MYSQL_USER'), (string) getenv('TEST_MYSQL_PASS'), [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            ]);
-        } catch (PDOException $e) {
-            // El mensaje de PDO puede traer el DSN pero nunca la contrasena.
-            self::fail('No se pudo conectar al MySQL de pruebas: ' . $e->getMessage());
-        }
-
-        // Base propia por caso, colgando de la que dio el entorno: asi dos casos
-        // no se pisan y el nombre sigue casando con el GRANT del usuario.
-        $this->base = $base . '_' . bin2hex(random_bytes(4));
-        $raiz->exec('CREATE DATABASE ' . $this->base);
-
-        $this->pdo = new PDO(
-            self::dsnSinBase($dsn) . ';dbname=' . $this->base,
-            (string) getenv('TEST_MYSQL_USER'),
-            (string) getenv('TEST_MYSQL_PASS'),
-            [
-                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-                // Los EXECUTE de la migracion devuelven un resultado ('SELECT 1'
-                // cuando el paso ya estaba hecho) y sin buffer dejan el cursor
-                // abierto: la sentencia siguiente muere con "unbuffered queries
-                // are active". El cliente mysql bufferiza por defecto, asi que
-                // esto reproduce como se ejecuta de verdad.
-                PDO::MYSQL_ATTR_USE_BUFFERED_QUERY => true,
-                // Y EMULACION ACTIVADA: sin ella, query() manda las sentencias
-                // por el protocolo de prepared statements, que no admite
-                // PREPARE/EXECUTE/DEALLOCATE ("1295 This command is not
-                // supported in the prepared statement protocol yet") -- y esta
-                // migracion esta hecha entera de eso, porque es la unica forma
-                // de tener ADD COLUMN idempotente en Oracle MySQL.
-                PDO::ATTR_EMULATE_PREPARES => true,
-            ]
-        );
-
-        $this->esquemaPrevio();
-    }
-
-    protected function tearDown(): void
-    {
-        if ($this->pdo !== null && $this->base !== '') {
-            $this->pdo->exec('DROP DATABASE IF EXISTS ' . $this->base);
-        }
-        $this->pdo = null;
-    }
-
     /** El esquema TAL COMO ESTA ANTES de la 054: sin llavero y sin ambiente. */
-    private function esquemaPrevio(): void
+    protected function prepararEsquema(): void
     {
         $this->pdo->exec(<<<'SQL'
             CREATE TABLE cuenta (
@@ -212,104 +114,10 @@ final class BackfillAmbiente054Test extends TestCase
         ]);
     }
 
-    /** Ejecuta la 054 entera. Devuelve null si fue bien, o el mensaje del SIGNAL. */
+    /** Ejecuta la 054 entera. Devuelve null si fue bien, o el mensaje del error. */
     private function migrar(): ?string
     {
-        $sql = file_get_contents(self::MIGRACION);
-        self::assertNotFalse($sql);
-
-        try {
-            // Sentencia a sentencia: PDO no acepta multi-query con
-            // PREPARE/EXECUTE, y asi ademas el error senala la que falla.
-            //
-            // query() Y NO exec(): los EXECUTE de esta migracion devuelven un
-            // resultset ('SELECT 1' cuando el paso ya estaba hecho), y exec() lo
-            // deja sin consumir -- la sentencia siguiente muere con "unbuffered
-            // queries are active". Hay que vaciar el cursor, que es justo lo que
-            // hace el cliente mysql entre sentencia y sentencia.
-            foreach (self::sentencias($sql) as $sentencia) {
-                $st = $this->pdo->query($sentencia);
-                if ($st === false) {
-                    continue;
-                }
-                do {
-                    $st->fetchAll();
-                } while ($st->nextRowset());
-                $st->closeCursor();
-            }
-        } catch (PDOException $e) {
-            return $e->getMessage();
-        }
-
-        return null;
-    }
-
-    /**
-     * Parte el archivo en sentencias, RESPETANDO LAS COMILLAS.
-     *
-     * Un explode(';') ingenuo no sirve: los COMMENT de las columnas contienen
-     * puntos y coma ("flow es la unica implementada; el contrato admite mas"), y
-     * cortar ahi produce SQL invalido. El cliente mysql maneja bien esos casos,
-     * asi que el problema seria del test y no de la migracion -- y un test que
-     * obligue a escribir peor el SQL para poder ejecutarlo es un mal test.
-     *
-     * Solo hay que seguir comillas simples, incluida la duplicada ('') que MySQL
-     * usa para escaparlas dentro de una cadena.
-     *
-     * @return list<string>
-     */
-    private static function sentencias(string $sql): array
-    {
-        $limpio = (string) preg_replace('/^\s*--.*$/m', '', $sql);
-
-        $sentencias = [];
-        $actual     = '';
-        $enCadena   = false;
-        $largo      = strlen($limpio);
-
-        for ($i = 0; $i < $largo; $i++) {
-            $c = $limpio[$i];
-
-            if ($c === "'") {
-                // '' dentro de una cadena es una comilla escapada, no el cierre.
-                if ($enCadena && ($limpio[$i + 1] ?? '') === "'") {
-                    $actual .= "''";
-                    $i++;
-                    continue;
-                }
-                $enCadena = ! $enCadena;
-                $actual  .= $c;
-                continue;
-            }
-
-            if ($c === ';' && ! $enCadena) {
-                $sentencias[] = $actual;
-                $actual       = '';
-                continue;
-            }
-
-            $actual .= $c;
-        }
-        $sentencias[] = $actual;
-
-        return array_values(array_filter(
-            array_map('trim', $sentencias),
-            static fn (string $s): bool => $s !== ''
-        ));
-    }
-
-    /** El dbname de un DSN de PDO, o cadena vacia si no lo trae. */
-    private static function baseDelDsn(string $dsn): string
-    {
-        return preg_match('/(?:^|;)dbname=([^;]*)/', $dsn, $m) === 1 ? trim($m[1]) : '';
-    }
-
-    /** El mismo DSN sin su dbname, para conectar a la base que crea cada caso. */
-    private static function dsnSinBase(string $dsn): string
-    {
-        $limpio = (string) preg_replace('/(?:^|;)dbname=[^;]*/', '', $dsn);
-
-        return rtrim(str_replace(';;', ';', $limpio), ';');
+        return $this->ejecutarSql(self::MIGRACION);
     }
 
     private function ambienteDe(int $dteId): ?string
