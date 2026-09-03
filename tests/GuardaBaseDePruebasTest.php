@@ -102,6 +102,116 @@ final class GuardaBaseDePruebasTest extends TestCase
         );
     }
 
+    // ------------------------------------------------------------------
+    //  Que estos tests no puedan volverse opcionales sin que se note
+    // ------------------------------------------------------------------
+
+    public function testPrepararElMysqlDePruebasFallaEnVezDeDegradar(): void
+    {
+        // La primera version hacia `return 0` ante cualquier tropiezo: los tests
+        // de migracion quedaban en gris y el deploy seguia. O sea que la
+        // comprobacion mas cara del modulo era opcional en la practica -- bastaba
+        // con que MySQL tuviera un mal dia para desplegar sin ella.
+        $deploy = self::deploySh();
+        $cuerpo = self::cuerpoDeFuncion($deploy, 'preparar_mysql_de_pruebas');
+
+        self::assertStringNotContainsString(
+            'return 0',
+            $cuerpo,
+            'preparar_mysql_de_pruebas no puede rendirse en silencio: tiene que llamar a falla'
+        );
+        self::assertGreaterThanOrEqual(
+            2,
+            substr_count($cuerpo, 'falla '),
+            'cada punto de fallo (contenedor ausente, SQL rechazado) tiene que abortar'
+        );
+    }
+
+    public function testLosTestsDeMigracionSeCorrenAparteYConLasDosBanderas(): void
+    {
+        // --fail-on-skipped: un skip devuelve exit != 0. Sin el, un DSN que no
+        //   llega al contenedor deja los quince tests en gris y la suite en verde.
+        // --fail-on-empty-test-suite: un filtro que no casa nada devuelve exit
+        //   != 0. Sin el, renombrar la clase daria "No tests executed!" con exit
+        //   0 -- verde por no haber hecho nada.
+        $cuerpo = self::cuerpoDeFuncion(self::deploySh(), 'verificar_tests_de_migracion');
+
+        self::assertStringContainsString('--fail-on-skipped', $cuerpo);
+        self::assertStringContainsString('--fail-on-empty-test-suite', $cuerpo);
+        self::assertStringContainsString('--filter "$TESTS_DE_MIGRACION"', $cuerpo);
+        self::assertStringContainsString('falla ', $cuerpo, 'un fallo aqui aborta el deploy');
+    }
+
+    public function testElFiltroDeDeployApuntaAlTestQueEjecutaLaMigracion(): void
+    {
+        // Si alguien renombra la clase y no toca deploy.sh, el filtro deja de
+        // casar. --fail-on-empty-test-suite lo cazaria en la corrida; esto lo caza
+        // antes, sin necesidad de MySQL.
+        $deploy = self::deploySh();
+
+        self::assertMatchesRegularExpression(
+            "/TESTS_DE_MIGRACION='([A-Za-z0-9_]+)'/",
+            $deploy
+        );
+        preg_match("/TESTS_DE_MIGRACION='([A-Za-z0-9_]+)'/", $deploy, $m);
+
+        self::assertTrue(
+            class_exists('Plantiflex\\FacturacionCl\\Tests\\' . $m[1] . 'Test'),
+            "deploy.sh filtra por '{$m[1]}', que no corresponde a ninguna clase de test"
+        );
+    }
+
+    public function testLosTestsDeMigracionSeExigenTambienEnDryRun(): void
+    {
+        // El resto del script reporta y sigue en dry-run, porque ahi el valor
+        // esta en ver el diagnostico completo. Aqui no hay diagnostico que ver: o
+        // se ejecutaron o no, y si no, el dry-run estaria diciendo "listo para
+        // desplegar" sobre una validacion que no ocurrio.
+        $deploy = self::deploySh();
+
+        self::assertSame(
+            2,
+            substr_count($deploy, "\nverificar_tests_de_migracion\n")
+                + substr_count($deploy, "\n  verificar_tests_de_migracion\n"),
+            'se llama en los dos caminos: el de dry-run y el real'
+        );
+    }
+
+    // ------------------------------------------------------------------
+
+    private static function deploySh(): string
+    {
+        $deploy = file_get_contents(__DIR__ . '/../deploy.sh');
+        self::assertNotFalse($deploy, 'deploy.sh tiene que estar montado en el contenedor de tests');
+
+        return $deploy;
+    }
+
+    /** El cuerpo de una funcion de shell, entre su '() {' y el '}' de columna 0. */
+    private static function cuerpoDeFuncion(string $script, string $nombre): string
+    {
+        $lineas = explode("\n", $script);
+        $ini    = null;
+
+        foreach ($lineas as $i => $linea) {
+            if (str_starts_with($linea, $nombre . '() {')) {
+                $ini = $i;
+                break;
+            }
+        }
+        self::assertNotNull($ini, "no se encontro la funcion {$nombre}() en deploy.sh");
+
+        $cuerpo = '';
+        for ($i = $ini + 1; $i < count($lineas); $i++) {
+            if ($lineas[$i] === '}') {
+                return $cuerpo;
+            }
+            $cuerpo .= $lineas[$i] . "\n";
+        }
+
+        self::fail("la funcion {$nombre}() no cierra");
+    }
+
     private static function baseDelDsn(string $dsn): string
     {
         return preg_match('/(?:^|;)dbname=([^;]*)/', $dsn, $m) === 1 ? trim($m[1]) : '';

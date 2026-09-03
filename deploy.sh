@@ -62,6 +62,10 @@ SERVICIOS=(mysql motor panel)
 # limitados EXACTAMENTE a este patron.
 PREFIJO_BASE_PRUEBAS='pruebamig_'
 
+# Los tests que EJECUTAN migraciones contra MySQL. Se corren aparte y con
+# --fail-on-skipped, porque en la suite general un skip pasa desapercibido.
+TESTS_DE_MIGRACION='BackfillAmbiente054'
+
 BUILD_MEM="2g"
 BUILD_CPUSET="0,1"
 
@@ -310,9 +314,13 @@ MYSQL_PRUEBAS_USER=""
 MYSQL_PRUEBAS_PASS=""
 
 preparar_mysql_de_pruebas() {
+  # FALLA, NO DEGRADA. Antes, cualquier tropiezo aqui dejaba los tests de
+  # migracion en gris y el deploy seguia tan tranquilo -- o sea que la
+  # comprobacion mas cara del modulo era, en la practica, opcional: bastaba con
+  # que MySQL tuviera un mal dia para desplegar sin ella. No poder montar el
+  # entorno de validacion no es "una comprobacion menos": es no haber validado.
   if ! docker inspect sinergia_mysql >/dev/null 2>&1; then
-    echo "    sin sinergia_mysql: los tests que ejecutan migraciones se saltaran"
-    return 0
+    falla "no existe el contenedor sinergia_mysql: sin el no se pueden correr los tests que EJECUTAN migraciones, y esos no son opcionales"
   fi
 
   local sufijo
@@ -350,11 +358,10 @@ GRANT ALL PRIVILEGES ON \`${patron_grant}\`.* TO '${MYSQL_PRUEBAS_USER}'@'%';
 FLUSH PRIVILEGES;
 SQL
   then
-    MYSQL_PRUEBAS_BASE=""
-    MYSQL_PRUEBAS_USER=""
-    MYSQL_PRUEBAS_PASS=""
-    echo "    no se pudo preparar el MySQL de pruebas: esos tests se saltaran"
-    return 0
+    # Se limpia lo que hubiera quedado a medias antes de abortar: si el CREATE
+    # DATABASE paso y el GRANT no, la base ya existe.
+    limpiar_mysql_de_pruebas
+    falla "no se pudo preparar el MySQL desechable (base/usuario/GRANT). Los tests que ejecutan la migracion 054 NO pueden saltarse: revisa el contenedor sinergia_mysql y vuelve a intentar"
   fi
 
   ok "MySQL de pruebas listo (base ${MYSQL_PRUEBAS_BASE}, usuario acotado a ${PREFIJO_BASE_PRUEBAS}%)"
@@ -389,6 +396,70 @@ SQL
 
 
 trap 'limpiar_mysql_de_pruebas' EXIT
+
+# ── Los tests que EJECUTAN migraciones, aparte y obligatorios ────────────────
+#
+# POR QUE SE CORREN SOLOS Y NO SE CONFIA EN LA SUITE GENERAL. Porque la suite
+# general pasa igual con estos quince tests en gris: markTestSkipped no rompe
+# nada. Mirar el total de "Skipped" tampoco vale -- hoy son 11 por los fixtures
+# de openssl, manana pueden ser otros -- asi que el numero no demuestra nada.
+#
+# Lo inequivoco son dos banderas de PHPUnit:
+#
+#   --fail-on-skipped            un test saltado devuelve exit != 0. Si el DSN no
+#                                llega al contenedor, o la guarda lo rechaza, o
+#                                MySQL no responde, esto se entera.
+#   --fail-on-empty-test-suite   un filtro que no casa nada devuelve exit != 0.
+#                                Sin esto, renombrar la clase daria "No tests
+#                                executed!" con exit 0: verde por no haber hecho
+#                                nada, que es la peor forma de verde.
+#
+# ABORTA TAMBIEN EN DRY-RUN, apartandose del resto del script. verificar_suite
+# reporta y sigue en dry-run porque ahi el valor esta en ver el diagnostico
+# completo; aqui no hay diagnostico que ver: o se ejecutaron o no, y si no se
+# ejecutaron el dry-run estaria diciendo "todo listo para desplegar" sobre una
+# validacion que no ocurrio.
+verificar_tests_de_migracion() {
+  [ -n "$MYSQL_PRUEBAS_BASE" ] \
+    || falla "no hay MySQL desechable preparado: los tests que ejecutan migraciones no pueden correr"
+
+  local red_mysql
+  red_mysql=$(docker inspect sinergia_mysql \
+                --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' 2>/dev/null \
+              | grep -v '^$' | head -n1 || true)
+  [ -n "$red_mysql" ] || falla "no pude derivar la red de sinergia_mysql para los tests de migracion"
+
+  local salida rc
+  set +e
+  salida=$(docker run --rm \
+             --network "$red_mysql" \
+             -e "TEST_MYSQL_DSN=mysql:host=sinergia_mysql;dbname=${MYSQL_PRUEBAS_BASE};charset=utf8mb4" \
+             -e "TEST_MYSQL_USER=${MYSQL_PRUEBAS_USER}" \
+             -e "TEST_MYSQL_PASS=${MYSQL_PRUEBAS_PASS}" \
+             -v "$APP_DIR/src:/app/src:ro" \
+             -v "$APP_DIR/tests:/app/tests:ro" \
+             -v "$APP_DIR/panel:/app/panel:ro" \
+             -v "$APP_DIR/integration:/app/integration:ro" \
+             -v "$APP_DIR/scripts:/app/scripts:ro" \
+             -v "$APP_DIR/phpunit.xml:/app/phpunit.xml:ro" \
+             -v "$APP_DIR/deploy.sh:/app/deploy.sh:ro" \
+             sinergia_tests:latest \
+             vendor/bin/phpunit --no-coverage --testdox \
+               --fail-on-skipped --fail-on-empty-test-suite \
+               --filter "$TESTS_DE_MIGRACION" 2>&1)
+  rc=$?
+  set -e
+
+  if [ "$rc" -ne 0 ]; then
+    echo "$salida" | sed 's/^/    /'
+    falla "los tests que EJECUTAN migraciones no pasaron (exit $rc). No se despliega una migracion de la estructura de pagos sin haberla ejecutado contra MySQL"
+  fi
+
+  # Se imprime la lista entera: es la prueba de que corrieron, y va al log del
+  # deploy para que quede por escrito cuales fueron.
+  echo "$salida" | sed 's/^/    /'
+  ok "los tests que ejecutan migraciones corrieron de verdad (ni uno saltado)"
+}
 
 verificar_suite() {
   local modo="$1"   # "dry-run" o "real"
@@ -471,6 +542,9 @@ if [ "$DRY_RUN" -eq 1 ]; then
   paso "Preparando MySQL desechable para los tests que ejecutan migraciones"
   preparar_mysql_de_pruebas
 
+  paso "Tests que EJECUTAN migraciones (obligatorios, no pueden saltarse)"
+  verificar_tests_de_migracion
+
   paso "Corriendo la suite (arbol actual, SIN el pull)"
   verificar_suite "dry-run"
 
@@ -508,6 +582,9 @@ verificar_migraciones "real"
 # arregla antes y no tiene sentido gastar una corrida de tests.
 paso "Preparando MySQL desechable para los tests que ejecutan migraciones"
 preparar_mysql_de_pruebas
+
+paso "Tests que EJECUTAN migraciones (obligatorios, no pueden saltarse)"
+verificar_tests_de_migracion
 
 paso "Corriendo la suite"
 verificar_suite "real"
