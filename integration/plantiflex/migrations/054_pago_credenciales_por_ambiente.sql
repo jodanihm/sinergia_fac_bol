@@ -64,6 +64,30 @@
 --
 -- IDEMPOTENTE. Todo va por information_schema + PREPARE/EXECUTE porque Oracle
 -- MySQL no tiene ADD COLUMN IF NOT EXISTS.
+--
+--
+-- SI ESTA MIGRACION ABORTA CON "054 ABORTA: N orden(es) ... sin ambiente
+-- determinable", esto es lo que hay que hacer:
+--
+--   1. Ver cuales son:
+--
+--        SELECT id, dte_emitido_id, cuenta_id, proveedor, estado, url, creado_at
+--          FROM dte_pago_link
+--         WHERE ambiente IS NULL
+--
+--   2. Decidir el ambiente de cada una MIRANDO SU HISTORIA, no por comodidad:
+--      la url del checkout si la tiene, la fecha de creacion contra cuando esa
+--      empresa cambio de ambiente (queda en la auditoria, accion
+--      'pago.pasarela.guardada'), o el panel de comercio de la pasarela.
+--
+--   3. Escribirlo a mano y volver a ejecutar la migracion, que es idempotente:
+--
+--        UPDATE dte_pago_link SET ambiente = 'produccion' WHERE id = ...
+--
+-- NO se resuelve poniendo 'sandbox' a todas para que pase. Una orden marcada con
+-- el ambiente equivocado se consulta contra el endpoint equivocado, y si era de
+-- produccion su pago no se registra nunca -- justo el fallo que esta migracion
+-- viene a cerrar.
 -- =============================================================================
 
 -- --- 1. El llavero -----------------------------------------------------------
@@ -161,41 +185,100 @@ PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
--- 4b. Backfill, en dos reglas y por este orden.
+-- 4b. Backfill, en dos reglas y por este orden. NINGUNA DE LAS DOS ADIVINA.
 --
--- REGLA 1 -- LA URL, QUE ES EVIDENCIA DIRECTA. La url del checkout la devolvio
--- la propia pasarela al crear la orden, y su host dice de que ambiente salio.
--- No es una inferencia sobre la configuracion: es el dato que la orden ya trae.
+-- NO HAY REGLA DE ULTIMO RECURSO, y esa ausencia es deliberada. Una version
+-- anterior de esta migracion terminaba con
+--
+--     UPDATE dte_pago_link SET ambiente = 'sandbox' WHERE ambiente IS NULL;
+--
+-- "porque sandbox es el lado seguro". Era falso por dos motivos. Uno: marcar de
+-- sandbox una orden que nacio en produccion la deja consultandose contra el
+-- endpoint equivocado, o sea un cobro real que no se registra nunca -- el mismo
+-- fallo que esta migracion viene a cerrar, reintroducido por la puerta de atras.
+-- Dos, y peor: ese UPDATE hacia que no quedara jamas un NULL, asi que la guarda
+-- de mas abajo no podia dispararse nunca. Era una guarda decorativa.
+--
+-- Si una orden no trae evidencia de su ambiente, la respuesta correcta no es
+-- elegir uno: es NO MIGRAR y que una persona mire. Una orden puede mover dinero.
+
+-- REGLA A -- LA URL, QUE ES EVIDENCIA DIRECTA. La devolvio la propia pasarela al
+-- crear la orden, y su host dice de que ambiente salio. No es una inferencia
+-- sobre la configuracion: es el dato que la orden ya trae.
+--
+-- SE EXIGE UN HOST RECONOCIBLE, en positivo. Antes bastaba con que la url NO
+-- dijera "sandbox" para darla por produccion, y eso convertia cualquier url
+-- rara, truncada o de otro proveedor en produccion sin fundamento. Ahora una url
+-- que no case con ninguno de los dos patrones no decide nada y la fila sigue a
+-- la regla B.
 UPDATE dte_pago_link
    SET ambiente = 'sandbox'
- WHERE ambiente IS NULL AND url LIKE '%sandbox%';
+ WHERE ambiente IS NULL
+   AND url LIKE '%sandbox.flow.cl%';
 
 UPDATE dte_pago_link
    SET ambiente = 'produccion'
- WHERE ambiente IS NULL AND url IS NOT NULL AND url <> '' AND url NOT LIKE '%sandbox%';
+ WHERE ambiente IS NULL
+   AND (url LIKE '%//www.flow.cl%' OR url LIKE '%//flow.cl%');
 
--- REGLA 2 -- LA CONFIGURACION DE SU CUENTA, para las ordenes que nunca llegaron
+-- REGLA B -- LA CONFIGURACION DE SU CUENTA, para las ordenes que nunca llegaron
 -- a tener url (estado 'pendiente', 'error' u 'omitido': se reclamaron y la
 -- pasarela no devolvio checkout). Es lo unico que se puede saber de ellas, y es
--- correcto: se crearon con la configuracion que la cuenta tenia.
+-- legitimo: se crearon con la configuracion que la cuenta tenia.
+--
+-- EL JOIN ES LA CONDICION. Si la cuenta no tiene fila en pago_pasarela_cuenta no
+-- hay nada que copiar, el JOIN no encuentra pareja y la orden se queda en NULL.
+-- Tambien se exige que el proveedor coincida: la configuracion de un proveedor
+-- no dice nada del ambiente de una orden creada con otro.
 UPDATE dte_pago_link p
-  JOIN pago_pasarela_cuenta c ON c.cuenta_id = p.cuenta_id
+  JOIN pago_pasarela_cuenta c
+    ON c.cuenta_id = p.cuenta_id
+   AND c.proveedor = p.proveedor
    SET p.ambiente = c.ambiente
- WHERE p.ambiente IS NULL;
+ WHERE p.ambiente IS NULL
+   AND c.ambiente IN ('sandbox', 'produccion');
 
--- Ultimo recurso: una orden cuya cuenta ya no tiene configuracion. Se marca
--- sandbox, que es el lado seguro -- una orden mal marcada como sandbox no cobra
--- de verdad; al reves, si.
-UPDATE dte_pago_link SET ambiente = 'sandbox' WHERE ambiente IS NULL;
-
--- 4c. ABORTA si algo quedo sin resolver. El SIGNAL corta la migracion antes del
--- NOT NULL, en vez de dejar que el ALTER rellene con el default en silencio.
+-- 4c. ABORTA si algo quedo sin resolver, y ahora SI puede dispararse.
+--
+-- Corta la migracion ANTES del NOT NULL. Sin esto, el ALTER rellenaria las filas
+-- restantes con el default en silencio y nadie se enteraria hasta que un pago no
+-- se registrara.
+--
+-- POR QUE UN PROCEDIMIENTO Y NO UN SIGNAL SUELTO. La forma obvia era
+--
+--     SET @sql := IF(@n = 0, 'SELECT 1', 'SIGNAL SQLSTATE ''45000'' SET MESSAGE_TEXT = ...')
+--     PREPARE stmt FROM @sql
+--
+-- y NO FUNCIONA: MySQL responde "1295 This command is not supported in the
+-- prepared statement protocol yet". SIGNAL no se puede preparar. La migracion
+-- abortaba igual -- por el 1295 --, pero con un mensaje que no dice nada de lo
+-- que pasa, y quien lo leyera buscaria el problema en el sitio equivocado. Se
+-- descubrio ejecutandola: leyendo el .sql las dos versiones se parecen.
+--
+-- CALL si se puede preparar, y un procedimiento de UNA SOLA SENTENCIA no lleva
+-- ';' dentro, asi que tampoco necesita DELIMITER ni rompe a los ejecutores que
+-- parten el archivo por punto y coma. El MESSAGE_TEXT acepta una variable de
+-- usuario, de modo que el aviso puede decir cuantas filas son.
 SET @sin_ambiente := (SELECT COUNT(*) FROM dte_pago_link WHERE ambiente IS NULL);
-SET @aviso := CONCAT('054 ABORTA: quedan ', @sin_ambiente, ' filas de dte_pago_link sin ambiente. NO se aplica el NOT NULL.');
-SET @sql := IF(@sin_ambiente = 0, 'SELECT 1', CONCAT('SIGNAL SQLSTATE ''45000'' SET MESSAGE_TEXT = ''', @aviso, ''''));
+--
+-- EL MENSAJE CABE EN 128 CARACTERES, que es el limite de MESSAGE_TEXT: pasarse
+-- da "1648 Data too long for condition item", o sea otra vez un aborto con un
+-- mensaje que no explica nada. El detalle largo va en la cabecera de este
+-- archivo, que es donde se puede leer con calma.
+SET @aviso := CONCAT(
+    '054 ABORTA: ', @sin_ambiente,
+    ' orden(es) de dte_pago_link sin ambiente determinable. Mira ambiente IS NULL. NO se aplico el NOT NULL.'
+);
+
+DROP PROCEDURE IF EXISTS mig054_abortar;
+CREATE PROCEDURE mig054_abortar() SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @aviso;
+
+SET @sql := IF(@sin_ambiente = 0, 'SELECT 1', 'CALL mig054_abortar()');
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
+
+DROP PROCEDURE IF EXISTS mig054_abortar;
 
 -- 4d. Ahora si: NOT NULL. Sin DEFAULT, a proposito -- quien cree una orden tiene
 -- que decir su ambiente explicitamente. Un default aqui volveria a permitir que
