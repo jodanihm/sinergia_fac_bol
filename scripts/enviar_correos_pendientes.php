@@ -41,7 +41,6 @@ require __DIR__ . '/../vendor/autoload.php';
 use Plantiflex\FacturacionCl\Correo\BrevoMailer;
 use Plantiflex\FacturacionCl\Correo\PreparadorEnvio;
 use Plantiflex\FacturacionCl\Pago\ResolutorLinkPago;
-use Plantiflex\Integration\Facturacion\CertificadoCrypto;
 
 /**
  * TOPE POR CORRIDA. Por que 50:
@@ -385,33 +384,16 @@ try {
 //  de configuracion nuestro no puede acabar en facturas enviadas sin el link que
 //  la empresa pidio.
 // ---------------------------------------------------------------------------
-$resolutor    = null;
-$errorPasarela = null;
-try {
-    $llaveHex = getenv('CRYPTO_MASTER_KEY');
-    $llave    = is_string($llaveHex) ? @hex2bin($llaveHex) : false;
-    if ($llave === false || strlen($llave) !== CertificadoCrypto::KEY_LENGTH) {
-        throw new RuntimeException('CRYPTO_MASTER_KEY ausente o mal formada');
-    }
-    // La RAIZ publica del panel. Aqui solo se comprueba que exista; que sea
-    // ALCANZABLE de verdad -- https, no localhost, no una IP privada -- lo valida
-    // el resolutor en cada orden, porque esas reglas dependen del ambiente de
-    // cada empresa y no se pueden decidir una vez para todas.
-    $urlPublica = trim((string) (getenv('PANEL_URL_PUBLICA') ?: ''));
-    if ($urlPublica === '') {
-        throw new RuntimeException('falta PANEL_URL_PUBLICA (la url publica del panel)');
-    }
-    $crypto    = new CertificadoCrypto($llave);
-    $resolutor = new ResolutorLinkPago(
-        $pdo,
-        static fn (string $cifrado): string => $crypto->descifrar($cifrado),
-        $urlPublica,
-    );
-} catch (Throwable $e) {
-    $errorPasarela = $e->getMessage();
-    linea('*** NO SE PUEDE RESOLVER EL LINK DE PAGO: ' . $errorPasarela . '. ***');
-    linea('*** Los correos de empresas con cobro en linea activo QUEDARAN ESPERANDO. ***');
-}
+// SE CONSTRUYE SIEMPRE Y NO PUEDE FALLAR. Las dependencias del modulo de pagos
+// (la llave maestra, la url publica) se validan DENTRO, en el momento en que un
+// documento concreto de una empresa concreta resulta que lleva link.
+//
+// Antes se validaban aqui, y si faltaba una el resolutor quedaba en null; el
+// bucle de abajo hacia continue ANTES de mirar de que cuenta era el correo, asi
+// que retenia los de TODOS los inquilinos. Una empresa con el cobro en linea
+// apagado se quedaba sin enviar por una variable de un modulo que no usa.
+// Medido en un preview con la pasarela en habilitado=0: dos correos APLAZADA.
+$resolutor = ResolutorLinkPago::desdeEntorno($pdo);
 
 $enviados          = 0;
 $fallidos          = 0;
@@ -473,14 +455,9 @@ foreach ($candidatas as $c) {
         // mismos intentos, sin gastar presupuesto. Si un fallo de pasarela
         // pasara por el camino de error, tres caidas dejarian la factura en
         // 'error' con intentos=3 y el runner no la miraria nunca mas.
-        if ($resolutor === null) {
-            // Sin resolutor no se puede saber si a este correo le toca link. Se
-            // aplaza en vez de mandarlo pelado, por lo mismo de siempre.
-            $aplazados++;
-            linea(sprintf('fila %-6d APLAZADA no se pudo resolver el link de pago (%s)', $id, (string) $errorPasarela));
-            continue;
-        }
-
+        // Ya no hay una guarda global aqui. resolver() decide POR DOCUMENTO, y
+        // para los de empresas sin cobro en linea contesta 'no_aplica' sin haber
+        // mirado siquiera la llave ni la url: su correo sale como siempre.
         $pago = $resolutor->resolver($id);
         if ($pago['verdicto'] === 'esperar') {
             $aplazados++;

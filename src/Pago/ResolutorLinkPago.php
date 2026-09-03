@@ -16,6 +16,7 @@ use Plantiflex\FacturacionCl\Exceptions\PasarelaNoConfiguradaException;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaPermanenteException;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaTransitoriaException;
 use Plantiflex\FacturacionCl\Sii\Rut;
+use Plantiflex\Integration\Facturacion\CertificadoCrypto;
 use Throwable;
 
 /**
@@ -114,10 +115,78 @@ final class ResolutorLinkPago
          *
          * LA CUENTA VA EN EL PATH de la confirmacion porque para verificar la
          * firma del aviso hay que saber de que empresa es ANTES de creerse nada.
+         *
+         * ES UNA CLOSURE Y NO UN string, Y ESO ES EL ARREGLO DE UN FALLO REAL.
+         * Cuando era un string, quien construia el resolutor tenia que tener la
+         * url A MANO -- y el runner de correos, que no puede saber de antemano si
+         * a algun documento de la tanda le tocara link, se negaba a construirlo
+         * si faltaba. El resultado medido: una empresa con el cobro en linea
+         * APAGADO veia sus correos aplazados por una variable de entorno de un
+         * modulo que no usa. Siendo perezosa, la url solo se pide cuando ya se
+         * decidio que este documento se cobra. Ver desdeEntorno().
+         *
+         * @var \Closure(): string
          */
-        private readonly string $urlPublicaPanel,
+        private readonly \Closure $urlPublicaPanel,
         private readonly ?Client $http = null,
     ) {
+    }
+
+    /**
+     * El resolutor que usan el runner y el CLI, armado desde el entorno.
+     *
+     * NUNCA FALLA AL CONSTRUIRSE, y ese es todo el punto. Las dos dependencias
+     * caras -- la llave maestra y la url publica -- se leen y validan DENTRO de
+     * las closures, o sea en el primer momento en que de verdad hacen falta, que
+     * es cuando ya se sabe que este documento lleva link.
+     *
+     * Antes se validaban al construir, y el runner hacia:
+     *
+     *     if ($resolutor === null) { $aplazados++; continue; }
+     *
+     * ese continue iba ANTES de mirar de que cuenta era el correo, asi que una
+     * variable de entorno ausente retenia los correos de TODOS los inquilinos,
+     * incluidos los que no tienen pasarela. En un sistema donde una sola empresa
+     * manda 139 facturas al mes, eso es el modulo de pagos apagando el correo de
+     * quien no lo usa.
+     *
+     * LO QUE NO CAMBIA ES EL FAIL-CLOSED. Si la empresa SI tiene el cobro
+     * activo y la llave o la url faltan, las closures lanzan, resolver() lo
+     * traduce a 'esperar' (los catch de mas abajo) y el correo se retiene. Nadie
+     * recibe una factura sin el link que su emisor pidio: el aislamiento protege
+     * a quien no usa pagos, no relaja a quien si.
+     */
+    public static function desdeEntorno(PDO $pdo, ?Client $http = null): self
+    {
+        return new self(
+            $pdo,
+            static function (string $cifrado): string {
+                $llaveHex = getenv('CRYPTO_MASTER_KEY');
+                $llave    = is_string($llaveHex) ? @hex2bin($llaveHex) : false;
+                if ($llave === false || strlen($llave) !== CertificadoCrypto::KEY_LENGTH) {
+                    throw new PasarelaNoConfiguradaException(
+                        'CRYPTO_MASTER_KEY ausente o mal formada: no se puede leer la '
+                        . 'credencial de la pasarela.'
+                    );
+                }
+
+                return (new CertificadoCrypto($llave))->descifrar($cifrado);
+            },
+            static function (): string {
+                $url = trim((string) (getenv('PANEL_URL_PUBLICA') ?: ''));
+                if ($url === '') {
+                    // El mismo tipo que lanza UrlPublica, para que el catch que
+                    // ya existe alrededor de la validacion lo recoja sin cambios.
+                    throw new PasarelaNoConfiguradaException(
+                        'falta PANEL_URL_PUBLICA (la url publica del panel): la pasarela '
+                        . 'no tendria a donde avisar del pago.'
+                    );
+                }
+
+                return $url;
+            },
+            $http,
+        );
     }
 
     /**
@@ -198,7 +267,7 @@ final class ResolutorLinkPago
         // el aviso no llega nunca -- cobro real sin registrar.
         $ambiente = AmbientePasarela::desde($config['ambiente'] ?? null);
         try {
-            $urlBase = UrlPublica::validar($this->urlPublicaPanel, $ambiente);
+            $urlBase = UrlPublica::validar(($this->urlPublicaPanel)(), $ambiente);
         } catch (PasarelaNoConfiguradaException $e) {
             return self::v('esperar', $e->getMessage());
         }

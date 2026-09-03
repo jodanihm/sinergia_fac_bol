@@ -32,6 +32,17 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-09-03',
+        'version' => '1.53',
+        'titulo'  => 'Activar el cobro en linea en una empresa no puede afectar el correo de las demas',
+        'tag'     => 'backend',
+        'items'   => [
+            'Garantia nueva: si el cobro en linea esta mal configurado, solo se retienen los correos de la empresa que lo tiene activado. Las demas siguen enviando sus facturas exactamente igual, aunque compartan el mismo servidor y la misma corrida de envio.',
+            'Antes no era asi. Un dato de configuracion ausente bastaba para retener los correos de TODAS las empresas, incluidas las que nunca activaron el cobro en linea. Se detecto probandolo, no leyendolo: en una copia de prueba, una empresa con el cobro APAGADO se quedo con sus dos correos retenidos.',
+            'Lo que no cambia: si tu empresa SI tiene el cobro activado y algo falta, tus correos siguen esperando en vez de salir sin el boton de pago. Nadie recibe una factura sin el link que pediste.',
+        ],
+    ],
+    [
         'fecha'   => '2026-09-02',
         'version' => '1.52',
         'titulo'  => 'Quien paga una factura por internet ahora vuelve a una pagina que le dice como quedo',

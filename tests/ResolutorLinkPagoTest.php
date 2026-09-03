@@ -115,7 +115,7 @@ final class ResolutorLinkPagoTest extends TestCase
         return new ResolutorLinkPago(
             $this->pdo,
             static fn (string $c): string => 'secreto-descifrado',
-            self::URL_PANEL,
+            static fn (): string => self::URL_PANEL,
             $http
         );
     }
@@ -519,7 +519,7 @@ final class ResolutorLinkPagoTest extends TestCase
         $resolutor = new ResolutorLinkPago(
             $this->pdo,
             static fn (string $c): string => 'secreto',
-            'http://localhost:8086',   // ni https ni alcanzable
+            static fn (): string => 'http://localhost:8086',   // ni https ni alcanzable
             null
         );
 
@@ -539,7 +539,7 @@ final class ResolutorLinkPagoTest extends TestCase
         $resolutor = new ResolutorLinkPago(
             $this->pdo,
             static fn (string $c): string => 'secreto',
-            'http://localhost:8086',
+            static fn (): string => 'http://localhost:8086',
             new Client(['handler' => HandlerStack::create(new MockHandler([self::respuestaFlowOk()]))])
         );
 
