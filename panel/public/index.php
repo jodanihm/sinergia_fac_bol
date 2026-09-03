@@ -693,6 +693,26 @@ const PERMISOS_RUTA_PATRON = [
 ];
 
 /**
+ * A donde vuelve el CLIENTE despues de pagar, si su proveedor no configuro una
+ * pagina propia.
+ *
+ * Es distinta de la de confirmacion y no puede ser la misma: aquella solo
+ * responde a POST y la llama la pasarela desde sus servidores. Reutilizarla como
+ * retorno dejaba al cliente que acababa de pagar mirando un error -- lo ultimo
+ * que ve alguien que acaba de darnos dinero.
+ *
+ * ACEPTA GET Y POST porque la pasarela puede redirigir de las dos formas.
+ *
+ * VA AQUI ARRIBA, ANTES DE RUTAS_PUBLICAS, Y NO ES ESTETICA. Esa lista la USA
+ * en su propia definicion, y las const de nivel de archivo NO se hoistean: solo
+ * existen cuando la ejecucion pasa por su linea. Declarada mas abajo, el panel
+ * ENTERO reventaba con "Undefined constant" en la primera peticion -- no una
+ * pantalla: todas. Es la misma asimetria que documenta ConstantesAntesDelDespacho,
+ * vista desde el otro lado.
+ */
+const RUTA_RETORNO_PAGO = '/pagos/retorno';
+
+/**
  * Rutas PUBLICAS: anteriores a cualquier sesion, no pueden llevar permiso
  * porque el gate necesita un usuario. Estan listadas y no solo "antes del
  * guard en el router" a proposito: asi el despachador es correcto donde sea que
@@ -734,19 +754,6 @@ const RUTAS_PUBLICAS = [
  * pago -- y la pasarela reintenta un rato y se rinde.
  */
 const PATRON_CONFIRMACION_PAGO = '#^/pagos/flow/confirmacion/(\d+)$#';
-
-/**
- * A donde vuelve el CLIENTE despues de pagar, si su proveedor no configuro una
- * pagina propia.
- *
- * Es distinta de la de confirmacion y no puede ser la misma: aquella solo
- * responde a POST y la llama la pasarela desde sus servidores. Reutilizarla como
- * retorno dejaba al cliente que acababa de pagar mirando un error -- lo ultimo
- * que ve alguien que acaba de darnos dinero.
- *
- * ACEPTA GET Y POST porque la pasarela puede redirigir de las dos formas.
- */
-const RUTA_RETORNO_PAGO = '/pagos/retorno';
 
 /** @var list<string> Regex de rutas publicas con parametro. */
 const PATRONES_PUBLICOS = [
