@@ -733,13 +733,23 @@ const RUTAS_PUBLICAS = [
     // desde sus servidores: no hay sesion que exigir ni CSRF que validar -- un
     // token de formulario no existe para quien no vino de un formulario.
     //
-    // QUE NO SEA PUBLICA DE VERDAD lo garantiza la FIRMA: el cuerpo viene
-    // firmado con el secreto de la empresa, y el handler rehace esa firma antes
-    // de creerse una sola palabra. Sin secreto correcto no se toca ninguna fila.
+    // ES PUBLICA DE VERDAD, Y NO VIENE FIRMADA. Aqui decia que el cuerpo llegaba
+    // firmado con el secreto de la empresa; era falso. Flow manda un POST con
+    // Content-Type application/x-www-form-urlencoded y el cuerpo es UNICAMENTE
+    // token=<token de la transaccion>; la firma HMAC es de las peticiones que
+    // SALEN hacia su API. Mientras se exigio esa firma, todo aviso real murio en
+    // un 403 y ningun pago se registro por esta via.
     //
-    // Lleva la cuenta en la url (/pagos/flow/confirmacion/7) porque para
-    // verificar la firma hay que saber de que empresa es el aviso ANTES de
-    // creerse nada. Por eso vive en PATRONES_PUBLICOS y no aqui.
+    // LO QUE LA PROTEGE NO ES AUTENTICAR AL QUE LLAMA, es no creerle. Del cuerpo
+    // se toma un token y nada mas; con el token se consulta payment/getStatus
+    // con las credenciales de esa empresa -- esa peticion SI va firmada -- y solo
+    // un 'pagada' con el monto exacto marca la factura. Un POST inventado no
+    // puede mover una fila; como mucho nos hace preguntar por una orden.
+    //
+    // Lleva la cuenta en la url (/pagos/flow/confirmacion/7) para que la busqueda
+    // de la orden pueda acotarse por cuenta_id: sin eso, un token dirigido a una
+    // empresa podria encontrar la fila de otra. Por eso vive en PATRONES_PUBLICOS
+    // y no aqui.
     //
     // La pagina de retorno del pagador SI es exacta y va aqui, en sus dos
     // metodos: la abre una persona en su navegador, sin sesion nuestra.
@@ -752,7 +762,13 @@ const RUTAS_PUBLICAS = [
  * En una constante y no escrito tres veces porque se usa en tres sitios que
  * TIENEN que coincidir: la lista de rutas publicas, la excepcion del CSRF y el
  * despacho. Si divergieran, el sintoma seria un 403 o un 404 ante un aviso de
- * pago -- y la pasarela reintenta un rato y se rinde.
+ * pago -- y la pasarela NO reintenta: llama una vez, espera un 200 en 15
+ * segundos y, si no lo recibe, manda un correo de alerta y se olvida. El pago
+ * sigue cobrado de su lado. Eso ya paso una vez, con el 403 de la firma.
+ *
+ * LA EXCEPCION DEL CSRF NO ES UN AGUJERO: el POST lo origina Flow desde sus
+ * servidores, asi que no puede llevar nuestro token. Y no hay nada que
+ * falsificar, porque el cuerpo no decide nada -- ver ConfirmacionPago.
  */
 const PATRON_CONFIRMACION_PAGO = '#^/pagos/flow/confirmacion/(\d+)$#';
 
@@ -6159,18 +6175,29 @@ function handleCorreoEnviarSinLinkPost(int $envioId): void
 /**
  * POST /pagos/flow/confirmacion/{cuentaId} -- el aviso de pago de la pasarela.
  *
- * PUBLICA Y SIN CSRF, porque la llama Flow desde sus servidores. Lo que la
- * protege es la FIRMA: se rehace el HMAC de lo recibido con el secreto de esa
- * empresa y, si no coincide, no se toca absolutamente nada.
+ * PUBLICA Y SIN CSRF, porque la llama Flow desde sus servidores. Y TAMPOCO VIENE
+ * FIRMADA: aqui decia que se rehacia el HMAC de lo recibido con el secreto de la
+ * empresa, y eso era falso. Flow manda POST con el cuerpo token=<token> y nada
+ * mas; la firma HMAC es de las peticiones que SALEN hacia su API. Mientras se
+ * exigio, todo aviso real se respondio con 403 y ningun pago se registro por
+ * aqui.
+ *
+ * LO QUE LA PROTEGE ES NO CREERSE EL CUERPO. Del POST solo se toma un token; la
+ * orden se busca acotando por la cuenta de la url, y el estado se le pregunta a
+ * Flow con las credenciales de esa empresa. Un POST inventado no mueve una fila.
  *
  * NO SE CREE QUE TODO AVISO ES UN PAGO. Flow avisa igual cuando el pago se
  * rechaza, y su aviso solo trae un token. Por eso se le vuelve a preguntar por
- * el estado real antes de marcar nada: dar por pagada una factura que nadie
- * pago es un error que no se descubre hasta que alguien reclama.
+ * el estado real antes de marcar nada, y solo un 'pagada' con el MONTO EXACTO
+ * marca la factura: dar por pagada una factura que nadie pago es un error que no
+ * se descubre hasta que alguien reclama.
  *
- * RESPONDE 200 SIEMPRE QUE LA FIRMA SEA BUENA, incluso si el pago fue rechazado
- * o si la orden no es nuestra: para la pasarela, 200 significa "recibido". Un
- * error aqui la hace reintentar durante horas por algo que no va a cambiar.
+ * RESPONDE 200 CASI SIEMPRE -- pago rechazado, orden ajena, consulta caida --
+ * porque para la pasarela 200 significa "recibido" y NO REINTENTA: llama una vez,
+ * espera 200 en 15 segundos y si no, manda un correo de alerta y se olvida (el
+ * pago sigue cobrado de su lado). Lo que recupera un aviso perdido es NUESTRO
+ * conciliador. Solo se sale del 200 cuando la cuenta de la url no tiene pasarela
+ * configurada (403) o no se pudo descifrar su secreto (500).
  */
 function handleConfirmacionPagoPost(int $cuentaId): void
 {
@@ -6181,7 +6208,7 @@ function handleConfirmacionPagoPost(int $cuentaId): void
     //
     // POR QUE ASI: es la superficie de mayor consecuencia del modulo -- decide si
     // una factura se da por pagada -- y dentro de este archivo no habia forma de
-    // probarla. Fuera, cada escenario (firma mala, cuenta ajena, monto distinto,
+    // probarla. Fuera, cada escenario (token ajeno, cuenta sin pasarela, monto distinto,
     // consulta caida, aviso repetido) es un test.
     $resultado = ConfirmacionPago::procesar(
         Db::conexion(),
@@ -10747,10 +10774,16 @@ if ($ruta === '') {
 //  de sesion y no puede traer un token que solo existe dentro de una sesion
 //  nuestra. Exigirle CSRF no la protege de nada -- la haria fallar siempre.
 //
-//  LO QUE LA PROTEGE ES LA FIRMA, no la ausencia de comprobacion. El handler
-//  rehace el HMAC del cuerpo con el secreto de la empresa antes de creerse una
-//  palabra, y sin coincidencia no toca ninguna fila. Es el mismo criterio que la
-//  API del motor: otra forma de autenticar, no ninguna.
+//  Y NO, NO LA PROTEGE UNA FIRMA. Aqui decia que el handler rehacia el HMAC del
+//  cuerpo con el secreto de la empresa; era falso, y mientras se hizo, todo aviso
+//  real de Flow murio en un 403. Flow manda POST con el cuerpo token=<token> y
+//  nada mas: la firma HMAC es de las peticiones que SALEN hacia su API.
+//
+//  LO QUE LA PROTEGE ES NO CREERLE AL CUERPO. Del POST se saca un token, se busca
+//  la orden acotando por la cuenta de la url, y el estado se le pregunta a Flow
+//  por el canal con credenciales (payment/getStatus, esa si firmada); solo un
+//  'pagada' con el monto exacto marca la factura. Un POST inventado no mueve
+//  ninguna fila. Ver ConfirmacionPago, que lo explica entero.
 //
 //  La excepcion es UNA ruta escrita literal. Nada de prefijos ni de patrones:
 //  un '/pagos/' abierto seria una puerta por la que entraria cualquier POST

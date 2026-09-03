@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-03',
+        'version' => '1.55',
+        'titulo'  => 'Los pagos en linea ya quedan registrados en el momento en que se pagan',
+        'tag'     => 'backend',
+        'items'   => [
+            'Cuando un cliente pagaba, Flow nos avisaba y el sistema rechazaba el aviso. El pago se cobraba de verdad, pero la factura seguia apareciendo como impaga hasta que el proceso de revision la encontraba mas tarde. Ahora el aviso se acepta y el pago se registra en el acto.',
+            'La causa: se le exigia a Flow una credencial de seguridad que Flow no envia en ese aviso. Verificado contra su documentacion oficial.',
+            'Lo que NO cambio, y es lo importante: el aviso por si solo nunca marca una factura como pagada. El sistema le vuelve a preguntar a Flow por el estado real, con sus propias credenciales, y solo la marca si Flow confirma el pago Y el monto cuadra al peso. Un aviso falso no puede dar por pagada ninguna factura.',
+            'Un pago que ya se haya cobrado y no aparezca registrado se recupera con el proceso de revision, sin necesidad de volver a pagar.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-03',
         'version' => '1.54',
         'titulo'  => 'El boton de pago del correo ahora se ve, y avisa cuando es una prueba',
         'tag'     => 'frontend',

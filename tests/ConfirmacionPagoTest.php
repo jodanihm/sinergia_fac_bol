@@ -11,9 +11,9 @@ use GuzzleHttp\HandlerStack;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use PDO;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Plantiflex\FacturacionCl\Pago\ConfirmacionPago;
-use Plantiflex\FacturacionCl\Providers\FlowPasarelaPago;
 
 /**
  * Tests del aviso de pago de la pasarela.
@@ -105,13 +105,22 @@ final class ConfirmacionPagoTest extends TestCase
         return (int) $this->pdo->lastInsertId();
     }
 
-    /** El POST tal como lo manda Flow: token + firma sobre el resto. */
-    private function aviso(string $secreto, string $token = self::TOKEN): array
+    /**
+     * El POST TAL COMO LO MANDA FLOW: token y nada mas.
+     *
+     * Antes este helper anadia un parametro 's' con el HMAC del resto, porque el
+     * codigo lo exigia. Flow no lo manda: su documentacion de "Confirmacion de
+     * orden" dice POST con Content-Type application/x-www-form-urlencoded y el
+     * cuerpo token=<token de la transaccion>. Mientras el helper firmaba, los
+     * tests pasaban con un protocolo que no era el real y el 403 solo aparecio en
+     * produccion.
+     *
+     * El parametro $secreto se conserva y se ignora para no reescribir las
+     * treinta llamadas; da igual el valor que se le pase.
+     */
+    private function aviso(string $secreto = '', string $token = self::TOKEN): array
     {
-        $params      = ['token' => $token];
-        $params['s'] = FlowPasarelaPago::firmar($params, $secreto);
-
-        return $params;
+        return ['token' => $token];
     }
 
     private function procesar(int $cuentaId, array $post, array $respuestas = [], ?string $secreto = null): array
@@ -152,42 +161,58 @@ final class ConfirmacionPagoTest extends TestCase
     //  Autenticidad
     // -----------------------------------------------------------------------
 
-    public function testUnaFirmaValidaConPagoConfirmadoMarcaPagada(): void
+    public function testElAvisoOficialDeFlowSoloTraeTokenYSeProcesa(): void
     {
+        // EL TEST DE REGRESION DEL BUG. El cuerpo es exactamente lo que Flow
+        // manda -- token y nada mas, sin parametro 's' -- y tiene que llegar
+        // hasta la consulta de estado. Mientras se exigio la firma, esto
+        // respondia 403 y el pago del DTE 241 se quedo sin registrar.
         $this->pasarela(self::CUENTA_A);
         $id = $this->orden(self::CUENTA_A);
 
-        $r = $this->procesar(self::CUENTA_A, $this->aviso(self::SECRETO_A), [self::estado(2)]);
+        $r = $this->procesar(self::CUENTA_A, ['token' => self::TOKEN], [self::estado(2)]);
 
         self::assertSame(200, $r['codigo']);
+        self::assertNotSame(403, $r['codigo'], 'la ausencia de firma no puede dar 403');
         self::assertSame('pagado', $this->link($id)['estado']);
         self::assertNotNull($this->link($id)['pagado_at']);
     }
 
-    public function testUnaFirmaInvalidaNoTocaNada(): void
+    public function testLaAusenciaDelParametroSNoSeCastiga(): void
     {
-        $this->pasarela(self::CUENTA_A);
-        $id = $this->orden(self::CUENTA_A);
-
-        // Firmado con el secreto equivocado. Mock vacio: no debe consultar nada.
-        $r = $this->procesar(self::CUENTA_A, $this->aviso('secreto-que-no-es'));
-
-        self::assertSame(403, $r['codigo']);
-        self::assertSame('creado', $this->link($id)['estado']);
-    }
-
-    public function testSinFirmaNoPasa(): void
-    {
+        // Dicho por separado del test de arriba porque es la afirmacion que hay
+        // que proteger: si alguien vuelve a meter una comprobacion de firma
+        // entrante, este es el test que se pone rojo.
         $this->pasarela(self::CUENTA_A);
         $this->orden(self::CUENTA_A);
 
-        self::assertSame(403, $this->procesar(self::CUENTA_A, ['token' => self::TOKEN])['codigo']);
+        $r = $this->procesar(self::CUENTA_A, ['token' => self::TOKEN], [self::estado(2)]);
+
+        self::assertNotSame(403, $r['codigo']);
+        // 'firma' a secas no sirve de aguja: "confirmado" la contiene.
+        self::assertStringNotContainsString('firma invalida', $r['motivo']);
     }
 
-    public function testUnaCuentaInexistenteResponde403IgualQueUnaFirmaMala(): void
+    public function testUnTokenQueNoEsDeNadieNoTocaNingunaFila(): void
     {
-        // La misma respuesta a proposito: distinguirlas diria si esa cuenta existe.
-        $r = $this->procesar(4242, $this->aviso(self::SECRETO_A));
+        // Sustituye al viejo test de "firma invalida". Sin firma que validar, lo
+        // que frena a un tercero es que su token no encuentre ninguna orden.
+        // Mock vacio: si se llegara a consultar a Flow, el test explota.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(self::CUENTA_A);
+
+        $r = $this->procesar(self::CUENTA_A, ['token' => 'token-inventado-por-un-tercero']);
+
+        self::assertSame(200, $r['codigo'], 'se acusa recibo: la pasarela no reintenta');
+        self::assertSame('creado', $this->link($id)['estado'], 'la orden real no se toca');
+    }
+
+    public function testUnaCuentaSinPasarelaResponde403SinConsultarNada(): void
+    {
+        // Aqui el 403 se queda: no es un aviso perdido que el conciliador pueda
+        // recuperar, es una url que no corresponde a ninguna empresa con cobro
+        // configurado. Mock vacio: no debe hablar con Flow.
+        $r = $this->procesar(4242, ['token' => self::TOKEN]);
 
         self::assertSame(403, $r['codigo']);
     }
@@ -222,8 +247,15 @@ final class ConfirmacionPagoTest extends TestCase
         $this->pasarela(self::CUENTA_B);
         $idA = $this->orden(self::CUENTA_A, dteId: 100);
 
-        // Aviso firmado correctamente por B, con el token de A, dirigido a B.
-        $r = $this->procesar(self::CUENTA_B, $this->aviso(self::SECRETO_B), [], self::SECRETO_B);
+        // Aviso con el token de A, dirigido a la url de B. Mock vacio: si llegara
+        // a consultar a Flow, el test explota.
+        //
+        // ESTE TEST PESA MAS QUE ANTES. Cuando el aviso tenia que venir firmado,
+        // esto quedaba frenado dos veces: por la firma y por el cuenta_id del
+        // WHERE. Con la firma fuera -- Flow no la manda --, el cuenta_id es la
+        // UNICA defensa: sin el, un token de A posteado a la url de B encontraria
+        // la fila de A. Por eso la cuenta va en el path de la url.
+        $r = $this->procesar(self::CUENTA_B, ['token' => self::TOKEN], [], self::SECRETO_B);
 
         // 200 y no 503: la pasarela NO reintenta -- espera un 200 en 15 s y, si
         // no, manda un correo de alerta y se olvida --, asi que un no-200 solo
@@ -258,7 +290,7 @@ final class ConfirmacionPagoTest extends TestCase
         return [[1, 'pendiente'], [3, 'rechazada'], [4, 'anulada']];
     }
 
-    #[\PHPUnit\Framework\Attributes\DataProvider('estadosQueNoSonPago')]
+    #[DataProvider('estadosQueNoSonPago')]
     public function testUnPagoNoConfirmadoNoMarcaNada(int $status, string $caso): void
     {
         $this->pasarela(self::CUENTA_A);
@@ -402,33 +434,47 @@ final class ConfirmacionPagoTest extends TestCase
 
     public function testUnAvisoSinTokenSeAcusaYNoHaceNada(): void
     {
+        // Mock vacio: sin token no hay nada que consultar, asi que no debe
+        // hablar con Flow. 200 porque la pasarela no reintenta.
         $this->pasarela(self::CUENTA_A);
         $id = $this->orden(self::CUENTA_A);
 
-        $params      = ['algo' => 'otra cosa'];
-        $params['s'] = FlowPasarelaPago::firmar($params, self::SECRETO_A);
-
-        self::assertSame(200, $this->procesar(self::CUENTA_A, $params)['codigo']);
+        self::assertSame(200, $this->procesar(self::CUENTA_A, ['algo' => 'otra cosa'])['codigo']);
         self::assertSame('creado', $this->link($id)['estado']);
     }
 
-    public function testUnPostConArraysAnidadosNoRompeLaVerificacion(): void
+    #[DataProvider('tokensVacios')]
+    public function testUnTokenVacioNoMarcaNada(mixed $token): void
     {
-        // strval() sobre un array emite warning y produce "Array". Se filtran con
-        // is_scalar para que la firma se calcule solo sobre lo que se puede
-        // firmar, en vez de reventar con un aviso de PHP a mitad de la
-        // verificacion.
-        //
-        // QUE UN CAMPO ASI SE IGNORE NO ABRE NADA: quien lo cuele sigue
-        // necesitando una firma valida sobre los escalares, y para eso hace falta
-        // el secreto. El caso de abajo la trae buena, asi que pasa; el de mas
-        // arriba (firma mala) demuestra que sin el secreto no se entra.
         $this->pasarela(self::CUENTA_A);
         $id = $this->orden(self::CUENTA_A);
 
-        $post      = ['token' => self::TOKEN];
-        $post['s'] = FlowPasarelaPago::firmar($post, self::SECRETO_A);
-        $post['x'] = ['anidado' => 1];
+        $r = $this->procesar(self::CUENTA_A, ['token' => $token]);
+
+        self::assertSame(200, $r['codigo']);
+        self::assertSame('creado', $this->link($id)['estado']);
+    }
+
+    /** @return list<array{mixed}> */
+    public static function tokensVacios(): array
+    {
+        return [
+            'cadena vacia'   => [''],
+            'solo espacios'  => ['   '],
+            'salto de linea' => ["\n"],
+        ];
+    }
+
+    public function testUnPostConArraysAnidadosNoRompeNada(): void
+    {
+        // strval() sobre un array emite warning y produce "Array". Se filtran con
+        // is_scalar para que un campo asi no acabe buscandose como si fuera un
+        // token llamado "Array", ni reviente con un aviso de PHP a mitad del
+        // proceso. Sigue haciendo falta aunque ya no haya firma que calcular.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(self::CUENTA_A);
+
+        $post = ['token' => self::TOKEN, 'x' => ['anidado' => 1]];
 
         $r = $this->procesar(self::CUENTA_A, $post, [self::estado(2)]);
 
@@ -436,20 +482,58 @@ final class ConfirmacionPagoTest extends TestCase
         self::assertSame('pagado', $this->link($id)['estado']);
     }
 
-    public function testColarUnCampoAnidadoNoPermiteSaltarseLaFirma(): void
+    public function testUnTokenQueLlegaComoArrayNoSeConvierteEnLaCadenaArray(): void
     {
-        // El contrapunto del anterior: mismo campo raro, pero sin secreto valido.
+        // $_POST['token'][]=x produce un array. Sin el filtro, (string) sobre el
+        // se convertiria en "Array" y se buscaria una orden con ese token.
         $this->pasarela(self::CUENTA_A);
         $id = $this->orden(self::CUENTA_A);
 
-        $post = [
-            'token' => self::TOKEN,
-            's'     => FlowPasarelaPago::firmar(['token' => self::TOKEN], 'secreto-inventado'),
-            'x'     => ['anidado' => 1],
-        ];
+        $r = $this->procesar(self::CUENTA_A, ['token' => ['a', 'b']]);
 
-        self::assertSame(403, $this->procesar(self::CUENTA_A, $post)['codigo']);
+        self::assertSame(200, $r['codigo']);
         self::assertSame('creado', $this->link($id)['estado']);
+    }
+
+    /**
+     * Que quitar la firma ENTRANTE no haya tocado la SALIENTE.
+     *
+     * Es la mitad que de verdad autentica: el aviso solo trae un puntero, y lo
+     * que decide es esta consulta, hecha con la apiKey de la cuenta y firmada con
+     * su secretKey. Si alguien "simplificara" tambien esta, cualquiera podria
+     * preguntar por cualquier orden. FlowPasarelaPagoTest comprueba el HMAC al
+     * detalle; aqui se comprueba que el flujo de la callback pasa por ahi.
+     */
+    public function testLaConsultaQueDispraElAvisoSigueYendoFirmada(): void
+    {
+        $this->pasarela(self::CUENTA_A);
+        $this->orden(self::CUENTA_A);
+
+        $peticiones = [];
+        $handler    = HandlerStack::create(new MockHandler([self::estado(2)]));
+        $handler->push(\GuzzleHttp\Middleware::history($peticiones));
+
+        ConfirmacionPago::procesar(
+            $this->pdo,
+            self::CUENTA_A,
+            ['token' => self::TOKEN],
+            static fn (string $cifrado): string => self::SECRETO_A,
+            new Client(['handler' => $handler])
+        );
+
+        self::assertCount(1, $peticiones, 'la callback tiene que consultar a Flow');
+
+        parse_str((string) $peticiones[0]['request']->getUri()->getQuery(), $q);
+        self::assertArrayHasKey('s', $q, 'la peticion saliente va firmada');
+        self::assertSame(self::TOKEN, $q['token']);
+
+        $firma = $q['s'];
+        unset($q['s']);
+        self::assertSame(
+            hash_hmac('sha256', 'apiKey' . 'apikey' . 'token' . self::TOKEN, self::SECRETO_A),
+            $firma,
+            'firmada con el secreto de ESTA cuenta'
+        );
     }
 
     // -----------------------------------------------------------------------

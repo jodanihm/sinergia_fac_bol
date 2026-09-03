@@ -113,8 +113,13 @@ final class ResolutorLinkPago
          * https y una direccion alcanzable desde internet; en sandbox se permite
          * un localhost de desarrollo. Ver UrlPublica.
          *
-         * LA CUENTA VA EN EL PATH de la confirmacion porque para verificar la
-         * firma del aviso hay que saber de que empresa es ANTES de creerse nada.
+         * LA CUENTA VA EN EL PATH de la confirmacion, y NO es para verificar una
+         * firma: el aviso de Flow no viene firmado (solo trae token=<token>).
+         * Va ahi porque el token es lo unico que llega, y sin saber de que
+         * empresa es el aviso habria que buscar la orden por token a secas --
+         * o sea, un token dirigido a una cuenta podria encontrar la fila de
+         * otra. Con la cuenta en la url, el WHERE lleva cuenta_id y ese cruce
+         * no existe. Ver ConfirmacionPago.
          *
          * ES UNA CLOSURE Y NO UN string, Y ESO ES EL ARREGLO DE UN FALLO REAL.
          * Cuando era un string, quien construia el resolutor tenia que tener la

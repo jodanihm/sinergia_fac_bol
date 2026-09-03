@@ -10,7 +10,6 @@ use PDO;
 use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
 use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaTransitoriaException;
-use Plantiflex\FacturacionCl\Providers\FlowPasarelaPago;
 use Throwable;
 
 /**
@@ -26,8 +25,8 @@ use Throwable;
  *
  * Aqui recibe todo por parametro -- PDO, el POST, como descifrar, el cliente
  * HTTP -- y devuelve un codigo y un cuerpo. El handler del panel se limita a
- * emitirlos. Asi cada escenario (firma mala, cuenta ajena, monto distinto,
- * consulta caida) es un test.
+ * emitirlos. Asi cada escenario (token ajeno, monto distinto, consulta caida) es
+ * un test.
  *
  *
  * LO QUE ESTA CLASE NO SE CREE
@@ -36,6 +35,13 @@ use Throwable;
  * se rechaza, y su aviso solo trae un identificador. Por eso siempre se le
  * vuelve a preguntar el estado real, y solo un 'pagada' con el MONTO EXACTO
  * marca la factura.
+ *
+ * EL AVISO NO LLEGA FIRMADO, y no es un descuido nuestro: Flow manda un POST con
+ * el cuerpo token=<token> y nada mas. La firma HMAC es de las peticiones que
+ * SALEN hacia su API. Exigirla aqui hacia que todo aviso real muriera en un 403
+ * -- ver el comentario largo dentro de procesar(). Que la callback no venga
+ * autenticada no la vuelve peligrosa porque de ella solo se toma un puntero: la
+ * decision se apoya en payment/getStatus, que si va firmado, y en el monto.
  */
 final class ConfirmacionPago
 {
@@ -70,8 +76,9 @@ final class ConfirmacionPago
         $config = $stmt->fetch(PDO::FETCH_ASSOC);
 
         // Una cuenta sin pasarela nunca pudo emitir un link, asi que un aviso
-        // para ella no existe. Misma respuesta que ante una firma mala:
-        // cualquier otra delataria si esa cuenta existe.
+        // para ella no existe. Se responde 403 y no 200 porque aqui no hay nada
+        // que consultar ni que recuperar mas tarde: no es un aviso perdido, es
+        // una url que no corresponde a ninguna empresa con cobro configurado.
         if ($config === false) {
             return self::r(403, 'no', 'cuenta sin pasarela configurada');
         }
@@ -82,30 +89,60 @@ final class ConfirmacionPago
             return self::r(500, 'error', 'no se pudo descifrar el secreto');
         }
 
+        // EL AVISO DE FLOW NO VIENE FIRMADO, Y ANTES SE EXIGIA QUE LO ESTUVIERA.
+        //
+        // Esta clase pedia un parametro 's' y lo comparaba con un HMAC del resto
+        // del cuerpo. Flow no manda ese parametro: su documentacion de
+        // "Confirmacion de orden" dice que la llamada llega por POST con
+        // Content-Type application/x-www-form-urlencoded y el cuerpo es
+        // UNICAMENTE token=<token de la transaccion>. La firma 's' es de las
+        // peticiones que SALEN hacia su API (payment/create, payment/getStatus),
+        // no de las que entran.
+        //
+        // Consecuencia medida en produccion: Flow llamo a
+        // /pagos/flow/confirmacion/1, se le respondio 403 "firma invalida", y el
+        // pago del DTE 241 quedo sin registrar -- estado 'creado',
+        // estado_pasarela NULL. Con la firma exigida, NINGUN aviso real podia
+        // pasar nunca: el 100% de los pagos dependia del conciliador.
+        //
+        // NO SE PONE UNA FIRMA ALTERNATIVA en su lugar. Inventar un esquema que
+        // Flow no implementa solo reproduciria el mismo 403 con otro nombre.
+        //
+        //
+        // ENTONCES QUE AUTENTICA ESTO, SI CUALQUIERA PUEDE POSTEAR AQUI
+        // ---------------------------------------------------------------------
+        // El aviso no se cree: se usa como AVISO, no como fuente. Del cuerpo solo
+        // sale un token, y con el token no se marca nada. Lo que decide es la
+        // consulta a payment/getStatus que hacemos nosotros, con la apiKey y el
+        // secreto de ESTA cuenta y firmada con secretKey, y despues el monto
+        // tiene que cuadrar al peso. Un tercero que postee un token cualquiera
+        // consigue, en el mejor de los casos para el, que le preguntemos a Flow
+        // por una orden que no cambiara de estado.
+        //
+        // Es el modelo que Flow prescribe, y es el mismo que ya usa la pagina de
+        // retorno (ver EstadoRetornoPago): el navegador y la callback son
+        // punteros; la verdad se pide por el canal con credenciales.
+        //
         // is_scalar filtra arrays anidados: strval() sobre un array emite warning
-        // y produce "Array", que rompe la firma de una forma que cuesta explicar.
+        // y produce "Array", que aqui acabaria buscando una orden llamada "Array".
         $recibido = array_filter($post, 'is_scalar');
-        $firma    = (string) ($recibido['s'] ?? '');
-        unset($recibido['s']);
-
-        // hash_equals y no ===: comparar firmas con == filtra por el tiempo que
-        // tarda en fallar cuantos caracteres iniciales acerto quien lo intente.
-        $esperada = FlowPasarelaPago::firmar(array_map('strval', $recibido), $secreto);
-        if ($firma === '' || ! hash_equals($esperada, $firma)) {
-            return self::r(403, 'no', 'firma invalida');
-        }
 
         $token = trim((string) ($recibido['token'] ?? ''));
         if ($token === '') {
+            // Sin token no hay nada que consultar. 200 porque la pasarela no
+            // reintenta y un no-200 solo le genera un correo de alerta al
+            // comerciante por algo que no puede arreglar.
             return self::r(200, 'ok', 'aviso sin token');
         }
 
         // LA FILA SE BUSCA POR TOKEN Y POR CUENTA, antes de preguntar nada.
         //
-        // cuenta_id en el WHERE es lo que impide que un aviso firmado por una
-        // empresa toque la orden de otra. El token es lo unico que trae el aviso,
-        // asi que es por donde hay que entrar -- y por eso la orden se guarda con
-        // el token como identificador externo.
+        // cuenta_id en el WHERE es lo que impide que un aviso dirigido a una
+        // empresa toque la orden de otra, y con la firma fuera es la unica
+        // defensa que queda en este punto: sin el, un token de la cuenta 5
+        // posteado a /pagos/flow/confirmacion/1 encontraria su fila. El token es
+        // lo unico que trae el aviso, asi que es por donde hay que entrar -- y
+        // por eso la orden se guarda con el token como identificador externo.
         $stmt = $pdo->prepare(
             'SELECT id, monto FROM dte_pago_link WHERE cuenta_id = :c AND orden_externa = :t LIMIT 1'
         );
