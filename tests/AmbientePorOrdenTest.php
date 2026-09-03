@@ -281,6 +281,191 @@ final class AmbientePorOrdenTest extends TestCase
     }
 
     // ==================================================================
+    //  Una orden a medio crear NO cambia de ambiente con la cuenta
+    // ==================================================================
+
+    /**
+     * Deja una orden reclamada y sin completar, como la deja registrarFallo().
+     *
+     * Es el estado en que queda una fila cuando payment/create falla: 'pendiente',
+     * con su ambiente ya congelado, sin token ni url, y lista para reintentarse
+     * en cuanto venza el backoff.
+     */
+    private function ordenAMedias(string $ambiente, int $dteId = 100, int $cuentaId = self::CUENTA): int
+    {
+        $this->pdo->prepare(
+            'INSERT INTO dte_pago_link (dte_emitido_id, cuenta_id, proveedor, ambiente, referencia, monto, estado, intentos) '
+            . "VALUES (:d, :c, 'flow', :a, :r, :m, 'pendiente', 1)"
+        )->execute([
+            ':d' => $dteId, ':c' => $cuentaId, ':a' => $ambiente,
+            ':r' => 'SIN-' . $cuentaId . '-33-' . $dteId, ':m' => self::MONTO,
+        ]);
+
+        return (int) $this->pdo->lastInsertId();
+    }
+
+    public function testUnaOrdenPendienteDeSandboxNoSeCreaEnProduccionAlCambiarElActivo(): void
+    {
+        // EL AGUJERO QUE ESTE TEST CIERRA, con dinero real dentro:
+        //   1. cuenta en sandbox, se reclama la orden -> fila ambiente sandbox
+        //   2. payment/create falla -> queda 'pendiente' con backoff
+        //   3. la empresa pasa a produccion y carga sus llaves reales
+        //   4. vence el backoff -> el reintento leia el ambiente ACTIVO y creaba
+        //      la orden en PRODUCCION, dejando la fila marcada sandbox
+        // Resultado: correo con aviso PRUEBA sobre un cobro real, y callback
+        // consultando sandbox con un token de produccion.
+        $envio = $this->documento();
+        $id    = $this->ordenAMedias('sandbox');
+
+        $this->eleccion('produccion');
+        $this->llaves('sandbox');
+        $this->llaves('produccion');
+
+        $capturadas = [];
+        $handler    = HandlerStack::create(new MockHandler([self::respuestaCrear()]));
+        $handler->push(\GuzzleHttp\Middleware::history($capturadas));
+
+        $r = (new ResolutorLinkPago(
+            $this->pdo,
+            static fn (string $c): string => 'descifrado:' . $c,
+            static fn (): string => self::URL,
+            new Client(['handler' => $handler])
+        ))->resolver($envio);
+
+        self::assertSame('listo', $r['verdicto'], $r['motivo']);
+        self::assertSame('sandbox', $this->link($id)['ambiente'], 'la historia no se reescribe');
+
+        $uri = (string) $capturadas[0]['request']->getUri();
+        self::assertStringContainsString('sandbox.flow.cl', $uri, 'la orden se creo en SANDBOX');
+        self::assertStringNotContainsString('www.flow.cl', $uri);
+
+        parse_str((string) $capturadas[0]['request']->getBody(), $cuerpo);
+        self::assertSame('apikey-sandbox', $cuerpo['apiKey'], 'y con las llaves de SANDBOX');
+    }
+
+    public function testUnaOrdenPendienteDeProduccionNoSeCreaEnSandboxAlCambiarElActivo(): void
+    {
+        // El reverso, y no es simetrico en consecuencias pero si en principio:
+        // una orden de produccion a medias que se completara en sandbox daria un
+        // link que no cobra, sobre una factura que si hay que cobrar.
+        $envio = $this->documento();
+        $id    = $this->ordenAMedias('produccion');
+
+        $this->eleccion('sandbox');
+        $this->llaves('sandbox');
+        $this->llaves('produccion');
+
+        $capturadas = [];
+        $handler    = HandlerStack::create(new MockHandler([self::respuestaCrear()]));
+        $handler->push(\GuzzleHttp\Middleware::history($capturadas));
+
+        $r = (new ResolutorLinkPago(
+            $this->pdo,
+            static fn (string $c): string => 'descifrado:' . $c,
+            static fn (): string => self::URL,
+            new Client(['handler' => $handler])
+        ))->resolver($envio);
+
+        self::assertSame('listo', $r['verdicto'], $r['motivo']);
+        self::assertSame('produccion', $this->link($id)['ambiente']);
+
+        $uri = (string) $capturadas[0]['request']->getUri();
+        self::assertStringContainsString('www.flow.cl', $uri, 'la orden se creo en PRODUCCION');
+        self::assertStringNotContainsString('sandbox', $uri);
+
+        parse_str((string) $capturadas[0]['request']->getBody(), $cuerpo);
+        self::assertSame('apikey-produccion', $cuerpo['apiKey']);
+    }
+
+    public function testSinLlavesDelAmbienteHistoricoNoSeCreaConLasDelActivo(): void
+    {
+        // La tentacion seria "hay llaves de produccion, uselas". Seria crear en
+        // produccion una orden que la empresa pidio en pruebas. Mock vacio: si
+        // llamara a Flow, el test revienta.
+        $envio = $this->documento();
+        $id    = $this->ordenAMedias('sandbox');
+
+        $this->eleccion('produccion');
+        $this->llaves('produccion');   // sandbox ya no tiene llaves
+
+        $r = (new ResolutorLinkPago(
+            $this->pdo,
+            static fn (string $c): string => 'descifrado:' . $c,
+            static fn (): string => self::URL,
+            new Client(['handler' => HandlerStack::create(new MockHandler([]))])
+        ))->resolver($envio);
+
+        self::assertSame('esperar', $r['verdicto']);
+        self::assertStringContainsString('faltan las llaves', $r['motivo']);
+        self::assertStringContainsString('sandbox', $r['motivo']);
+        self::assertStringContainsString('nacio esta orden', $r['motivo']);
+        self::assertSame('pendiente', $this->link($id)['estado'], 'no se toco');
+        self::assertSame('sandbox', $this->link($id)['ambiente']);
+    }
+
+    public function testUnaFilaNUEVA_SI_UsaElAmbienteActivo(): void
+    {
+        // La otra mitad de la regla: el activo decide para lo que todavia no
+        // existe. Sin esto, cambiar de ambiente no serviria de nada.
+        $envio = $this->documento();
+        $this->eleccion('produccion');
+        $this->llaves('produccion');
+
+        $r = $this->resolutor([self::respuestaCrear()])->resolver($envio);
+
+        self::assertSame('listo', $r['verdicto'], $r['motivo']);
+        self::assertSame('produccion', $this->pdo->query('SELECT ambiente FROM dte_pago_link')->fetchColumn());
+    }
+
+    public function testElReintentoNoActualizaNiElAmbienteNiElProveedor(): void
+    {
+        // reclamar() hace UPDATE sobre una fila existente para tomar el reclamo.
+        // Ese UPDATE toca intentos y reclamado_at, y nada mas: si algun dia
+        // alguien le agregara ambiente o proveedor, este test se pone rojo.
+        $envio = $this->documento();
+        $id    = $this->ordenAMedias('sandbox');
+        $antes = $this->link($id);
+
+        $this->eleccion('produccion');
+        $this->llaves('sandbox');
+        $this->llaves('produccion');
+
+        $this->resolutor([self::respuestaCrear()])->resolver($envio);
+
+        $despues = $this->link($id);
+        self::assertSame($antes['ambiente'], $despues['ambiente']);
+        self::assertSame($antes['proveedor'], $despues['proveedor']);
+    }
+
+    public function testLaHistoriaDeUnaEmpresaNoAlcanzaALaDeOtra(): void
+    {
+        // Dos cuentas con ordenes a medias en ambientes distintos: cada una se
+        // completa contra el suyo.
+        $envioA = $this->documento(dteId: 100, envioId: 1, cuentaId: self::CUENTA);
+        $idA    = $this->ordenAMedias('sandbox', dteId: 100, cuentaId: self::CUENTA);
+        $this->eleccion('produccion', cuentaId: self::CUENTA);
+        $this->llaves('sandbox', cuentaId: self::CUENTA);
+
+        $this->eleccion('produccion', cuentaId: self::CUENTA_B);
+        $this->llaves('produccion', cuentaId: self::CUENTA_B);
+
+        $capturadas = [];
+        $handler    = HandlerStack::create(new MockHandler([self::respuestaCrear()]));
+        $handler->push(\GuzzleHttp\Middleware::history($capturadas));
+
+        (new ResolutorLinkPago(
+            $this->pdo,
+            static fn (string $c): string => 'descifrado:' . $c,
+            static fn (): string => self::URL,
+            new Client(['handler' => $handler])
+        ))->resolver($envioA);
+
+        self::assertSame('sandbox', $this->link($idA)['ambiente']);
+        parse_str((string) $capturadas[0]['request']->getBody(), $cuerpo);
+        self::assertSame('apikey-sandbox', $cuerpo['apiKey'], 'las llaves de SU cuenta y SU ambiente');
+    }
+
+    // ==================================================================
     //  6-7. La callback resuelve por la historia de la orden
     // ==================================================================
 

@@ -244,11 +244,33 @@ final class ResolutorLinkPago
             return self::v('no_aplica', 'la empresa no tiene el cobro en linea activo');
         }
 
-        // LA FUENTE UNICA DEL AMBIENTE PARA UNA ORDEN NUEVA. Sale de la eleccion
-        // activa, que es una sola fila por empresa: no hay dos configuraciones
-        // compitiendo, porque el esquema no permite escribirlas.
-        $proveedor = (string) $config['proveedor'];
-        $ambiente  = (string) $config['ambiente_activo'];
+        // EL AMBIENTE ACTIVO DECIDE SOLO PARA UNA ORDEN QUE TODAVIA NO EXISTE.
+        //
+        // Si ya hay fila en dte_pago_link manda LO QUE ELLA DICE, aunque la
+        // empresa haya cambiado de ambiente entretanto. Antes se tomaba siempre
+        // el activo, y eso abria un agujero con dinero real dentro:
+        //
+        //   1. cuenta en sandbox: se reclama la orden -> fila con ambiente sandbox
+        //   2. payment/create falla (timeout, Flow caido) -> registrarFallo deja
+        //      la fila en 'pendiente' con backoff, lista para reintentarse
+        //   3. la empresa pasa a produccion y carga sus llaves reales
+        //   4. vence el backoff: el reintento leia el ambiente ACTIVO, creaba la
+        //      orden en PRODUCCION... y la fila seguia marcada sandbox, porque el
+        //      UPDATE de reclamar() no toca el ambiente (y hace bien: es inmutable)
+        //
+        // Resultado: el correo anunciaba PRUEBA sobre un cobro real, y la
+        // callback consultaba sandbox con un token de produccion -- fallo
+        // permanente, pago real sin registrar. Las dos mitades del desastre.
+        //
+        // LA REGLA, DICHA ENTERA: el ambiente activo es una decision sobre el
+        // FUTURO; una orden que ya existe pertenece al pasado y no se relee.
+        $existeOrden = ($fila['pago_id'] ?? null) !== null;
+        $proveedor   = $existeOrden
+            ? (string) $fila['pago_proveedor']
+            : (string) $config['proveedor'];
+        $ambiente    = $existeOrden
+            ? (string) $fila['pago_ambiente']
+            : (string) $config['ambiente_activo'];
 
         if ($this->clienteExcluido((int) $fila['cuenta_id'], (string) $fila['receptor_rut'])) {
             return self::v('no_aplica', 'a este cliente no se le manda link');
@@ -290,12 +312,16 @@ final class ResolutorLinkPago
         // NO SE CAE AL OTRO AMBIENTE. Sin fila de produccion no se crea la orden
         // con el secreto de sandbox -- eso firmaria mal, o peor, cobraria de
         // verdad algo que la empresa pidio en pruebas.
+        // SIN FALLBACK AL AMBIENTE ACTIVO, y aqui es donde mas importa: si esta
+        // orden nacio en sandbox y ya no quedan llaves de sandbox, la respuesta
+        // correcta es esperar, no crearla en produccion con las llaves nuevas.
         $credencial = $this->credencialDe((int) $fila['cuenta_id'], $proveedor, $ambiente);
         if ($credencial === null) {
             return self::v('esperar', sprintf(
-                'faltan las llaves de %s en %s: cargalas en Configuracion > Cobro en linea',
+                'faltan las llaves de %s en %s%s: cargalas en Configuracion > Cobro en linea',
                 $proveedor,
-                $ambiente
+                $ambiente,
+                $existeOrden ? ' (el ambiente con que nacio esta orden)' : ''
             ));
         }
 
@@ -401,7 +427,12 @@ final class ResolutorLinkPago
             'SELECT q.id, q.cuenta_id, q.dte_emitido_id, q.destinatario, '
             . '       e.tipo_dte, e.folio, e.total, e.receptor_rut, e.ambiente, '
             . '       p.id AS pago_id, p.estado AS pago_estado, p.url AS pago_url, '
-            . '       p.intentos AS pago_intentos, p.reintentar_despues_at AS pago_reintentar_despues_at '
+            . '       p.intentos AS pago_intentos, p.reintentar_despues_at AS pago_reintentar_despues_at, '
+            // EL PROVEEDOR Y EL AMBIENTE CON QUE NACIO LA ORDEN, si es que ya
+            // existe. Sin esto, un reintento de una orden reclamada en sandbox
+            // se creaba contra el ambiente ACTIVO -- ver el bloque de resolver()
+            // que los elige.
+            . '       p.proveedor AS pago_proveedor, p.ambiente AS pago_ambiente '
             . 'FROM dte_envio_correo q '
             . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
             . 'LEFT JOIN dte_pago_link p ON p.dte_emitido_id = q.dte_emitido_id '
