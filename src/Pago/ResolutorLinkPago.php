@@ -10,7 +10,9 @@ use PDOException;
 use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
 use Plantiflex\FacturacionCl\Dto\OrdenPagoCreada;
 use Plantiflex\FacturacionCl\Dto\SolicitudPago;
+use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
 use Plantiflex\FacturacionCl\Exceptions\PagoException;
+use Plantiflex\FacturacionCl\Exceptions\PasarelaNoConfiguradaException;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaPermanenteException;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaTransitoriaException;
 use Plantiflex\FacturacionCl\Sii\Rut;
@@ -81,22 +83,39 @@ final class ResolutorLinkPago
      */
     private const BACKOFF_PERMANENTE_MINUTOS = 1440;
 
+    /**
+     * Cuanto vale un reclamo antes de darlo por abandonado.
+     *
+     * TIENE QUE SER MAYOR QUE EL TIMEOUT DE LA PASARELA (30 s en Flow), y por
+     * bastante. Si fuera menor, un proceso que todavia esta esperando respuesta
+     * veria caducar su propio reclamo, otro entraria, y volveriamos a tener dos
+     * llamadas en vuelo por el mismo documento -- justo lo que el reclamo existe
+     * para impedir.
+     *
+     * Y no puede ser eterno: un proceso muerto entre el reclamo y la respuesta
+     * dejaria el documento sin cobrar para siempre. Diez minutos deja dos pasadas
+     * del runner de margen y recupera solo.
+     */
+    private const RECLAMO_TTL_MINUTOS = 10;
+
     public function __construct(
         private readonly PDO $pdo,
         /** Descifra pago_pasarela_cuenta.credencial_cifrada. */
         private readonly \Closure $descifrar,
         /**
-         * Base de la url a la que la pasarela avisa del pago. El resolutor le
-         * pega la cuenta: .../confirmacion/7.
+         * La raiz publica del panel, tal cual (https://facturacion.ejemplo.cl).
+         * De aqui salen las DOS direcciones que la orden lleva dentro: a donde
+         * avisar del pago y a donde vuelve el cliente.
          *
-         * VA POR CUENTA Y NO PUEDE NO IRLO. El aviso llega firmado con el
-         * secreto de la empresa, y para verificar esa firma hay que saber DE QUE
-         * EMPRESA es antes de creerse nada. Con una url unica para todos, el
-         * receptor del aviso no tendria forma de elegir el secreto correcto: o
-         * los prueba todos -- que es un oraculo para adivinar secretos -- o no
-         * verifica, que es peor.
+         * SE VALIDA EN CADA ORDEN, no al construir el resolutor, porque las
+         * reglas dependen del ambiente de CADA empresa: en produccion se exige
+         * https y una direccion alcanzable desde internet; en sandbox se permite
+         * un localhost de desarrollo. Ver UrlPublica.
+         *
+         * LA CUENTA VA EN EL PATH de la confirmacion porque para verificar la
+         * firma del aviso hay que saber de que empresa es ANTES de creerse nada.
          */
-        private readonly string $urlConfirmacionBase,
+        private readonly string $urlPublicaPanel,
         private readonly ?Client $http = null,
     ) {
     }
@@ -170,14 +189,35 @@ final class ResolutorLinkPago
 
         // --- A partir de aqui SI se habla con la pasarela ---------------------
 
+        // LA URL DE AVISO SE VALIDA ANTES DE RECLAMAR NADA.
+        //
+        // Va aqui y no dentro del try de mas abajo porque una url mal puesta no
+        // es un fallo de la pasarela: es configuracion nuestra, y no tiene
+        // sentido tomar el reclamo ni gastar un intento por ella. La direccion
+        // viaja DENTRO de la orden, asi que si esta mal el cliente paga igual y
+        // el aviso no llega nunca -- cobro real sin registrar.
+        $ambiente = AmbientePasarela::desde($config['ambiente'] ?? null);
+        try {
+            $urlBase = UrlPublica::validar($this->urlPublicaPanel, $ambiente);
+        } catch (PasarelaNoConfiguradaException $e) {
+            return self::v('esperar', $e->getMessage());
+        }
+
         $referencia = self::referencia((int) $fila['cuenta_id'], $tipoDte, (int) $fila['folio']);
-        $linkId     = $this->reservar(
+        $linkId     = $this->reclamar(
             (int) $fila['dte_emitido_id'],
             (int) $fila['cuenta_id'],
             (string) $config['proveedor'],
             $referencia,
             $total
         );
+
+        // OTRO PROCESO TIENE EL RECLAMO. No se llama a la pasarela: es la unica
+        // linea que separa "un cobro" de "dos cobros" cuando el cron y el envio
+        // manual coinciden sobre el mismo documento.
+        if ($linkId === null) {
+            return self::v('esperar', 'otro proceso esta creando el link de este documento');
+        }
 
         try {
             $cred = $this->credenciales($config);
@@ -187,8 +227,13 @@ final class ResolutorLinkPago
                     monto: $total,
                     asunto: sprintf('Documento %d N %d', $tipoDte, (int) $fila['folio']),
                     emailPagador: $destinatario,
-                    urlConfirmacion: rtrim($this->urlConfirmacionBase, '/') . '/' . (int) $fila['cuenta_id'],
-                    urlRetorno: trim((string) ($config['url_retorno'] ?? '')) ?: null,
+                    urlConfirmacion: $urlBase . '/pagos/flow/confirmacion/' . (int) $fila['cuenta_id'],
+                    // PAGINA DE RETORNO PROPIA cuando el tenant no puso la
+                    // suya. Antes se caia a la url de CONFIRMACION, que solo
+                    // responde a POST: el cliente que acababa de pagar aterrizaba
+                    // en un error. Lo ultimo que ve quien acaba de pagar no puede
+                    // ser una pagina rota.
+                    urlRetorno: trim((string) ($config['url_retorno'] ?? '')) ?: $urlBase . '/pagos/retorno',
                 ),
                 $cred
             );
@@ -251,7 +296,7 @@ final class ResolutorLinkPago
     private function configuracionPasarela(int $cuentaId): ?array
     {
         $stmt = $this->pdo->prepare(
-            'SELECT proveedor, habilitado, credencial_publica, credencial_cifrada, url_retorno '
+            'SELECT proveedor, ambiente, habilitado, credencial_publica, credencial_cifrada, url_retorno '
             . 'FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
         );
         $stmt->execute([':c' => $cuentaId]);
@@ -268,7 +313,12 @@ final class ResolutorLinkPago
         return new CredencialesPasarela(
             apiKey: (string) ($config['credencial_publica'] ?? ''),
             secreto: $secreto,
-            sandbox: false,
+            // DESDE LA CONFIGURACION, nunca fijo. Aqui habia un `sandbox: false`
+            // escrito a mano que mandaba TODA orden al Flow real y dejaba las
+            // constantes de sandbox como codigo inalcanzable: no habia forma de
+            // probar sin cobrarle a alguien. AmbientePasarela::desde() manda a
+            // sandbox cualquier valor que no sea exactamente 'produccion'.
+            ambiente: AmbientePasarela::desde($config['ambiente'] ?? null),
             urlRetorno: trim((string) ($config['url_retorno'] ?? '')) ?: null,
         );
     }
@@ -318,16 +368,51 @@ final class ResolutorLinkPago
      * MySqlIdempotenciaRepository::reclamar(), y ademas funciona igual en SQLite,
      * que es donde corren los tests.
      */
-    private function reservar(int $dteEmitidoId, int $cuentaId, string $proveedor, string $referencia, int $monto): int
+    /**
+     * Toma el permiso EXCLUSIVO de llamar a la pasarela por este documento, o
+     * devuelve null si otro proceso lo tiene.
+     *
+     * ESTO ES LO QUE IMPIDE EL DOBLE COBRO, y el UNIQUE por si solo no bastaba.
+     * uk_pago_link_documento garantiza UNA FILA; no garantiza UNA LLAMADA. Con la
+     * version anterior, dos procesos concurrentes -- el cron y
+     * scripts/enviar_correo.php, que no toma el candado del runner -- perdian los
+     * dos el INSERT, se quedaban los dos con el mismo id y los dos seguian
+     * adelante a crear la orden. Que no naciera un segundo cobro dependia
+     * enteramente de que la pasarela dedupliqe commerceOrder, cosa que este
+     * proyecto no ha verificado y no deberia necesitar.
+     *
+     * COMO SE GANA EL RECLAMO, en dos caminos que se excluyen:
+     *
+     *   1. El INSERT sale bien -> la fila es mia, nadie mas la tenia.
+     *   2. El INSERT choca con el UNIQUE -> la fila ya existia, asi que se
+     *      compite por ella con un UPDATE CONDICIONADO. Solo uno lo gana, porque
+     *      MySQL bloquea la fila y el segundo evalua el WHERE contra el valor YA
+     *      escrito por el primero. rowCount() dice quien fue.
+     *
+     * EL RECLAMO CADUCA. Se guarda la HORA, no un flag: un proceso que muera
+     * despues de reclamar dejaria el documento bloqueado para siempre si esto
+     * fuera un booleano. Pasado RECLAMO_TTL_MINUTOS otro lo puede tomar.
+     *
+     * intentos SUBE SIEMPRE que se gana el reclamo, y de paso hace que el
+     * rowCount() sea fiable: MySQL cuenta filas CAMBIADAS, no encontradas, asi
+     * que un UPDATE que no cambiara ningun valor podria devolver 0 aunque hubiera
+     * casado. Con intentos+1 siempre cambia algo.
+     *
+     * @return int|null id de la fila si se gano el reclamo; null si lo tiene otro
+     */
+    private function reclamar(int $dteEmitidoId, int $cuentaId, string $proveedor, string $referencia, int $monto): ?int
     {
+        $ahora = date('Y-m-d H:i:s');
+
         try {
             $ins = $this->pdo->prepare(
-                'INSERT INTO dte_pago_link (dte_emitido_id, cuenta_id, proveedor, referencia, monto, estado, intentos) '
-                . "VALUES (:d, :c, :p, :r, :m, 'pendiente', 1)"
+                'INSERT INTO dte_pago_link '
+                . '(dte_emitido_id, cuenta_id, proveedor, referencia, monto, estado, intentos, reclamado_at) '
+                . "VALUES (:d, :c, :p, :r, :m, 'pendiente', 1, :ahora)"
             );
             $ins->execute([
                 ':d' => $dteEmitidoId, ':c' => $cuentaId, ':p' => $proveedor,
-                ':r' => $referencia, ':m' => $monto,
+                ':r' => $referencia, ':m' => $monto, ':ahora' => $ahora,
             ]);
 
             return (int) $this->pdo->lastInsertId();
@@ -337,10 +422,26 @@ final class ResolutorLinkPago
             }
         }
 
-        // Ya existia: se sube el contador de intentos y se sigue con la misma fila.
-        $this->pdo->prepare(
-            'UPDATE dte_pago_link SET intentos = intentos + 1 WHERE dte_emitido_id = :d'
-        )->execute([':d' => $dteEmitidoId]);
+        // La fila ya existia. Se compite por el reclamo.
+        //
+        // estado = 'pendiente' en el WHERE cubre el caso de que otro proceso la
+        // haya COMPLETADO entre el cargar() de arriba y esta linea: entonces no
+        // se gana, se devuelve 'esperar', y la pasada siguiente vera 'creado' y
+        // dira 'listo'. Un ciclo de retraso a cambio de no llamar dos veces.
+        $upd = $this->pdo->prepare(
+            'UPDATE dte_pago_link SET intentos = intentos + 1, reclamado_at = :ahora '
+            . "WHERE dte_emitido_id = :d AND estado = 'pendiente' "
+            . '  AND (reclamado_at IS NULL OR reclamado_at < :limite)'
+        );
+        $upd->execute([
+            ':ahora'  => $ahora,
+            ':d'      => $dteEmitidoId,
+            ':limite' => date('Y-m-d H:i:s', time() - (self::RECLAMO_TTL_MINUTOS * 60)),
+        ]);
+
+        if ($upd->rowCount() !== 1) {
+            return null;
+        }
 
         $stmt = $this->pdo->prepare('SELECT id FROM dte_pago_link WHERE dte_emitido_id = :d LIMIT 1');
         $stmt->execute([':d' => $dteEmitidoId]);
@@ -358,7 +459,8 @@ final class ResolutorLinkPago
         // misma: los dos contenedores comparten reloj con el host.
         $this->pdo->prepare(
             "UPDATE dte_pago_link SET estado = 'creado', orden_externa = :o, url = :u, "
-            . 'creado_at = :ahora, ultimo_error = NULL, reintentar_despues_at = NULL WHERE id = :id'
+            . 'creado_at = :ahora, ultimo_error = NULL, reintentar_despues_at = NULL, '
+            . 'reclamado_at = NULL WHERE id = :id'
         )->execute([
             ':o'     => $orden->ordenExterna,
             ':u'     => $orden->url,
@@ -372,8 +474,13 @@ final class ResolutorLinkPago
         // El estado se queda en 'pendiente', NO pasa a 'error': el correo sigue
         // esperando y la fila sigue siendo candidata. 'error' se reserva para lo
         // que ya no se reintenta solo.
+        // reclamado_at SE LIMPIA, y hace falta. El reclamo ya cumplio su turno: si
+        // se dejara puesto, el proximo intento tendria que esperar a que caduque
+        // (10 min) aunque su propio backoff fuera de 5, y el documento avanzaria
+        // al ritmo del candado en vez de al del backoff.
         $this->pdo->prepare(
-            'UPDATE dte_pago_link SET ultimo_error = :e, reintentar_despues_at = :hasta WHERE id = :id'
+            'UPDATE dte_pago_link SET ultimo_error = :e, reintentar_despues_at = :hasta, '
+            . 'reclamado_at = NULL WHERE id = :id'
         )->execute([
             ':e'     => mb_substr($error, 0, 500),
             ':hasta' => date('Y-m-d H:i:s', time() + ($minutos * 60)),

@@ -28,7 +28,8 @@ use Plantiflex\FacturacionCl\Pago\ResolutorLinkPago;
 final class ResolutorLinkPagoTest extends TestCase
 {
     private const CUENTA = 7;
-    private const URL_CONFIRMACION = 'https://facturacion.sinergiaia.cl/pagos/flow/confirmacion';
+    /** La RAIZ publica: el resolutor arma de aqui la de aviso y la de retorno. */
+    private const URL_PANEL = 'https://facturacion.ejemplo.cl';
 
     private PDO $pdo;
 
@@ -56,14 +57,17 @@ final class ResolutorLinkPagoTest extends TestCase
                 cuenta_id BIGINT NOT NULL, proveedor TEXT NOT NULL,
                 referencia TEXT NOT NULL UNIQUE, orden_externa TEXT, url TEXT,
                 monto INT NOT NULL DEFAULT 0, estado TEXT NOT NULL DEFAULT 'pendiente',
-                intentos INT NOT NULL DEFAULT 0, ultimo_error TEXT,
-                reintentar_despues_at TEXT, creado_at TEXT, pagado_at TEXT
+                intentos INT NOT NULL DEFAULT 0, reclamado_at TEXT, ultimo_error TEXT,
+                reintentar_despues_at TEXT, confirmacion_pendiente_at TEXT,
+                creado_at TEXT, pagado_at TEXT
             );
         SQL);
         $this->pdo->exec(<<<'SQL'
             CREATE TABLE pago_pasarela_cuenta (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, cuenta_id BIGINT NOT NULL UNIQUE,
-                proveedor TEXT NOT NULL DEFAULT 'flow', habilitado INT NOT NULL DEFAULT 0,
+                proveedor TEXT NOT NULL DEFAULT 'flow',
+                ambiente TEXT NOT NULL DEFAULT 'sandbox',
+                habilitado INT NOT NULL DEFAULT 0,
                 credencial_publica TEXT, credencial_cifrada TEXT, url_retorno TEXT
             );
         SQL);
@@ -93,12 +97,13 @@ final class ResolutorLinkPagoTest extends TestCase
         return 1;
     }
 
-    private function pasarelaActiva(int $habilitado = 1): void
+    private function pasarelaActiva(int $habilitado = 1, string $ambiente = 'sandbox'): void
     {
         $this->pdo->prepare(
-            'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, habilitado, credencial_publica, credencial_cifrada) '
-            . "VALUES (:c, 'flow', :h, 'apikey-publica', 'cifrado')"
-        )->execute([':c' => self::CUENTA, ':h' => $habilitado]);
+            'INSERT INTO pago_pasarela_cuenta '
+            . '(cuenta_id, proveedor, ambiente, habilitado, credencial_publica, credencial_cifrada) '
+            . "VALUES (:c, 'flow', :a, :h, 'apikey-publica', 'cifrado')"
+        )->execute([':c' => self::CUENTA, ':a' => $ambiente, ':h' => $habilitado]);
     }
 
     private function resolutor(array $respuestas = []): ResolutorLinkPago
@@ -110,7 +115,7 @@ final class ResolutorLinkPagoTest extends TestCase
         return new ResolutorLinkPago(
             $this->pdo,
             static fn (string $c): string => 'secreto-descifrado',
-            self::URL_CONFIRMACION,
+            self::URL_PANEL,
             $http
         );
     }
@@ -147,7 +152,9 @@ final class ResolutorLinkPagoTest extends TestCase
         $link = $this->link();
         self::assertSame('creado', $link['estado']);
         self::assertSame('https://www.flow.cl/app/web/pay.php?token=TOK123', $link['url']);
-        self::assertSame('999', (string) $link['orden_externa']);
+        // EL TOKEN, no flowOrder: es lo unico que trae el aviso de pago, asi que
+        // es por donde la confirmacion encuentra esta fila.
+        self::assertSame('TOK123', (string) $link['orden_externa']);
         self::assertSame('49990', (string) $link['monto'], 'el monto queda como foto');
         self::assertSame('SIN-7-33-745', $link['referencia']);
     }
@@ -388,6 +395,155 @@ final class ResolutorLinkPagoTest extends TestCase
         $this->pdo->exec("UPDATE dte_pago_link SET estado = 'pagado', url = NULL");
 
         self::assertSame('no_aplica', $this->resolutor()->resolver($envio)['verdicto']);
+    }
+
+    // -----------------------------------------------------------------------
+    //  El reclamo exclusivo: lo que impide DOS ordenes en la pasarela
+    // -----------------------------------------------------------------------
+
+    public function testElPrimeroGanaElReclamoYLlamaALaPasarela(): void
+    {
+        $envio = $this->documento();
+        $this->pasarelaActiva();
+
+        self::assertSame('listo', $this->resolutor([self::respuestaFlowOk()])->resolver($envio)['verdicto']);
+        self::assertSame('creado', $this->link()['estado']);
+        // El reclamo se suelta al terminar: ya cumplio su turno, y ademas el
+        // estado 'creado' basta para que nadie vuelva a entrar.
+        self::assertNull($this->link()['reclamado_at']);
+    }
+
+    public function testUnSegundoProcesoConElReclamoTomadoNoLlamaALaPasarela(): void
+    {
+        // ESTE ES EL TEST DE LA CARRERA, y hay que leer con cuidado que demuestra
+        // y que no. Con SQLite en un solo proceso no se puede tener dos PHP
+        // corriendo a la vez, asi que no se prueba el paralelismo REAL. Lo que si
+        // se prueba es la operacion que lo decide: se deja la fila EXACTAMENTE
+        // como la dejaria el primer proceso -- reclamada hace un instante -- y se
+        // comprueba que el segundo NO obtiene permiso.
+        //
+        // El mock va vacio: si el segundo llamara a la pasarela, el test revienta.
+        $envio = $this->documento();
+        $this->pasarelaActiva();
+
+        $this->pdo->prepare(
+            'INSERT INTO dte_pago_link (dte_emitido_id, cuenta_id, proveedor, referencia, monto, estado, intentos, reclamado_at) '
+            . "VALUES (100, :c, 'flow', 'SIN-7-33-745', 49990, 'pendiente', 1, :ahora)"
+        )->execute([':c' => self::CUENTA, ':ahora' => date('Y-m-d H:i:s')]);
+
+        $r = $this->resolutor()->resolver($envio);
+
+        self::assertSame('esperar', $r['verdicto']);
+        self::assertStringContainsString('otro proceso', $r['motivo']);
+        self::assertSame(1, (int) $this->link()['intentos'], 'no se gasta un intento por no ganar');
+    }
+
+    public function testUnReclamoAbandonadoSePuedeRecuperarPasadoElPlazo(): void
+    {
+        // Un proceso que muere despues de reclamar no puede dejar el documento
+        // sin cobrar para siempre. Se simula un reclamo viejo (2 horas) y se
+        // comprueba que otro lo toma.
+        $envio = $this->documento();
+        $this->pasarelaActiva();
+
+        $this->pdo->prepare(
+            'INSERT INTO dte_pago_link (dte_emitido_id, cuenta_id, proveedor, referencia, monto, estado, intentos, reclamado_at) '
+            . "VALUES (100, :c, 'flow', 'SIN-7-33-745', 49990, 'pendiente', 1, :viejo)"
+        )->execute([':c' => self::CUENTA, ':viejo' => date('Y-m-d H:i:s', time() - 7200)]);
+
+        self::assertSame('listo', $this->resolutor([self::respuestaFlowOk()])->resolver($envio)['verdicto']);
+        self::assertSame('creado', $this->link()['estado']);
+    }
+
+    public function testUnReclamoRecienTomadoNoSeConsideraAbandonado(): void
+    {
+        // El plazo tiene que ser MAYOR que el timeout de la pasarela: si no, un
+        // proceso que todavia espera respuesta veria caducar su propio reclamo y
+        // volveriamos a tener dos llamadas en vuelo.
+        $envio = $this->documento();
+        $this->pasarelaActiva();
+
+        $this->pdo->prepare(
+            'INSERT INTO dte_pago_link (dte_emitido_id, cuenta_id, proveedor, referencia, monto, estado, intentos, reclamado_at) '
+            . "VALUES (100, :c, 'flow', 'SIN-7-33-745', 49990, 'pendiente', 1, :hace5min)"
+        )->execute([':c' => self::CUENTA, ':hace5min' => date('Y-m-d H:i:s', time() - 300)]);
+
+        self::assertSame('esperar', $this->resolutor()->resolver($envio)['verdicto']);
+    }
+
+    public function testUnFalloSueltaElReclamoParaQueElBackoffMandeYNoElCandado(): void
+    {
+        $envio = $this->documento();
+        $this->pasarelaActiva();
+
+        $this->resolutor([new Response(503, [], 'caida')])->resolver($envio);
+
+        self::assertNull(
+            $this->link()['reclamado_at'],
+            'si no se soltara, el reintento esperaria al plazo del candado en vez de al backoff'
+        );
+    }
+
+    public function testUnLinkYaCreadoNoVuelveAReclamarNiALlamar(): void
+    {
+        $envio = $this->documento();
+        $this->pasarelaActiva();
+        $this->resolutor([self::respuestaFlowOk()])->resolver($envio);
+
+        // Mock vacio: cualquier llamada revienta.
+        self::assertSame('listo', $this->resolutor()->resolver($envio)['verdicto']);
+        self::assertSame(1, (int) $this->pdo->query('SELECT COUNT(*) FROM dte_pago_link')->fetchColumn());
+    }
+
+    // -----------------------------------------------------------------------
+    //  Ambiente y url publica
+    // -----------------------------------------------------------------------
+
+    public function testEnSandboxLaOrdenVaAlHostDePruebas(): void
+    {
+        $envio = $this->documento();
+        $this->pasarelaActiva(ambiente: 'sandbox');
+
+        $this->resolutor([self::respuestaFlowOk()])->resolver($envio);
+
+        self::assertSame('creado', $this->link()['estado']);
+    }
+
+    public function testUnaUrlPublicaInvalidaEnProduccionRetieneYNoCreaOrden(): void
+    {
+        // Con la url mal, la orden se crearia igual y el aviso no llegaria nunca:
+        // cobro real sin registrar. Se retiene ANTES de reclamar y antes de llamar.
+        $envio = $this->documento();
+        $this->pasarelaActiva(ambiente: 'produccion');
+
+        $resolutor = new ResolutorLinkPago(
+            $this->pdo,
+            static fn (string $c): string => 'secreto',
+            'http://localhost:8086',   // ni https ni alcanzable
+            null
+        );
+
+        $r = $resolutor->resolver($envio);
+
+        self::assertSame('esperar', $r['verdicto']);
+        self::assertNull($this->link(), 'ni siquiera se reserva la fila');
+    }
+
+    public function testEnSandboxSePermiteUnaUrlDeDesarrollo(): void
+    {
+        // Aflojarlo solo en sandbox es lo que permite tener reglas estrictas en
+        // produccion sin que nadie las quiera desactivar para poder trabajar.
+        $envio = $this->documento();
+        $this->pasarelaActiva(ambiente: 'sandbox');
+
+        $resolutor = new ResolutorLinkPago(
+            $this->pdo,
+            static fn (string $c): string => 'secreto',
+            'http://localhost:8086',
+            new Client(['handler' => HandlerStack::create(new MockHandler([self::respuestaFlowOk()]))])
+        );
+
+        self::assertSame('listo', $resolutor->resolver($envio)['verdicto']);
     }
 
     public function testLaReferenciaEsDeterministaYNoDependeDelReloj(): void

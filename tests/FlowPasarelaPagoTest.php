@@ -14,6 +14,7 @@ use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
+use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
 use Plantiflex\FacturacionCl\Dto\SolicitudPago;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaNoConfiguradaException;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaPermanenteException;
@@ -51,9 +52,9 @@ final class FlowPasarelaPagoTest extends TestCase
         return new FlowPasarelaPago(new Client(['handler' => $stack]));
     }
 
-    private function credenciales(bool $sandbox = false): CredencialesPasarela
+    private function credenciales(AmbientePasarela $ambiente = AmbientePasarela::Produccion): CredencialesPasarela
     {
-        return new CredencialesPasarela(self::API_KEY, self::SECRETO, $sandbox);
+        return new CredencialesPasarela(self::API_KEY, self::SECRETO, $ambiente);
     }
 
     private function solicitud(int $monto = 49990): SolicitudPago
@@ -99,7 +100,13 @@ final class FlowPasarelaPagoTest extends TestCase
             'https://www.flow.cl/app/web/pay.php?token=33373581FC32576FAF33C46FC6454B1FFEBD7E1H',
             $orden->url
         );
-        self::assertSame('8765456', $orden->ordenExterna, 'flowOrder es por donde la buscara la confirmacion');
+        // SE GUARDA EL TOKEN, no flowOrder: el aviso de pago solo trae el token, y
+        // guardar flowOrder dejaba una fila que ese aviso no sabia encontrar.
+        self::assertSame(
+            '33373581FC32576FAF33C46FC6454B1FFEBD7E1H',
+            $orden->ordenExterna,
+            'el token es lo unico que trae el aviso de pago'
+        );
     }
 
     public function testSinFlowOrderSeQuedaConElTokenComoIdentificador(): void
@@ -111,8 +118,6 @@ final class FlowPasarelaPagoTest extends TestCase
 
         $orden = $this->pasarela([$sinFlowOrder])->crearOrden($this->solicitud(), $this->credenciales());
 
-        // Quedarse sin ningun identificador dejaria una orden que la confirmacion
-        // no sabria encontrar.
         self::assertSame('TOKEN123', $orden->ordenExterna);
     }
 
@@ -264,23 +269,61 @@ final class FlowPasarelaPagoTest extends TestCase
 
     public function testSandboxYProduccionVanADominiosDistintos(): void
     {
-        $this->pasarela([$this->respuestaOk()])->crearOrden($this->solicitud(), $this->credenciales(sandbox: true));
+        $this->pasarela([$this->respuestaOk()])
+            ->crearOrden($this->solicitud(), $this->credenciales(AmbientePasarela::Sandbox));
         self::assertSame(
             'https://sandbox.flow.cl/api/payment/create',
             (string) $this->peticiones[0]['request']->getUri()
         );
 
-        $this->pasarela([$this->respuestaOk()])->crearOrden($this->solicitud(), $this->credenciales(sandbox: false));
+        $this->pasarela([$this->respuestaOk()])
+            ->crearOrden($this->solicitud(), $this->credenciales(AmbientePasarela::Produccion));
         self::assertSame(
             'https://www.flow.cl/api/payment/create',
             (string) $this->peticiones[0]['request']->getUri()
         );
     }
 
+    public function testLaConsultaDeEstadoTambienRespetaElAmbiente(): void
+    {
+        // El host se elige en UN solo sitio (base()); si esta eleccion viviera
+        // repetida, arreglar un metodo y olvidar el otro dejaria una operacion
+        // apuntando al mundo equivocado.
+        $ok = new Response(200, [], (string) json_encode(['status' => 2, 'commerceOrder' => 'X']));
+
+        $this->pasarela([$ok])->consultarEstado('TOK', $this->credenciales(AmbientePasarela::Sandbox));
+        self::assertStringStartsWith(
+            'https://sandbox.flow.cl/api/payment/getStatus',
+            (string) $this->peticiones[0]['request']->getUri()
+        );
+    }
+
+    public function testElAmbienteNoTienePorDefectoYNoSePuedeOlvidar(): void
+    {
+        // La version anterior llevaba `bool $sandbox = false`: olvidarse del
+        // parametro significaba PRODUCCION, y eso fue exactamente lo que paso.
+        $r = new \ReflectionClass(CredencialesPasarela::class);
+        $p = $r->getConstructor()->getParameters()[2];
+
+        self::assertSame('ambiente', $p->getName());
+        self::assertFalse($p->isDefaultValueAvailable(), 'el ambiente no puede tener valor por defecto');
+    }
+
+    public function testUnValorRaroDeAmbienteCaeEnSandbox(): void
+    {
+        // El lado barato: dejar de cobrar se nota y se arregla; cobrar sin querer,
+        // no. Cubre NULL (fila anterior a la 053), cadena vacia y basura.
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde(null));
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde(''));
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde('PRODUCCION'));
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde('prod'));
+        self::assertSame(AmbientePasarela::Produccion, AmbientePasarela::desde('produccion'));
+    }
+
     public function testUnasCredencialesIncompletasNoSePuedenNiConstruir(): void
     {
         $this->expectException(PasarelaNoConfiguradaException::class);
-        new CredencialesPasarela(self::API_KEY, '   ');
+        new CredencialesPasarela(self::API_KEY, '   ', AmbientePasarela::Sandbox);
     }
 
     public function testElSecretoNoSeFiltraAlVolcarLasCredenciales(): void

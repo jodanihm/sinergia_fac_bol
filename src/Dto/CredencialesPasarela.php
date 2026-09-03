@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Plantiflex\FacturacionCl\Dto;
 
+use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaNoConfiguradaException;
 
 /**
@@ -16,10 +17,18 @@ use Plantiflex\FacturacionCl\Exceptions\PasarelaNoConfiguradaException;
  */
 final readonly class CredencialesPasarela
 {
+    /**
+     * $ambiente NO TIENE VALOR POR DEFECTO, y es deliberado.
+     *
+     * Antes era `bool $sandbox = false`, o sea que olvidarse del parametro
+     * significaba PRODUCCION. Eso no es una omision teorica: ResolutorLinkPago
+     * construia las credenciales sin tocarlo y toda orden salia contra el Flow
+     * real. Sin default, olvidarlo es un TypeError en el acto y no un cobro.
+     */
     public function __construct(
         public string $apiKey,
         public string $secreto,
-        public bool $sandbox = false,
+        public AmbientePasarela $ambiente,
         public ?string $urlRetorno = null,
     ) {
         if (trim($this->apiKey) === '' || trim($this->secreto) === '') {
@@ -35,7 +44,7 @@ final readonly class CredencialesPasarela
         return [
             'apiKey'  => $this->apiKey,
             'secreto' => '*** oculto ***',
-            'sandbox' => $this->sandbox ? 'si' : 'no',
+            'ambiente' => $this->ambiente->value,
         ];
     }
 }

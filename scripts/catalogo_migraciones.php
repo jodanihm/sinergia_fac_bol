@@ -666,6 +666,23 @@ const MIGRACIONES = [
              'columnas' => ['pago_link'], 'esperado' => 1],
         ],
     ],
+    [
+        'id' => '053', 'archivo' => '053_pago_ambiente_y_reclamo.sql',
+        'nota' => 'ALTER x3 (ambiente de la pasarela, reclamo exclusivo, aviso sin resolver)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'pago_pasarela_cuenta.ambiente', 'tabla' => 'pago_pasarela_cuenta',
+             'columnas' => ['ambiente'], 'esperado' => 1],
+            // Los DOS valores del ENUM, no solo la columna: si alguien le agregara
+            // un tercero, esta huella lo nota y la 053 sale PARCIAL en vez de dar
+            // por buena una columna que ya no es la que describe su .sql. En una
+            // columna que decide si se cobra dinero real, eso importa.
+            ['tipo' => 'valores_enum', 'desc' => 'los 2 ambientes de la pasarela', 'tabla' => 'pago_pasarela_cuenta',
+             'columna' => 'ambiente', 'valores' => ['sandbox', 'produccion'], 'esperado' => 2],
+            ['tipo' => 'columnas', 'desc' => 'dte_pago_link.reclamado_at y confirmacion_pendiente_at',
+             'tabla' => 'dte_pago_link',
+             'columnas' => ['reclamado_at', 'confirmacion_pendiente_at'], 'esperado' => 2],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

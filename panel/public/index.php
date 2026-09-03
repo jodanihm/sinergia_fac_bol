@@ -91,9 +91,9 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
 use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
-use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
+use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
+use Plantiflex\FacturacionCl\Pago\ConfirmacionPago;
 use Plantiflex\FacturacionCl\Pago\FabricaPasarela;
-use Plantiflex\FacturacionCl\Providers\FlowPasarelaPago;
 use Plantiflex\Integration\Facturacion\ProductoDuplicadoException;
 
 require __DIR__ . '/../src/Db.php';
@@ -719,6 +719,10 @@ const RUTAS_PUBLICAS = [
     // Lleva la cuenta en la url (/pagos/flow/confirmacion/7) porque para
     // verificar la firma hay que saber de que empresa es el aviso ANTES de
     // creerse nada. Por eso vive en PATRONES_PUBLICOS y no aqui.
+    //
+    // La pagina de retorno del pagador SI es exacta y va aqui, en sus dos
+    // metodos: la abre una persona en su navegador, sin sesion nuestra.
+    'GET ' . RUTA_RETORNO_PAGO, 'POST ' . RUTA_RETORNO_PAGO,
 ];
 
 /**
@@ -730,6 +734,19 @@ const RUTAS_PUBLICAS = [
  * pago -- y la pasarela reintenta un rato y se rinde.
  */
 const PATRON_CONFIRMACION_PAGO = '#^/pagos/flow/confirmacion/(\d+)$#';
+
+/**
+ * A donde vuelve el CLIENTE despues de pagar, si su proveedor no configuro una
+ * pagina propia.
+ *
+ * Es distinta de la de confirmacion y no puede ser la misma: aquella solo
+ * responde a POST y la llama la pasarela desde sus servidores. Reutilizarla como
+ * retorno dejaba al cliente que acababa de pagar mirando un error -- lo ultimo
+ * que ve alguien que acaba de darnos dinero.
+ *
+ * ACEPTA GET Y POST porque la pasarela puede redirigir de las dos formas.
+ */
+const RUTA_RETORNO_PAGO = '/pagos/retorno';
 
 /** @var list<string> Regex de rutas publicas con parametro. */
 const PATRONES_PUBLICOS = [
@@ -5961,7 +5978,7 @@ function handlePagosConfigGet(): void
 {
     $pdo  = Db::conexion();
     $stmt = $pdo->prepare(
-        'SELECT proveedor, habilitado, credencial_publica, url_retorno, '
+        'SELECT proveedor, ambiente, habilitado, credencial_publica, url_retorno, '
         . 'CASE WHEN credencial_cifrada IS NULL OR credencial_cifrada = \'\' THEN 0 ELSE 1 END AS tieneSecreto '
         . 'FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
     );
@@ -5995,17 +6012,22 @@ function handlePagosConfigPost(): void
     $cuentaId = Auth::cuentaId();
 
     $proveedor  = trim((string) ($_POST['proveedor'] ?? 'flow'));
+    // AmbientePasarela::desde() manda a sandbox cualquier cosa que no sea
+    // exactamente 'produccion', asi que un POST manipulado no puede promover una
+    // cuenta a cobro real por accidente: tiene que decirlo con esa palabra.
+    $ambiente   = AmbientePasarela::desde($_POST['ambiente'] ?? null);
     $apiKey     = trim((string) ($_POST['credencial_publica'] ?? ''));
     $secreto    = trim((string) ($_POST['secreto'] ?? ''));
     $urlRetorno = trim((string) ($_POST['url_retorno'] ?? ''));
     $habilitado = ! empty($_POST['habilitado']);
 
     $stmt = $pdo->prepare(
-        'SELECT credencial_cifrada FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
+        'SELECT credencial_cifrada, ambiente FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
     );
     $stmt->execute([':c' => $cuentaId]);
-    $anterior     = $stmt->fetchColumn();
-    $teniaSecreto = $anterior !== false && trim((string) $anterior) !== '';
+    $filaPrevia      = $stmt->fetch(PDO::FETCH_ASSOC);
+    $teniaSecreto    = $filaPrevia !== false && trim((string) $filaPrevia['credencial_cifrada']) !== '';
+    $ambienteAnterior = $filaPrevia === false ? null : (string) $filaPrevia['ambiente'];
 
     $errores = [];
     if (! in_array($proveedor, FabricaPasarela::proveedores(), true)) {
@@ -6023,6 +6045,7 @@ function handlePagosConfigPost(): void
         vista('pagos-config', [
             'config' => [
                 'proveedor'          => $proveedor,
+                'ambiente'           => $ambiente->value,
                 'habilitado'         => $habilitado,
                 'credencial_publica' => $apiKey,
                 'url_retorno'        => $urlRetorno,
@@ -6047,16 +6070,16 @@ function handlePagosConfigPost(): void
     // esto, guardar el formulario con el campo vacio -- que es lo normal al
     // editar cualquier otra cosa -- borraria la llave.
     $sql = 'INSERT INTO pago_pasarela_cuenta '
-        . '(cuenta_id, proveedor, habilitado, credencial_publica, url_retorno' . ($cifrado !== null ? ', credencial_cifrada' : '') . ') '
-        . 'VALUES (:c, :p, :h, :k, :u' . ($cifrado !== null ? ', :s' : '') . ') '
-        . 'ON DUPLICATE KEY UPDATE proveedor = :p2, habilitado = :h2, '
+        . '(cuenta_id, proveedor, ambiente, habilitado, credencial_publica, url_retorno' . ($cifrado !== null ? ', credencial_cifrada' : '') . ') '
+        . 'VALUES (:c, :p, :a, :h, :k, :u' . ($cifrado !== null ? ', :s' : '') . ') '
+        . 'ON DUPLICATE KEY UPDATE proveedor = :p2, ambiente = :a2, habilitado = :h2, '
         . 'credencial_publica = :k2, url_retorno = :u2'
         . ($cifrado !== null ? ', credencial_cifrada = :s2' : '');
 
     $params = [
-        ':c' => $cuentaId, ':p' => $proveedor, ':h' => $habilitado ? 1 : 0,
+        ':c' => $cuentaId, ':p' => $proveedor, ':a' => $ambiente->value, ':h' => $habilitado ? 1 : 0,
         ':k' => $apiKey, ':u' => $urlRetorno !== '' ? $urlRetorno : null,
-        ':p2' => $proveedor, ':h2' => $habilitado ? 1 : 0,
+        ':p2' => $proveedor, ':a2' => $ambiente->value, ':h2' => $habilitado ? 1 : 0,
         ':k2' => $apiKey, ':u2' => $urlRetorno !== '' ? $urlRetorno : null,
     ];
     if ($cifrado !== null) {
@@ -6067,15 +6090,34 @@ function handlePagosConfigPost(): void
 
     // Auditado: activar o desactivar el cobro tiene consecuencia comercial, y
     // cambiar una llave puede retener correos. Sin el secreto, obviamente.
-    registrarAuditoria($pdo, Auth::usuarioId(), 'pago.pasarela.guardada', 'cuenta', $cuentaId, null, [
-        'proveedor'  => $proveedor,
-        'habilitado' => $habilitado ? 1 : 0,
-        'secreto'    => $secreto !== '' ? '(cambiado)' : '(sin cambios)',
-    ]);
+    // El AMBIENTE va en la auditoria con su valor anterior y el nuevo: pasar de
+    // sandbox a produccion es el momento en que esta empresa empieza a cobrar
+    // dinero de verdad, y tiene que quedar con nombre y hora. El secreto no, por
+    // razones obvias: solo si cambio o no.
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'pago.pasarela.guardada',
+        'cuenta',
+        $cuentaId,
+        $ambienteAnterior === null ? null : ['ambiente' => $ambienteAnterior],
+        [
+            'proveedor'  => $proveedor,
+            'ambiente'   => $ambiente->value,
+            'habilitado' => $habilitado ? 1 : 0,
+            'secreto'    => $secreto !== '' ? '(cambiado)' : '(sin cambios)',
+        ]
+    );
 
-    flashSet('exito', $habilitado
-        ? 'Cobro en linea activado. Las facturas que emitas de ahora en adelante llevaran el boton de pago.'
-        : 'Guardado. El cobro en linea esta desactivado: tus correos salen sin boton de pago.');
+    if (! $habilitado) {
+        flashSet('exito', 'Guardado. El cobro en linea esta desactivado: tus correos salen sin boton de pago.');
+    } elseif ($ambiente->esProduccion()) {
+        flashSet('exito', 'Cobro en linea activado EN PRODUCCION: los pagos son reales. '
+            . 'Las facturas que emitas de ahora en adelante llevaran el boton de pago.');
+    } else {
+        flashSet('advertencia', 'Cobro en linea activado en SANDBOX: los pagos NO son reales y el '
+            . 'dinero no llega a tu cuenta. Sirve para probar. Cambia a Produccion cuando quieras cobrar de verdad.');
+    }
     redirigirPrg('/configuracion/pagos');
 }
 
@@ -6126,80 +6168,39 @@ function handleConfirmacionPagoPost(int $cuentaId): void
 {
     header('Content-Type: text/plain; charset=utf-8');
 
-    $pdo  = Db::conexion();
-    $stmt = $pdo->prepare(
-        'SELECT proveedor, credencial_publica, credencial_cifrada FROM pago_pasarela_cuenta '
-        . 'WHERE cuenta_id = :c AND habilitado = 1 LIMIT 1'
+    // TODA LA DECISION VIVE EN ConfirmacionPago, en src/. Aqui solo se le pasa lo
+    // que necesita y se emite lo que devuelve.
+    //
+    // POR QUE ASI: es la superficie de mayor consecuencia del modulo -- decide si
+    // una factura se da por pagada -- y dentro de este archivo no habia forma de
+    // probarla. Fuera, cada escenario (firma mala, cuenta ajena, monto distinto,
+    // consulta caida, aviso repetido) es un test.
+    $resultado = ConfirmacionPago::procesar(
+        Db::conexion(),
+        $cuentaId,
+        $_POST,
+        static fn (string $cifrado): string => (new CertificadoCrypto(kekMaestra()))->descifrar($cifrado),
     );
-    $stmt->execute([':c' => $cuentaId]);
-    $config = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // Cuenta inexistente, sin pasarela o con el cobro apagado: se responde lo
-    // mismo que ante una firma mala. Distinguirlos diria si esa cuenta existe.
-    if ($config === false) {
-        http_response_code(403);
-        echo 'no';
-        return;
-    }
-
-    try {
-        $crypto  = new CertificadoCrypto(kekMaestra());
-        $secreto = $crypto->descifrar((string) $config['credencial_cifrada']);
-    } catch (Throwable $e) {
-        error_log('confirmacion de pago: no se pudo descifrar el secreto de la cuenta ' . $cuentaId);
-        http_response_code(500);
-        echo 'error';
-        return;
-    }
-
-    $recibido = $_POST;
-    $firma    = (string) ($recibido['s'] ?? '');
-    unset($recibido['s']);
-
-    // hash_equals y no ===: comparar firmas con == filtra por el tiempo que
-    // tarda en fallar cuantos caracteres iniciales acerto quien lo intenta.
-    $esperada = FlowPasarelaPago::firmar(array_map('strval', $recibido), $secreto);
-    if ($firma === '' || ! hash_equals($esperada, $firma)) {
-        error_log('confirmacion de pago: firma invalida para la cuenta ' . $cuentaId);
-        http_response_code(403);
-        echo 'no';
-        return;
-    }
-
-    $token = trim((string) ($recibido['token'] ?? ''));
-    if ($token === '') {
-        echo 'ok';
-        return;
-    }
-
-    try {
-        $pasarela = FabricaPasarela::crear((string) $config['proveedor']);
-        $estado   = $pasarela->consultarEstado($token, new CredencialesPasarela(
-            apiKey: (string) $config['credencial_publica'],
-            secreto: $secreto,
+    // El motivo va al log, nunca al cuerpo: quien llama es la pasarela, y una
+    // respuesta que explique POR QUE se rechazo le sirve a quien sondea.
+    if ($resultado['codigo'] !== 200) {
+        error_log(sprintf(
+            'confirmacion de pago: cuenta %d, HTTP %d -- %s',
+            $cuentaId,
+            $resultado['codigo'],
+            $resultado['motivo']
         ));
-    } catch (Throwable $e) {
-        // No se pudo confirmar el estado. Se responde 200 igual -- el aviso SI
-        // llego -- y queda en el log: reintentar del lado de la pasarela no
-        // arreglaria que su propio getStatus no responda.
-        error_log('confirmacion de pago: no se pudo consultar el estado (cuenta ' . $cuentaId . '): ' . $e->getMessage());
-        echo 'ok';
-        return;
+    } elseif (str_contains($resultado['motivo'], 'MONTO DISTINTO')) {
+        // Un descuadre de monto es un 200 (la pasarela no tiene que reintentar)
+        // pero es lo mas grave que puede pasar aqui: va al log igual.
+        error_log(sprintf('confirmacion de pago: cuenta %d -- %s', $cuentaId, $resultado['motivo']));
     }
 
-    if ($estado['pagada'] === true) {
-        // Por referencia Y por cuenta: la referencia ya es unica, pero acotar por
-        // cuenta impide que un aviso firmado por una empresa pueda tocar la fila
-        // de otra si alguna vez dos referencias colisionaran.
-        $upd = $pdo->prepare(
-            "UPDATE dte_pago_link SET estado = 'pagado', pagado_at = NOW() "
-            . "WHERE referencia = :r AND cuenta_id = :c AND estado <> 'pagado'"
-        );
-        $upd->execute([':r' => $estado['referencia'], ':c' => $cuentaId]);
-    }
-
-    echo 'ok';
+    http_response_code($resultado['codigo']);
+    echo $resultado['cuerpo'];
 }
+
 
 function handleCorreosListadoGet(): void
 {
@@ -10696,6 +10697,7 @@ if ($ruta === '') {
 if (
     $metodo === 'POST'
     && ! preg_match(PATRON_CONFIRMACION_PAGO, $ruta)
+    && $ruta !== RUTA_RETORNO_PAGO
     && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))
 ) {
     http_response_code(403);
@@ -11287,6 +11289,15 @@ if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/enviar-sin-link$#'
 // tres no puedan divergir.
 if ($metodo === 'POST' && preg_match(PATRON_CONFIRMACION_PAGO, $ruta, $mPago)) {
     handleConfirmacionPagoPost((int) $mPago[1]);
+}
+
+// Sin sesion: la abre el cliente de nuestro cliente, que no tiene cuenta aqui.
+if ($metodo === 'GET' && $ruta === RUTA_RETORNO_PAGO) {
+    handleRetornoPagoGet();
+}
+
+if ($metodo === 'POST' && $ruta === RUTA_RETORNO_PAGO) {
+    handleRetornoPagoGet();
 }
 
 if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)$#', $ruta, $mDoc)) {

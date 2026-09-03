@@ -74,6 +74,16 @@ final class FlowPasarelaPago implements PasarelaPagoInterface
     {
     }
 
+    /**
+     * El host segun el ambiente de las credenciales. Un solo sitio donde se
+     * decide: si esta eleccion viviera repetida en cada metodo, arreglar uno y
+     * olvidar el otro dejaria una operacion apuntando al mundo equivocado.
+     */
+    private static function base(CredencialesPasarela $cred): string
+    {
+        return $cred->ambiente->esProduccion() ? self::URL_PRODUCCION : self::URL_SANDBOX;
+    }
+
     public function nombre(): string
     {
         return 'flow';
@@ -81,7 +91,7 @@ final class FlowPasarelaPago implements PasarelaPagoInterface
 
     public function crearOrden(SolicitudPago $solicitud, CredencialesPasarela $cred): OrdenPagoCreada
     {
-        $base = $cred->sandbox ? self::URL_SANDBOX : self::URL_PRODUCCION;
+        $base = self::base($cred);
 
         // El monto va como entero puro. (string) sobre un int no mete separador
         // de miles ni decimales; number_format aqui romperia la firma Y el cobro.
@@ -143,13 +153,18 @@ final class FlowPasarelaPago implements PasarelaPagoInterface
             );
         }
 
-        // flowOrder es el identificador de la orden en Flow y es lo que traera
-        // la confirmacion. Si no viniera, se cae al token, que tambien identifica
-        // la operacion: quedarse sin ninguno de los dos dejaria una orden que la
-        // confirmacion no sabria encontrar.
-        $ordenExterna = trim((string) ($datos['flowOrder'] ?? '')) ?: $token;
-
-        return new OrdenPagoCreada($ordenExterna, $url . '?token=' . $token);
+        // SE GUARDA EL TOKEN, NO flowOrder, y la eleccion importa.
+        //
+        // El aviso de pago que manda Flow trae EL TOKEN y nada mas. Guardar
+        // flowOrder dejaba una fila que ese aviso no sabia encontrar: mientras la
+        // consulta de estado respondiera se podia salir del paso, porque devuelve
+        // commerceOrder, pero en cuanto esa consulta falla no queda forma de
+        // saber de que documento hablaba el aviso -- y ese es justo el caso que
+        // hay que poder reconciliar despues.
+        //
+        // flowOrder no se pierde para siempre: getStatus lo devuelve cuando haga
+        // falta. El token es el que hace falta AQUI.
+        return new OrdenPagoCreada($token, $url . '?token=' . $token);
     }
 
     /**
@@ -163,7 +178,7 @@ final class FlowPasarelaPago implements PasarelaPagoInterface
      */
     public function consultarEstado(string $referenciaExterna, CredencialesPasarela $cred): array
     {
-        $base   = $cred->sandbox ? self::URL_SANDBOX : self::URL_PRODUCCION;
+        $base   = self::base($cred);
         $params = ['apiKey' => $cred->apiKey, 'token' => $referenciaExterna];
         $params['s'] = self::firmar($params, $cred->secreto);
 

@@ -238,6 +238,18 @@ $qs = $estado !== '' ? '&estado=' . urlencode($estado) : '';
                                 <span class="badge badge--ok">Pagada</span>
                             <?php elseif ($pagoEstado === 'omitido'): ?>
                                 <span class="badge badge--neutro">Sin link</span>
+                            <?php elseif ($pagoEstado === 'error'): ?>
+                                <?php
+                                // DESCUADRE DE MONTO: alguien pago un importe
+                                // distinto del que se cobro. No se marca pagada
+                                // -- seria mentir -- y no puede quedarse como un
+                                // guion neutro: es lo mas grave que registra esta
+                                // columna y necesita que una persona lo mire.
+                                ?>
+                                <span class="badge badge--error"
+                                      title="<?= htmlspecialchars($fmt($it['pago_error'])); ?>">
+                                    Revisar pago
+                                </span>
                             <?php elseif ($esperando): ?>
                                 <span class="badge <?= $horas >= 6 ? 'badge--error' : 'badge--aviso'; ?>"
                                       title="<?= htmlspecialchars($fmt($it['pago_error'])); ?>">

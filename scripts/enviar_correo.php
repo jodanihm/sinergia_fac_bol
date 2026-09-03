@@ -116,7 +116,8 @@ function resolutorLinkPago(PDO $pdo): ?ResolutorLinkPago
     return new ResolutorLinkPago(
         $pdo,
         static fn (string $cifrado): string => $crypto->descifrar($cifrado),
-        rtrim($url, '/') . '/pagos/flow/confirmacion',
+        // La RAIZ publica, sin path. Ver el runner de la cola.
+        $url,
     );
 }
 

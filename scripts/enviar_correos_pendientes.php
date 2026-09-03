@@ -393,15 +393,19 @@ try {
     if ($llave === false || strlen($llave) !== CertificadoCrypto::KEY_LENGTH) {
         throw new RuntimeException('CRYPTO_MASTER_KEY ausente o mal formada');
     }
-    $urlConfirmacion = trim((string) (getenv('PANEL_URL_PUBLICA') ?: ''));
-    if ($urlConfirmacion === '') {
+    // La RAIZ publica del panel. Aqui solo se comprueba que exista; que sea
+    // ALCANZABLE de verdad -- https, no localhost, no una IP privada -- lo valida
+    // el resolutor en cada orden, porque esas reglas dependen del ambiente de
+    // cada empresa y no se pueden decidir una vez para todas.
+    $urlPublica = trim((string) (getenv('PANEL_URL_PUBLICA') ?: ''));
+    if ($urlPublica === '') {
         throw new RuntimeException('falta PANEL_URL_PUBLICA (la url publica del panel)');
     }
     $crypto    = new CertificadoCrypto($llave);
     $resolutor = new ResolutorLinkPago(
         $pdo,
         static fn (string $cifrado): string => $crypto->descifrar($cifrado),
-        rtrim($urlConfirmacion, '/') . '/pagos/flow/confirmacion',
+        $urlPublica,
     );
 } catch (Throwable $e) {
     $errorPasarela = $e->getMessage();

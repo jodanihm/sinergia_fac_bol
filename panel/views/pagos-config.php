@@ -27,8 +27,13 @@ $err = static function (string $campo) use ($errores): string {
         ? '<small class="form-error">' . htmlspecialchars($errores[$campo], ENT_QUOTES, 'UTF-8') . '</small>'
         : '';
 };
-$habilitado  = ! empty($config['habilitado']);
+$habilitado   = ! empty($config['habilitado']);
 $tieneSecreto = ! empty($config['tieneSecreto']);
+// Sin fila todavia -> sandbox, igual que el default de la columna. Que la
+// pantalla y la base digan lo mismo evita que alguien crea que esta en
+// produccion porque el formulario venia en blanco.
+$ambiente     = ($config['ambiente'] ?? 'sandbox') === 'produccion' ? 'produccion' : 'sandbox';
+$enProduccion = $ambiente === 'produccion';
 ?>
 
 <div class="dash-header">
@@ -40,6 +45,28 @@ $tieneSecreto = ! empty($config['tieneSecreto']);
         </p>
     </div>
 </div>
+
+<?php if ($habilitado): ?>
+    <?php
+    // EL AMBIENTE ACTIVO, ARRIBA Y CON COLOR. Es el dato que decide si un clic
+    // en el correo de un cliente mueve dinero de verdad, y tiene que verse antes
+    // que ningun campo del formulario.
+    ?>
+    <div class="panel-info <?= $enProduccion ? '' : 'panel-info--aviso'; ?>">
+        <p class="panel-info__titulo">
+            <span class="panel-info__icono" aria-hidden="true">&#9432;</span>
+            <?= $enProduccion ? 'Cobrando en PRODUCCION: los pagos son reales' : 'En SANDBOX: los pagos NO son reales'; ?>
+        </p>
+        <p>
+            <?php if ($enProduccion): ?>
+                Cada boton de pago que sale en un correo cobra dinero de verdad y llega a tu cuenta de Flow.
+            <?php else: ?>
+                Los botones de pago apuntan al entorno de pruebas de Flow. Sirven para comprobar que todo
+                funciona, pero <strong>ningun cliente puede pagarte de verdad</strong> mientras estes aqui.
+            <?php endif; ?>
+        </p>
+    </div>
+<?php endif; ?>
 
 <?php if (! $tieneSecreto): ?>
     <div class="panel-info">
@@ -99,6 +126,19 @@ $tieneSecreto = ! empty($config['tieneSecreto']);
                 <?php endforeach; ?>
             </select>
             <small class="form-ayuda">Por ahora solo Flow. El sistema admite otras sin rehacer esta pantalla.</small>
+        </div>
+
+        <div class="form-campo">
+            <label for="ambiente">Ambiente</label>
+            <select name="ambiente" id="ambiente">
+                <option value="sandbox" <?= $enProduccion ? '' : 'selected'; ?>>Sandbox (pruebas, no cobra)</option>
+                <option value="produccion" <?= $enProduccion ? 'selected' : ''; ?>>Produccion (cobra de verdad)</option>
+            </select>
+            <small class="form-ayuda">
+                Empieza siempre en <strong>Sandbox</strong> con las llaves de prueba de Flow: los links funcionan
+                igual pero no mueven dinero. Cambia a Produccion solo cuando hayas comprobado el circuito completo,
+                y acuerdate de poner entonces las llaves reales: las de sandbox no sirven en produccion.
+            </small>
         </div>
 
         <div class="form-campo">
