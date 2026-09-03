@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-03',
+        'version' => '1.56',
+        'titulo'  => 'Un pago correcto ya no se marca como descuadre por como Flow escribe el monto',
+        'tag'     => 'backend',
+        'items'   => [
+            'Flow confirmo un pago de $1.190 y el sistema lo dio por descuadrado, dejando la factura marcada para revisar. El pago estaba perfecto: el problema era que Flow escribe el monto entre comillas y el sistema solo aceptaba numeros sin ellas.',
+            'Lo que NO se relajo: el monto sigue teniendo que coincidir al peso con lo que dice la factura. Un cobro de $1.191 sobre una factura de $1.190 sigue siendo un descuadre que revisa una persona.',
+            'Y se siguen rechazando los formatos que podrian esconder un error. El caso que importa: "1.000" son mil pesos en Chile, pero un sistema descuidado lo leeria como un peso. El sistema no acepta montos con puntos ni comas: exige digitos y nada mas.',
+            'Si tienes una factura marcada como descuadre por este motivo, el pago ya esta cobrado y hay que reactivarla a mano: no se recupera sola.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-03',
         'version' => '1.55',
         'titulo'  => 'Los pagos en linea ya quedan registrados en el momento en que se pagan',
         'tag'     => 'backend',

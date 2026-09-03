@@ -307,6 +307,78 @@ final class ConfirmacionPagoTest extends TestCase
     //  El monto tiene que cuadrar exacto
     // -----------------------------------------------------------------------
 
+    public function testFlowManda_amount_COMO_CADENA_Y_EL_PAGO_SE_REGISTRA(): void
+    {
+        // LA RESPUESTA REAL DE FLOW SANDBOX, tal cual: status 2 y amount entre
+        // comillas. Con MontoPasarela rechazando cadenas, esto acababa en
+        //
+        //   estado = error
+        //   estado_pasarela = pagada
+        //   ultimo_error = "monto informado '1190' (normalizado NULL) distinto
+        //                   del cobrado 1190"
+        //
+        // Un descuadre inventado sobre un pago perfecto, con la factura marcada
+        // para que la mirara una persona.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(self::CUENTA_A, monto: 1190);
+
+        $r = $this->procesar(
+            self::CUENTA_A,
+            ['token' => self::TOKEN],
+            [self::estado(2, monto: '1190')]
+        );
+
+        self::assertSame(200, $r['codigo']);
+        self::assertSame('pagado', $this->link($id)['estado']);
+        self::assertNotNull($this->link($id)['pagado_at']);
+        self::assertStringNotContainsString('distinto', (string) $this->link($id)['ultimo_error']);
+    }
+
+    public function testUnaCadenaConOtroMontoNOSeDaPorPagada(): void
+    {
+        // La otra mitad, y la que importa: aceptar la cadena NO relaja la
+        // comparacion. '1191' contra 1190 sigue siendo un descuadre.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(self::CUENTA_A, monto: 1190);
+
+        $r = $this->procesar(
+            self::CUENTA_A,
+            ['token' => self::TOKEN],
+            [self::estado(2, monto: '1191')]
+        );
+
+        self::assertSame(200, $r['codigo']);
+        self::assertNotSame('pagado', $this->link($id)['estado'], 'un peso de mas no es el mismo cobro');
+        self::assertSame('error', $this->link($id)['estado']);
+        self::assertStringContainsString('distinto', (string) $this->link($id)['ultimo_error']);
+    }
+
+    #[DataProvider('cadenasDeMontoQueNoCuadran')]
+    public function testUnaCadenaMalFormadaSIGUE_siendoUnDescuadre(string $amount): void
+    {
+        // Aceptar '1190' no abre la puerta a '1.190' ni a '1190.5'. Un separador
+        // de miles interpretado como decimal convertiria mil pesos en uno.
+        $this->pasarela(self::CUENTA_A);
+        $id = $this->orden(self::CUENTA_A, monto: 1190);
+
+        $this->procesar(self::CUENTA_A, ['token' => self::TOKEN], [self::estado(2, monto: $amount)]);
+
+        self::assertNotSame('pagado', $this->link($id)['estado'], "'{$amount}' no puede dar por pagada");
+    }
+
+    /** @return list<array{string}> */
+    public static function cadenasDeMontoQueNoCuadran(): array
+    {
+        return [
+            'separador de miles' => ['1.190'],
+            'con decimales'      => ['1190.5'],
+            'decimal en cero'    => ['1190.0'],
+            'con simbolo'        => ['$1190'],
+            'vacia'              => [''],
+            'texto'              => ['mucho'],
+        ];
+    }
+
     public function testUnMontoDistintoNoSeMarcaPagadoYQuedaParaRevisar(): void
     {
         $this->pasarela(self::CUENTA_A);
