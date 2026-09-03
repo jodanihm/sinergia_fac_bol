@@ -71,9 +71,15 @@ interface PasarelaPagoInterface
      * @param string $referenciaExterna lo que identifica la operacion en la
      *                                  pasarela (para Flow, el token)
      *
-     * @return array{pagada:bool, referencia:string, monto:?int}
+     * @return array{pagada:bool, referencia:string, monto:?int, montoCrudo:mixed}
      *         referencia es NUESTRA clave (commerceOrder), que es por donde se
      *         encuentra la fila sin depender de como la llame cada proveedor.
+     *
+     *         monto viene YA NORMALIZADO a pesos enteros, o null si lo que
+     *         informo la pasarela no representa una cantidad entera utilizable.
+     *         null NO significa cero: significa "no se puede usar este dato".
+     *         montoCrudo lleva lo que llego tal cual, solo para poder investigar
+     *         un descuadre sin tener que adivinar.
      *
      * @throws PasarelaTransitoriaException
      * @throws PasarelaPermanenteException

@@ -11,6 +11,7 @@ use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
 use Plantiflex\FacturacionCl\Dto\OrdenPagoCreada;
 use Plantiflex\FacturacionCl\Dto\SolicitudPago;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaPermanenteException;
+use Plantiflex\FacturacionCl\Pago\MontoPasarela;
 use Plantiflex\FacturacionCl\Exceptions\PasarelaTransitoriaException;
 
 /**
@@ -209,12 +210,20 @@ final class FlowPasarelaPago implements PasarelaPagoInterface
             throw new PasarelaPermanenteException('Respuesta de getStatus sin commerceOrder: ' . self::recorte($cuerpo));
         }
 
-        $monto = $datos['amount'] ?? null;
+        // EL MONTO NO SE CASTEA A LA BRAVA. Flow documenta amount como
+        // `number <float>`, asi que json_decode puede devolver 49990.0 para un
+        // pago valido; y un `(int)` sobre '49990.5' o sobre texto habria
+        // fabricado un numero de aspecto razonable a partir de basura.
+        // MontoPasarela devuelve null cuando el valor no representa una cantidad
+        // entera de pesos, y el crudo viaja aparte para que el incidente se pueda
+        // investigar sin adivinar que llego.
+        $crudo = $datos['amount'] ?? null;
 
         return [
             'pagada'     => ((int) ($datos['status'] ?? 0)) === 2,
             'referencia' => (string) $datos['commerceOrder'],
-            'monto'      => $monto === null ? null : (int) $monto,
+            'monto'      => MontoPasarela::normalizar($crudo),
+            'montoCrudo' => $crudo,
         ];
     }
 

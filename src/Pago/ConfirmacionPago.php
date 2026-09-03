@@ -114,14 +114,56 @@ final class ConfirmacionPago
 
         if ($link === false) {
             // O no es nuestra, o es la carrera de que el aviso llegue antes de
-            // que terminemos de guardar la orden. 503 para que la pasarela
-            // reintente: si era la carrera se resuelve sola, y si no lo era, la
-            // pasarela se rinde tras sus propios reintentos.
-            return self::r(503, 'reintenta', 'orden desconocida para esta cuenta');
+            // que terminemos de guardar la orden.
+            //
+            // SE RESPONDE 200 AUNQUE NO SE HAYA HECHO NADA, y conviene entender
+            // por que: la pasarela NO reintenta. Espera un 200 en 15 segundos y,
+            // si no lo recibe, manda un correo de alerta de integracion y se
+            // olvida. Devolver 503 aqui no conseguiria otra llamada -- solo
+            // alarmaria al comerciante por algo que no puede arreglar. Si era la
+            // carrera, el conciliador barre esa orden mas tarde igualmente.
+            return self::r(200, 'ok', 'orden desconocida para esta cuenta');
         }
 
-        $linkId = (int) $link['id'];
+        $desenlace = self::resolverOrden(
+            $pdo,
+            $config,
+            $secreto,
+            (int) $link['id'],
+            (int) $link['monto'],
+            $token,
+            $http
+        );
 
+        // Todo desenlace se acusa con 200 salvo el fallo de descifrado, porque la
+        // pasarela no reintenta y un no-200 solo genera ruido. Lo que recupera un
+        // aviso que no se pudo resolver es NUESTRO conciliador, no ella.
+        return self::r(200, 'ok', $desenlace['motivo']);
+    }
+
+    /**
+     * Resuelve UNA orden contra la pasarela y actualiza su estado.
+     *
+     * ES EL NUCLEO COMPARTIDO por el aviso de pago y por el conciliador. Vive
+     * separado justamente para que no haya dos copias: si la regla del monto o la
+     * del estado se arreglaran en un sitio y no en el otro, el sistema daria una
+     * respuesta distinta segun por donde llegara la noticia -- y una de las dos
+     * seria la equivocada.
+     *
+     * @param array<string,mixed> $config fila de pago_pasarela_cuenta
+     *
+     * @return array{cambio:string, motivo:string}
+     *         cambio: 'pagado' | 'no_pagado' | 'monto_distinto' | 'transitorio' | 'permanente'
+     */
+    public static function resolverOrden(
+        PDO $pdo,
+        array $config,
+        string $secreto,
+        int $linkId,
+        int $montoEsperado,
+        string $token,
+        ?Client $http = null,
+    ): array {
         try {
             $estado = FabricaPasarela::crear((string) $config['proveedor'], $http)->consultarEstado(
                 $token,
@@ -132,61 +174,67 @@ final class ConfirmacionPago
                 )
             );
         } catch (PasarelaTransitoriaException $e) {
-            // NO SE RESPONDE 200, y este es el punto que mas importa de la clase.
-            // Antes si: la pasarela daba el aviso por entregado, no lo repetia, y
-            // el pago quedaba cobrado de verdad y sin registrar, sin nada que
-            // volviera a mirarlo. Con 503 reintenta, y ademas queda la marca local
-            // por si acaba rindiendose.
+            // Queda marcada para que el conciliador la retome. La pasarela no va
+            // a volver a avisar.
             self::marcarPendiente($pdo, $linkId, 'no se pudo consultar el estado: ' . $e->getMessage());
 
-            return self::r(503, 'reintenta', 'consulta de estado transitoriamente caida');
+            return ['cambio' => 'transitorio', 'motivo' => 'consulta de estado transitoriamente caida'];
         } catch (Throwable $e) {
-            // Permanente o inesperado: reintentar no lo arregla. Se acusa recibo
-            // y queda la marca para mirarlo a mano.
             self::marcarPendiente($pdo, $linkId, 'fallo permanente al consultar: ' . $e->getMessage());
 
-            return self::r(200, 'ok', 'consulta de estado fallo de forma permanente');
+            return ['cambio' => 'permanente', 'motivo' => 'consulta de estado fallo de forma permanente'];
         }
 
         if ($estado['pagada'] !== true) {
-            // Pendiente, rechazada o anulada: la pasarela avisa igual. No se toca
-            // la fila -- el link sigue vivo y pagable, que es lo correcto.
-            return self::r(200, 'ok', 'el pago no esta confirmado');
+            // Pendiente, rechazada o anulada. No se toca el estado -- el link
+            // sigue vivo y pagable, que es lo correcto -- pero SI se limpia la
+            // marca: la pregunta se pudo hacer y se contesto.
+            self::limpiarPendiente($pdo, $linkId);
+
+            return ['cambio' => 'no_pagado', 'motivo' => 'el pago no esta confirmado'];
         }
 
         // --- EL MONTO TIENE QUE CUADRAR EXACTO --------------------------------
         //
-        // Un pago por un importe distinto al cobrado no se da por bueno. No se
-        // marca pagado -- seria mentir sobre lo que se recibio -- ni se deja como
-        // si nada -- ocultaria el incidente. Va a 'error', que hasta esta entrega
-        // era un valor del ENUM que no escribia nadie.
-        $esperado = (int) $link['monto'];
-        $pagado   = $estado['monto'];
+        // $estado['monto'] llega YA normalizado a pesos enteros por el proveedor,
+        // o null si lo que informo la pasarela no representa una cantidad entera
+        // utilizable. null no es cero: es "este dato no sirve", y tampoco se da
+        // por bueno.
+        $pagado = $estado['monto'];
 
-        if (! is_int($pagado) || $pagado !== $esperado) {
+        if ($pagado === null || $pagado !== $montoEsperado) {
             $pdo->prepare(
                 "UPDATE dte_pago_link SET estado = 'error', ultimo_error = :e, "
                 . 'confirmacion_pendiente_at = :ahora WHERE id = :id'
             )->execute([
-                ':e'     => sprintf('monto pagado %s distinto del cobrado %d', var_export($pagado, true), $esperado),
+                ':e'     => sprintf(
+                    'monto informado %s (normalizado %s) distinto del cobrado %d',
+                    var_export($estado['montoCrudo'] ?? null, true),
+                    var_export($pagado, true),
+                    $montoEsperado
+                ),
                 ':ahora' => date('Y-m-d H:i:s'),
                 ':id'    => $linkId,
             ]);
 
-            return self::r(200, 'ok', sprintf(
-                'MONTO DISTINTO: pagado %s, cobrado %d. NO se marca pagada.',
-                var_export($pagado, true),
-                $esperado
-            ));
+            return [
+                'cambio' => 'monto_distinto',
+                'motivo' => sprintf(
+                    'MONTO DISTINTO: informado %s, cobrado %d. NO se marca pagada.',
+                    var_export($estado['montoCrudo'] ?? null, true),
+                    $montoEsperado
+                ),
+            ];
         }
 
-        // estado <> 'pagado' hace idempotente un aviso repetido.
+        // estado <> 'pagado' hace idempotente que esto se ejecute dos veces, sea
+        // por un aviso repetido o porque el aviso y el conciliador coincidan.
         $pdo->prepare(
             "UPDATE dte_pago_link SET estado = 'pagado', pagado_at = :ahora, "
             . "confirmacion_pendiente_at = NULL WHERE id = :id AND estado <> 'pagado'"
         )->execute([':ahora' => date('Y-m-d H:i:s'), ':id' => $linkId]);
 
-        return self::r(200, 'ok', 'pago confirmado');
+        return ['cambio' => 'pagado', 'motivo' => 'pago confirmado'];
     }
 
     /**
@@ -214,6 +262,18 @@ final class ConfirmacionPago
         } catch (Throwable $e) {
             // Si ni siquiera se puede anotar, no se puede hacer mas desde aqui.
             // El codigo de respuesta ya le dice a la pasarela que reintente.
+        }
+    }
+
+    /** La pregunta se pudo hacer: ya no hay nada pendiente de mirar. */
+    private static function limpiarPendiente(PDO $pdo, int $linkId): void
+    {
+        try {
+            $pdo->prepare(
+                'UPDATE dte_pago_link SET confirmacion_pendiente_at = NULL WHERE id = :id'
+            )->execute([':id' => $linkId]);
+        } catch (Throwable $e) {
+            // Sin consecuencia: la orden se volvera a mirar en el proximo barrido.
         }
     }
 

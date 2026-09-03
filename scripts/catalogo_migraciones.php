@@ -681,6 +681,9 @@ const MIGRACIONES = [
             ['tipo' => 'columnas', 'desc' => 'dte_pago_link.reclamado_at y confirmacion_pendiente_at',
              'tabla' => 'dte_pago_link',
              'columnas' => ['reclamado_at', 'confirmacion_pendiente_at'], 'esperado' => 2],
+            ['tipo' => 'columnas', 'desc' => 'dte_pago_link: columnas del conciliador',
+             'tabla' => 'dte_pago_link',
+             'columnas' => ['conciliado_at', 'conciliacion_intentos'], 'esperado' => 2],
         ],
     ],
 ];

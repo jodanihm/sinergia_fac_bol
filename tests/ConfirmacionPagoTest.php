@@ -26,7 +26,10 @@ use Plantiflex\FacturacionCl\Providers\FlowPasarelaPago;
  *
  * Lo que se fija aqui, en orden de lo que costaria equivocarse:
  *
- *   1. Que un pago cobrado NUNCA quede sin registrar en silencio.
+ *   1. Que un pago cobrado NUNCA quede sin registrar en silencio. Ojo: la
+ *      pasarela NO reintenta el aviso, asi que "responder 503 para que vuelva a
+ *      llamar" no es una recuperacion. Lo que recupera es la marca local que
+ *      recoge ReconciliadorPagos.
  *   2. Que un aviso NO se confunda con un pago -- la pasarela avisa igual cuando
  *      el pago se rechaza.
  *   3. Que el monto cuadre exacto antes de marcar nada.
@@ -222,19 +225,27 @@ final class ConfirmacionPagoTest extends TestCase
         // Aviso firmado correctamente por B, con el token de A, dirigido a B.
         $r = $this->procesar(self::CUENTA_B, $this->aviso(self::SECRETO_B), [], self::SECRETO_B);
 
-        self::assertSame(503, $r['codigo'], 'para B esa orden no existe');
+        // 200 y no 503: la pasarela NO reintenta -- espera un 200 en 15 s y, si
+        // no, manda un correo de alerta y se olvida --, asi que un no-200 solo
+        // alarmaria al comerciante sin conseguir otra llamada. Lo que importa es
+        // que la orden de A NO se toca.
+        self::assertSame(200, $r['codigo']);
+        self::assertStringContainsString('desconocida', $r['motivo']);
         self::assertSame('creado', $this->link($idA)['estado'], 'la orden de A no se toca');
     }
 
-    public function testUnAvisoDeUnaOrdenDesconocidaPideReintento(): void
+    public function testUnAvisoDeUnaOrdenDesconocidaSeAcusaYLoRecogeElConciliador(): void
     {
         // Puede ser la carrera de que el aviso llegue antes de terminar de
-        // guardar la orden. 503 para que se resuelva sola.
+        // guardar la orden. Se acusa recibo con 200 porque pedir un reintento no
+        // serviria: la pasarela no vuelve a llamar. Si era la carrera, el
+        // conciliador barre esa orden mas tarde igualmente.
         $this->pasarela(self::CUENTA_A);
 
         $r = $this->procesar(self::CUENTA_A, $this->aviso(self::SECRETO_A));
 
-        self::assertSame(503, $r['codigo']);
+        self::assertSame(200, $r['codigo']);
+        self::assertStringContainsString('desconocida', $r['motivo']);
     }
 
     // -----------------------------------------------------------------------
@@ -308,25 +319,25 @@ final class ConfirmacionPagoTest extends TestCase
     //  Cuando no se puede consultar el estado
     // -----------------------------------------------------------------------
 
-    public function testUnFalloTransitorioPideReintentoYDejaLaMarcaLocal(): void
+    public function testUnFalloTransitorioDejaLaMarcaParaQueElConciliadorLoRetome(): void
     {
-        // EL FALLO QUE MAS CARO SALIA. Antes se respondia 200: la pasarela daba
-        // el aviso por entregado, no lo repetia, y el pago quedaba cobrado de
-        // verdad y sin registrar, sin nada que volviera a mirarlo.
+        // EL FALLO QUE MAS CARO SALE, y la correccion NO es pedir un reintento:
+        // la pasarela no reintenta. Lo unico que recupera este pago es NUESTRO
+        // conciliador, y para eso hace falta la marca.
         $this->pasarela(self::CUENTA_A);
         $id = $this->orden(self::CUENTA_A);
 
         $r = $this->procesar(self::CUENTA_A, $this->aviso(self::SECRETO_A), [new Response(503, [], 'caida')]);
 
-        self::assertSame(503, $r['codigo'], 'la pasarela tiene que reintentar');
+        self::assertSame(200, $r['codigo'], 'se acusa recibo: un no-200 no consigue nada');
         self::assertNotNull(
             $this->link($id)['confirmacion_pendiente_at'],
-            'y ademas queda la marca local por si acaba rindiendose'
+            'la marca es lo que hace recuperable el pago'
         );
         self::assertSame('creado', $this->link($id)['estado'], 'no se inventa un estado');
     }
 
-    public function testUnFalloDeConexionTambienPideReintento(): void
+    public function testUnFalloDeConexionTambienQuedaRecuperable(): void
     {
         $this->pasarela(self::CUENTA_A);
         $id = $this->orden(self::CUENTA_A);
@@ -337,7 +348,7 @@ final class ConfirmacionPagoTest extends TestCase
             [new ConnectException('sin ruta', new Request('GET', 'x'))]
         );
 
-        self::assertSame(503, $r['codigo']);
+        self::assertSame(200, $r['codigo']);
         self::assertNotNull($this->link($id)['confirmacion_pendiente_at']);
     }
 

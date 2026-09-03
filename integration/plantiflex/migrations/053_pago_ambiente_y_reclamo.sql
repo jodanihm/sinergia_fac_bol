@@ -1,14 +1,15 @@
 -- =============================================================================
--- Migracion 053: ambiente de la pasarela, reclamo exclusivo y rastro de la
--- confirmacion que no se pudo consultar.
+-- Migracion 053: ambiente de la pasarela, reclamo exclusivo y conciliacion de
+-- pagos que no dependa de que la pasarela vuelva a avisar.
 --
 -- QUE RESUELVE
 -- -----------------------------------------------------------------------------
--- Tres defectos que una auditoria del modulo de cobro dejo por escrito antes de
--- la primera prueba. Van juntos en una sola migracion porque los tres son
+-- Tres defectos que dos revisiones del modulo de cobro dejaron por escrito antes
+-- de la primera prueba. Van juntos en una sola migracion porque los tres son
 -- columnas nuevas sobre las dos tablas que ya creo la 050/051 y porque los tres
--- son requisito de la MISMA prueba: sin ellos no se puede probar en sandbox ni
--- se puede garantizar que no haya un doble cobro.
+-- son requisito de la MISMA prueba: sin ellos no se puede probar en sandbox, no
+-- se puede garantizar que no haya un doble cobro, y un pago cobrado se puede
+-- perder sin que nadie se entere.
 --
 --
 -- 1) pago_pasarela_cuenta.ambiente -- SIN ESTO NO SE PUEDE PROBAR
@@ -57,21 +58,39 @@
 -- esperando respuesta.
 --
 --
--- 3) dte_pago_link.confirmacion_pendiente_at -- EL AVISO QUE NO SE PUDO MIRAR
+-- 3) LA CONCILIACION: confirmacion_pendiente_at, conciliado_at, conciliacion_intentos
 -- -----------------------------------------------------------------------------
--- El aviso de pago de la pasarela solo trae un identificador: hay que volver a
--- preguntarle el estado real antes de dar nada por pagado, porque avisa igual
--- cuando el pago se rechaza. Si esa consulta falla, el handler respondia 200 y se
--- acabo: la pasarela daba el aviso por entregado, no lo repetia, y el pago
--- quedaba cobrado de verdad y sin registrar, sin que nada volviera a mirarlo.
+-- FLOW NO REINTENTA EL AVISO DE PAGO. Es el hecho del que cuelga todo este
+-- bloque, y conviene dejarlo escrito porque es contraintuitivo: su documentacion
+-- dice que llama por POST a urlConfirmation, espera un 200 en menos de 15
+-- segundos y, si no lo recibe, MANDA UN CORREO de "Alerta: Problema de
+-- integracion" -- pero NO vuelve a llamar. Y anade que el estado de la
+-- transaccion no se ve afectado por ese error: el pago sigue cobrado de su lado.
 --
--- Esta columna deja la marca de que llego un aviso que no se pudo resolver. No
--- es un sistema de conciliacion -- eso seria otra cosa y no toca aqui -- es el
--- minimo para que la pregunta "que avisos quedaron sin mirar" se pueda contestar
--- con un SELECT en vez de con un grep del log:
+-- Consecuencia directa: si nuestro handler no puede resolver el aviso en ese
+-- momento -- porque la consulta de estado esta caida, porque la fila todavia no
+-- se habia guardado, porque la red fallo -- ESE PAGO SE PIERDE PARA NOSOTROS. No
+-- hay segunda oportunidad que venga de fuera.
 --
---   SELECT * FROM dte_pago_link
---    WHERE confirmacion_pendiente_at IS NOT NULL AND estado = 'creado';
+-- Por eso la recuperacion tiene que ser NUESTRA y no puede depender de recibir
+-- otro aviso. Estas tres columnas son lo que la sostiene:
+--
+--   confirmacion_pendiente_at  llego un aviso que no se pudo resolver. Es una
+--                              pista para priorizar, no la unica fuente: el
+--                              conciliador barre TODAS las ordenes creadas,
+--                              tambien aquellas cuyo aviso nunca llego.
+--   conciliado_at              cuando se le pregunto por ultima vez a la
+--                              pasarela. Sin esto, un barrido preguntaria por
+--                              cada orden en cada pasada.
+--   conciliacion_intentos      cuantas veces se ha preguntado. Es el tope que
+--                              impide un bucle eterno sobre una orden que
+--                              simplemente nadie va a pagar nunca.
+--
+-- POR QUE EL CONCILIADOR NO SE LIMITA A LAS MARCADAS. Porque el peor caso no
+-- deja marca: si el aviso no llega nunca -- se perdio en la red, nuestro panel
+-- estaba caido esos 15 segundos -- no hay nada que marcar, y esa orden pagada
+-- quedaria invisible para siempre. Barrer por estado='creado' cubre los dos
+-- casos con la misma consulta.
 --
 --
 -- SOBRE EL ESTADO 'error', QUE HASTA HOY NO LO ESCRIBIA NADIE
@@ -84,7 +103,7 @@
 --
 -- IDEMPOTENCIA
 -- -----------------------------------------------------------------------------
--- Las tres columnas se agregan con el patron information_schema + PREPARE, uno
+-- Las cinco columnas se agregan con el patron information_schema + PREPARE, uno
 -- por columna, porque ADD COLUMN IF NOT EXISTS no existe en el MySQL de Oracle.
 -- No toca ningun dato.
 -- =============================================================================
@@ -141,6 +160,43 @@ SET @sql := (
     WHERE TABLE_SCHEMA = DATABASE()
       AND TABLE_NAME   = 'dte_pago_link'
       AND COLUMN_NAME  = 'confirmacion_pendiente_at'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+-- --- 4. Conciliacion: cuando se pregunto por ultima vez y cuantas veces -------
+SET @sql := (
+    SELECT IF(
+        COUNT(*) = 0,
+        'ALTER TABLE dte_pago_link
+            ADD COLUMN conciliado_at TIMESTAMP NULL DEFAULT NULL
+                COMMENT ''ultima vez que se le pregunto el estado a la pasarela''
+                AFTER confirmacion_pendiente_at',
+        'SELECT 1'
+    )
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'dte_pago_link'
+      AND COLUMN_NAME  = 'conciliado_at'
+);
+PREPARE stmt FROM @sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @sql := (
+    SELECT IF(
+        COUNT(*) = 0,
+        'ALTER TABLE dte_pago_link
+            ADD COLUMN conciliacion_intentos INT UNSIGNED NOT NULL DEFAULT 0
+                COMMENT ''cuantas veces se pregunto; su tope evita un bucle eterno''
+                AFTER conciliado_at',
+        'SELECT 1'
+    )
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'dte_pago_link'
+      AND COLUMN_NAME  = 'conciliacion_intentos'
 );
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
