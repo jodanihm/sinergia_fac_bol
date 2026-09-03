@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-03',
+        'version' => '1.54',
+        'titulo'  => 'El boton de pago del correo ahora se ve, y avisa cuando es una prueba',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El link de pago era un enlace de texto perdido entre los parrafos del correo. Ahora es un recuadro destacado con el monto en grande, el numero de la factura y un boton azul de "Pagar factura" que se ve a la primera.',
+            'Debajo del boton va la direccion completa escrita en texto. No es un adorno: hay correos corporativos que borran o reescriben los botones, y sin esa linea quien reciba uno de esos se queda sin poder pagar.',
+            'Nuevo aviso amarillo cuando la pasarela esta en modo PRUEBA: "este enlace usa Flow Sandbox y no realizara un cobro real". Antes un correo de prueba era indistinguible de uno de verdad. El aviso sale del ambiente que configuraste, no de adivinarlo, y en produccion no aparece nunca.',
+            'Se mantiene el aviso de "si ya la pago por otro medio, ignore este mensaje", que es lo que evita que alguien pague dos veces.',
+            'El recuadro esta hecho para verse igual en Outlook, Gmail y el correo del telefono.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-03',
         'version' => '1.53',
         'titulo'  => 'Activar el cobro en linea en una empresa no puede afectar el correo de las demas',
         'tag'     => 'backend',
