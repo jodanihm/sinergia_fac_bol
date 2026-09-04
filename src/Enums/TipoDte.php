@@ -99,6 +99,30 @@ enum TipoDte: int
     }
 
     /**
+     * Notas de credito, en INT CRUDO: 61 la electronica, 60 la de papel.
+     *
+     * PARA QUE SE CONSULTA: una NOTA DE DEBITO que ANULA (CodRef=1) solo puede
+     * anular una nota de credito. No una factura, no una factura exenta, no una
+     * boleta. Es la regla que el Formato DTE enuncia para el codigo 1 y que la
+     * ayuda del formulario de emision ya recitaba sin que nadie la hiciera
+     * cumplir. Para referenciar una FACTURA, una ND tiene que usar CodRef=3
+     * (corrige montos), que es otro documento tributario distinto.
+     *
+     * 60 va en la lista por el mismo motivo que 32 y 38 en SIN_IVA: no es un
+     * caso del enum -- no lo emitimos -- pero si puede ser el TpoDocRef de una
+     * ND electronica que corrige una nota de credito emitida en papel.
+     *
+     * @var list<int>
+     */
+    public const NOTAS_CREDITO = [60, 61];
+
+    /** Si un tipo, EN INT CRUDO, es una nota de credito (electronica o de papel). */
+    public static function esNotaCredito(int $tipo): bool
+    {
+        return in_array($tipo, self::NOTAS_CREDITO, true);
+    }
+
+    /**
      * Nombre CORTO, el de la interfaz. Es el que va en tablas, badges y
      * selectores: en una tabla el nombre largo estorba, y .tabla-scroll ya
      * desborda por debajo de 1024px sin ayuda.

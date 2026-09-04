@@ -102,6 +102,17 @@ $refSinIva  = $esNota && is_numeric($refTipo)
 // deshabilitada, y el maestro de productos no puede desmarcarla.
 $exentoForzado = $esExenta || $refSinIva;
 
+// NOTA DE DEBITO QUE ANULA ALGO QUE NO ES UNA NOTA DE CREDITO. Con CodRef=1 una
+// ND solo puede anular una NC (61); para tocar una factura va con CodRef=3. La
+// lista de abajo ya lo explicaba y aun asi se emitieron CINCO ND contra una
+// factura 33 con CodRef=1, ninguna aceptada por el SII. Aqui se avisa en la
+// pantalla; quien lo impide de verdad es el motor, con un 422 sin quemar folio.
+$refCodigo = trim((string) ($form['referencias'][0]['codigo'] ?? ''));
+$ndMalAnula = $tipoDte === 56
+    && $refCodigo === '1'
+    && is_numeric($refTipo)
+    && ! \Plantiflex\FacturacionCl\Enums\TipoDte::esNotaCredito((int) $refTipo);
+
 // Forma de pago y vencimiento solo aplican a factura y factura exenta: son los
 // dos tipos para los que el Formato DTE exige informar FmaPago (pag. 4, cambio
 // del 31/05/2017). NC y ND no lo llevan.
@@ -373,6 +384,12 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                                 <option value="2" <?= $codSel === '2' ? 'selected' : ''; ?>>2 - Corrige texto</option>
                                 <option value="3" <?= $codSel === '3' ? 'selected' : ''; ?>>3 - Corrige montos</option>
                             </select>
+                            <p class="form-ayuda" id="aviso-nd-anula"<?= $ndMalAnula ? '' : ' hidden'; ?>>
+                                <strong>Esta combinacion la rechaza el SII.</strong> Una nota de debito
+                                con "1 - Anula documento" solo puede anular una <strong>nota de credito</strong>
+                                (tipo 61). Para corregir el monto de una factura, usa
+                                "3 - Corrige montos". Si la emites asi, el folio se pierde igual.
+                            </p>
                             <small class="form-ayuda" id="ayuda-ref-codigo">
                                 CodRef. Que puede referenciar cada codigo, segun el Formato DTE del SII:
                             </small>
@@ -541,6 +558,24 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             if (aviso) { aviso.hidden = !exentoForzado; }
         };
         refTipo.addEventListener('input', aplicarExento);
+    }
+
+    // AVISO DE LA NOTA DE DEBITO QUE ANULA LO QUE NO DEBE. Solo en el 56: en la
+    // nota de credito CodRef=1 sobre una factura es justamente el caso normal.
+    // Mismo reparto de responsabilidades que arriba -- esto avisa, el motor es
+    // quien rechaza --, y por eso el boton de emitir NO se deshabilita: la regla
+    // que manda vive en el servidor y aqui no se simula.
+    var ES_NOTA_DEBITO = <?= $tipoDte === 56 ? 'true' : 'false'; ?>;
+    var NOTAS_CREDITO  = <?= json_encode(\Plantiflex\FacturacionCl\Enums\TipoDte::NOTAS_CREDITO); ?>;
+    var refCodigo = document.getElementById('ref-codigo');
+    var avisoNd   = document.getElementById('aviso-nd-anula');
+    if (ES_NOTA_DEBITO && refTipo && refCodigo && avisoNd) {
+        var revisarNd = function () {
+            var t = parseInt(refTipo.value.trim(), 10);
+            avisoNd.hidden = !(refCodigo.value === '1' && !isNaN(t) && NOTAS_CREDITO.indexOf(t) === -1);
+        };
+        refTipo.addEventListener('input', revisarNd);
+        refCodigo.addEventListener('change', revisarNd);
     }
 
     // Autocompletado del receptor por RUT.

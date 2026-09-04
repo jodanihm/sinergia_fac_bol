@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-04',
+        'version' => '1.60',
+        'titulo'  => 'Una nota de debito ya no puede anular una factura',
+        'tag'     => 'backend',
+        'items'   => [
+            'Revisando lo anterior aparecio un segundo caso del mismo tipo. Una nota de DEBITO con el codigo "1 - Anula documento" solo puede anular una NOTA DE CREDITO: el SII no la acepta contra una factura. Para corregir el monto de una factura el codigo correcto es "3 - Corrige montos".',
+            'Ya se habian emitido cinco notas de debito asi, y ninguna fue aceptada. La pantalla lo explicaba en su lista de ayuda desde siempre, pero nada lo impedia.',
+            'Ahora, al elegir "1 - Anula documento" en una nota de debito sobre algo que no es una nota de credito, aparece el aviso en la misma pantalla. Y si el documento llegara igual, se rechaza antes de reservar el folio.',
+            'Las notas de CREDITO no cambian: anular una factura con codigo 1 sigue siendo lo normal y correcto.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-04',
         'version' => '1.59',
         'titulo'  => 'Una nota de credito sobre una factura exenta ya no se emite con IVA',
         'tag'     => 'backend',

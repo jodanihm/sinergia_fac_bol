@@ -21,9 +21,17 @@ function invalido(string $error, string $campo): never
 }
 
 /**
- * UNA NOTA DE CREDITO SOBRE UN DOCUMENTO SIN IVA NO PUEDE LLEVAR LINEAS AFECTAS.
+ * LAS FORMAS DE NOTA QUE EL SII RECHAZA, ATAJADAS ANTES DE QUE CUESTEN UN FOLIO.
  *
- * DE DONDE SALE ESTE TEST: de dos folios de produccion perdidos en tres dias,
+ * Dos reglas, las dos con su costo ya medido en produccion, las dos validadas en
+ * validarDocumentoDte() -- o sea ANTES de asignar folio y sin tocar el SII.
+ *
+ *   A. Una nota (61/56) sobre un documento SIN IVA no puede llevar lineas
+ *      afectas.                          exigirLineasExentasSiLaRefEsExenta()
+ *   B. Una nota de DEBITO que anula (CodRef=1) solo puede anular una nota de
+ *      credito.       exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito()
+ *
+ * REGLA A -- DE DONDE SALE: de dos folios de produccion perdidos en tres dias,
  * de la misma serie de NC del RUT 78225195-3.
  *
  *   folio 5, 02-09-2026  RSC "Rechazado por Error en Schema" -- el RUT del
@@ -37,8 +45,15 @@ function invalido(string $error, string $campo): never
  *                        documento devuelve DNK, "Datos NO Coinciden".
  *
  * En los dos casos el folio ya estaba quemado cuando llego el rechazo: se asigna
- * antes de enviar y no se devuelve. Por eso la regla se valida ANTES de asignar
- * folio, en validarDocumentoDte(), y responde 422 sin tocar el SII.
+ * antes de enviar y no se devuelve.
+ *
+ * REGLA B -- DE DONDE SALE: de las CINCO notas de debito emitidas en produccion
+ * en toda la historia de la base. Las cinco referencian una FACTURA 33 con
+ * CodRef=1, y ninguna fue aceptada: dos con RECHAZADOS=1 explicito
+ * (78454034-0 folios 2 y 3, 26-07-2026) y tres cuyo veredicto por documento
+ * nunca se registro. Enfrente, las 21 notas de debito de CERTIFICACION -- con
+ * las que el SII autorizo a estos mismos emisores -- referencian todas 61 con
+ * CodRef=1. La forma buena y la mala estan medidas y no se solapan.
  *
  * COMO SE PRUEBA EL MOTOR, QUE ES UN FRONT CONTROLLER. public/index.php no se
  * puede require-ear en un test: al incluirlo despacha la ruta y llama a
@@ -47,14 +62,14 @@ function invalido(string $error, string $campo): never
  * invalido() de prueba. Lo que se ejercita es el codigo que se despliega, no una
  * copia: si alguien cambia la funcion en el motor, este test corre lo nuevo.
  */
-final class NotaSobreDocumentoSinIvaTest extends TestCase
+final class NotasQueElSiiRechazaTest extends TestCase
 {
     private const MOTOR = __DIR__ . '/../public/index.php';
     private const PANEL = __DIR__ . '/../panel/public/index.php';
 
     public static function setUpBeforeClass(): void
     {
-        if (function_exists(__NAMESPACE__ . '\exigirLineasExentasSiLaRefEsExenta')) {
+        if (function_exists(__NAMESPACE__ . '\exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito')) {
             return;
         }
 
@@ -69,6 +84,14 @@ final class NotaSobreDocumentoSinIvaTest extends TestCase
         // Se compila DENTRO del namespace de los tests: asi la llamada a
         // invalido() de la funcion resuelve al stub de arriba y no al de verdad,
         // que haria exit y se llevaria por delante la corrida entera de PHPUnit.
+        eval('namespace ' . __NAMESPACE__ . ";\nuse " . TipoDte::class . ";\n" . $m[0]);
+
+        $ok = preg_match(
+            '/^function exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito.*?\n\}\n/ms',
+            $fuente,
+            $m
+        );
+        self::assertSame(1, $ok, 'no se encontro exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito() en el motor');
         eval('namespace ' . __NAMESPACE__ . ";\nuse " . TipoDte::class . ";\n" . $m[0]);
 
         // Y la capa del panel, por el mismo camino y por el mismo motivo:
@@ -326,6 +349,85 @@ final class NotaSobreDocumentoSinIvaTest extends TestCase
     {
         $doc = $this->armar(61, self::postDelFolio6());
         self::assertSame('78447717-7', $doc['receptor']['rut']);
+    }
+
+    // -----------------------------------------------------------------------
+    //  La nota de DEBITO que anula: solo puede anular una nota de credito
+    // -----------------------------------------------------------------------
+
+    private function validarNd(int $tipoDte, int $tipoRef, int $codRef, string $prefijo = ''): void
+    {
+        $fn = __NAMESPACE__ . '\\exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito';
+        $fn($tipoDte, $tipoRef, $codRef, $prefijo);
+    }
+
+    /**
+     * Los cinco folios de nota de debito emitidos en produccion: todos contra
+     * una factura 33 con CodRef=1, ninguno aceptado por el SII.
+     */
+    public function testLaNdQueAnulaUnaFacturaSeRechaza(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias|');
+        $this->validarNd(56, 33, 1);
+    }
+
+    public function testElMensajeOfreceLaSalidaCorrecta(): void
+    {
+        try {
+            $this->validarNd(56, 33, 1);
+            self::fail('deberia haber rechazado');
+        } catch (RuntimeException $e) {
+            self::assertStringContainsString('CodRef=3', $e->getMessage());
+            self::assertStringContainsString('NOTA DE CREDITO', $e->getMessage());
+            self::assertStringContainsString('folio', $e->getMessage());
+        }
+    }
+
+    /**
+     * La forma correcta, y la que usan las 21 notas de debito de certificacion
+     * con las que el SII autorizo a estos emisores: 61 con CodRef=1.
+     */
+    public function testLaNdQueAnulaUnaNotaDeCreditoPasa(): void
+    {
+        $this->validarNd(56, 61, 1);
+        $this->validarNd(56, 60, 1); // nota de credito en papel
+        $this->expectNotToPerformAssertions();
+    }
+
+    /** Con CodRef=3 una ND puede referenciar una factura: es el unico codigo que se lo permite. */
+    public function testLaNdQueCorrigeMontosDeUnaFacturaPasa(): void
+    {
+        $this->validarNd(56, 33, 3);
+        $this->validarNd(56, 34, 3);
+        $this->expectNotToPerformAssertions();
+    }
+
+    /**
+     * CodRef=2 no se toca: la ayuda del formulario dice que corregir texto es
+     * solo de la nota de credito, pero no hay ni un caso medido, y una guarda
+     * inventada bloquea emisiones legitimas.
+     */
+    public function testLaNdConCorrigeTextoNoSeRechazaAqui(): void
+    {
+        $this->validarNd(56, 33, 2);
+        $this->expectNotToPerformAssertions();
+    }
+
+    /** En la NOTA DE CREDITO anular una factura es el caso normal: no se toca. */
+    public function testLaNcQueAnulaUnaFacturaNoSeVeAfectada(): void
+    {
+        foreach ([33, 34, 39, 41, 46, 56] as $tipoRef) {
+            $this->validarNd(61, $tipoRef, 1);
+        }
+        $this->expectNotToPerformAssertions();
+    }
+
+    public function testEnLoteElCampoLlevaElIndiceDelDocumentoTambienAqui(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('documentos[2].referencias|');
+        $this->validarNd(56, 33, 1, 'documentos[2].');
     }
 
     public function testNingunFrontControllerRepiteLaListaDeTipos(): void

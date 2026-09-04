@@ -668,6 +668,54 @@ function exigirLineasExentasSiLaRefEsExenta(array $detalles, int $tipoRef, strin
     }
 }
 
+/**
+ * UNA NOTA DE DEBITO QUE ANULA SOLO PUEDE ANULAR UNA NOTA DE CREDITO.
+ *
+ * Formato DTE, codigo de referencia 1 ("Anula documento de referencia"): una
+ * NOTA DE CREDITO anula una factura, una nota de debito o una factura de compra;
+ * una NOTA DE DEBITO solo anula una NOTA DE CREDITO. Para tocar una factura, una
+ * ND tiene que ir con CodRef=3 (corrige montos), que es el unico codigo con el
+ * que puede referenciarla. La ayuda del formulario de emision recita esta regla
+ * desde que existe la pantalla; lo que faltaba era hacerla cumplir.
+ *
+ * COSTO MEDIDO. Las CINCO notas de debito emitidas en produccion referencian una
+ * FACTURA 33 con CodRef=1, y NINGUNA fue aceptada:
+ *
+ *   78454034-0 folios 2 y 3 (26-07-2026)   INFORMADOS=1 y RECHAZADOS=1 cada una
+ *   78454034-0 folio 1, 76543210-3 1 y 2   el sobre quedo EPR y el veredicto por
+ *                                          documento nunca se registro
+ *
+ * Contra eso, las 21 notas de debito de CERTIFICACION -- las que el SII valido
+ * para autorizar a estos emisores -- referencian todas 61 con CodRef=1. La forma
+ * correcta y la incorrecta estan las dos medidas, y no se solapan.
+ *
+ * SOLO MIRA CodRef=1. Con CodRef=3 una ND puede referenciar lo que sea, y no se
+ * toca. CodRef=2 (corrige texto) es, segun esa misma ayuda, exclusivo de la nota
+ * de credito, PERO no hay ni un caso medido -- ni bueno ni malo -- asi que aqui
+ * no se rechaza: inventar la guarda sin la cita ni el dato es como se bloquea una
+ * emision legitima.
+ *
+ * Como su hermana exigirLineasExentasSiLaRefEsExenta(), responde 422 ANTES de
+ * asignar folio y sin tocar el SII.
+ */
+function exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito(int $tipoDte, int $tipoRef, int $codRef, string $p): void
+{
+    if ($tipoDte !== 56 || $codRef !== 1 || TipoDte::esNotaCredito($tipoRef)) {
+        return;
+    }
+    invalido(
+        sprintf(
+            '%sreferencias: una nota de debito con CodRef=1 (anula) solo puede anular una NOTA DE '
+            . 'CREDITO (TpoDocRef 61), y esta apunta a un documento tipo %d. Para corregir el monto '
+            . 'de una factura, la nota de debito va con CodRef=3 (corrige montos). Emitirla asi la '
+            . 'haria rechazar por el SII con el folio ya consumido.',
+            $p,
+            $tipoRef,
+        ),
+        "{$p}referencias",
+    );
+}
+
 // ===========================================================================
 //  Validacion compartida de UN documento DTE (forma del body de POST /api/v1/dte)
 //
@@ -1007,10 +1055,12 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
     if (in_array($tipoDte, [61, 56], true)) {
         $tiposDteRef = [29, 30, 32, 33, 34, 35, 38, 39, 40, 41, 43, 45, 46, 48, 50, 52, 55, 56, 60, 61, 103, 110, 111, 112];
         $tieneRefValida = false;
-        // Tipo del documento que la nota corrige o anula. Queda en null cuando
-        // la referencia madre es intra-lote (refIndiceLote): ahi el tipo lo
-        // resuelve el handler del lote, que si conoce los otros documentos.
+        // Tipo y CodRef del documento que la nota corrige o anula. Quedan en
+        // null cuando la referencia madre es intra-lote (refIndiceLote): ahi el
+        // tipo lo resuelve el handler del lote, que si conoce los otros
+        // documentos.
         $tipoRefMadre = null;
+        $codRefMadre  = null;
         foreach ($referencias as $ref) {
             if (! is_array($ref)) {
                 continue;
@@ -1031,6 +1081,7 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
             ) {
                 $tieneRefValida = true;
                 $tipoRefMadre   = (int) $tipoRef;
+                $codRefMadre    = is_numeric($ref['codigo'] ?? null) ? (int) $ref['codigo'] : null;
                 break;
             }
         }
@@ -1042,6 +1093,9 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         }
         if ($tipoRefMadre !== null) {
             exigirLineasExentasSiLaRefEsExenta($detalles, $tipoRefMadre, $p);
+        }
+        if ($tipoRefMadre !== null && $codRefMadre !== null) {
+            exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito($tipoDte, $tipoRefMadre, $codRefMadre, $p);
         }
     }
 
@@ -1445,6 +1499,14 @@ function emitirDteLote(array $tenant): never
                     (int) $validados[$k]['tipoDte'],
                     "documentos[{$i}].",
                 );
+                if (is_numeric($ref['codigo'] ?? null)) {
+                    exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito(
+                        (int) $v['tipoDte'],
+                        (int) $validados[$k]['tipoDte'],
+                        (int) $ref['codigo'],
+                        "documentos[{$i}].",
+                    );
+                }
             }
         }
 
