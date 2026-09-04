@@ -366,8 +366,23 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                             <input type="text" inputmode="numeric" name="referencias[0][folio]" id="ref-folio" value="<?= $vref('folio'); ?>">
                         </div>
                         <div class="form-campo form-campo--ancho form-campo--corto">
-                            <label for="ref-fecha">Fecha</label>
-                            <input type="date" name="referencias[0][fecha]" id="ref-fecha" value="<?= $vref('fecha'); ?>">
+                            <label for="ref-fecha">Fecha del documento referenciado <?= $req; ?></label>
+                            <?php
+                                // required DE VERDAD, y es la segunda excepcion a la regla de
+                                // "obligatorio segun el motor, no segun el navegador" (la primera
+                                // es el select del codigo, ver su nota). FchRef NO es opcional: el
+                                // esquema del SII la declara obligatoria dentro de Referencia
+                                // (docs/18_Schema_XML_DTE/DTE_v10.xsd, bloque Referencia). Este
+                                // campo se ofrecia sin marca y sin required, asi que dejarlo en
+                                // blanco armaba un sobre que el SII rechaza por schema -- RSC -- con
+                                // el folio ya gastado. Exactamente como se perdio la NC folio 5 del
+                                // 02-09-2026 por el RUT con puntos.
+                                //
+                                // Quien lo garantiza es el motor (validarReferencias): el required
+                                // es para que el usuario lo vea antes de enviar, no la regla.
+                            ?>
+                            <input type="date" name="referencias[0][fecha]" id="ref-fecha" value="<?= $vref('fecha'); ?>" required<?= $errStyle('referencias[0].fecha'); ?>>
+                            <small class="form-ayuda">FchRef. Es la fecha de emision del documento que estas corrigiendo, no la de hoy.</small>
                         </div>
                         <div class="form-campo form-campo--ancho">
                             <label for="ref-codigo">Codigo de referencia <?= $req; ?></label>
@@ -406,7 +421,9 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         </div>
                         <div class="form-campo form-campo--ancho">
                             <label for="ref-razon">Razon de la referencia</label>
-                            <input type="text" name="referencias[0][razon]" id="ref-razon" value="<?= $vref('razon'); ?>" placeholder="Anula factura N...">
+                            <?php // maxlength 90: es el tope de RazonRef en el esquema del SII. Pasarse rompe el sobre entero. ?>
+                            <input type="text" name="referencias[0][razon]" id="ref-razon" value="<?= $vref('razon'); ?>" maxlength="90" placeholder="Anula factura N..."<?= $errStyle('referencias[0].razon'); ?>>
+                            <small class="form-ayuda">RazonRef. Hasta 90 caracteres.</small>
                         </div>
                     </div>
                 </section>

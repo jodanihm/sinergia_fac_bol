@@ -716,6 +716,147 @@ function exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito(int $tipoDte, int $tipoRef
     );
 }
 
+/**
+ * CADA REFERENCIA TIENE QUE PODER PASAR EL ESQUEMA DEL SII.
+ *
+ * Las tres reglas de arriba (34 sin lineas afectas, nota sin IVA, ND que anula)
+ * son de NEGOCIO: el documento valida contra el XSD y lo rechaza el SII al
+ * procesarlo. Esta es de FORMA: si la referencia no cumple el esquema, el sobre
+ * vuelve RSC "Rechazado por Error en Schema" -- y el folio se gasta igual,
+ * porque se asigna antes de enviar. Es exactamente como se perdio la NC 61
+ * folio 5 de 78225195-3 el 02-09-2026, por un RUT con puntos.
+ *
+ * LO QUE EXIGE EL ESQUEMA, medido ejecutando DTE_v10.xsd contra el XML que
+ * produce DteXmlBuilder::buildReferencia() (docs/18_Schema_XML_DTE/DTE_v10.xsd,
+ * bloque Referencia, lineas 1813-1903):
+ *
+ *   Referencia   maxOccurs="40"
+ *   NroLinRef    obligatorio, positiveInteger, maxInclusive 99  (lo pone el
+ *                builder con la posicion, asi que el tope de 40 ya lo cubre)
+ *   TpoDocRef    OBLIGATORIO, string de 1 a 3 caracteres
+ *   FolioRef     OBLIGATORIO
+ *   FchRef       OBLIGATORIO, FechaType (AAAA-MM-DD)
+ *   CodRef       opcional, pero SOLO 1, 2 o 3
+ *   RazonRef     opcional, maximo 90 caracteres
+ *
+ * POR QUE HACIA FALTA. El builder emite cada uno de esos campos bajo isset():
+ * lo que no viene, no sale, y el elemento obligatorio simplemente falta. El
+ * motor no miraba ninguno salvo la referencia madre de una NC/ND. El caso vivo
+ * era FchRef: el formulario del panel la ofrecia como opcional -- etiqueta
+ * "Fecha" sin marca y sin required -- cuando el esquema la exige. Dejarla en
+ * blanco producia un sobre invalido. No llego a pasar en produccion: se reviso
+ * el XML de los 502 documentos emitidos y ninguno tenia una referencia sin
+ * FchRef. Se arregla antes de que pase, no despues.
+ *
+ * LAS DOS FORMAS QUE NO SE TOCAN, y son la razon de que esto no sea un simple
+ * "todos los campos obligatorios":
+ *
+ *   refIndiceLote   la referencia a otro documento DEL MISMO LOTE llega SIN
+ *                   tipoDocumento, folio ni fecha: los inyecta emitirDteLote()
+ *                   despues de validar, cuando ya sabe que folio le toco al
+ *                   documento referenciado. Aqui solo se le miran codigo y razon.
+ *   TpoDocRef "SET" la auto-referencia al set de certificacion llega sin folio:
+ *                   buildReferencia() usa el folio PROPIO del documento. Es la
+ *                   forma que emite SetBasicoPayloadBuilder para los tres tipos
+ *                   del set basico, y pasa por aqui en cada certificacion.
+ *
+ * @param list<mixed>|array<mixed> $referencias
+ */
+function validarReferencias(array $referencias, string $p): void
+{
+    if (count($referencias) > 40) {
+        invalido(
+            sprintf(
+                '%sreferencias: hay %d y el esquema del SII permite hasta 40 por documento '
+                . '(DTE_v10.xsd, Referencia maxOccurs="40").',
+                $p,
+                count($referencias),
+            ),
+            "{$p}referencias",
+        );
+    }
+
+    foreach ($referencias as $j => $ref) {
+        if (! is_array($ref)) {
+            invalido("{$p}referencias[{$j}] debe ser un objeto", "{$p}referencias[{$j}]");
+        }
+
+        // Referencia intra-lote: tipo, folio y fecha los pone emitirDteLote()
+        // despues de validar. Aqui solo se comprueba lo que SI viaja.
+        $intraLote = array_key_exists('refIndiceLote', $ref);
+
+        if (! $intraLote) {
+            $td = $ref['tipoDocumento'] ?? null;
+            if ((! is_string($td) && ! is_int($td)) || trim((string) $td) === '') {
+                invalido(
+                    "{$p}referencias[{$j}].tipoDocumento es obligatorio: el esquema del SII exige TpoDocRef",
+                    "{$p}referencias[{$j}].tipoDocumento",
+                );
+            }
+            $td = trim((string) $td);
+            if (mb_strlen($td) > 3) {
+                invalido(
+                    "{$p}referencias[{$j}].tipoDocumento admite hasta 3 caracteres (TpoDocRef), y trae {$td}",
+                    "{$p}referencias[{$j}].tipoDocumento",
+                );
+            }
+
+            // FolioRef es obligatorio, SALVO en la auto-referencia al SET: ahi
+            // el builder usa el folio propio del documento (ver su nota).
+            if ($td !== 'SET') {
+                $fol = $ref['folio'] ?? null;
+                if (! is_numeric($fol) || (int) $fol <= 0) {
+                    invalido(
+                        "{$p}referencias[{$j}].folio es obligatorio y debe ser un entero > 0 (FolioRef)",
+                        "{$p}referencias[{$j}].folio",
+                    );
+                }
+            }
+
+            // FchRef: obligatoria en el esquema, y es la que faltaba.
+            $fecha = $ref['fecha'] ?? null;
+            if (! is_string($fecha) || ! validaFecha($fecha)) {
+                invalido(
+                    "{$p}referencias[{$j}].fecha es obligatoria y debe ser AAAA-MM-DD: el esquema del SII "
+                    . 'exige FchRef, y un documento sin ella vuelve rechazado por schema con el folio ya consumido',
+                    "{$p}referencias[{$j}].fecha",
+                );
+            }
+        }
+
+        // CodRef: opcional, pero la enumeracion del esquema es exactamente 1, 2, 3.
+        $cod = $ref['codigo'] ?? null;
+        if ($cod !== null && $cod !== '') {
+            if (! is_numeric($cod) || ! in_array((int) $cod, [1, 2, 3], true)) {
+                invalido(
+                    "{$p}referencias[{$j}].codigo debe ser 1 (anula), 2 (corrige texto) o 3 (corrige montos): "
+                    . 'el esquema del SII no admite otro valor en CodRef',
+                    "{$p}referencias[{$j}].codigo",
+                );
+            }
+        }
+
+        // RazonRef: opcional, maximo 90 caracteres.
+        $razon = $ref['razon'] ?? null;
+        if ($razon !== null && $razon !== '') {
+            if (! is_string($razon)) {
+                invalido("{$p}referencias[{$j}].razon debe ser texto", "{$p}referencias[{$j}].razon");
+            }
+            if (mb_strlen($razon) > 90) {
+                invalido(
+                    sprintf(
+                        '%sreferencias[%s].razon admite hasta 90 caracteres (RazonRef) y trae %d',
+                        $p,
+                        (string) $j,
+                        mb_strlen($razon),
+                    ),
+                    "{$p}referencias[{$j}].razon",
+                );
+            }
+        }
+    }
+}
+
 // ===========================================================================
 //  Validacion compartida de UN documento DTE (forma del body de POST /api/v1/dte)
 //
@@ -1045,6 +1186,13 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
             }
         }
     }
+
+    // --- Forma de CADA referencia contra el esquema del SII ---
+    //
+    // VA ANTES de la regla de la referencia madre y APLICA A TODO TIPO, no solo
+    // a NC/ND: una FACTURA del set de certificacion tambien lleva referencia (la
+    // del SET), y una referencia mal formada rompe el sobre igual.
+    validarReferencias($referencias, $p);
 
     // --- NC (61) y ND (56) EXIGEN al menos una referencia a un DTE valido ---
     // (SII REF-3-415). Se valida ANTES de armar el DTO/asignar folio/llamar al SII,

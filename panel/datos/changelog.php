@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-04',
+        'version' => '1.61',
+        'titulo'  => 'La fecha del documento referenciado pasa a ser obligatoria',
+        'tag'     => 'backend',
+        'items'   => [
+            'En una nota de credito o debito, la fecha del documento que estas corrigiendo se pedia como opcional. No lo es: el SII la exige, y sin ella rechaza el envio completo y el folio se pierde igual. Nunca llego a pasar en produccion, pero se podia.',
+            'Ahora el campo va marcado como obligatorio, dice que es la fecha de emision del documento referenciado (no la de hoy) y el formulario no deja enviar sin ella.',
+            'La razon de la referencia queda limitada a 90 caracteres, que es el maximo que acepta el SII. Antes se podia escribir mas largo y el documento se caia entero.',
+            'Y las notas que llegan desde sistemas externos conectados por API pasan los mismos controles: tipo de documento, folio, fecha, codigo de referencia (solo 1, 2 o 3) y hasta 40 referencias por documento. Todo se revisa antes de reservar el folio.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-04',
         'version' => '1.60',
         'titulo'  => 'Una nota de debito ya no puede anular una factura',
         'tag'     => 'backend',

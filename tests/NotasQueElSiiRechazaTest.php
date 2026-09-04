@@ -94,6 +94,15 @@ final class NotasQueElSiiRechazaTest extends TestCase
         self::assertSame(1, $ok, 'no se encontro exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito() en el motor');
         eval('namespace ' . __NAMESPACE__ . ";\nuse " . TipoDte::class . ";\n" . $m[0]);
 
+        // validarReferencias() y la validaFecha() de la que depende. Se extrae la
+        // de verdad y no un stub: el formato que acepte el test tiene que ser el
+        // mismo que acepte el motor.
+        foreach (['validaFecha', 'validarReferencias'] as $fn) {
+            $ok = preg_match('/^function ' . $fn . '\\(.*?\\n\\}\\n/ms', $fuente, $m);
+            self::assertSame(1, $ok, "no se encontro {$fn}() en el motor");
+            eval('namespace ' . __NAMESPACE__ . ";\n" . $m[0]);
+        }
+
         // Y la capa del panel, por el mismo camino y por el mismo motivo:
         // panel/public/index.php es otro front controller de 19.000 lineas que
         // al incluirlo arranca sesion, base de datos y router.
@@ -428,6 +437,175 @@ final class NotasQueElSiiRechazaTest extends TestCase
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('documentos[2].referencias|');
         $this->validarNd(56, 33, 1, 'documentos[2].');
+    }
+
+    // -----------------------------------------------------------------------
+    //  La FORMA de cada referencia: lo que exige el esquema del SII
+    // -----------------------------------------------------------------------
+
+    /** @param list<array<string,mixed>> $refs */
+    private function validarRefs(array $refs, string $prefijo = ''): void
+    {
+        $fn = __NAMESPACE__ . '\\validarReferencias';
+        $fn($refs, $prefijo);
+    }
+
+    private static function refCompleta(array $cambios = []): array
+    {
+        return $cambios + ['tipoDocumento' => 33, 'folio' => 744, 'fecha' => '2026-09-02', 'codigo' => 1, 'razon' => 'Anula documento N 744'];
+    }
+
+    public function testUnaReferenciaCompletaPasa(): void
+    {
+        $this->validarRefs([self::refCompleta()]);
+        $this->expectNotToPerformAssertions();
+    }
+
+    /**
+     * EL CASO QUE MOTIVO ESTO. El formulario ofrecia la fecha como opcional y el
+     * esquema del SII la exige: sin FchRef el sobre vuelve RSC con el folio ya
+     * gastado. Medido ejecutando DTE_v10.xsd contra el XML del builder.
+     */
+    public function testUnaReferenciaSinFechaSeRechaza(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].fecha|');
+        $refs = self::refCompleta();
+        unset($refs['fecha']);
+        $this->validarRefs([$refs]);
+    }
+
+    public function testUnaFechaConFormatoChilenoSeRechaza(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].fecha|');
+        $this->validarRefs([self::refCompleta(['fecha' => '02-09-2026'])]);
+    }
+
+    public function testSinTipoDeDocumentoSeRechaza(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].tipoDocumento|');
+        $refs = self::refCompleta();
+        unset($refs['tipoDocumento']);
+        $this->validarRefs([$refs]);
+    }
+
+    public function testUnTipoDeMasDeTresCaracteresSeRechaza(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].tipoDocumento|');
+        $this->validarRefs([self::refCompleta(['tipoDocumento' => 'SETX'])]);
+    }
+
+    public function testSinFolioSeRechaza(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].folio|');
+        $refs = self::refCompleta();
+        unset($refs['folio']);
+        $this->validarRefs([$refs]);
+    }
+
+    /**
+     * @param mixed $codigo
+     */
+    #[DataProvider('codigosInvalidos')]
+    public function testUnCodRefFueraDeLaEnumeracionSeRechaza(mixed $codigo): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].codigo|');
+        $this->validarRefs([self::refCompleta(['codigo' => $codigo])]);
+    }
+
+    public static function codigosInvalidos(): array
+    {
+        return ['cuatro' => [4], 'cero' => [0], 'negativo' => [-1], 'texto' => ['anula']];
+    }
+
+    public function testLosTresCodigosDelEsquemaPasan(): void
+    {
+        foreach ([1, 2, 3, '1', '2', '3'] as $cod) {
+            $this->validarRefs([self::refCompleta(['codigo' => $cod])]);
+        }
+        // Y sin codigo tambien: CodRef es opcional en el esquema.
+        $refs = self::refCompleta();
+        unset($refs['codigo']);
+        $this->validarRefs([$refs]);
+        $this->expectNotToPerformAssertions();
+    }
+
+    public function testLaRazonSePuedeUsarHastaLos90Caracteres(): void
+    {
+        $this->validarRefs([self::refCompleta(['razon' => str_repeat('A', 90)])]);
+        $this->expectNotToPerformAssertions();
+    }
+
+    public function testUnaRazonDe91CaracteresSeRechaza(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].razon|');
+        $this->validarRefs([self::refCompleta(['razon' => str_repeat('A', 91)])]);
+    }
+
+    public function testElTopeDe40ReferenciasDelEsquema(): void
+    {
+        $this->validarRefs(array_fill(0, 40, self::refCompleta()));
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias|');
+        $this->validarRefs(array_fill(0, 41, self::refCompleta()));
+    }
+
+    public function testElIndiceDelCampoSenalaLaReferenciaMala(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('documentos[7].referencias[2].fecha|');
+        $mala = self::refCompleta();
+        unset($mala['fecha']);
+        $this->validarRefs([self::refCompleta(), self::refCompleta(), $mala], 'documentos[7].');
+    }
+
+    // --- Las dos formas que NO se pueden romper -----------------------------
+
+    /**
+     * AUTO-REFERENCIA AL SET DE CERTIFICACION: llega SIN folio, porque
+     * DteXmlBuilder::buildReferencia() usa el folio PROPIO del documento. Es
+     * literalmente la forma que arma SetBasicoPayloadBuilder para los tres tipos
+     * del set basico, y pasa por esta validacion en cada certificacion. Si este
+     * test se pone rojo, no se puede certificar a ningun emisor nuevo.
+     */
+    public function testLaAutoReferenciaAlSetDeCertificacionPasaSinFolio(): void
+    {
+        $this->validarRefs([[
+            'tipoDocumento' => 'SET',
+            'fecha'         => '2026-07-13',
+            'razon'         => 'CASO 4860965-1',
+        ]]);
+        $this->expectNotToPerformAssertions();
+    }
+
+    /**
+     * REFERENCIA INTRA-LOTE: llega SIN tipoDocumento, folio ni fecha. Los inyecta
+     * emitirDteLote() DESPUES de validar, cuando ya sabe que folio le toco al
+     * documento referenciado. Exigirlos aqui rompe el set basico entero.
+     */
+    public function testLaReferenciaIntraLotePasaSinTipoFolioNiFecha(): void
+    {
+        $this->validarRefs([[
+            'refIndiceLote' => 0,
+            'codigo'        => '1',
+            'razon'         => 'ANULA FACTURA',
+        ]]);
+        $this->expectNotToPerformAssertions();
+    }
+
+    /** Pero a la intra-lote SI se le miran codigo y razon, que si viajan. */
+    public function testALaIntraLoteSeLeSigueValidandoElCodigo(): void
+    {
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('referencias[0].codigo|');
+        $this->validarRefs([['refIndiceLote' => 0, 'codigo' => 9]]);
     }
 
     public function testNingunFrontControllerRepiteLaListaDeTipos(): void
