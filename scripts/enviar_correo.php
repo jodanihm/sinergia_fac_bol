@@ -48,6 +48,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Plantiflex\FacturacionCl\Correo\BrevoMailer;
 use Plantiflex\FacturacionCl\Correo\PreparadorEnvio;
+use Plantiflex\FacturacionCl\Pago\ResolutorLinkPago;
 
 function fail(string $msg, int $code = 2): never
 {
@@ -114,6 +115,26 @@ $pdo = conectarDb();
 // ---------------------------------------------------------------------------
 //  Preparacion: consulta, guardas, PDF y armado del mensaje
 // ---------------------------------------------------------------------------
+// EL LINK DE PAGO ANTES DE PREPARAR, igual que en el runner de la cola.
+//
+// Este CLI existe para mandar un documento suelto a mano, y tiene que seguir
+// exactamente la misma regla: si no hay puerta trasera, no hay forma de mandar
+// por error una factura sin el link que su empresa pidio. En --dry-run NO se
+// resuelve, por lo mismo de siempre: resolver crea una orden de cobro real.
+if (! $dryRun) {
+    // MISMA POLITICA QUE EL RUNNER, Y POR LA MISMA PUERTA: desdeEntorno() no
+    // falla al construirse, y decide POR DOCUMENTO. Antes este CLI hacia fail()
+    // si faltaba CRYPTO_MASTER_KEY o PANEL_URL_PUBLICA, aunque el documento
+    // fuera de una empresa sin cobro en linea -- una politica distinta de la del
+    // cron para el mismo correo. Si la empresa SI cobra y falta algo, resolver()
+    // contesta 'esperar' y se sale igual, sin mandar nada.
+    $pago = ResolutorLinkPago::desdeEntorno($pdo)->resolver($envioId);
+    if ($pago['verdicto'] === 'esperar') {
+        fwrite(STDOUT, "Fila {$envioId}: esperando el link de pago ({$pago['motivo']}). NO se envia nada.\n");
+        exit(1);
+    }
+}
+
 $envio = PreparadorEnvio::preparar($pdo, $envioId);
 
 if ($envio['ok'] === false) {

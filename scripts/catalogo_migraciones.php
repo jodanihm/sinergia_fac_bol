@@ -70,6 +70,34 @@ function huellaColumnas(PDO $pdo, string $tabla, array $columnas): int
 }
 
 /**
+ * Cuantas de $columnas YA NO existen en $tabla.
+ *
+ * ES LA HUELLA DE UNA MIGRACION DESTRUCTIVA, y hacia falta porque el resto del
+ * verificador da por hecho que las migraciones AGREGAN. veredicto() compara
+ * "presentes" contra "esperados" y llama NO_APLICADA a presentes === 0: eso
+ * funciona mientras "presente" cuente rasgos que la migracion CREA.
+ *
+ * Una migracion que BORRA no encaja ahi. Con la huella normal y esperado = 0, la
+ * 055 -- que retira tres columnas que hoy tienen que seguir existiendo -- daba
+ * "PARCIAL 3/0", y una PARCIAL aborta el despliegue aunque este diferida. O sea
+ * que una migracion correctamente NO aplicada bloqueaba deploys.
+ *
+ * La solucion no es una excepcion para la 055 ni maquillar la salida: es contar
+ * el rasgo que esa migracion SI produce, que es la AUSENCIA. Asi "presente"
+ * vuelve a significar lo mismo que en todas las demas -- cuanto de lo que la
+ * migracion tenia que dejar hecho esta hecho -- y veredicto() no cambia:
+ *
+ *   las 3 columnas todavia ahi  -> 0 de 3 -> NO_APLICADA
+ *   ninguna                     -> 3 de 3 -> APLICADA
+ *   una o dos borradas          -> 1|2 de 3 -> PARCIAL, que es exactamente lo que
+ *                                 hay que mirar a mano: un DROP a medias.
+ */
+function huellaColumnasAusentes(PDO $pdo, string $tabla, array $columnas): int
+{
+    return count($columnas) - huellaColumnas($pdo, $tabla, $columnas);
+}
+
+/**
  * 1 si $tabla.$columna existe Y su nulabilidad es la pedida; 0 si no.
  *
  * ES LA HUELLA QUE SEPARA LA 022 DE LA 023. Las dos tocan la MISMA columna
@@ -629,6 +657,110 @@ const MIGRACIONES = [
              'valores' => ['sin_definir', 'interna', 'demo', 'trial', 'pago', 'cortesia'], 'esperado' => 6],
         ],
     ],
+    [
+        'id' => '050', 'archivo' => '050_dte_pago_link.sql', 'nota' => 'CREATE TABLE (orden de pago por documento)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'dte_pago_link', 'tablas' => ['dte_pago_link'], 'esperado' => 1],
+            // El UNIQUE se comprueba aparte de la tabla, y no por prolijidad:
+            // es lo unico que impide crear dos ordenes de cobro para el mismo
+            // documento. Una tabla presente sin ese indice cobraria dos veces.
+            ['tipo' => 'indice', 'desc' => 'uk_pago_link_documento (unico)', 'tabla' => 'dte_pago_link',
+             'indice' => 'uk_pago_link_documento', 'esperado' => 1],
+            // La otra mitad de la defensa contra el doble cobro: la referencia
+            // estable que se le manda a la pasarela. Ver la cabecera del .sql.
+            ['tipo' => 'indice', 'desc' => 'uk_pago_link_referencia (unico)', 'tabla' => 'dte_pago_link',
+             'indice' => 'uk_pago_link_referencia', 'esperado' => 1],
+            ['tipo' => 'valores_enum', 'desc' => 'los 5 estados de dte_pago_link.estado', 'tabla' => 'dte_pago_link',
+             'columna' => 'estado',
+             'valores' => ['pendiente', 'creado', 'error', 'omitido', 'pagado'], 'esperado' => 5],
+            ['tipo' => 'claves_foraneas', 'desc' => 'fk_pago_link_documento y fk_pago_link_cuenta',
+             'restricciones' => ['fk_pago_link_documento', 'fk_pago_link_cuenta'], 'esperado' => 2],
+        ],
+    ],
+    [
+        'id' => '051', 'archivo' => '051_pago_pasarela_cuenta.sql', 'nota' => 'CREATE TABLE (credenciales por empresa)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'pago_pasarela_cuenta', 'tablas' => ['pago_pasarela_cuenta'], 'esperado' => 1],
+            ['tipo' => 'indice', 'desc' => 'uk_pasarela_cuenta (unico)', 'tabla' => 'pago_pasarela_cuenta',
+             'indice' => 'uk_pasarela_cuenta', 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'las dos credenciales y el interruptor', 'tabla' => 'pago_pasarela_cuenta',
+             'columnas' => ['habilitado', 'credencial_publica', 'credencial_cifrada'], 'esperado' => 3],
+        ],
+    ],
+    [
+        'id' => '052', 'archivo' => '052_cliente_pago_link.sql', 'nota' => 'ALTER (opt-out por cliente)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'cliente.pago_link', 'tabla' => 'cliente',
+             'columnas' => ['pago_link'], 'esperado' => 1],
+        ],
+    ],
+    [
+        'id' => '053', 'archivo' => '053_pago_ambiente_y_reclamo.sql',
+        'nota' => 'ALTER x6 (ambiente, reclamo exclusivo, conciliacion)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'pago_pasarela_cuenta.ambiente', 'tabla' => 'pago_pasarela_cuenta',
+             'columnas' => ['ambiente'], 'esperado' => 1],
+            // Los DOS valores del ENUM, no solo la columna: si alguien le agregara
+            // un tercero, esta huella lo nota y la 053 sale PARCIAL en vez de dar
+            // por buena una columna que ya no es la que describe su .sql. En una
+            // columna que decide si se cobra dinero real, eso importa.
+            ['tipo' => 'valores_enum', 'desc' => 'los 2 ambientes de la pasarela', 'tabla' => 'pago_pasarela_cuenta',
+             'columna' => 'ambiente', 'valores' => ['sandbox', 'produccion'], 'esperado' => 2],
+            ['tipo' => 'columnas', 'desc' => 'dte_pago_link.reclamado_at y confirmacion_pendiente_at',
+             'tabla' => 'dte_pago_link',
+             'columnas' => ['reclamado_at', 'confirmacion_pendiente_at'], 'esperado' => 2],
+            ['tipo' => 'columnas', 'desc' => 'dte_pago_link: columnas del conciliador',
+             'tabla' => 'dte_pago_link',
+             'columnas' => ['conciliacion_ultimo_intento_at', 'conciliacion_intentos', 'estado_pasarela'],
+             'esperado' => 3],
+        ],
+    ],
+    [
+        'id' => '054', 'archivo' => '054_pago_credenciales_por_ambiente.sql',
+        'nota' => 'CREATE (llavero) + ALTER x3 (ambiente_activo, ambiente historico, indice)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'tabla pago_pasarela_credencial',
+             'tablas' => ['pago_pasarela_credencial'], 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'pago_pasarela_cuenta.ambiente_activo',
+             'tabla' => 'pago_pasarela_cuenta', 'columnas' => ['ambiente_activo'], 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'dte_pago_link.ambiente (historico de la orden)',
+             'tabla' => 'dte_pago_link', 'columnas' => ['ambiente'], 'esperado' => 1],
+            // NULABILIDAD Y NO SOLO EXISTENCIA. La 054 agrega la columna nullable,
+            // hace el backfill y solo entonces la pone NOT NULL. Si el backfill
+            // fallara y la migracion se cortara ahi, la columna existiria igual y
+            // una huella de existencia daria la migracion por buena -- con ordenes
+            // sin ambiente, que es justo lo que rompe la callback.
+            ['tipo' => 'nulabilidad', 'desc' => 'dte_pago_link.ambiente quedo NOT NULL tras el backfill',
+             'tabla' => 'dte_pago_link', 'columna' => 'ambiente', 'esperado_nulabilidad' => 'NO'],
+            ['tipo' => 'valores_enum', 'desc' => 'los 2 ambientes del llavero',
+             'tabla' => 'pago_pasarela_credencial', 'columna' => 'ambiente',
+             'valores' => ['sandbox', 'produccion'], 'esperado' => 2],
+        ],
+    ],
+    [
+        'id' => '055', 'archivo' => '055_pago_pasarela_cuenta_retirar_credenciales.sql',
+        'nota' => 'DROP x3 (las columnas que la 054 movio al llavero)',
+        // DIFERIDA A PROPOSITO, no olvidada. Un DROP de credencial_cifrada es lo
+        // unico de este modulo que no se puede deshacer: todo lo demas se
+        // regenera, un secreto borrado hay que ir a pedirlo otra vez a Flow y
+        // mientras tanto la empresa no cobra. El razonamiento completo y las dos
+        // condiciones para aplicarla estan en la cabecera de su .sql.
+        'diferida' => 'Se aplica SOLO cuando el modelo de la 054 lleve tiempo corriendo en produccion '
+            . 'y se haya comprobado que pago_pasarela_credencial tiene una fila por cada credencial que '
+            . 'estuviera en uso. La consulta de comprobacion y el porque de partirlo en dos estan en la '
+            . 'cabecera de su .sql. Hasta entonces las columnas viejas son un respaldo que nadie lee, no '
+            . 'una segunda fuente de verdad.',
+        'huellas' => [
+            // HUELLA DE AUSENCIA, no de presencia. Con la huella normal y
+            // esperado = 0 esto daba "PARCIAL 3/0" mientras las columnas
+            // siguieran existiendo -- que es justo lo que tiene que pasar hasta
+            // que esta migracion se aplique -- y una PARCIAL aborta el
+            // despliegue aunque este diferida. Ver huellaColumnasAusentes().
+            ['tipo' => 'columnas_ausentes', 'desc' => 'pago_pasarela_cuenta ya NO tiene las columnas viejas',
+             'tabla' => 'pago_pasarela_cuenta',
+             'columnas' => ['credencial_publica', 'credencial_cifrada', 'ambiente']],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------
@@ -641,6 +773,11 @@ function evaluarHuella(PDO $pdo, array $h): array
             return ['presente' => huellaTablas($pdo, $h['tablas']), 'esperado' => $h['esperado']];
         case 'columnas':
             return ['presente' => huellaColumnas($pdo, $h['tabla'], $h['columnas']), 'esperado' => $h['esperado']];
+        case 'columnas_ausentes':
+            return [
+                'presente' => huellaColumnasAusentes($pdo, $h['tabla'], $h['columnas']),
+                'esperado' => count($h['columnas']),
+            ];
         case 'indice':
             return ['presente' => huellaIndice($pdo, $h['tabla'], $h['indice']), 'esperado' => 1];
         case 'pk':

@@ -40,6 +40,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Plantiflex\FacturacionCl\Correo\BrevoMailer;
 use Plantiflex\FacturacionCl\Correo\PreparadorEnvio;
+use Plantiflex\FacturacionCl\Pago\ResolutorLinkPago;
 
 /**
  * TOPE POR CORRIDA. Por que 50:
@@ -200,6 +201,13 @@ function enviadosHoy(PDO $pdo): int
 //  Argumentos y configuracion
 // ---------------------------------------------------------------------------
 $argumentos = array_slice($argv, 1);
+/**
+ * Horas que un documento puede llevar esperando el link de pago antes de que la
+ * corrida lo grite. No es un tope que suelte nada: es un aviso. Quien decide
+ * mandar la factura sin link es una persona, desde el panel.
+ */
+const LINK_PAGO_ALARMA_HORAS = 6;
+
 $dryRun     = in_array('--dry-run', $argumentos, true);
 
 $tope = enteroDeEnv('CORREO_TOPE_POR_CORRIDA', TOPE_POR_CORRIDA_DEFAULT);
@@ -236,7 +244,7 @@ if (! adquirirCandado($pdo)) {
 //  Orden por antiguedad: created_at y, a igualdad, id. Nadie se queda atras.
 // ---------------------------------------------------------------------------
 $stmt = $pdo->prepare(
-    'SELECT id, estado, intentos FROM dte_envio_correo '
+    'SELECT id, estado, intentos, dte_emitido_id FROM dte_envio_correo '
     . "WHERE estado = 'pendiente' OR (estado = 'error' AND intentos < :tope) "
     . 'ORDER BY created_at ASC, id ASC LIMIT :lim'
 );
@@ -320,14 +328,23 @@ if ($dryRun) {
             continue;
         }
         $listas++;
+        // El estado del link se LEE de la base, no se resuelve: resolver crearia
+        // una orden de cobro real, y este modo promete no tocar nada. Por eso
+        // aqui puede decir 'sin orden' de un documento al que en la corrida de
+        // verdad si le tocaria link.
+        $st = $pdo->prepare('SELECT estado FROM dte_pago_link WHERE dte_emitido_id = :d LIMIT 1');
+        $st->execute([':d' => (int) $c['dte_emitido_id']]);
+        $estadoLink = (string) ($st->fetchColumn() ?: 'sin orden');
+
         linea(sprintf(
-            '  fila %-6d ENVIARIA a %-32s tipo %d folio %-6d  xml %d B  pdf %d B  asunto: %s',
+            '  fila %-6d ENVIARIA a %-32s tipo %d folio %-6d  xml %d B  pdf %d B  link: %-9s asunto: %s',
             $id,
             $envio['destinatario'],
             $envio['tipoDte'],
             $envio['folio'],
             strlen($envio['adjuntos'][0]['contenido']),
             strlen($envio['adjuntos'][1]['contenido']),
+            $estadoLink,
             $envio['asunto']
         ));
     }
@@ -353,9 +370,35 @@ try {
     fail('correo no configurado: ' . $e->getMessage());
 }
 
+// ---------------------------------------------------------------------------
+//  El resolutor del link de pago
+//
+//  SE CONSTRUYE AQUI Y NO EN --dry-run, Y ESA ES LA LINEA MAS IMPORTANTE DE
+//  ESTE BLOQUE. Resolver el link CREA UNA ORDEN DE COBRO REAL contra la pasarela
+//  de la empresa. El modo seco promete no tocar nada, asi que alli no se
+//  construye ni se llama: lo que muestra es el link que YA exista guardado.
+//
+//  SI FALTA LA CONFIGURACION PARA CIFRAR, el resolutor no se puede construir. En
+//  ese caso NO se sigue como si nada: se avisa a gritos y se deja $resolutor en
+//  null, que hace que ningun correo con cobro activo se mande a medias. Un fallo
+//  de configuracion nuestro no puede acabar en facturas enviadas sin el link que
+//  la empresa pidio.
+// ---------------------------------------------------------------------------
+// SE CONSTRUYE SIEMPRE Y NO PUEDE FALLAR. Las dependencias del modulo de pagos
+// (la llave maestra, la url publica) se validan DENTRO, en el momento en que un
+// documento concreto de una empresa concreta resulta que lleva link.
+//
+// Antes se validaban aqui, y si faltaba una el resolutor quedaba en null; el
+// bucle de abajo hacia continue ANTES de mirar de que cuenta era el correo, asi
+// que retenia los de TODOS los inquilinos. Una empresa con el cobro en linea
+// apagado se quedaba sin enviar por una variable de un modulo que no usa.
+// Medido en un preview con la pasarela en habilitado=0: dos correos APLAZADA.
+$resolutor = ResolutorLinkPago::desdeEntorno($pdo);
+
 $enviados          = 0;
 $fallidos          = 0;
 $omitidos          = 0;
+$aplazados         = 0;
 $usadoHoy          = enviadosHoy($pdo);
 $presupuestoAgotado = false;
 
@@ -398,6 +441,28 @@ foreach ($candidatas as $c) {
                 continue;
             }
             linea(sprintf('fila %-6d REINTENTO (intento %d de %d)', $id, (int) $c['intentos'] + 1, $topeIntentos));
+        }
+
+        // EL LINK DE PAGO, ANTES DE PREPARAR NADA.
+        //
+        // Va aqui y no dentro de PreparadorEnvio por dos motivos: esa clase
+        // declara que no decide politica, y sobre todo --dry-run la ejecuta --
+        // meter ahi la llamada habria hecho que el modo seco creara cobros
+        // reales.
+        //
+        // 'esperar' hace continue SIN pasar por preparar() ni por
+        // registrarResultado(), asi que la fila queda intacta: mismo estado,
+        // mismos intentos, sin gastar presupuesto. Si un fallo de pasarela
+        // pasara por el camino de error, tres caidas dejarian la factura en
+        // 'error' con intentos=3 y el runner no la miraria nunca mas.
+        // Ya no hay una guarda global aqui. resolver() decide POR DOCUMENTO, y
+        // para los de empresas sin cobro en linea contesta 'no_aplica' sin haber
+        // mirado siquiera la llave ni la url: su correo sale como siempre.
+        $pago = $resolutor->resolver($id);
+        if ($pago['verdicto'] === 'esperar') {
+            $aplazados++;
+            linea(sprintf('fila %-6d APLAZADA esperando el link de pago: %s', $id, $pago['motivo']));
+            continue;
         }
 
         $envio = PreparadorEnvio::preparar($pdo, $id);
@@ -475,12 +540,40 @@ if ($presupuestoAgotado) {
     ));
 }
 
+// LA ALARMA DEL LINK DE PAGO.
+//
+// Un correo aplazado no aparece como fallo en ninguna parte: su fila sigue
+// 'pendiente' con sus intentos intactos, que es justo lo que se quiso. El precio
+// de esa limpieza es que un atasco largo seria INVISIBLE, y una factura sin
+// enviar a las diez de la noche del dia 30 no es un detalle.
+//
+// Por eso se mira el reloj y no el contador: lo que importa no es cuantas veces
+// se intento, es CUANTO LLEVA ESPERANDO. Pasado el umbral, la linea sale a
+// gritos y el script termina con codigo 5 para que el cron lo pueda distinguir
+// de una corrida normal.
+$atascados = (int) $pdo->query(
+    'SELECT COUNT(*) FROM dte_pago_link p '
+    . 'INNER JOIN dte_envio_correo q ON q.dte_emitido_id = p.dte_emitido_id '
+    . "WHERE p.estado = 'pendiente' AND q.estado = 'pendiente' "
+    . '  AND p.created_at < DATE_SUB(NOW(), INTERVAL ' . LINK_PAGO_ALARMA_HORAS . ' HOUR)'
+)->fetchColumn();
+
+if ($atascados > 0) {
+    linea(sprintf(
+        '*** %d documento(s) llevan mas de %d h esperando el link de pago y NO SE HAN ENVIADO. '
+        . 'Revisa Ventas > Correos: o se arregla la pasarela, o se mandan sin link. ***',
+        $atascados,
+        LINK_PAGO_ALARMA_HORAS
+    ));
+}
+
 linea(sprintf(
-    'RESUMEN enviados=%d fallidos=%d omitidos=%d pendientes_restantes=%d '
+    'RESUMEN enviados=%d fallidos=%d omitidos=%d aplazados=%d pendientes_restantes=%d '
     . '(tope=%d intentos_max=%d presupuesto=%d usado_hoy=%d)',
     $enviados,
     $fallidos,
     $omitidos,
+    $aplazados,
     $restantes,
     $tope,
     $topeIntentos,
@@ -490,7 +583,17 @@ linea(sprintf(
 
 soltarCandado($pdo);
 
+// El presupuesto agotado va PRIMERO porque es mas grave: ahi no sale ningun
+// correo. Un atasco de cobro retiene solo a las empresas con cobro activo.
 if ($presupuestoAgotado) {
     exit(4);
 }
+
+// Codigo 5: la corrida fue bien, pero hay documentos atascados esperando cobro.
+// Un codigo propio deja que el cron o un monitor lo distingan de "todo normal"
+// sin tener que leer el texto del log.
+if ($atascados > 0) {
+    exit(5);
+}
+
 exit($fallidos > 0 ? 1 : 0);

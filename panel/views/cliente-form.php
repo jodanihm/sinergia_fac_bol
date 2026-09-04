@@ -122,6 +122,28 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <input type="text" name="telefono" id="telefono" value="<?= $val('telefono'); ?>">
                         <small class="form-ayuda">Opcional. Solo para tu registro.</small>
                     </div>
+
+                    <?php
+                    // COBRO EN LINEA. Se pinta SIEMPRE, tenga o no la empresa el
+                    // cobro activo, y marcada por defecto en un cliente nuevo.
+                    //
+                    // Podria esconderse cuando la empresa no cobra en linea, pero
+                    // entonces el dia que lo active se encontraria con que nunca
+                    // pudo decidir por adelantado quien queda fuera, y tendria que
+                    // recorrer el maestro entero a la carrera. La ayuda explica el
+                    // caso para que no confunda a quien no cobra en linea.
+                    $pagoLink = ! isset($cliente['pago_link']) || (bool) $cliente['pago_link'];
+                    ?>
+                    <div class="form-campo">
+                        <label class="form-check">
+                            <input type="checkbox" name="pago_link" value="1" <?= $pagoLink ? 'checked' : ''; ?>>
+                            Mandarle link de pago en el correo
+                        </label>
+                        <small class="form-ayuda">
+                            Desmarcalo para los clientes que pagan por transferencia o tienen convenio.
+                            Solo tiene efecto si tu empresa tiene activado el cobro en linea.
+                        </small>
+                    </div>
                 </div>
             </section>
         </div>

@@ -1,0 +1,421 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Plantiflex\FacturacionCl\Tests;
+
+use GuzzleHttp\Client;
+use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Request;
+use GuzzleHttp\Psr7\Response;
+use PHPUnit\Framework\Attributes\DataProvider;
+use PHPUnit\Framework\TestCase;
+use Plantiflex\FacturacionCl\Dto\CredencialesPasarela;
+use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
+use Plantiflex\FacturacionCl\Dto\SolicitudPago;
+use Plantiflex\FacturacionCl\Exceptions\PasarelaNoConfiguradaException;
+use Plantiflex\FacturacionCl\Exceptions\PasarelaPermanenteException;
+use Plantiflex\FacturacionCl\Exceptions\PasarelaTransitoriaException;
+use Plantiflex\FacturacionCl\Pago\FabricaPasarela;
+use Plantiflex\FacturacionCl\Providers\FlowPasarelaPago;
+
+/**
+ * Tests del cobro por link contra Flow, sin tocar la red.
+ *
+ * LO QUE MAS IMPORTA AQUI NO ES EL CAMINO FELIZ. Esta clase mueve dinero de un
+ * tercero, asi que lo que hay que fijar con tests es:
+ *
+ *   - que la FIRMA se calcule exactamente como Flow la espera (un error da 401 y
+ *     ninguna pista de cual de las tres reglas se rompio);
+ *   - que el MONTO viaje como entero puro, porque "49.990" firmaria mal Y
+ *     cobraria mal;
+ *   - que cada fallo se clasifique en transitorio o permanente, que es EL DATO
+ *     con el que despues se decide si una factura espera o se aparca.
+ */
+final class FlowPasarelaPagoTest extends TestCase
+{
+    private const API_KEY = 'llave-publica-del-comercio';
+    private const SECRETO = 'secreto-que-nunca-se-imprime';
+
+    /** @var list<Request> */
+    private array $peticiones = [];
+
+    private function pasarela(array $respuestas): FlowPasarelaPago
+    {
+        $this->peticiones = [];
+        $stack = HandlerStack::create(new MockHandler($respuestas));
+        $stack->push(Middleware::history($this->peticiones));
+
+        return new FlowPasarelaPago(new Client(['handler' => $stack]));
+    }
+
+    private function credenciales(AmbientePasarela $ambiente = AmbientePasarela::Produccion): CredencialesPasarela
+    {
+        return new CredencialesPasarela(self::API_KEY, self::SECRETO, $ambiente);
+    }
+
+    private function solicitud(int $monto = 49990): SolicitudPago
+    {
+        return new SolicitudPago(
+            referencia: 'SIN-7-33-745',
+            monto: $monto,
+            asunto: 'Factura electronica N 745',
+            emailPagador: 'cliente@ejemplo.cl',
+            urlConfirmacion: 'https://facturacion.sinergiaia.cl/pagos/flow/confirmacion',
+            urlRetorno: 'https://facturacion.sinergiaia.cl/pagos/gracias',
+        );
+    }
+
+    private function respuestaOk(): Response
+    {
+        return new Response(200, [], (string) json_encode([
+            'url'       => 'https://www.flow.cl/app/web/pay.php',
+            'token'     => '33373581FC32576FAF33C46FC6454B1FFEBD7E1H',
+            'flowOrder' => 8765456,
+        ]));
+    }
+
+    /** @return array<string,string> los parametros del form que se enviaron */
+    private function parametrosEnviados(): array
+    {
+        parse_str((string) $this->peticiones[0]['request']->getBody(), $params);
+
+        return array_map('strval', $params);
+    }
+
+    // -----------------------------------------------------------------------
+    //  Camino feliz
+    // -----------------------------------------------------------------------
+
+    public function testDevuelveElLinkArmadoComoLoDocumentaFlow(): void
+    {
+        $orden = $this->pasarela([$this->respuestaOk()])
+            ->crearOrden($this->solicitud(), $this->credenciales());
+
+        // El link del pagador es url + '?token=' + token. Ese armado es de Flow.
+        self::assertSame(
+            'https://www.flow.cl/app/web/pay.php?token=33373581FC32576FAF33C46FC6454B1FFEBD7E1H',
+            $orden->url
+        );
+        // SE GUARDA EL TOKEN, no flowOrder: el aviso de pago solo trae el token, y
+        // guardar flowOrder dejaba una fila que ese aviso no sabia encontrar.
+        self::assertSame(
+            '33373581FC32576FAF33C46FC6454B1FFEBD7E1H',
+            $orden->ordenExterna,
+            'el token es lo unico que trae el aviso de pago'
+        );
+    }
+
+    public function testSinFlowOrderSeQuedaConElTokenComoIdentificador(): void
+    {
+        $sinFlowOrder = new Response(200, [], (string) json_encode([
+            'url'   => 'https://www.flow.cl/app/web/pay.php',
+            'token' => 'TOKEN123',
+        ]));
+
+        $orden = $this->pasarela([$sinFlowOrder])->crearOrden($this->solicitud(), $this->credenciales());
+
+        self::assertSame('TOKEN123', $orden->ordenExterna);
+    }
+
+    // -----------------------------------------------------------------------
+    //  La firma
+    // -----------------------------------------------------------------------
+
+    public function testLaFirmaSigueElAlgoritmoDeFlow(): void
+    {
+        $this->pasarela([$this->respuestaOk()])->crearOrden($this->solicitud(), $this->credenciales());
+
+        $enviados = $this->parametrosEnviados();
+        $firma    = $enviados['s'];
+        unset($enviados['s']);
+
+        // Se rehace a mano, sin usar el helper, para que el test compruebe el
+        // algoritmo y no se limite a repetir la implementacion.
+        ksort($enviados, SORT_STRING);
+        $aFirmar = '';
+        foreach ($enviados as $k => $v) {
+            $aFirmar .= $k . $v;
+        }
+
+        self::assertSame(hash_hmac('sha256', $aFirmar, self::SECRETO), $firma);
+    }
+
+    public function testLaFirmaNoSeIncluyeASiMisma(): void
+    {
+        // Si 's' entrara en lo que se firma, la firma dependeria de si misma y
+        // nunca cuadraria del lado de Flow.
+        $params = ['b' => '2', 'a' => '1', 's' => 'basura-previa'];
+
+        self::assertSame(
+            hash_hmac('sha256', 'a1b2', self::SECRETO),
+            FlowPasarelaPago::firmar($params, self::SECRETO)
+        );
+    }
+
+    public function testLaFirmaOrdenaLasClavesAlfabeticamenteYNoPorComoSeEscribieron(): void
+    {
+        self::assertSame(
+            FlowPasarelaPago::firmar(['a' => '1', 'b' => '2'], self::SECRETO),
+            FlowPasarelaPago::firmar(['b' => '2', 'a' => '1'], self::SECRETO)
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    //  El monto
+    // -----------------------------------------------------------------------
+
+    public function testElMontoViajaComoEnteroPuroSinSeparadores(): void
+    {
+        $this->pasarela([$this->respuestaOk()])
+            ->crearOrden($this->solicitud(1234567), $this->credenciales());
+
+        // "1.234.567" o "1234567.00" firmarian mal Y cobrarian mal.
+        self::assertSame('1234567', $this->parametrosEnviados()['amount']);
+    }
+
+    public function testUnMontoCeroONegativoNiSiquieraSaleDeCasa(): void
+    {
+        $this->expectException(\Plantiflex\FacturacionCl\Exceptions\DocumentoInvalidoException::class);
+        $this->solicitud(0);
+    }
+
+    // -----------------------------------------------------------------------
+    //  La referencia: la defensa contra el doble cobro
+    // -----------------------------------------------------------------------
+
+    public function testLaReferenciaViajaComoCommerceOrder(): void
+    {
+        $this->pasarela([$this->respuestaOk()])->crearOrden($this->solicitud(), $this->credenciales());
+
+        // Es lo que hace idempotente el reintento: Flow trata commerceOrder como
+        // clave del comercio y no crea una segunda orden con la misma.
+        self::assertSame('SIN-7-33-745', $this->parametrosEnviados()['commerceOrder']);
+    }
+
+    public function testDosLlamadasConLaMismaSolicitudMandanLaMismaReferencia(): void
+    {
+        $pasarela = $this->pasarela([$this->respuestaOk(), $this->respuestaOk()]);
+        $pasarela->crearOrden($this->solicitud(), $this->credenciales());
+        $primera = $this->parametrosEnviados()['commerceOrder'];
+
+        parse_str((string) $this->peticiones[0]['request']->getBody(), $p1);
+        $pasarela->crearOrden($this->solicitud(), $this->credenciales());
+        parse_str((string) $this->peticiones[1]['request']->getBody(), $p2);
+
+        self::assertSame($p1['commerceOrder'], $p2['commerceOrder']);
+        self::assertSame('SIN-7-33-745', $primera);
+    }
+
+    // -----------------------------------------------------------------------
+    //  Clasificacion de fallos: transitorio contra permanente
+    // -----------------------------------------------------------------------
+
+    public function testUnFalloDeConexionEsTransitorio(): void
+    {
+        $this->expectException(PasarelaTransitoriaException::class);
+
+        $this->pasarela([new ConnectException('sin ruta al host', new Request('POST', 'x'))])
+            ->crearOrden($this->solicitud(), $this->credenciales());
+    }
+
+    public function testUn500EsTransitorio(): void
+    {
+        $this->expectException(PasarelaTransitoriaException::class);
+
+        $this->pasarela([new Response(500, [], 'Internal Server Error')])
+            ->crearOrden($this->solicitud(), $this->credenciales());
+    }
+
+    public function testUn429EsTransitorio(): void
+    {
+        $this->expectException(PasarelaTransitoriaException::class);
+
+        $this->pasarela([new Response(429, [], 'Too Many Requests')])
+            ->crearOrden($this->solicitud(), $this->credenciales());
+    }
+
+    public function testCredencialesRechazadasEsPermanente(): void
+    {
+        // Reintentar una clave mal pegada cada 5 minutos no la va a arreglar.
+        $this->expectException(PasarelaPermanenteException::class);
+
+        $this->pasarela([new Response(401, [], (string) json_encode(['message' => 'Invalid api key']))])
+            ->crearOrden($this->solicitud(), $this->credenciales());
+    }
+
+    public function testUnaRespuestaQueNoEsJsonEsPermanente(): void
+    {
+        $this->expectException(PasarelaPermanenteException::class);
+
+        $this->pasarela([new Response(200, [], '<html>mantenimiento</html>')])
+            ->crearOrden($this->solicitud(), $this->credenciales());
+    }
+
+    public function testUnJsonSinUrlNiTokenEsPermanente(): void
+    {
+        $this->expectException(PasarelaPermanenteException::class);
+
+        $this->pasarela([new Response(200, [], (string) json_encode(['flowOrder' => 1]))])
+            ->crearOrden($this->solicitud(), $this->credenciales());
+    }
+
+    // -----------------------------------------------------------------------
+    //  Sandbox, credenciales y fabrica
+    // -----------------------------------------------------------------------
+
+    public function testSandboxYProduccionVanADominiosDistintos(): void
+    {
+        $this->pasarela([$this->respuestaOk()])
+            ->crearOrden($this->solicitud(), $this->credenciales(AmbientePasarela::Sandbox));
+        self::assertSame(
+            'https://sandbox.flow.cl/api/payment/create',
+            (string) $this->peticiones[0]['request']->getUri()
+        );
+
+        $this->pasarela([$this->respuestaOk()])
+            ->crearOrden($this->solicitud(), $this->credenciales(AmbientePasarela::Produccion));
+        self::assertSame(
+            'https://www.flow.cl/api/payment/create',
+            (string) $this->peticiones[0]['request']->getUri()
+        );
+    }
+
+    public function testLaConsultaDeEstadoTambienRespetaElAmbiente(): void
+    {
+        // El host se elige en UN solo sitio (base()); si esta eleccion viviera
+        // repetida, arreglar un metodo y olvidar el otro dejaria una operacion
+        // apuntando al mundo equivocado.
+        $ok = new Response(200, [], (string) json_encode(['status' => 2, 'commerceOrder' => 'X']));
+
+        $this->pasarela([$ok])->consultarEstado('TOK', $this->credenciales(AmbientePasarela::Sandbox));
+        self::assertStringStartsWith(
+            'https://sandbox.flow.cl/api/payment/getStatus',
+            (string) $this->peticiones[0]['request']->getUri()
+        );
+    }
+
+    public function testElAmbienteNoTienePorDefectoYNoSePuedeOlvidar(): void
+    {
+        // La version anterior llevaba `bool $sandbox = false`: olvidarse del
+        // parametro significaba PRODUCCION, y eso fue exactamente lo que paso.
+        $r = new \ReflectionClass(CredencialesPasarela::class);
+        $p = $r->getConstructor()->getParameters()[2];
+
+        self::assertSame('ambiente', $p->getName());
+        self::assertFalse($p->isDefaultValueAvailable(), 'el ambiente no puede tener valor por defecto');
+    }
+
+    public function testUnValorRaroDeAmbienteCaeEnSandbox(): void
+    {
+        // El lado barato: dejar de cobrar se nota y se arregla; cobrar sin querer,
+        // no. Cubre NULL (fila anterior a la 053), cadena vacia y basura.
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde(null));
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde(''));
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde('PRODUCCION'));
+        self::assertSame(AmbientePasarela::Sandbox, AmbientePasarela::desde('prod'));
+        self::assertSame(AmbientePasarela::Produccion, AmbientePasarela::desde('produccion'));
+    }
+
+    public function testUnasCredencialesIncompletasNoSePuedenNiConstruir(): void
+    {
+        $this->expectException(PasarelaNoConfiguradaException::class);
+        new CredencialesPasarela(self::API_KEY, '   ', AmbientePasarela::Sandbox);
+    }
+
+    public function testElSecretoNoSeFiltraAlVolcarLasCredenciales(): void
+    {
+        // Un var_dump en un diagnostico, o una traza de excepcion, no pueden
+        // dejar escrita la llave con la que se cobra.
+        $volcado = print_r($this->credenciales(), true);
+
+        self::assertStringNotContainsString(self::SECRETO, $volcado);
+        self::assertStringContainsString('oculto', $volcado);
+    }
+
+    // -----------------------------------------------------------------------
+    //  consultarEstado: lo que decide si una factura se da por pagada
+    // -----------------------------------------------------------------------
+
+    public function testUnPagoConfirmadoSeReconoce(): void
+    {
+        $r = $this->pasarela([new Response(200, [], (string) json_encode([
+            'status'        => 2,          // 2 = pagada, en Flow
+            'commerceOrder' => 'SIN-7-33-745',
+            'amount'        => 49990,
+        ]))])->consultarEstado('TOK123', $this->credenciales());
+
+        self::assertTrue($r['pagada']);
+        self::assertSame('SIN-7-33-745', $r['referencia'], 'la referencia es NUESTRA clave, no la de Flow');
+        self::assertSame(49990, $r['monto']);
+    }
+
+    /** @return list<array{int}> */
+    public static function estadosQueNoSonPago(): array
+    {
+        return [[1], [3], [4], [0]];   // pendiente, rechazada, anulada, desconocido
+    }
+
+    #[DataProvider('estadosQueNoSonPago')]
+    public function testTodoLoQueNoSeaPagadaNoSeDaPorPagada(int $status): void
+    {
+        // ESTE ES EL TEST QUE IMPORTA DE TODO EL ARCHIVO. Flow avisa igual
+        // cuando el pago se RECHAZA; creerse que todo aviso es un pago marcaria
+        // como pagadas facturas que nadie pago, y eso no se descubre hasta que
+        // alguien reclama.
+        $r = $this->pasarela([new Response(200, [], (string) json_encode([
+            'status'        => $status,
+            'commerceOrder' => 'SIN-7-33-745',
+        ]))])->consultarEstado('TOK123', $this->credenciales());
+
+        self::assertFalse($r['pagada']);
+    }
+
+    public function testLaConsultaTambienVaFirmada(): void
+    {
+        $this->pasarela([new Response(200, [], (string) json_encode([
+            'status' => 2, 'commerceOrder' => 'SIN-7-33-745',
+        ]))])->consultarEstado('TOK123', $this->credenciales());
+
+        parse_str((string) $this->peticiones[0]['request']->getUri()->getQuery(), $q);
+        $firma = $q['s'];
+        unset($q['s']);
+
+        self::assertSame(hash_hmac('sha256', 'apiKey' . self::API_KEY . 'tokenTOK123', self::SECRETO), $firma);
+        self::assertSame($firma, FlowPasarelaPago::firmar(array_map('strval', $q), self::SECRETO));
+    }
+
+    public function testUnaConsultaSinCommerceOrderEsPermanente(): void
+    {
+        // Sin nuestra referencia no se sabe QUE factura marcar. Adivinarla seria
+        // peor que fallar.
+        $this->expectException(PasarelaPermanenteException::class);
+
+        $this->pasarela([new Response(200, [], (string) json_encode(['status' => 2]))])
+            ->consultarEstado('TOK123', $this->credenciales());
+    }
+
+    public function testUnaConsultaQueNoRespondeEsTransitoria(): void
+    {
+        $this->expectException(PasarelaTransitoriaException::class);
+
+        $this->pasarela([new Response(502, [], 'bad gateway')])
+            ->consultarEstado('TOK123', $this->credenciales());
+    }
+
+    public function testLaFabricaDevuelveFlow(): void
+    {
+        self::assertSame('flow', FabricaPasarela::crear('flow')->nombre());
+        self::assertSame(['flow'], FabricaPasarela::proveedores());
+    }
+
+    public function testLaFabricaFallaCerradoAnteUnProveedorDesconocido(): void
+    {
+        // Nunca se hace new sobre texto que viene de la base.
+        $this->expectException(PasarelaPermanenteException::class);
+        FabricaPasarela::crear('pasarela-inventada');
+    }
+}

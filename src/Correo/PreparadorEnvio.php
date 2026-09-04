@@ -56,6 +56,23 @@ final class PreparadorEnvio
      */
     public const TIPOS_CON_PDF = [33, 34, 61, 56, 39];
 
+    /**
+     * Los tipos que pueden llevar link de pago en el correo.
+     *
+     * SOLO LOS QUE SE COBRAN. La nota de credito (61) DEVUELVE dinero: mandarla
+     * con un boton de pagar seria, en el mejor caso, confuso, y en el peor haria
+     * que alguien pagara de mas. La nota de debito (56) es un ajuste que casi
+     * nunca se cobra por esta via. La boleta (39) queda fuera por otro motivo
+     * distinto: hoy el panel no encola correo de boletas, asi que no hay donde
+     * poner el link.
+     *
+     * ES LA SEGUNDA LINEA DE DEFENSA, no la primera: quien decide de verdad es
+     * ResolutorLinkPago, que ni siquiera crea la orden para un tipo que no
+     * corresponde. Esta se comprueba igual, aqui, porque es lo ultimo que pasa
+     * antes de que lo lea un tercero.
+     */
+    public const TIPOS_CON_LINK_PAGO = [33, 34];
+
     // El mapa de nombres que vivia aqui se elimino: ahora sale de
     // TipoDte::nombreDe($tipo, largo: true), que es la unica fuente del
     // proyecto. Este es el UNICO sitio que usa el nombre LARGO (con
@@ -88,6 +105,7 @@ final class PreparadorEnvio
         //     dte_envio_correo.dte_emitido_id -> dte_emitido.id
         //     dte_envio_correo.cuenta_id      -> dte_emisor.cuenta_id
         //     dte_envio_correo.cuenta_id      -> cuenta.id
+        //     dte_envio_correo.dte_emitido_id -> dte_pago_link.dte_emitido_id
         //
         // dte_envio_correo ya guarda cuenta_id y destinatario como FOTO, tomada
         // al encolar, justamente para no depender de esos cruces.
@@ -100,11 +118,33 @@ final class PreparadorEnvio
             // dos en NULL y no llevan la linea.
             . '       e.forma_pago, e.fecha_vencimiento, '
             . '       em.razon_social, '
-            . '       c.email AS cuenta_email '
+            . '       c.email AS cuenta_email, '
+            // La orden de pago del documento, si es que existe (migracion 050).
+            // AQUI SOLO SE LEE: esta clase no decide si corresponde cobrar ni
+            // llama a ninguna pasarela -- eso seria decidir politica, que su
+            // contrato dice que no hace, y ademas --dry-run ejecuta este metodo
+            // y crearia cobros de verdad. Quien crea la orden es
+            // ResolutorLinkPago, antes, desde el runner.
+            . '       p.url AS pago_url, p.estado AS pago_estado, p.monto AS pago_monto, '
+            // EL AMBIENTE DE LA ORDEN, NO EL DE LA CUENTA.
+            //
+            // Sale de dte_pago_link (migracion 054), donde se congelo al crear la
+            // orden. Antes salia de pago_pasarela_cuenta, o sea de la
+            // configuracion del momento del ENVIO: un correo de una orden creada
+            // en sandbox que se mandara despues de pasar a produccion habria
+            // perdido su aviso de PRUEBA. El aviso tiene que hablar del link que
+            // lleva el correo, no de lo que la empresa este haciendo hoy.
+            //
+            // Y no se adivina mirando si la url dice "sandbox": eso ataria un
+            // aviso de "esto no cobra de verdad" a como Flow decida nombrar sus
+            // dominios manana, y equivocarse en el sentido peligroso -- no avisar
+            // en una prueba -- es hacer que alguien crea que pago.
+            . '       p.ambiente AS pago_ambiente '
             . 'FROM dte_envio_correo q '
             . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
             . "LEFT JOIN dte_emisor em ON em.cuenta_id = q.cuenta_id AND em.ambiente = 'produccion' "
             . 'LEFT JOIN cuenta c ON c.id = q.cuenta_id '
+            . 'LEFT JOIN dte_pago_link p ON p.dte_emitido_id = q.dte_emitido_id '
             . 'WHERE q.id = :id LIMIT 1'
         );
         $stmt->execute([':id' => $envioId]);
@@ -216,12 +256,26 @@ final class PreparadorEnvio
             );
         }
 
+        // EL LINK DE PAGO. Va DESPUES del vencimiento y ANTES de los adjuntos, y
+        // ese orden es el que se lee bien: que documento es, cuando vence, como
+        // se paga, que viene adjunto.
+        $bloquePago = self::bloqueLinkPago(
+            $fila['pago_url'] ?? null,
+            $fila['pago_estado'] ?? null,
+            isset($fila['pago_monto']) ? (int) $fila['pago_monto'] : null,
+            $tipoDte,
+            $folio,
+            $etiquetaTipo,
+            $fila['pago_ambiente'] ?? null
+        );
+
         // El correo se manda SOLO como HTML: BrevoMailer arma el payload con
         // 'htmlContent' y no envia parte de texto plano, asi que la linea va en un
         // unico lugar.
         $cuerpo = sprintf(
             "<p>Estimado(a),</p>\n"
             . "<p>Adjuntamos su <strong>%s N&deg; %d</strong>, emitida por <strong>%s</strong> (RUT %s).</p>\n"
+            . '%s'
             . '%s'
             . "<p>Se adjuntan dos archivos:</p>\n"
             . "<ul><li>El XML con firma electronica, valido ante el SII.</li>\n"
@@ -231,7 +285,8 @@ final class PreparadorEnvio
             $folio,
             htmlspecialchars($nombreVisible, ENT_QUOTES, 'UTF-8'),
             htmlspecialchars($rutEmisor, ENT_QUOTES, 'UTF-8'),
-            $lineaVencimiento
+            $lineaVencimiento,
+            $bloquePago
         );
 
         // Nombres que sirvan de verdad al abrir el correo: RUT_tipo_folio.
@@ -267,6 +322,173 @@ final class PreparadorEnvio
     }
 
     /** @return array{ok:false, motivo:string, canal:string, codigo:int} */
+    /**
+     * El bloque HTML del link de pago, o cadena vacia si no corresponde.
+     *
+     * ESTATICO Y PURO A PROPOSITO. preparar() necesita un PDO y genera PDF, asi
+     * que probarlo entero es caro; esto es lo unico del correo que lleva un dato
+     * venido de FUERA DE CASA -- una URL que devolvio un tercero -- y va dentro
+     * de un href que va a leer un cliente de nuestro cliente. Separado, se puede
+     * probar cada guarda por su cuenta y sin base de datos.
+     *
+     * LAS CUATRO CONDICIONES, Y NINGUNA SOBRA:
+     *
+     *   1. El tipo se cobra (33 o 34). Segunda linea de defensa; la primera es
+     *      el resolutor, que ni crea la orden.
+     *   2. estado === 'creado'. Ni 'pendiente' (la orden todavia no existe alla),
+     *      ni 'error', ni 'omitido' (una persona decidio soltar el correo sin
+     *      link), ni 'pagado' -- a quien ya pago no se le vuelve a ofrecer pagar.
+     *   3. La url empieza por https://. OrdenPagoCreada ya lo exige al construirse;
+     *      se repite aqui porque entre aquello y esto hay un viaje por la base, y
+     *      este es el ultimo punto antes de que lo vea un tercero. Dos cinturones
+     *      para el unico dato del correo que no es nuestro.
+     *   4. Hay monto. Sin el, el correo diria "paga" sin decir cuanto.
+     *
+     * EL MONTO SE ESCRIBE $1.234.567, con punto de miles y sin decimales. Misma
+     * razon que la fecha d-m-Y de mas arriba: esto lo lee un tercero en Chile, no
+     * el operador del panel.
+     *
+     * LA FRASE DEL FINAL no es relleno. Mientras no exista la conciliacion, un
+     * link sigue vivo aunque el cliente ya haya pagado por transferencia; hay que
+     * decirselo, o alguien va a pagar dos veces.
+     */
+    public static function bloqueLinkPago(
+        ?string $url,
+        ?string $estado,
+        ?int $monto,
+        int $tipoDte,
+        int $folio = 0,
+        string $etiquetaTipo = '',
+        ?string $ambiente = null
+    ): string {
+        if (! in_array($tipoDte, self::TIPOS_CON_LINK_PAGO, true)) {
+            return '';
+        }
+        if ($estado !== 'creado') {
+            return '';
+        }
+        $url = trim((string) $url);
+        if ($url === '' || ! str_starts_with($url, 'https://')) {
+            return '';
+        }
+        if ($monto === null || $monto <= 0) {
+            return '';
+        }
+
+        $urlSegura = htmlspecialchars($url, ENT_QUOTES, 'UTF-8');
+        $montoTxt  = '$' . number_format($monto, 0, ',', '.');
+
+        // "Factura electronica N&deg; 3". Si por lo que sea no llegan el tipo en
+        // palabras o el folio, la linea entera se cae en vez de quedar coja
+        // ("N&deg; 0" o un numero sin sustantivo delante).
+        $referencia = '';
+        if ($etiquetaTipo !== '' && $folio > 0) {
+            $referencia = sprintf(
+                '<div style="%s">%s N&deg; %d</div>',
+                'font:400 13px/1.4 Arial,Helvetica,sans-serif;color:#5c6470;'
+                . 'padding:0 0 6px;',
+                htmlspecialchars($etiquetaTipo, ENT_QUOTES, 'UTF-8'),
+                $folio
+            );
+        }
+
+        // EL AVISO DE PRUEBA VA ARRIBA DEL RECUADRO Y NO DENTRO, para que se lea
+        // antes que el monto y el boton. Solo aparece en sandbox: en produccion
+        // seria una mentira que le quitaria valor al aviso cuando de verdad haga
+        // falta. Y solo lo enciende la columna de la migracion 053; ver el SELECT.
+        $avisoPrueba = '';
+        if (self::esSandbox($ambiente)) {
+            $avisoPrueba = sprintf(
+                '<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" '
+                . 'style="border-collapse:collapse;margin:0 0 12px;"><tr>'
+                . '<td style="%s">%s</td></tr></table>' . "\n",
+                'background:#fff3cd;border:2px solid #d39e00;border-radius:6px;'
+                . 'padding:12px 16px;font:700 14px/1.45 Arial,Helvetica,sans-serif;'
+                . 'color:#6b4e00;text-align:center;',
+                'PRUEBA &mdash; Este enlace usa Flow Sandbox y no realizar&aacute; un cobro real.'
+            );
+        }
+
+        // LAS TILDES VAN COMO ENTIDAD HTML (&iacute;, &oacute;, &aacute;), no como
+        // byte UTF-8. Es la convencion que ya seguia el cuerpo del correo con
+        // &deg;: el archivo se queda en ASCII y el texto le llega al lector
+        // acentuado, sin depender de que cada pasarela de correo respete el
+        // charset. Un test comprueba que no se cuelen tildes crudas.
+        //
+        // POR QUE TABLAS Y style= EN CADA ETIQUETA. El correo se manda sin <head>
+        // (BrevoMailer solo pone htmlContent), asi que no hay donde colgar una
+        // hoja de estilos, y Outlook para escritorio renderiza con Word: ignora
+        // padding y background sobre un <a>, y descuadra los div flotados. Una
+        // tabla con el color en el <td> y el <a> dentro es lo que se ve igual en
+        // Outlook, Gmail y iOS. role="presentation" para que un lector de
+        // pantalla no la anuncie como tabla de datos.
+        return $avisoPrueba . sprintf(
+            '<table role="presentation" width="100%%" cellpadding="0" cellspacing="0" border="0" '
+            . 'style="border-collapse:collapse;margin:18px 0;"><tr>'
+            . '<td style="%s">' . "\n"
+            . '<div style="%s">Paga tu factura en l&iacute;nea</div>' . "\n"
+            . '%s'
+            . '<div style="%s">%s</div>' . "\n"
+            // El boton, en su propia tabla de una celda: es la forma que Outlook
+            // respeta. El color va en el <td> Y en el <a> -- si uno de los dos se
+            // pierde, el boton sigue siendo un boton y no un texto invisible.
+            . '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
+            . 'style="border-collapse:separate;margin:4px 0 14px;"><tr>'
+            . '<td align="center" style="%s"><a href="%s" style="%s">Pagar factura</a></td>'
+            . '</tr></table>' . "\n"
+            . '<div style="%s">El pago se realiza de forma segura a trav&eacute;s de Flow.</div>' . "\n"
+            . '<div style="%s">Si ya la pag&oacute; por otro medio, ignore este mensaje.</div>' . "\n"
+            // EL LINK EN TEXTO NO ES REDUNDANCIA. Hay clientes de correo y filtros
+            // corporativos que quitan o reescriben los botones; sin esta linea,
+            // quien se queda sin boton se queda sin forma de pagar. word-break
+            // porque una url de pasarela es larga y en movil desborda la pantalla.
+            . '<div style="%s">Si el bot&oacute;n no funciona, copia y pega esta direcci&oacute;n:</div>' . "\n"
+            . '<div style="%s">%s</div>' . "\n"
+            . '</td></tr></table>' . "\n",
+            // recuadro
+            'background:#f4f7fb;border:1px solid #d6dee8;border-left:4px solid #1f6feb;'
+            . 'border-radius:6px;padding:20px 24px;',
+            // titulo
+            'font:700 17px/1.3 Arial,Helvetica,sans-serif;color:#16324f;padding:0 0 4px;',
+            $referencia,
+            // monto
+            'font:700 30px/1.15 Arial,Helvetica,sans-serif;color:#16324f;padding:0 0 14px;',
+            $montoTxt,
+            // celda del boton
+            'background:#1f6feb;border-radius:6px;',
+            $urlSegura,
+            // el <a> del boton
+            'display:inline-block;padding:15px 34px;background:#1f6feb;color:#ffffff;'
+            . 'font:700 17px/1 Arial,Helvetica,sans-serif;text-decoration:none;'
+            . 'border-radius:6px;',
+            // texto de apoyo
+            'font:400 13px/1.5 Arial,Helvetica,sans-serif;color:#3d4a5c;padding:0 0 4px;',
+            // doble pago
+            'font:400 13px/1.5 Arial,Helvetica,sans-serif;color:#5c6470;padding:0 0 12px;',
+            // rotulo del link de respaldo
+            'font:400 12px/1.5 Arial,Helvetica,sans-serif;color:#5c6470;padding:0 0 2px;',
+            // la url
+            'font:400 12px/1.5 Arial,Helvetica,sans-serif;color:#1f6feb;'
+            . 'word-break:break-all;',
+            $urlSegura
+        );
+    }
+
+    /**
+     * True solo si la empresa tiene la pasarela en sandbox.
+     *
+     * FALLA HACIA "PRODUCCION" A PROPOSITO, que es lo contrario de lo habitual en
+     * este proyecto. Un null o un valor raro aqui NO pinta el aviso de prueba: el
+     * aviso dice "no se te va a cobrar", y decirlo sobre un cobro real es el unico
+     * error de los dos que le cuesta dinero a alguien. Quien tiene una orden
+     * creada tiene su ambiente congelado en dte_pago_link, asi que el null no es un caso
+     * normal sino un dato roto, y ante un dato roto se avisa de menos.
+     */
+    private static function esSandbox(?string $ambiente): bool
+    {
+        return strtolower(trim((string) $ambiente)) === 'sandbox';
+    }
+
     private static function no(string $motivo, string $canal, int $codigo): array
     {
         return ['ok' => false, 'motivo' => $motivo, 'canal' => $canal, 'codigo' => $codigo];

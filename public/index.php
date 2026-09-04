@@ -622,6 +622,241 @@ if ($metodo === 'POST' && preg_match('#^/api/v1/dte/(\d+)/(\d+)/anular$#', $ruta
 
 responder(404, ['error' => 'ruta no encontrada', 'metodo' => $metodo, 'ruta' => $ruta]);
 
+/**
+ * UNA NOTA QUE CORRIGE UN DOCUMENTO SIN IVA NO PUEDE LLEVAR LINEAS AFECTAS.
+ *
+ * Si el TpoDocRef de la referencia madre es de los que no llevan IVA
+ * (TipoDte::SIN_IVA, que es donde vive la lista y su por que), todas las
+ * lineas de la NC/ND tienen que venir exento=true. Es la misma regla que ya
+ * rige dentro de un tipo 34, corrida un documento hacia el lado: el builder
+ * decide POR DATOS (src/Sii/DteXmlBuilder.php:171-205) y emite MntNeto, TasaIVA
+ * e IVA en cuanto ve un peso afecto, sin mirar a que apunta la referencia. Una
+ * nota asi sale con un IVA que el documento original nunca tuvo, el SII la
+ * rechaza, Y EL FOLIO QUEDA QUEMADO IGUAL porque se asigna antes de enviar.
+ *
+ * Se valida aqui, ANTES de asignar folio y antes de tocar el SII, que es el
+ * contrato de validarDocumentoDte(). El formulario del panel ahora tambien
+ * fuerza la casilla cuando el usuario teclea un tipo de referencia sin IVA,
+ * pero eso es comodidad: la regla vive en el motor porque al cliente no se le
+ * cree nunca -- las api_key 'externa' emiten por este mismo endpoint.
+ *
+ * NO SE HACE AL REVES. Una nota EXENTA sobre una factura 33 es legitima: un 33
+ * puede traer lineas exentas y la nota puede corregir justo esas.
+ *
+ * @param list<mixed>|array<mixed> $detalles
+ */
+function exigirLineasExentasSiLaRefEsExenta(array $detalles, int $tipoRef, string $p): void
+{
+    if (! TipoDte::esSinIva($tipoRef)) {
+        return;
+    }
+    foreach ($detalles as $i => $d) {
+        if (! is_array($d) || ! empty($d['exento'])) {
+            continue;
+        }
+        invalido(
+            sprintf(
+                '%sdetalles[%s]: la nota referencia un documento tipo %d, que no lleva IVA, '
+                . 'asi que no puede tener lineas afectas; marca exento=true en todas. '
+                . 'Emitirla asi la haria rechazar por el SII con el folio ya consumido.',
+                $p,
+                (string) $i,
+                $tipoRef,
+            ),
+            "{$p}detalles[{$i}].exento",
+        );
+    }
+}
+
+/**
+ * UNA NOTA DE DEBITO QUE ANULA SOLO PUEDE ANULAR UNA NOTA DE CREDITO.
+ *
+ * Formato DTE, codigo de referencia 1 ("Anula documento de referencia"): una
+ * NOTA DE CREDITO anula una factura, una nota de debito o una factura de compra;
+ * una NOTA DE DEBITO solo anula una NOTA DE CREDITO. Para tocar una factura, una
+ * ND tiene que ir con CodRef=3 (corrige montos), que es el unico codigo con el
+ * que puede referenciarla. La ayuda del formulario de emision recita esta regla
+ * desde que existe la pantalla; lo que faltaba era hacerla cumplir.
+ *
+ * COSTO MEDIDO. Las CINCO notas de debito emitidas en produccion referencian una
+ * FACTURA 33 con CodRef=1, y NINGUNA fue aceptada:
+ *
+ *   78454034-0 folios 2 y 3 (26-07-2026)   INFORMADOS=1 y RECHAZADOS=1 cada una
+ *   78454034-0 folio 1, 76543210-3 1 y 2   el sobre quedo EPR y el veredicto por
+ *                                          documento nunca se registro
+ *
+ * Contra eso, las 21 notas de debito de CERTIFICACION -- las que el SII valido
+ * para autorizar a estos emisores -- referencian todas 61 con CodRef=1. La forma
+ * correcta y la incorrecta estan las dos medidas, y no se solapan.
+ *
+ * SOLO MIRA CodRef=1. Con CodRef=3 una ND puede referenciar lo que sea, y no se
+ * toca. CodRef=2 (corrige texto) es, segun esa misma ayuda, exclusivo de la nota
+ * de credito, PERO no hay ni un caso medido -- ni bueno ni malo -- asi que aqui
+ * no se rechaza: inventar la guarda sin la cita ni el dato es como se bloquea una
+ * emision legitima.
+ *
+ * Como su hermana exigirLineasExentasSiLaRefEsExenta(), responde 422 ANTES de
+ * asignar folio y sin tocar el SII.
+ */
+function exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito(int $tipoDte, int $tipoRef, int $codRef, string $p): void
+{
+    if ($tipoDte !== 56 || $codRef !== 1 || TipoDte::esNotaCredito($tipoRef)) {
+        return;
+    }
+    invalido(
+        sprintf(
+            '%sreferencias: una nota de debito con CodRef=1 (anula) solo puede anular una NOTA DE '
+            . 'CREDITO (TpoDocRef 61), y esta apunta a un documento tipo %d. Para corregir el monto '
+            . 'de una factura, la nota de debito va con CodRef=3 (corrige montos). Emitirla asi la '
+            . 'haria rechazar por el SII con el folio ya consumido.',
+            $p,
+            $tipoRef,
+        ),
+        "{$p}referencias",
+    );
+}
+
+/**
+ * CADA REFERENCIA TIENE QUE PODER PASAR EL ESQUEMA DEL SII.
+ *
+ * Las tres reglas de arriba (34 sin lineas afectas, nota sin IVA, ND que anula)
+ * son de NEGOCIO: el documento valida contra el XSD y lo rechaza el SII al
+ * procesarlo. Esta es de FORMA: si la referencia no cumple el esquema, el sobre
+ * vuelve RSC "Rechazado por Error en Schema" -- y el folio se gasta igual,
+ * porque se asigna antes de enviar. Es exactamente como se perdio la NC 61
+ * folio 5 de 78225195-3 el 02-09-2026, por un RUT con puntos.
+ *
+ * LO QUE EXIGE EL ESQUEMA, medido ejecutando DTE_v10.xsd contra el XML que
+ * produce DteXmlBuilder::buildReferencia() (docs/18_Schema_XML_DTE/DTE_v10.xsd,
+ * bloque Referencia, lineas 1813-1903):
+ *
+ *   Referencia   maxOccurs="40"
+ *   NroLinRef    obligatorio, positiveInteger, maxInclusive 99  (lo pone el
+ *                builder con la posicion, asi que el tope de 40 ya lo cubre)
+ *   TpoDocRef    OBLIGATORIO, string de 1 a 3 caracteres
+ *   FolioRef     OBLIGATORIO
+ *   FchRef       OBLIGATORIO, FechaType (AAAA-MM-DD)
+ *   CodRef       opcional, pero SOLO 1, 2 o 3
+ *   RazonRef     opcional, maximo 90 caracteres
+ *
+ * POR QUE HACIA FALTA. El builder emite cada uno de esos campos bajo isset():
+ * lo que no viene, no sale, y el elemento obligatorio simplemente falta. El
+ * motor no miraba ninguno salvo la referencia madre de una NC/ND. El caso vivo
+ * era FchRef: el formulario del panel la ofrecia como opcional -- etiqueta
+ * "Fecha" sin marca y sin required -- cuando el esquema la exige. Dejarla en
+ * blanco producia un sobre invalido. No llego a pasar en produccion: se reviso
+ * el XML de los 502 documentos emitidos y ninguno tenia una referencia sin
+ * FchRef. Se arregla antes de que pase, no despues.
+ *
+ * LAS DOS FORMAS QUE NO SE TOCAN, y son la razon de que esto no sea un simple
+ * "todos los campos obligatorios":
+ *
+ *   refIndiceLote   la referencia a otro documento DEL MISMO LOTE llega SIN
+ *                   tipoDocumento, folio ni fecha: los inyecta emitirDteLote()
+ *                   despues de validar, cuando ya sabe que folio le toco al
+ *                   documento referenciado. Aqui solo se le miran codigo y razon.
+ *   TpoDocRef "SET" la auto-referencia al set de certificacion llega sin folio:
+ *                   buildReferencia() usa el folio PROPIO del documento. Es la
+ *                   forma que emite SetBasicoPayloadBuilder para los tres tipos
+ *                   del set basico, y pasa por aqui en cada certificacion.
+ *
+ * @param list<mixed>|array<mixed> $referencias
+ */
+function validarReferencias(array $referencias, string $p): void
+{
+    if (count($referencias) > 40) {
+        invalido(
+            sprintf(
+                '%sreferencias: hay %d y el esquema del SII permite hasta 40 por documento '
+                . '(DTE_v10.xsd, Referencia maxOccurs="40").',
+                $p,
+                count($referencias),
+            ),
+            "{$p}referencias",
+        );
+    }
+
+    foreach ($referencias as $j => $ref) {
+        if (! is_array($ref)) {
+            invalido("{$p}referencias[{$j}] debe ser un objeto", "{$p}referencias[{$j}]");
+        }
+
+        // Referencia intra-lote: tipo, folio y fecha los pone emitirDteLote()
+        // despues de validar. Aqui solo se comprueba lo que SI viaja.
+        $intraLote = array_key_exists('refIndiceLote', $ref);
+
+        if (! $intraLote) {
+            $td = $ref['tipoDocumento'] ?? null;
+            if ((! is_string($td) && ! is_int($td)) || trim((string) $td) === '') {
+                invalido(
+                    "{$p}referencias[{$j}].tipoDocumento es obligatorio: el esquema del SII exige TpoDocRef",
+                    "{$p}referencias[{$j}].tipoDocumento",
+                );
+            }
+            $td = trim((string) $td);
+            if (mb_strlen($td) > 3) {
+                invalido(
+                    "{$p}referencias[{$j}].tipoDocumento admite hasta 3 caracteres (TpoDocRef), y trae {$td}",
+                    "{$p}referencias[{$j}].tipoDocumento",
+                );
+            }
+
+            // FolioRef es obligatorio, SALVO en la auto-referencia al SET: ahi
+            // el builder usa el folio propio del documento (ver su nota).
+            if ($td !== 'SET') {
+                $fol = $ref['folio'] ?? null;
+                if (! is_numeric($fol) || (int) $fol <= 0) {
+                    invalido(
+                        "{$p}referencias[{$j}].folio es obligatorio y debe ser un entero > 0 (FolioRef)",
+                        "{$p}referencias[{$j}].folio",
+                    );
+                }
+            }
+
+            // FchRef: obligatoria en el esquema, y es la que faltaba.
+            $fecha = $ref['fecha'] ?? null;
+            if (! is_string($fecha) || ! validaFecha($fecha)) {
+                invalido(
+                    "{$p}referencias[{$j}].fecha es obligatoria y debe ser AAAA-MM-DD: el esquema del SII "
+                    . 'exige FchRef, y un documento sin ella vuelve rechazado por schema con el folio ya consumido',
+                    "{$p}referencias[{$j}].fecha",
+                );
+            }
+        }
+
+        // CodRef: opcional, pero la enumeracion del esquema es exactamente 1, 2, 3.
+        $cod = $ref['codigo'] ?? null;
+        if ($cod !== null && $cod !== '') {
+            if (! is_numeric($cod) || ! in_array((int) $cod, [1, 2, 3], true)) {
+                invalido(
+                    "{$p}referencias[{$j}].codigo debe ser 1 (anula), 2 (corrige texto) o 3 (corrige montos): "
+                    . 'el esquema del SII no admite otro valor en CodRef',
+                    "{$p}referencias[{$j}].codigo",
+                );
+            }
+        }
+
+        // RazonRef: opcional, maximo 90 caracteres.
+        $razon = $ref['razon'] ?? null;
+        if ($razon !== null && $razon !== '') {
+            if (! is_string($razon)) {
+                invalido("{$p}referencias[{$j}].razon debe ser texto", "{$p}referencias[{$j}].razon");
+            }
+            if (mb_strlen($razon) > 90) {
+                invalido(
+                    sprintf(
+                        '%sreferencias[%s].razon admite hasta 90 caracteres (RazonRef) y trae %d',
+                        $p,
+                        (string) $j,
+                        mb_strlen($razon),
+                    ),
+                    "{$p}referencias[{$j}].razon",
+                );
+            }
+        }
+    }
+}
+
 // ===========================================================================
 //  Validacion compartida de UN documento DTE (forma del body de POST /api/v1/dte)
 //
@@ -952,6 +1187,13 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         }
     }
 
+    // --- Forma de CADA referencia contra el esquema del SII ---
+    //
+    // VA ANTES de la regla de la referencia madre y APLICA A TODO TIPO, no solo
+    // a NC/ND: una FACTURA del set de certificacion tambien lleva referencia (la
+    // del SET), y una referencia mal formada rompe el sobre igual.
+    validarReferencias($referencias, $p);
+
     // --- NC (61) y ND (56) EXIGEN al menos una referencia a un DTE valido ---
     // (SII REF-3-415). Se valida ANTES de armar el DTO/asignar folio/llamar al SII,
     // para NO quemar folio. TpoDocRef debe ser un tipo DTE numerico valido (no "SET"):
@@ -961,6 +1203,12 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
     if (in_array($tipoDte, [61, 56], true)) {
         $tiposDteRef = [29, 30, 32, 33, 34, 35, 38, 39, 40, 41, 43, 45, 46, 48, 50, 52, 55, 56, 60, 61, 103, 110, 111, 112];
         $tieneRefValida = false;
+        // Tipo y CodRef del documento que la nota corrige o anula. Quedan en
+        // null cuando la referencia madre es intra-lote (refIndiceLote): ahi el
+        // tipo lo resuelve el handler del lote, que si conoce los otros
+        // documentos.
+        $tipoRefMadre = null;
+        $codRefMadre  = null;
         foreach ($referencias as $ref) {
             if (! is_array($ref)) {
                 continue;
@@ -980,6 +1228,8 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
                 && is_numeric($folioRef) && (int) $folioRef > 0
             ) {
                 $tieneRefValida = true;
+                $tipoRefMadre   = (int) $tipoRef;
+                $codRefMadre    = is_numeric($ref['codigo'] ?? null) ? (int) $ref['codigo'] : null;
                 break;
             }
         }
@@ -988,6 +1238,12 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
                 'NC/ND requiere al menos una referencia a un documento tributario valido (TpoDocRef numerico valido, FolioRef > 0, mas FchRef/CodRef/RazonRef)',
                 "{$p}referencias",
             );
+        }
+        if ($tipoRefMadre !== null) {
+            exigirLineasExentasSiLaRefEsExenta($detalles, $tipoRefMadre, $p);
+        }
+        if ($tipoRefMadre !== null && $codRefMadre !== null) {
+            exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito($tipoDte, $tipoRefMadre, $codRefMadre, $p);
         }
     }
 
@@ -1380,6 +1636,25 @@ function emitirDteLote(array $tenant): never
             }
             if ($k > $i) {
                 invalido("{$campo} debe apuntar a un documento ANTERIOR del lote", $campo);
+            }
+            // MISMA REGLA QUE EN EL UNITARIO, con el tipo resuelto aqui: en una
+            // referencia intra-lote no hay TpoDocRef que mirar, pero el
+            // documento referenciado es $validados[$k] y ya paso por
+            // validarDocumentoDte() (el indice es ANTERIOR, comprobado arriba).
+            if (in_array($v['tipoDte'], [61, 56], true)) {
+                exigirLineasExentasSiLaRefEsExenta(
+                    $v['detalles'],
+                    (int) $validados[$k]['tipoDte'],
+                    "documentos[{$i}].",
+                );
+                if (is_numeric($ref['codigo'] ?? null)) {
+                    exigirQueLaNotaDeDebitoAnuleUnaNotaDeCredito(
+                        (int) $v['tipoDte'],
+                        (int) $validados[$k]['tipoDte'],
+                        (int) $ref['codigo'],
+                        "documentos[{$i}].",
+                    );
+                }
             }
         }
 

@@ -192,6 +192,7 @@ $qs = $estado !== '' ? '&estado=' . urlencode($estado) : '';
                     <th class="tabla-datos__estado">Estado</th>
                     <th class="tabla-datos__num">Intentos</th>
                     <th>Ultimo error</th>
+                    <th>Cobro</th>
                     <th class="tabla-datos__acciones">Acciones</th>
                 </tr>
             </thead>
@@ -216,7 +217,48 @@ $qs = $estado !== '' ? '&estado=' . urlencode($estado) : '';
                             <?php endif; ?>
                         </td>
                         <td class="tabla-datos__num"><?= (int) $it['intentos']; ?></td>
-                        <td><?= htmlspecialchars($fmt($it['ultimo_error'])); ?></td>
+                        <?php
+                        // LA COLUMNA DE COBRO. Cinco lecturas, y la que importa
+                        // es "esperando": ese correo NO se ha mandado y no
+                        // aparece como fallido en ninguna otra parte, porque su
+                        // fila sigue 'pendiente' con sus intentos intactos. Sin
+                        // esta columna, un atasco de pasarela seria invisible.
+                        $pagoEstado = (string) ($it['pago_estado'] ?? '');
+                        $esperando  = $pagoEstado === 'pendiente' && $it['estado'] === 'pendiente';
+                        $horas      = $esperando && ! empty($it['pago_desde'])
+                            ? (int) floor((time() - strtotime((string) $it['pago_desde'])) / 3600)
+                            : 0;
+                        ?>
+                        <td>
+                            <?php if ($pagoEstado === ''): ?>
+                                &mdash;
+                            <?php elseif ($pagoEstado === 'creado'): ?>
+                                <span class="badge badge--ok">Con link</span>
+                            <?php elseif ($pagoEstado === 'pagado'): ?>
+                                <span class="badge badge--ok">Pagada</span>
+                            <?php elseif ($pagoEstado === 'omitido'): ?>
+                                <span class="badge badge--neutro">Sin link</span>
+                            <?php elseif ($pagoEstado === 'error'): ?>
+                                <?php
+                                // DESCUADRE DE MONTO: alguien pago un importe
+                                // distinto del que se cobro. No se marca pagada
+                                // -- seria mentir -- y no puede quedarse como un
+                                // guion neutro: es lo mas grave que registra esta
+                                // columna y necesita que una persona lo mire.
+                                ?>
+                                <span class="badge badge--error"
+                                      title="<?= htmlspecialchars($fmt($it['pago_error'])); ?>">
+                                    Revisar pago
+                                </span>
+                            <?php elseif ($esperando): ?>
+                                <span class="badge <?= $horas >= 6 ? 'badge--error' : 'badge--aviso'; ?>"
+                                      title="<?= htmlspecialchars($fmt($it['pago_error'])); ?>">
+                                    Esperando<?= $horas >= 1 ? ' ' . $horas . ' h' : ''; ?>
+                                </span>
+                            <?php else: ?>
+                                <span class="badge badge--neutro">&mdash;</span>
+                            <?php endif; ?>
+                        </td>
                         <td class="tabla-datos__acciones">
                             <?php
                             // UNA ACCION POR ESTADO, y solo donde hace algo:
@@ -230,7 +272,20 @@ $qs = $estado !== '' ? '&estado=' . urlencode($estado) : '';
                             // 'pendiente' ya esta en cola y 'enviado' seria un
                             // reenvio, que esta fuera de alcance.
                             ?>
-                            <?php if ($it['estado'] === 'error'): ?>
+                            <?php if ($esperando): ?>
+                                <?php
+                                // Va ANTES que las demas a proposito: un correo
+                                // que espera al link no se ha mandado, y soltarlo
+                                // es lo unico que lo desatasca cuando la pasarela
+                                // no vuelve. Las otras acciones no aplican
+                                // todavia porque la fila sigue 'pendiente'.
+                                ?>
+                                <form method="post" action="/ventas/correos/<?= (int) $it['id']; ?>/enviar-sin-link"
+                                      onsubmit="return confirm('Se enviara esta factura SIN el boton de pago. Seguro?');">
+                                    <?= csrfInput(); ?>
+                                    <button type="submit" class="boton-secundario">Enviar sin link</button>
+                                </form>
+                            <?php elseif ($it['estado'] === 'error'): ?>
                                 <form method="post" action="/ventas/correos/<?= (int) $it['id']; ?>/reintentar">
                                     <?= csrfInput(); ?>
                                     <button type="submit" class="boton-secundario">Reintentar</button>

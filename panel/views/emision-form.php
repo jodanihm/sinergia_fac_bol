@@ -87,6 +87,32 @@ $esNota = in_array($tipoDte, [61, 56], true);
 // un folio por un descuido.
 $esExenta = $tipoDte === 34;
 
+// NOTA (61/56) QUE CORRIGE UN DOCUMENTO SIN IVA. Mismo caso que el 34, un
+// documento hacia el lado: si el TpoDocRef tecleado es 32, 34, 38 o 41, la nota
+// tampoco puede llevar lineas afectas -- el documento que corrige nunca tuvo
+// IVA. Se calcula aqui para el RE-RENDER (cuando el motor devuelve un 422 el
+// tipo ya viene en $form) y el JS de mas abajo lo recalcula en vivo mientras se
+// teclea el campo. Quien garantiza el valor es armarDocumentoEmision(), porque
+// una casilla deshabilitada no viaja en el POST; y el motor lo vuelve a validar.
+$refTipo    = trim((string) ($form['referencias'][0]['tipoDocumento'] ?? ''));
+$refSinIva  = $esNota && is_numeric($refTipo)
+    && \Plantiflex\FacturacionCl\Enums\TipoDte::esSinIva((int) $refTipo);
+
+// A partir de aqui las dos situaciones se tratan igual: casilla marcada,
+// deshabilitada, y el maestro de productos no puede desmarcarla.
+$exentoForzado = $esExenta || $refSinIva;
+
+// NOTA DE DEBITO QUE ANULA ALGO QUE NO ES UNA NOTA DE CREDITO. Con CodRef=1 una
+// ND solo puede anular una NC (61); para tocar una factura va con CodRef=3. La
+// lista de abajo ya lo explicaba y aun asi se emitieron CINCO ND contra una
+// factura 33 con CodRef=1, ninguna aceptada por el SII. Aqui se avisa en la
+// pantalla; quien lo impide de verdad es el motor, con un 422 sin quemar folio.
+$refCodigo = trim((string) ($form['referencias'][0]['codigo'] ?? ''));
+$ndMalAnula = $tipoDte === 56
+    && $refCodigo === '1'
+    && is_numeric($refTipo)
+    && ! \Plantiflex\FacturacionCl\Enums\TipoDte::esNotaCredito((int) $refTipo);
+
 // Forma de pago y vencimiento solo aplican a factura y factura exenta: son los
 // dos tipos para los que el Formato DTE exige informar FmaPago (pag. 4, cambio
 // del 31/05/2017). NC y ND no lo llevan.
@@ -327,15 +353,36 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <div class="form-campo">
                             <label for="ref-tipo">Tipo de documento <?= $req; ?></label>
                             <input type="text" inputmode="numeric" name="referencias[0][tipoDocumento]" id="ref-tipo" value="<?= $vref('tipoDocumento'); ?>" placeholder="33"<?= $errStyle('referencias'); ?>>
-                            <small class="form-ayuda">TpoDocRef. 33 para factura.</small>
+                            <small class="form-ayuda">TpoDocRef. 33 para factura, 34 para factura exenta.</small>
+                            <p class="form-ayuda" id="aviso-ref-exenta"<?= $refSinIva ? '' : ' hidden'; ?>>
+                                El documento que estas corrigiendo <strong>no lleva IVA</strong>, asi que esta
+                                nota tampoco: el detalle queda exento completo y la casilla no se puede
+                                desmarcar. Una nota con IVA sobre un documento exento la rechaza el SII,
+                                y el folio se pierde igual.
+                            </p>
                         </div>
                         <div class="form-campo">
                             <label for="ref-folio">Folio <?= $req; ?></label>
                             <input type="text" inputmode="numeric" name="referencias[0][folio]" id="ref-folio" value="<?= $vref('folio'); ?>">
                         </div>
                         <div class="form-campo form-campo--ancho form-campo--corto">
-                            <label for="ref-fecha">Fecha</label>
-                            <input type="date" name="referencias[0][fecha]" id="ref-fecha" value="<?= $vref('fecha'); ?>">
+                            <label for="ref-fecha">Fecha del documento referenciado <?= $req; ?></label>
+                            <?php
+                                // required DE VERDAD, y es la segunda excepcion a la regla de
+                                // "obligatorio segun el motor, no segun el navegador" (la primera
+                                // es el select del codigo, ver su nota). FchRef NO es opcional: el
+                                // esquema del SII la declara obligatoria dentro de Referencia
+                                // (docs/18_Schema_XML_DTE/DTE_v10.xsd, bloque Referencia). Este
+                                // campo se ofrecia sin marca y sin required, asi que dejarlo en
+                                // blanco armaba un sobre que el SII rechaza por schema -- RSC -- con
+                                // el folio ya gastado. Exactamente como se perdio la NC folio 5 del
+                                // 02-09-2026 por el RUT con puntos.
+                                //
+                                // Quien lo garantiza es el motor (validarReferencias): el required
+                                // es para que el usuario lo vea antes de enviar, no la regla.
+                            ?>
+                            <input type="date" name="referencias[0][fecha]" id="ref-fecha" value="<?= $vref('fecha'); ?>" required<?= $errStyle('referencias[0].fecha'); ?>>
+                            <small class="form-ayuda">FchRef. Es la fecha de emision del documento que estas corrigiendo, no la de hoy.</small>
                         </div>
                         <div class="form-campo form-campo--ancho">
                             <label for="ref-codigo">Codigo de referencia <?= $req; ?></label>
@@ -352,6 +399,12 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                                 <option value="2" <?= $codSel === '2' ? 'selected' : ''; ?>>2 - Corrige texto</option>
                                 <option value="3" <?= $codSel === '3' ? 'selected' : ''; ?>>3 - Corrige montos</option>
                             </select>
+                            <p class="form-ayuda" id="aviso-nd-anula"<?= $ndMalAnula ? '' : ' hidden'; ?>>
+                                <strong>Esta combinacion la rechaza el SII.</strong> Una nota de debito
+                                con "1 - Anula documento" solo puede anular una <strong>nota de credito</strong>
+                                (tipo 61). Para corregir el monto de una factura, usa
+                                "3 - Corrige montos". Si la emites asi, el folio se pierde igual.
+                            </p>
                             <small class="form-ayuda" id="ayuda-ref-codigo">
                                 CodRef. Que puede referenciar cada codigo, segun el Formato DTE del SII:
                             </small>
@@ -368,7 +421,9 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         </div>
                         <div class="form-campo form-campo--ancho">
                             <label for="ref-razon">Razon de la referencia</label>
-                            <input type="text" name="referencias[0][razon]" id="ref-razon" value="<?= $vref('razon'); ?>" placeholder="Anula factura N...">
+                            <?php // maxlength 90: es el tope de RazonRef en el esquema del SII. Pasarse rompe el sobre entero. ?>
+                            <input type="text" name="referencias[0][razon]" id="ref-razon" value="<?= $vref('razon'); ?>" maxlength="90" placeholder="Anula factura N..."<?= $errStyle('referencias[0].razon'); ?>>
+                            <small class="form-ayuda">RazonRef. Hasta 90 caracteres.</small>
                         </div>
                     </div>
                 </section>
@@ -419,7 +474,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                             <td class="col-cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" aria-label="Cantidad"<?= $errStyle("detalles[{$i}].cantidad"); ?>></td>
                             <td class="col-precio"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][precioUnitario]" value="<?= htmlspecialchars((string) ($d['precioUnitario'] ?? '')); ?>" class="det-precio" aria-label="Precio unitario"<?= $errStyle("detalles[{$i}].precioUnitario"); ?>></td>
                             <td class="col-unidad"><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" aria-label="Unidad"></td>
-                            <td class="col-exento"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" aria-label="Exento de IVA" <?= $esExenta || ! empty($d['exento']) ? 'checked' : ''; ?><?= $esExenta ? ' disabled' : ''; ?>></td>
+                            <td class="col-exento"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" aria-label="Exento de IVA" <?= $exentoForzado || ! empty($d['exento']) ? 'checked' : ''; ?><?= $exentoForzado ? ' disabled' : ''; ?>></td>
                             <td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
                         </tr>
                     <?php endforeach; ?>
@@ -443,7 +498,13 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 <script>
 (function () {
     var PRODUCTOS = <?= json_encode($mapaProductos, JSON_UNESCAPED_UNICODE); ?>;
-    var ES_EXENTA = <?= $esExenta ? 'true' : 'false'; ?>;
+    // Los mismos tipos que consulta el PHP: no hay lista duplicada en el JS.
+    var REF_SIN_IVA = <?= json_encode(\Plantiflex\FacturacionCl\Enums\TipoDte::SIN_IVA); ?>;
+    // UNA SOLA BANDERA PARA LOS DOS CASOS que obligan a exento: el tipo 34 (fijo,
+    // lo decide el PHP y no cambia) y la nota que corrige un documento sin IVA
+    // (movil: depende de lo que se teclee en #ref-tipo). Antes esto era ES_EXENTA
+    // y solo cubria el primero.
+    var exentoForzado = <?= $exentoForzado ? 'true' : 'false'; ?>;
     var tbody = document.querySelector('#tabla-detalle tbody');
     var idx = <?= count($detalles); ?>;
 
@@ -458,7 +519,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         if (unidad && unidad.value === '') { unidad.value = p.unidad || ''; }
         // En una factura exenta el maestro NO manda: un producto afecto no puede
         // desmarcar la casilla, porque en un 34 no existe la linea afecta.
-        if (exento && !ES_EXENTA) { exento.checked = p.exento === 1; }
+        if (exento && !exentoForzado) { exento.checked = p.exento === 1; }
     }
 
     // Debe producir el MISMO DOM que la fila que renderiza el PHP de arriba
@@ -469,7 +530,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             '<td class="col-cantidad"><input type="text" inputmode="decimal" name="detalles[' + n + '][cantidad]" aria-label="Cantidad"></td>' +
             '<td class="col-precio"><input type="text" inputmode="decimal" name="detalles[' + n + '][precioUnitario]" class="det-precio" aria-label="Precio unitario"></td>' +
             '<td class="col-unidad"><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" aria-label="Unidad"></td>' +
-            '<td class="col-exento"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento" aria-label="Exento de IVA"' + (ES_EXENTA ? ' checked disabled' : '') + '></td>' +
+            '<td class="col-exento"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento" aria-label="Exento de IVA"' + (exentoForzado ? ' checked disabled' : '') + '></td>' +
             '<td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>';
     }
 
@@ -487,6 +548,52 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     tbody.addEventListener('change', function (e) {
         if (e.target.classList.contains('det-nombre')) { rellenarDesdeProducto(e.target.closest('tr')); }
     });
+
+    // EXENTO FORZADO EN VIVO SEGUN EL TIPO DE DOCUMENTO REFERENCIADO.
+    //
+    // #ref-tipo solo existe en nota de credito y de debito; en factura y factura
+    // exenta este bloque no encuentra nada y no hace nada. Se dispara con 'input'
+    // y no con 'change' para que el aviso aparezca mientras se teclea, no al
+    // salir del campo.
+    //
+    // ESTO ES COMODIDAD Y AVISO, NO LA GARANTIA: una casilla deshabilitada NO
+    // viaja en el POST, asi que quien pone el exento=true es
+    // armarDocumentoEmision(), y el motor lo valida otra vez por su cuenta.
+    var refTipo = document.getElementById('ref-tipo');
+    if (refTipo) {
+        var aplicarExento = function () {
+            var v = refTipo.value.trim();
+            exentoForzado = v !== '' && REF_SIN_IVA.indexOf(parseInt(v, 10)) !== -1;
+            var casillas = tbody.querySelectorAll('.det-exento');
+            for (var i = 0; i < casillas.length; i++) {
+                // Al FORZAR se marca y se bloquea. Al soltar el forzado solo se
+                // desbloquea: lo que el usuario haya marcado a mano se respeta.
+                if (exentoForzado) { casillas[i].checked = true; }
+                casillas[i].disabled = exentoForzado;
+            }
+            var aviso = document.getElementById('aviso-ref-exenta');
+            if (aviso) { aviso.hidden = !exentoForzado; }
+        };
+        refTipo.addEventListener('input', aplicarExento);
+    }
+
+    // AVISO DE LA NOTA DE DEBITO QUE ANULA LO QUE NO DEBE. Solo en el 56: en la
+    // nota de credito CodRef=1 sobre una factura es justamente el caso normal.
+    // Mismo reparto de responsabilidades que arriba -- esto avisa, el motor es
+    // quien rechaza --, y por eso el boton de emitir NO se deshabilita: la regla
+    // que manda vive en el servidor y aqui no se simula.
+    var ES_NOTA_DEBITO = <?= $tipoDte === 56 ? 'true' : 'false'; ?>;
+    var NOTAS_CREDITO  = <?= json_encode(\Plantiflex\FacturacionCl\Enums\TipoDte::NOTAS_CREDITO); ?>;
+    var refCodigo = document.getElementById('ref-codigo');
+    var avisoNd   = document.getElementById('aviso-nd-anula');
+    if (ES_NOTA_DEBITO && refTipo && refCodigo && avisoNd) {
+        var revisarNd = function () {
+            var t = parseInt(refTipo.value.trim(), 10);
+            avisoNd.hidden = !(refCodigo.value === '1' && !isNaN(t) && NOTAS_CREDITO.indexOf(t) === -1);
+        };
+        refTipo.addEventListener('input', revisarNd);
+        refCodigo.addEventListener('change', revisarNd);
+    }
 
     // Autocompletado del receptor por RUT.
     var rut = document.getElementById('receptor-rut');

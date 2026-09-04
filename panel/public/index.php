@@ -91,6 +91,10 @@ use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
 use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
+use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
+use Plantiflex\FacturacionCl\Pago\ConfirmacionPago;
+use Plantiflex\FacturacionCl\Pago\EstadoRetornoPago;
+use Plantiflex\FacturacionCl\Pago\FabricaPasarela;
 use Plantiflex\Integration\Facturacion\ProductoDuplicadoException;
 
 require __DIR__ . '/../src/Db.php';
@@ -537,6 +541,8 @@ const PERMISOS_RUTA = [
     'GET /ventas/correos'                        => ['ventas', 'ver'],
     'POST /ventas/correos/reintentar-fallidos'   => ['ventas', 'gestionar'],
     'POST /ventas/correos/buscar-destinatarios'  => ['ventas', 'gestionar'],
+    'GET /configuracion/pagos'                   => ['config', 'ver'],
+    'POST /configuracion/pagos'                  => ['config', 'gestionar'],
 
     // --- maestros ---
     'GET /maestros/clientes'                     => ['maestros', 'ver'],
@@ -672,6 +678,11 @@ const PERMISOS_RUTA_PATRON = [
     ['POST', '#^/ventas/panel-emision/(\d+)/(\d+)/estado-sii$#', 'ventas', 'gestionar'],
     ['POST', '#^/ventas/correos/(\d+)/reintentar$#',            'ventas', 'gestionar'],
     ['POST', '#^/ventas/correos/(\d+)/buscar-destinatario$#',   'ventas', 'gestionar'],
+    // La valvula de escape del link de pago: soltar UN correo retenido porque la
+    // pasarela no responde. 'gestionar' y no 'emitir': no toca el SII ni quema
+    // folios, pero si decide que esa factura ya no se va a cobrar por link, asi
+    // que queda auditada.
+    ['POST', '#^/ventas/correos/(\d+)/enviar-sin-link$#',       'ventas', 'gestionar'],
 
     // informes: el slug es el nombre del informe; los tres son de lectura.
     ['GET',  '#^/informes/([a-z-]+)/(pdf|excel)$#', 'informes', 'ver'],
@@ -681,6 +692,26 @@ const PERMISOS_RUTA_PATRON = [
     ['GET',  '#^/certificacion/etapa/([^/]+)$#',                              'certificacion', 'ver'],
     ['GET',  '#^/certificacion/intercambio/(acuse|resultado|recibos)\.xml$#', 'certificacion', 'ver'],
 ];
+
+/**
+ * A donde vuelve el CLIENTE despues de pagar, si su proveedor no configuro una
+ * pagina propia.
+ *
+ * Es distinta de la de confirmacion y no puede ser la misma: aquella solo
+ * responde a POST y la llama la pasarela desde sus servidores. Reutilizarla como
+ * retorno dejaba al cliente que acababa de pagar mirando un error -- lo ultimo
+ * que ve alguien que acaba de darnos dinero.
+ *
+ * ACEPTA GET Y POST porque la pasarela puede redirigir de las dos formas.
+ *
+ * VA AQUI ARRIBA, ANTES DE RUTAS_PUBLICAS, Y NO ES ESTETICA. Esa lista la USA
+ * en su propia definicion, y las const de nivel de archivo NO se hoistean: solo
+ * existen cuando la ejecucion pasa por su linea. Declarada mas abajo, el panel
+ * ENTERO reventaba con "Undefined constant" en la primera peticion -- no una
+ * pantalla: todas. Es la misma asimetria que documenta ConstantesAntesDelDespacho,
+ * vista desde el otro lado.
+ */
+const RUTA_RETORNO_PAGO = '/pagos/retorno';
 
 /**
  * Rutas PUBLICAS: anteriores a cualquier sesion, no pueden llevar permiso
@@ -698,10 +729,55 @@ const RUTAS_PUBLICAS = [
     // (publicas) corre ANTES del paso 2 (espacios con gate propio), asi que
     // esta pasa sin sesion y el resto de /admin/* sigue exigiendola.
     'GET /admin/login', 'POST /admin/login',
+    // LA CONFIRMACION DE PAGO DE FLOW. Publica porque quien la llama es Flow,
+    // desde sus servidores: no hay sesion que exigir ni CSRF que validar -- un
+    // token de formulario no existe para quien no vino de un formulario.
+    //
+    // ES PUBLICA DE VERDAD, Y NO VIENE FIRMADA. Aqui decia que el cuerpo llegaba
+    // firmado con el secreto de la empresa; era falso. Flow manda un POST con
+    // Content-Type application/x-www-form-urlencoded y el cuerpo es UNICAMENTE
+    // token=<token de la transaccion>; la firma HMAC es de las peticiones que
+    // SALEN hacia su API. Mientras se exigio esa firma, todo aviso real murio en
+    // un 403 y ningun pago se registro por esta via.
+    //
+    // LO QUE LA PROTEGE NO ES AUTENTICAR AL QUE LLAMA, es no creerle. Del cuerpo
+    // se toma un token y nada mas; con el token se consulta payment/getStatus
+    // con las credenciales de esa empresa -- esa peticion SI va firmada -- y solo
+    // un 'pagada' con el monto exacto marca la factura. Un POST inventado no
+    // puede mover una fila; como mucho nos hace preguntar por una orden.
+    //
+    // Lleva la cuenta en la url (/pagos/flow/confirmacion/7) para que la busqueda
+    // de la orden pueda acotarse por cuenta_id: sin eso, un token dirigido a una
+    // empresa podria encontrar la fila de otra. Por eso vive en PATRONES_PUBLICOS
+    // y no aqui.
+    //
+    // La pagina de retorno del pagador SI es exacta y va aqui, en sus dos
+    // metodos: la abre una persona en su navegador, sin sesion nuestra.
+    'GET ' . RUTA_RETORNO_PAGO, 'POST ' . RUTA_RETORNO_PAGO,
 ];
 
+/**
+ * La confirmacion de pago de la pasarela, con la cuenta en la url.
+ *
+ * En una constante y no escrito tres veces porque se usa en tres sitios que
+ * TIENEN que coincidir: la lista de rutas publicas, la excepcion del CSRF y el
+ * despacho. Si divergieran, el sintoma seria un 403 o un 404 ante un aviso de
+ * pago -- y la pasarela NO reintenta: llama una vez, espera un 200 en 15
+ * segundos y, si no lo recibe, manda un correo de alerta y se olvida. El pago
+ * sigue cobrado de su lado. Eso ya paso una vez, con el 403 de la firma.
+ *
+ * LA EXCEPCION DEL CSRF NO ES UN AGUJERO: el POST lo origina Flow desde sus
+ * servidores, asi que no puede llevar nuestro token. Y no hay nada que
+ * falsificar, porque el cuerpo no decide nada -- ver ConfirmacionPago.
+ */
+const PATRON_CONFIRMACION_PAGO = '#^/pagos/flow/confirmacion/(\d+)$#';
+
 /** @var list<string> Regex de rutas publicas con parametro. */
-const PATRONES_PUBLICOS = ['#^/activar/[0-9a-f]{64}$#'];
+const PATRONES_PUBLICOS = [
+    '#^/activar/[0-9a-f]{64}$#',
+    // La confirmacion de pago de la pasarela. Ver el comentario de RUTAS_PUBLICAS.
+    PATRON_CONFIRMACION_PAGO,
+];
 
 /**
  * MENSAJE UNICO DE FALLO DE ACCESO, para las dos pantallas de login.
@@ -944,6 +1020,10 @@ function definicionMenu(): array
         // quedaba al final de esa seccion, justo despues del bloque de
         // produccion, y se leia como si perteneciera a el. Aqui hace pareja con
         // Auditoria, que es lo que es: administracion transversal del tenant.
+        // Fuera de "Configuracion empresa" y junto a Usuarios, por el mismo
+        // motivo que aquel: no tiene ambiente. La cuenta de cobro de una empresa
+        // es una sola y mueve dinero de verdad; no hay una de certificacion.
+        ['clave' => 'config.pagos', 'label' => 'Cobro en linea', 'destino' => '/configuracion/pagos', 'icono' => 'apikeys', 'construido' => true, 'requiereProduccion' => false],
         ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'icono' => 'usuarios', 'construido' => true, 'requiereProduccion' => false],
         ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'icono' => 'auditoria', 'construido' => true, 'requiereProduccion' => false],
     ];
@@ -998,6 +1078,11 @@ function validarCliente(array $post): array
         'comuna'       => $comuna,
         'email'        => $email,
         'telefono'     => $tel,
+        // UNA CASILLA DESMARCADA NO VIAJA EN EL POST, asi que su ausencia es la
+        // que significa "excluido". Se lee al reves de como se pinta -- la
+        // casilla dice "mandarle link" y la columna guarda lo mismo -- para que
+        // no haya una negacion de mas entre la pantalla y la base.
+        'pago_link'    => ! empty($post['pago_link']),
     ];
 
     return [$datos, $errores];
@@ -4835,6 +4920,37 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
         $receptor['email'] = $email;
     }
 
+    // --- NOTA (61/56) SOBRE UN DOCUMENTO SIN IVA: TODAS SUS LINEAS SON EXENTAS ---
+    //
+    // Se resuelve ANTES de armar el detalle porque decide el 'exento' de cada
+    // linea, igual que $tipoDte === 34. La lista de tipos y su por que viven en
+    // TipoDte::SIN_IVA (32, 34, 38, 41), compartida con el motor.
+    //
+    // POR QUE: una NC que anula una factura exenta salia AFECTA si el usuario no
+    // marcaba la casilla -- que es lo que pasa siempre, porque la casilla habla
+    // de la NOTA y el usuario esta pensando en la factura que anula. El SII la
+    // rechaza y el folio ya esta quemado. Costo medido: NC 61 folio 6 del
+    // 04-09-2026 contra la factura exenta 34 folio 744, emitida con IVA de 5.698
+    // sobre un documento de 29.990 que nunca lo tuvo.
+    //
+    // El motor lo valida ademas por su cuenta (exigirLineasExentasSiLaRefEsExenta),
+    // y la vista marca y deshabilita la casilla en cuanto se teclea el tipo. Tres
+    // capas, como en el 34: al usuario no se le hace perder un folio por un
+    // descuido y al cliente no se le cree nunca.
+    $notaSobreExento = false;
+    if (in_array($tipoDte, [61, 56], true)) {
+        foreach (is_array($post['referencias'] ?? null) ? $post['referencias'] : [] as $ref) {
+            if (! is_array($ref)) {
+                continue;
+            }
+            $td = trim((string) ($ref['tipoDocumento'] ?? ''));
+            if (is_numeric($td) && TipoDte::esSinIva((int) $td)) {
+                $notaSobreExento = true;
+                break;
+            }
+        }
+    }
+
     $detalles = [];
     foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $d) {
         if (! is_array($d)) {
@@ -4855,7 +4971,11 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
             // DESHABILITADA, y una casilla deshabilitada no viaja en el POST, asi
             // que sin este forzado el documento saldria con todo afecto.
             // El motor lo valida ademas por su cuenta (validarDocumentoDte).
-            'exento'         => $tipoDte === 34 ? true : ! empty($d['exento']),
+            //
+            // $notaSobreExento es el mismo forzado corrido un documento hacia el
+            // lado: una NC/ND que corrige un documento sin IVA tampoco puede
+            // llevar lineas afectas. Ver la nota de arriba.
+            'exento'         => ($tipoDte === 34 || $notaSobreExento) ? true : ! empty($d['exento']),
         ];
         $unidad = trim((string) ($d['unidad'] ?? ''));
         if ($unidad !== '') {
@@ -5890,6 +6010,446 @@ const CORREO_REBUSCA_MAX_CORREOS = 2000;
  * resolverRazonSocialReceptores(). El destinatario -- que es el dato que importa
  * para diagnosticar un correo -- ya esta en la propia cola.
  */
+/**
+ * POST /ventas/correos/{id}/enviar-sin-link -- la valvula de escape.
+ *
+ * Suelta UN correo que lleva retenido esperando el link de pago. En la corrida
+ * siguiente sale sin el bloque de cobro.
+ *
+ * POR QUE EXISTE. El producto decidio que un correo espera al link en vez de
+ * salir sin el, que es lo correcto para no mandar una factura sin la forma de
+ * pagarla que la empresa prometio. Pero una pasarela caida mucho rato convierte
+ * esa espera en facturas que no llegan, y una factura que no llega el dia 30 no
+ * es un detalle. Este boton le devuelve la decision a una persona.
+ *
+ * QUEDA AUDITADO porque tiene consecuencia comercial: esa factura ya no se va a
+ * cobrar por link, y conviene saber quien lo decidio y cuando.
+ */
+/**
+ * GET /configuracion/pagos -- la cuenta de cobro de la empresa.
+ *
+ * NUNCA devuelve el secreto a la pantalla, ni enmascarado. Solo dice SI hay uno
+ * guardado, con tieneSecreto. Mismo trato que las claves del resto del panel:
+ * un value con asteriscos volveria al POST tal cual y sobrescribiria el secreto
+ * bueno con asteriscos en cuanto alguien editara otro campo.
+ */
+function handlePagosConfigGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    // LA ELECCION ACTIVA: una fila, un ambiente. Ya no trae credenciales.
+    $stmt = $pdo->prepare(
+        'SELECT proveedor, ambiente_activo, habilitado, url_retorno '
+        . 'FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1'
+    );
+    $stmt->execute([':c' => $cuentaId]);
+    $config = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    vista('pagos-config', [
+        'config'      => $config,
+        // EL LLAVERO, UNA ENTRADA POR AMBIENTE. El secreto NUNCA vuelve a la
+        // pantalla: solo si esta cargado o no.
+        'credenciales' => credencialesPorAmbiente($pdo, $cuentaId, (string) ($config['proveedor'] ?? 'flow')),
+        'errores'     => [],
+        'proveedores' => FabricaPasarela::proveedores(),
+        'navActivo'   => 'config.pagos',
+    ]);
+}
+
+/**
+ * El llavero de una cuenta para un proveedor, indexado por ambiente.
+ *
+ * Devuelve SIEMPRE las dos entradas, existan o no, para que la pantalla pueda
+ * pintar "sandbox: sin cargar / produccion: configurado" sin tener que adivinar.
+ * El secreto no sale de aqui: solo su presencia.
+ *
+ * @return array<string, array{apiKey:string, tieneSecreto:bool}>
+ */
+function credencialesPorAmbiente(PDO $pdo, int $cuentaId, string $proveedor): array
+{
+    $llavero = [
+        'sandbox'    => ['apiKey' => '', 'tieneSecreto' => false],
+        'produccion' => ['apiKey' => '', 'tieneSecreto' => false],
+    ];
+
+    $stmt = $pdo->prepare(
+        'SELECT ambiente, credencial_publica, '
+        . 'CASE WHEN credencial_cifrada IS NULL OR credencial_cifrada = \'\' THEN 0 ELSE 1 END AS tieneSecreto '
+        . 'FROM pago_pasarela_credencial WHERE cuenta_id = :c AND proveedor = :p'
+    );
+    $stmt->execute([':c' => $cuentaId, ':p' => $proveedor]);
+
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+        $amb = (string) $fila['ambiente'];
+        if (! isset($llavero[$amb])) {
+            continue;
+        }
+        $llavero[$amb] = [
+            'apiKey'       => (string) ($fila['credencial_publica'] ?? ''),
+            'tieneSecreto' => (int) $fila['tieneSecreto'] === 1,
+        ];
+    }
+
+    return $llavero;
+}
+
+/**
+ * POST /configuracion/pagos.
+ *
+ * EL SECRETO EN BLANCO SIGNIFICA "NO LO CAMBIES", y por eso el UPDATE se arma en
+ * dos formas. Si se guardara la cadena vacia, editar la url de retorno borraria
+ * la llave con la que se cobra, y el sintoma seria correos retenidos sin motivo
+ * aparente horas despues.
+ *
+ * NO SE PUEDE ACTIVAR SIN LLAVES: encender el interruptor sin credenciales
+ * dejaria todos los correos de la empresa esperando un link que nunca va a
+ * llegar. Se rechaza aqui, con el motivo, en vez de dejar que se descubra
+ * mirando por que no sale ninguna factura.
+ */
+function handlePagosConfigPost(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    $proveedor  = trim((string) ($_POST['proveedor'] ?? 'flow'));
+    $ambiente   = AmbientePasarela::desde($_POST['ambiente_activo'] ?? null);
+    $urlRetorno = trim((string) ($_POST['url_retorno'] ?? ''));
+    $habilitado = ! empty($_POST['habilitado']);
+
+    // UNA PAREJA POR AMBIENTE, Y LAS DOS LLEGAN JUNTAS O NO LLEGAN.
+    //
+    // Aqui estaba el fallo mas probable del modelo viejo: la apiKey se
+    // sobrescribia SIEMPRE y el secreto solo si se escribia. El camino natural al
+    // pasar a produccion -- pegar la apiKey nueva y dejar el secreto en blanco,
+    // porque la pantalla ensena que en blanco significa "no la toques" --
+    // producia apiKey de produccion con secretKey de sandbox: todas las firmas
+    // invalidas y ningun mensaje que lo explicara. Ahora cada ambiente tiene su
+    // fila y su par: mezclarlos es imposible.
+    $entradas = [
+        'sandbox' => [
+            'apiKey'  => trim((string) ($_POST['apikey_sandbox'] ?? '')),
+            'secreto' => trim((string) ($_POST['secreto_sandbox'] ?? '')),
+        ],
+        'produccion' => [
+            'apiKey'  => trim((string) ($_POST['apikey_produccion'] ?? '')),
+            'secreto' => trim((string) ($_POST['secreto_produccion'] ?? '')),
+        ],
+    ];
+
+    $llaveroPrevio = credencialesPorAmbiente($pdo, $cuentaId, $proveedor);
+
+    $stmt = $pdo->prepare('SELECT ambiente_activo FROM pago_pasarela_cuenta WHERE cuenta_id = :c LIMIT 1');
+    $stmt->execute([':c' => $cuentaId]);
+    $filaPrevia       = $stmt->fetch(PDO::FETCH_ASSOC);
+    $ambienteAnterior = $filaPrevia === false ? null : (string) $filaPrevia['ambiente_activo'];
+
+    // --- validacion ---------------------------------------------------------
+    $errores = [];
+
+    if (! in_array($proveedor, FabricaPasarela::proveedores(), true)) {
+        $errores['proveedor'] = 'Esa pasarela no esta disponible.';
+    }
+    if ($urlRetorno !== '' && ! str_starts_with($urlRetorno, 'https://')) {
+        $errores['url_retorno'] = 'La direccion tiene que empezar por https://';
+    }
+
+    foreach ($entradas as $amb => $dato) {
+        $yaTenia = $llaveroPrevio[$amb]['tieneSecreto'];
+
+        // SECRETO EN BLANCO AL EDITAR = conservar el de ESE ambiente. Nunca el
+        // del otro: viven en filas distintas y no hay forma de confundirlos.
+        // SECRETO EN BLANCO AL CREAR = rechazar. Una apiKey sin su secreto no
+        // sirve para nada y guardarla daria la impresion de que ya esta.
+        if ($dato['apiKey'] !== '' && $dato['secreto'] === '' && ! $yaTenia) {
+            $errores['secreto_' . $amb] = 'Falta la Secret Key de ' . $amb . '. '
+                . 'Las dos llaves van juntas: una API Key sin su secreto no sirve para cobrar.';
+        }
+        if ($dato['apiKey'] === '' && $dato['secreto'] !== '') {
+            $errores['apikey_' . $amb] = 'Falta la API Key de ' . $amb . '.';
+        }
+    }
+
+    // ACTIVAR PRODUCCION EXIGE LAS LLAVES DE PRODUCCION. No se hereda nada de
+    // sandbox: si no hay fila de produccion, no hay cobro en produccion.
+    if ($habilitado && $errores === []) {
+        $ambClave    = $ambiente->value;
+        $tendraApi   = $entradas[$ambClave]['apiKey'] !== '' || $llaveroPrevio[$ambClave]['apiKey'] !== '';
+        $tendraSecre = $entradas[$ambClave]['secreto'] !== '' || $llaveroPrevio[$ambClave]['tieneSecreto'];
+
+        if (! $tendraApi || ! $tendraSecre) {
+            $errores['ambiente_activo'] = sprintf(
+                'Para cobrar en %s hacen falta la API Key Y la Secret Key de %s. '
+                . 'Sin ellas, todos tus correos se quedarian esperando un link que no llegaria.',
+                $ambClave,
+                $ambClave
+            );
+        }
+    }
+
+    if ($errores !== []) {
+        $llaveroVista = $llaveroPrevio;
+        foreach ($entradas as $amb => $dato) {
+            if ($dato['apiKey'] !== '') {
+                $llaveroVista[$amb]['apiKey'] = $dato['apiKey'];
+            }
+        }
+
+        vista('pagos-config', [
+            'config' => [
+                'proveedor'       => $proveedor,
+                'ambiente_activo' => $ambiente->value,
+                'habilitado'      => $habilitado,
+                'url_retorno'     => $urlRetorno,
+            ],
+            'credenciales' => $llaveroVista,
+            'errores'      => $errores,
+            'proveedores'  => FabricaPasarela::proveedores(),
+            'navActivo'    => 'config.pagos',
+        ]);
+    }
+
+    // --- guardado -----------------------------------------------------------
+    //
+    // CAMBIAR EL AMBIENTE ACTIVO NO TOCA NINGUNA CREDENCIAL: son dos tablas y
+    // dos escrituras independientes. Pasar a produccion y volver a sandbox deja
+    // las dos parejas intactas.
+    $pdo->prepare(
+        'INSERT INTO pago_pasarela_cuenta (cuenta_id, proveedor, ambiente_activo, habilitado, url_retorno) '
+        . 'VALUES (:c, :p, :a, :h, :u) '
+        . 'ON DUPLICATE KEY UPDATE proveedor = :p2, ambiente_activo = :a2, habilitado = :h2, url_retorno = :u2'
+    )->execute([
+        ':c' => $cuentaId, ':p' => $proveedor, ':a' => $ambiente->value,
+        ':h' => $habilitado ? 1 : 0, ':u' => $urlRetorno !== '' ? $urlRetorno : null,
+        ':p2' => $proveedor, ':a2' => $ambiente->value,
+        ':h2' => $habilitado ? 1 : 0, ':u2' => $urlRetorno !== '' ? $urlRetorno : null,
+    ]);
+
+    $cambiados = [];
+    foreach ($entradas as $amb => $dato) {
+        if ($dato['apiKey'] === '' && $dato['secreto'] === '') {
+            continue;   // ese ambiente no se toco
+        }
+
+        $cifrado = $dato['secreto'] !== ''
+            ? (new CertificadoCrypto(kekMaestra()))->cifrar($dato['secreto'])
+            : null;
+
+        $sql = 'INSERT INTO pago_pasarela_credencial (cuenta_id, proveedor, ambiente, credencial_publica'
+            . ($cifrado !== null ? ', credencial_cifrada' : '') . ') '
+            . 'VALUES (:c, :p, :a, :k' . ($cifrado !== null ? ', :s' : '') . ') '
+            . 'ON DUPLICATE KEY UPDATE credencial_publica = :k2'
+            . ($cifrado !== null ? ', credencial_cifrada = :s2' : '');
+
+        $params = [
+            ':c' => $cuentaId, ':p' => $proveedor, ':a' => $amb,
+            ':k' => $dato['apiKey'], ':k2' => $dato['apiKey'],
+        ];
+        if ($cifrado !== null) {
+            $params[':s']  = $cifrado;
+            $params[':s2'] = $cifrado;
+        }
+        $pdo->prepare($sql)->execute($params);
+
+        $cambiados[$amb] = $cifrado !== null ? '(apiKey y secreto)' : '(solo apiKey)';
+    }
+
+    // Pasar de sandbox a produccion es el momento en que esta empresa empieza a
+    // cobrar dinero de verdad, y tiene que quedar con nombre y hora. Los secretos
+    // no, por razones obvias: solo que ambiente se toco.
+    registrarAuditoria(
+        $pdo,
+        Auth::usuarioId(),
+        'pago.pasarela.guardada',
+        'cuenta',
+        $cuentaId,
+        $ambienteAnterior === null ? null : ['ambiente_activo' => $ambienteAnterior],
+        [
+            'proveedor'       => $proveedor,
+            'ambiente_activo' => $ambiente->value,
+            'habilitado'      => $habilitado ? 1 : 0,
+            'credenciales'    => $cambiados === [] ? '(sin cambios)' : $cambiados,
+        ]
+    );
+
+    if (! $habilitado) {
+        flashSet('exito', 'Guardado. El cobro en linea esta desactivado: tus correos salen sin boton de pago. '
+            . 'Los links ya enviados siguen funcionando y sus pagos se siguen registrando.');
+    } elseif ($ambiente->esProduccion()) {
+        flashSet('exito', 'Cobro en linea activado EN PRODUCCION: los pagos son reales. '
+            . 'Las facturas que emitas de ahora en adelante llevaran el boton de pago.');
+    } else {
+        flashSet('advertencia', 'Cobro en linea activado en SANDBOX: los pagos NO son reales y el '
+            . 'dinero no llega a tu cuenta. Sirve para probar. Cambia a Produccion cuando quieras cobrar de verdad.');
+    }
+    redirigirPrg('/configuracion/pagos');
+}
+
+function handleCorreoEnviarSinLinkPost(int $envioId): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+
+    // cuenta_id en el WHERE y desde la SESION, nunca desde la peticion: es lo
+    // que impide soltar el correo de otro tenant escribiendo otro id en la url.
+    $stmt = $pdo->prepare(
+        "UPDATE dte_pago_link p "
+        . 'INNER JOIN dte_envio_correo q ON q.dte_emitido_id = p.dte_emitido_id '
+        . "SET p.estado = 'omitido', p.ultimo_error = NULL "
+        . "WHERE q.id = :id AND q.cuenta_id = :c AND p.estado <> 'pagado'"
+    );
+    $stmt->execute([':id' => $envioId, ':c' => $cuentaId]);
+
+    if ($stmt->rowCount() === 1) {
+        registrarAuditoria($pdo, Auth::usuarioId(), 'pago.link.omitido', 'dte_envio_correo', $envioId, null, null);
+        flashSet('exito', 'El correo saldra sin link de pago en la proxima pasada (cada 5 minutos).');
+    } else {
+        // No se encontro, es de otra cuenta, o ya estaba pagada. Un solo mensaje
+        // para los tres: distinguirlos le diria a quien sondea si ese id existe.
+        flashSet('advertencia', 'No se pudo soltar ese correo. Puede que ya no estuviera esperando.');
+    }
+
+    redirigirPrg('/ventas/correos');
+}
+
+/**
+ * POST /pagos/flow/confirmacion/{cuentaId} -- el aviso de pago de la pasarela.
+ *
+ * PUBLICA Y SIN CSRF, porque la llama Flow desde sus servidores. Y TAMPOCO VIENE
+ * FIRMADA: aqui decia que se rehacia el HMAC de lo recibido con el secreto de la
+ * empresa, y eso era falso. Flow manda POST con el cuerpo token=<token> y nada
+ * mas; la firma HMAC es de las peticiones que SALEN hacia su API. Mientras se
+ * exigio, todo aviso real se respondio con 403 y ningun pago se registro por
+ * aqui.
+ *
+ * LO QUE LA PROTEGE ES NO CREERSE EL CUERPO. Del POST solo se toma un token; la
+ * orden se busca acotando por la cuenta de la url, y el estado se le pregunta a
+ * Flow con las credenciales de esa empresa. Un POST inventado no mueve una fila.
+ *
+ * NO SE CREE QUE TODO AVISO ES UN PAGO. Flow avisa igual cuando el pago se
+ * rechaza, y su aviso solo trae un token. Por eso se le vuelve a preguntar por
+ * el estado real antes de marcar nada, y solo un 'pagada' con el MONTO EXACTO
+ * marca la factura: dar por pagada una factura que nadie pago es un error que no
+ * se descubre hasta que alguien reclama.
+ *
+ * RESPONDE 200 CASI SIEMPRE -- pago rechazado, orden ajena, consulta caida --
+ * porque para la pasarela 200 significa "recibido" y NO REINTENTA: llama una vez,
+ * espera 200 en 15 segundos y si no, manda un correo de alerta y se olvida (el
+ * pago sigue cobrado de su lado). Lo que recupera un aviso perdido es NUESTRO
+ * conciliador. Solo se sale del 200 cuando la cuenta de la url no tiene pasarela
+ * configurada (403) o no se pudo descifrar su secreto (500).
+ */
+function handleConfirmacionPagoPost(int $cuentaId): never
+{
+    header('Content-Type: text/plain; charset=utf-8');
+
+    // TODA LA DECISION VIVE EN ConfirmacionPago, en src/. Aqui solo se le pasa lo
+    // que necesita y se emite lo que devuelve.
+    //
+    // POR QUE ASI: es la superficie de mayor consecuencia del modulo -- decide si
+    // una factura se da por pagada -- y dentro de este archivo no habia forma de
+    // probarla. Fuera, cada escenario (token ajeno, cuenta sin pasarela, monto distinto,
+    // consulta caida, aviso repetido) es un test.
+    $resultado = ConfirmacionPago::procesar(
+        Db::conexion(),
+        $cuentaId,
+        $_POST,
+        static fn (string $cifrado): string => (new CertificadoCrypto(kekMaestra()))->descifrar($cifrado),
+    );
+
+    // El motivo va al log, nunca al cuerpo: quien llama es la pasarela, y una
+    // respuesta que explique POR QUE se rechazo le sirve a quien sondea.
+    if ($resultado['codigo'] !== 200) {
+        error_log(sprintf(
+            'confirmacion de pago: cuenta %d, HTTP %d -- %s',
+            $cuentaId,
+            $resultado['codigo'],
+            $resultado['motivo']
+        ));
+    } elseif (str_contains($resultado['motivo'], 'MONTO DISTINTO')) {
+        // Un descuadre de monto es un 200 (la pasarela no tiene que reintentar)
+        // pero es lo mas grave que puede pasar aqui: va al log igual.
+        error_log(sprintf('confirmacion de pago: cuenta %d -- %s', $cuentaId, $resultado['motivo']));
+    }
+
+    http_response_code($resultado['codigo']);
+    echo $resultado['cuerpo'];
+
+    // EL exit NO ES DECORACION: SIN EL, LA RESPUESTA A LA PASARELA SALIA ROTA.
+    //
+    // Los `if` del despacho no llevan exit porque los handlers de este router
+    // terminan solos: casi todos acaban en vista() o en redirigir(), que estan
+    // declaradas `never`. Este hace echo directo y volvia, asi que la ejecucion
+    // seguia bajando por el front controller hasta el 404 final y le concatenaba
+    // su cuerpo. Flow recibia, textualmente:
+    //
+    //     ok404 - ruta no encontrada
+    //
+    // El pago SI se procesaba -- por eso costo verlo --, pero la respuesta era un
+    // 200 con basura pegada. Y el http_response_code(404) de ahi abajo no se
+    // notaba solo porque este echo ya habia mandado los headers; en el camino de
+    // 403 el cuerpo tambien salia contaminado.
+    //
+    // Misma forma que handleOrdenCompraPdfGet(), el otro handler que escribe su
+    // propio cuerpo: `never` en la firma y exit al final.
+    exit;
+}
+
+
+/**
+ * La pagina a la que vuelve el PAGADOR desde la pasarela.
+ *
+ * NO CONFIRMA NADA, y esa es toda su razon de ser. La confirmacion la deciden
+ * Flow -> /pagos/flow/confirmacion/{cuenta} -> ConfirmacionPago, y el barrido de
+ * ReconciliadorPagos; los dos preguntan a la pasarela con credenciales y cuadran
+ * el monto. Esto de aqui solo LEE lo que ellos ya escribieron y lo traduce a una
+ * frase. No hay un solo UPDATE en este camino.
+ *
+ *
+ * POR QUE SE LLAMA ...Get SI EL ROUTER LA DESPACHA TAMBIEN EN POST
+ * -----------------------------------------------------------------------------
+ * Por la convencion del archivo: Get es el handler que PINTA y Post el que MUTA.
+ * Este pinta en los dos metodos, asi que Get es el sufijo correcto -- llamarlo
+ * Post prometeria un efecto que no tiene.
+ *
+ * EL METODO DE VERDAD ES POST. Flow redirige el navegador a la url de retorno
+ * con un POST que lleva el token; su cliente PHP oficial lee exactamente
+ * filter_input(INPUT_POST, 'token'). GET se mantiene por dos motivos concretos,
+ * no por simetria: el pagador puede recargar la pagina (y el navegador rehacer
+ * la peticion como GET), o pegar la direccion. Sin la rama GET, alguien que
+ * acaba de pagar veria un 404. Es una pagina de solo lectura: admitir los dos
+ * metodos no abre nada.
+ *
+ * ESTA RUTA ESTA EXENTA DE CSRF a proposito (ver el bloque del gate): el POST lo
+ * origina Flow, no un formulario nuestro, asi que no puede llevar nuestro token.
+ * La exencion es inofensiva porque no hay nada que falsificar: la peticion no
+ * cambia estado.
+ *
+ * NUNCA MUESTRA UN ERROR PHP. Quien mira esta pantalla acaba de darnos dinero;
+ * un stack trace ahi es lo peor que le puede pasar a esa persona. Cualquier
+ * fallo cae en la pagina neutra de "estamos verificando", que ademas es cierta.
+ */
+function handleRetornoPagoGet(): void
+{
+    $token = EstadoRetornoPago::tokenDeLaPeticion($_POST, $_GET);
+
+    try {
+        $estadoRetorno = EstadoRetornoPago::resolver(Db::conexion(), $token);
+    } catch (Throwable $e) {
+        // Ni siquiera se pudo abrir la base. Se registra para nosotros y el
+        // pagador ve la pagina neutra, que en ese momento es literalmente cierta.
+        error_log('retorno de pago: ' . $e->getMessage());
+        $estadoRetorno = EstadoRetornoPago::VERIFICANDO;
+    }
+
+    // Esta pagina depende del token de un pago concreto: cachearla en un proxy
+    // compartido serviria el estado de una persona a la siguiente.
+    header('Cache-Control: no-store, private');
+
+    vista('pago-retorno', ['estadoRetorno' => $estadoRetorno]);
+}
+
+
 function handleCorreosListadoGet(): void
 {
     $pdo      = Db::conexion();
@@ -5932,8 +6492,13 @@ function handleCorreosListadoGet(): void
 
     $stmt = $pdo->prepare(
         'SELECT q.id, q.destinatario, q.estado, q.intentos, q.ultimo_error, q.enviado_at, q.created_at, '
-        . '       e.tipo_dte, e.folio, e.receptor_rut '
+        . '       e.tipo_dte, e.folio, e.receptor_rut, '
+        // El estado del cobro de cada documento. LEFT JOIN por BIGINT, que no
+        // cruza collations. Sin fila = a ese documento no le toca link (o
+        // todavia no se ha intentado), y la vista lo pinta como un guion.
+        . '       p.estado AS pago_estado, p.ultimo_error AS pago_error, p.created_at AS pago_desde '
         . 'FROM dte_envio_correo q JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+        . 'LEFT JOIN dte_pago_link p ON p.dte_emitido_id = q.dte_emitido_id '
         . $where . ' ORDER BY q.created_at DESC, q.id DESC LIMIT :lim OFFSET :off'
     );
     foreach ($params as $k => $v) {
@@ -10360,8 +10925,35 @@ if ($ruta === '') {
 //  un front controller COMPLETAMENTE APARTE (public/index.php en la raiz del
 //  repo, no panel/public/index.php) y se autentica por X-Api-Key, nunca por
 //  cookie -- por eso no aplica CSRF ahi y no hay nada que excluir aqui.
+//
+//  LA UNICA EXCEPCION, Y POR QUE LO ES
+//  ---------------------------------------------------------------------------
+//  POST /pagos/flow/confirmacion. La llama la pasarela de pago desde SUS
+//  servidores para avisar de un pago: no viene de un formulario, no trae cookie
+//  de sesion y no puede traer un token que solo existe dentro de una sesion
+//  nuestra. Exigirle CSRF no la protege de nada -- la haria fallar siempre.
+//
+//  Y NO, NO LA PROTEGE UNA FIRMA. Aqui decia que el handler rehacia el HMAC del
+//  cuerpo con el secreto de la empresa; era falso, y mientras se hizo, todo aviso
+//  real de Flow murio en un 403. Flow manda POST con el cuerpo token=<token> y
+//  nada mas: la firma HMAC es de las peticiones que SALEN hacia su API.
+//
+//  LO QUE LA PROTEGE ES NO CREERLE AL CUERPO. Del POST se saca un token, se busca
+//  la orden acotando por la cuenta de la url, y el estado se le pregunta a Flow
+//  por el canal con credenciales (payment/getStatus, esa si firmada); solo un
+//  'pagada' con el monto exacto marca la factura. Un POST inventado no mueve
+//  ninguna fila. Ver ConfirmacionPago, que lo explica entero.
+//
+//  La excepcion es UNA ruta escrita literal. Nada de prefijos ni de patrones:
+//  un '/pagos/' abierto seria una puerta por la que entraria cualquier POST
+//  futuro que alguien cuelgue ahi sin pensar en esto.
 // ===========================================================================
-if ($metodo === 'POST' && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))) {
+if (
+    $metodo === 'POST'
+    && ! preg_match(PATRON_CONFIRMACION_PAGO, $ruta)
+    && $ruta !== RUTA_RETORNO_PAGO
+    && ! Csrf::validar((string) ($_POST['csrf_token'] ?? ''))
+) {
     http_response_code(403);
     header('Content-Type: text/html; charset=utf-8');
     echo '<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><title>Solicitud invalida</title></head><body>'
@@ -10927,6 +11519,49 @@ if ($metodo === 'POST' && $ruta === '/ventas/correos/buscar-destinatarios') {
 if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/buscar-destinatario$#', $ruta, $mBuscar)) {
     Auth::requerirSesion();
     handleCorreoBuscarDestinatarioPost((int) $mBuscar[1]);
+}
+
+if ($metodo === 'GET' && $ruta === '/configuracion/pagos') {
+    Auth::requerirSesion();
+    handlePagosConfigGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/configuracion/pagos') {
+    Auth::requerirSesion();
+    handlePagosConfigPost();
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/enviar-sin-link$#', $ruta, $mSinLink)) {
+    Auth::requerirSesion();
+    handleCorreoEnviarSinLinkPost((int) $mSinLink[1]);
+}
+
+// SIN Auth::requerirSesion(), y es lo unico de este router que lo omite a
+// proposito: la llama la pasarela de pago desde sus servidores.
+//
+// Y NO LA AUTENTICA NINGUNA FIRMA. Aqui decia que lo hacia la firma del cuerpo;
+// era falso, y mientras se comprobo, todo aviso real de Flow se respondio con un
+// 403. Flow manda POST con el cuerpo token=<token de la transaccion> y nada mas.
+//
+// LO QUE SOSTIENE ESTA RUTA ES QUE EL TOKEN NO ACREDITA NADA. Con el se busca la
+// orden acotando por la cuenta de la url, y el estado se le pregunta a Flow por
+// nuestro propio canal -- payment/getStatus con la apiKey y el secretKey de ESA
+// cuenta, esa peticion si firmada --; solo un 'pagada' con el MONTO EXACTO marca
+// la factura. Un POST inventado no mueve ninguna fila.
+//
+// Declarada en PATRONES_PUBLICOS y exceptuada del CSRF con la MISMA constante,
+// para que las tres no puedan divergir.
+if ($metodo === 'POST' && preg_match(PATRON_CONFIRMACION_PAGO, $ruta, $mPago)) {
+    handleConfirmacionPagoPost((int) $mPago[1]);
+}
+
+// Sin sesion: la abre el cliente de nuestro cliente, que no tiene cuenta aqui.
+if ($metodo === 'GET' && $ruta === RUTA_RETORNO_PAGO) {
+    handleRetornoPagoGet();
+}
+
+if ($metodo === 'POST' && $ruta === RUTA_RETORNO_PAGO) {
+    handleRetornoPagoGet();
 }
 
 if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)$#', $ruta, $mDoc)) {

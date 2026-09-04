@@ -30,7 +30,7 @@ final class MySqlClienteRepository
 {
     /** Columnas devueltas al anfitrion (nunca se expone nada mas). */
     private const COLUMNAS = 'id, rut_cliente, razon_social, giro, direccion, comuna, '
-        . 'email, telefono, activo, created_at, updated_at';
+        . 'email, telefono, pago_link, activo, created_at, updated_at';
 
     public function __construct(private readonly PDO $pdo)
     {
@@ -198,8 +198,8 @@ final class MySqlClienteRepository
     public function crear(int $cuentaId, array $datos): int
     {
         $stmt = $this->pdo->prepare(
-            'INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, giro, direccion, comuna, email, telefono) '
-            . 'VALUES (:cuenta_id, :rut, :razon, :giro, :dir, :comuna, :email, :tel)'
+            'INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, giro, direccion, comuna, email, telefono, pago_link) '
+            . 'VALUES (:cuenta_id, :rut, :razon, :giro, :dir, :comuna, :email, :tel, :pago_link)'
         );
         try {
             $stmt->execute($this->paramsEscritura($cuentaId, $datos));
@@ -262,7 +262,8 @@ final class MySqlClienteRepository
         }
         $stmt = $this->pdo->prepare(
             'UPDATE cliente SET rut_cliente = :rut, razon_social = :razon, giro = :giro, '
-            . 'direccion = :dir, comuna = :comuna, email = :email, telefono = :tel '
+            . 'direccion = :dir, comuna = :comuna, email = :email, telefono = :tel, '
+            . 'pago_link = :pago_link '
             . 'WHERE id = :id AND cuenta_id = :cuenta_id'
         );
         $params       = $this->paramsEscritura($cuentaId, $datos);
@@ -318,6 +319,11 @@ final class MySqlClienteRepository
             ':comuna'    => $this->nullSiVacio($datos['comuna'] ?? null),
             ':email'     => $this->nullSiVacio($datos['email'] ?? null),
             ':tel'       => $this->nullSiVacio($datos['telefono'] ?? null),
+            // 1 por defecto, y el default importa: si un formulario todavia no
+            // manda el campo -- una integracion, un script viejo -- el cliente
+            // queda INCLUIDO, que es lo que dice la columna en la base. Excluir
+            // por omision seria apagar el cobro sin que nadie lo pidiera.
+            ':pago_link' => isset($datos['pago_link']) ? (int) ((bool) $datos['pago_link']) : 1,
         ];
     }
 
@@ -362,6 +368,7 @@ final class MySqlClienteRepository
             'comuna'       => $row['comuna'] !== null ? (string) $row['comuna'] : null,
             'email'        => $row['email'] !== null ? (string) $row['email'] : null,
             'telefono'     => $row['telefono'] !== null ? (string) $row['telefono'] : null,
+            'pago_link'    => (bool) $row['pago_link'],
             'activo'       => (bool) $row['activo'],
             'created_at'   => (string) $row['created_at'],
             'updated_at'   => (string) $row['updated_at'],

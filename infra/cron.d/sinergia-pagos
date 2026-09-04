@@ -1,0 +1,3 @@
+# sinergia_fac_bol -- conciliar pagos pendientes, cada 5 minutos
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+*/5 * * * * root /usr/bin/flock -n /run/lock/sinergia_conciliar_pagos.lock /usr/bin/docker exec sinergia_motor php /app/scripts/conciliar_pagos.php >> /var/log/sinergia_pagos.log 2>&1
