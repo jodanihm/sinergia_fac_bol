@@ -32,6 +32,19 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-09-04',
+        'version' => '1.59',
+        'titulo'  => 'Una nota de credito sobre una factura exenta ya no se emite con IVA',
+        'tag'     => 'backend',
+        'items'   => [
+            'Al hacer una nota de credito para anular una factura EXENTA, la nota salia con IVA: la factura era de $29.990 sin impuesto y la nota se emitia por $35.688. El SII la rechazo y el folio se perdio igual, porque el numero se reserva antes de mandar el documento.',
+            'Por que pasaba: en el formulario la casilla "Exento" habla de la nota que estas creando, no de la factura que estas anulando, asi que nadie la marcaba. Y una nota con IVA sobre un documento que nunca lo tuvo no corrige nada.',
+            'Ahora, en cuanto escribes el tipo de documento que la nota corrige (34 factura exenta, 32, 38 o 41), el detalle se marca exento entero, la casilla se bloquea y aparece un aviso explicando por que. Ya no hay nada que recordar.',
+            'Y si el documento llegara igual con IVA -- por ejemplo desde un sistema externo conectado por API --, se rechaza ANTES de reservar el folio, con un mensaje que dice que linea corregir. Un error asi ya no cuesta un folio.',
+            'Las notas de credito sobre facturas normales no cambian en nada: siguen pudiendo llevar lineas afectas y exentas como siempre.',
+        ],
+    ],
+    [
         'fecha'   => '2026-09-03',
         'version' => '1.58',
         'titulo'  => 'Las llaves de prueba y las de cobro real se guardan por separado',

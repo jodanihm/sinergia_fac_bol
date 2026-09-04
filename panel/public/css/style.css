@@ -159,6 +159,14 @@
     --sombra-lg: 0 18px 45px rgba(20, 40, 90, 0.13);
 }
 
+/* El atributo hidden GANA a cualquier display de una clase.
+   Sin esta regla, hidden solo funciona en elementos cuyo display nadie fija: en
+   .alerta (display:flex) o .form-ayuda (display:block) el elemento sigue a la
+   vista, porque la especificidad de una clase supera al display:none que el
+   navegador aplica a [hidden]. El primer sitio donde se noto fue el aviso de
+   "esta nota va exenta" del formulario de emision, que arranca oculto. */
+[hidden] { display: none !important; }
+
 body {
     font-family: system-ui, sans-serif;
     max-width: 640px;

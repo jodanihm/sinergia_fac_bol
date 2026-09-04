@@ -622,6 +622,52 @@ if ($metodo === 'POST' && preg_match('#^/api/v1/dte/(\d+)/(\d+)/anular$#', $ruta
 
 responder(404, ['error' => 'ruta no encontrada', 'metodo' => $metodo, 'ruta' => $ruta]);
 
+/**
+ * UNA NOTA QUE CORRIGE UN DOCUMENTO SIN IVA NO PUEDE LLEVAR LINEAS AFECTAS.
+ *
+ * Si el TpoDocRef de la referencia madre es de los que no llevan IVA
+ * (TipoDte::SIN_IVA, que es donde vive la lista y su por que), todas las
+ * lineas de la NC/ND tienen que venir exento=true. Es la misma regla que ya
+ * rige dentro de un tipo 34, corrida un documento hacia el lado: el builder
+ * decide POR DATOS (src/Sii/DteXmlBuilder.php:171-205) y emite MntNeto, TasaIVA
+ * e IVA en cuanto ve un peso afecto, sin mirar a que apunta la referencia. Una
+ * nota asi sale con un IVA que el documento original nunca tuvo, el SII la
+ * rechaza, Y EL FOLIO QUEDA QUEMADO IGUAL porque se asigna antes de enviar.
+ *
+ * Se valida aqui, ANTES de asignar folio y antes de tocar el SII, que es el
+ * contrato de validarDocumentoDte(). El formulario del panel ahora tambien
+ * fuerza la casilla cuando el usuario teclea un tipo de referencia sin IVA,
+ * pero eso es comodidad: la regla vive en el motor porque al cliente no se le
+ * cree nunca -- las api_key 'externa' emiten por este mismo endpoint.
+ *
+ * NO SE HACE AL REVES. Una nota EXENTA sobre una factura 33 es legitima: un 33
+ * puede traer lineas exentas y la nota puede corregir justo esas.
+ *
+ * @param list<mixed>|array<mixed> $detalles
+ */
+function exigirLineasExentasSiLaRefEsExenta(array $detalles, int $tipoRef, string $p): void
+{
+    if (! TipoDte::esSinIva($tipoRef)) {
+        return;
+    }
+    foreach ($detalles as $i => $d) {
+        if (! is_array($d) || ! empty($d['exento'])) {
+            continue;
+        }
+        invalido(
+            sprintf(
+                '%sdetalles[%s]: la nota referencia un documento tipo %d, que no lleva IVA, '
+                . 'asi que no puede tener lineas afectas; marca exento=true en todas. '
+                . 'Emitirla asi la haria rechazar por el SII con el folio ya consumido.',
+                $p,
+                (string) $i,
+                $tipoRef,
+            ),
+            "{$p}detalles[{$i}].exento",
+        );
+    }
+}
+
 // ===========================================================================
 //  Validacion compartida de UN documento DTE (forma del body de POST /api/v1/dte)
 //
@@ -961,6 +1007,10 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
     if (in_array($tipoDte, [61, 56], true)) {
         $tiposDteRef = [29, 30, 32, 33, 34, 35, 38, 39, 40, 41, 43, 45, 46, 48, 50, 52, 55, 56, 60, 61, 103, 110, 111, 112];
         $tieneRefValida = false;
+        // Tipo del documento que la nota corrige o anula. Queda en null cuando
+        // la referencia madre es intra-lote (refIndiceLote): ahi el tipo lo
+        // resuelve el handler del lote, que si conoce los otros documentos.
+        $tipoRefMadre = null;
         foreach ($referencias as $ref) {
             if (! is_array($ref)) {
                 continue;
@@ -980,6 +1030,7 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
                 && is_numeric($folioRef) && (int) $folioRef > 0
             ) {
                 $tieneRefValida = true;
+                $tipoRefMadre   = (int) $tipoRef;
                 break;
             }
         }
@@ -988,6 +1039,9 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
                 'NC/ND requiere al menos una referencia a un documento tributario valido (TpoDocRef numerico valido, FolioRef > 0, mas FchRef/CodRef/RazonRef)',
                 "{$p}referencias",
             );
+        }
+        if ($tipoRefMadre !== null) {
+            exigirLineasExentasSiLaRefEsExenta($detalles, $tipoRefMadre, $p);
         }
     }
 
@@ -1380,6 +1434,17 @@ function emitirDteLote(array $tenant): never
             }
             if ($k > $i) {
                 invalido("{$campo} debe apuntar a un documento ANTERIOR del lote", $campo);
+            }
+            // MISMA REGLA QUE EN EL UNITARIO, con el tipo resuelto aqui: en una
+            // referencia intra-lote no hay TpoDocRef que mirar, pero el
+            // documento referenciado es $validados[$k] y ya paso por
+            // validarDocumentoDte() (el indice es ANTERIOR, comprobado arriba).
+            if (in_array($v['tipoDte'], [61, 56], true)) {
+                exigirLineasExentasSiLaRefEsExenta(
+                    $v['detalles'],
+                    (int) $validados[$k]['tipoDte'],
+                    "documentos[{$i}].",
+                );
             }
         }
 

@@ -60,6 +60,45 @@ enum TipoDte: int
     public const MANEJADOS = [33, 34, 61, 56, 39];
 
     /**
+     * Tipos que POR DEFINICION no llevan IVA, en INT CRUDO.
+     *
+     *   32  Factura de venta de bienes y servicios no afectos o exentos de IVA
+     *   34  Factura no afecta o exenta electronica
+     *   38  Boleta exenta
+     *   41  Boleta no afecta o exenta electronica
+     *
+     * NO ES esExento() NI PUEDE SERLO, y por eso es una lista de enteros y no un
+     * match sobre casos. esExento() responde sobre un TipoDte, o sea sobre los
+     * siete tipos que este enum modela; 32 y 38 no son casos -- son documentos en
+     * PAPEL, que este sistema no emite. Pero SI pueden aparecer como TpoDocRef de
+     * una nota de credito electronica: se corrige en electronico un documento que
+     * se emitio en papel, y ese es un uso normal. from() reventaria con ellos.
+     *
+     * PARA QUE SE CONSULTA: una NC (61) o ND (56) que corrige uno de estos NO
+     * puede llevar lineas afectas. El documento original nunca tuvo IVA, asi que
+     * una nota con IVA no lo corrige -- declara un impuesto que no existe, el SII
+     * la rechaza, y el folio se pierde igual porque se asigna antes de enviar.
+     *
+     * NO ESTAN LOS DE EXPORTACION (110, 111, 112): tambien van sin IVA, pero se
+     * corrigen con nota de exportacion (111/112) y no con 61/56, asi que no
+     * pueden llegar a esta pregunta.
+     *
+     * @var list<int>
+     */
+    public const SIN_IVA = [32, 34, 38, 41];
+
+    /**
+     * Si un tipo, EN INT CRUDO, es de los que no llevan IVA. Mismo patron que
+     * nombreDe(): recibe el int porque quien pregunta lo tiene asi -- el
+     * TpoDocRef de una referencia sale de un formulario o de un JSON -- y
+     * tryFrom() no sirve, porque 32 y 38 no son casos del enum.
+     */
+    public static function esSinIva(int $tipo): bool
+    {
+        return in_array($tipo, self::SIN_IVA, true);
+    }
+
+    /**
      * Nombre CORTO, el de la interfaz. Es el que va en tablas, badges y
      * selectores: en una tabla el nombre largo estorba, y .tabla-scroll ya
      * desborda por debajo de 1024px sin ayuda.

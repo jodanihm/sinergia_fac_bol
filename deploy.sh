@@ -512,6 +512,7 @@ verificar_tests_de_migracion() {
              -v "$APP_DIR/src:/app/src:ro" \
              -v "$APP_DIR/tests:/app/tests:ro" \
              -v "$APP_DIR/panel:/app/panel:ro" \
+             -v "$APP_DIR/public:/app/public:ro" \
              -v "$APP_DIR/integration:/app/integration:ro" \
              -v "$APP_DIR/scripts:/app/scripts:ro" \
              -v "$APP_DIR/phpunit.xml:/app/phpunit.xml:ro" \
@@ -552,7 +553,16 @@ verificar_suite() {
 
   # Se montan los directorios UNO A UNO y no el repo entero sobre /app: montar
   # /app taparia el vendor/ de la imagen, que es lo unico que esta imagen
-  # aporta. La config de OpenSSL se monta tambien, para que la suite corra con
+  # aporta.
+  #
+  # public/ TAMBIEN SE MONTA, y faltaba. La imagen de tests hereda de
+  # sinergia_panel:latest, que en este punto del script es todavia la del deploy
+  # ANTERIOR -- las imagenes se construyen en el paso 5, despues de esto. Sin
+  # este montaje, todo test que lea public/index.php (el motor) estaria leyendo
+  # el codigo viejo y aprobando un archivo que no es el que se va a desplegar.
+  # Ya habia dos tests asi (DatosDelPanelTest lee TIPOS_PERMITIDOS_PDF de ahi), y
+  # no se notaba porque leian constantes que casi nunca cambian: el dia que una
+  # cambiara, la suite habria dado verde sobre la version equivocada. La config de OpenSSL se monta tambien, para que la suite corra con
   # la del arbol nuevo y no con la horneada en la imagen vieja -- si no, un
   # deploy que venga a ARREGLAR esa config no podria pasar sus propios tests.
     # Los tests que EJECUTAN migraciones necesitan alcanzar a MySQL. Se les da la
@@ -580,6 +590,7 @@ verificar_suite() {
              -v "$APP_DIR/src:/app/src:ro" \
              -v "$APP_DIR/tests:/app/tests:ro" \
              -v "$APP_DIR/panel:/app/panel:ro" \
+             -v "$APP_DIR/public:/app/public:ro" \
              -v "$APP_DIR/integration:/app/integration:ro" \
              -v "$APP_DIR/scripts:/app/scripts:ro" \
              -v "$APP_DIR/phpunit.xml:/app/phpunit.xml:ro" \

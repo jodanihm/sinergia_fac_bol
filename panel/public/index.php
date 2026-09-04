@@ -4920,6 +4920,37 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
         $receptor['email'] = $email;
     }
 
+    // --- NOTA (61/56) SOBRE UN DOCUMENTO SIN IVA: TODAS SUS LINEAS SON EXENTAS ---
+    //
+    // Se resuelve ANTES de armar el detalle porque decide el 'exento' de cada
+    // linea, igual que $tipoDte === 34. La lista de tipos y su por que viven en
+    // TipoDte::SIN_IVA (32, 34, 38, 41), compartida con el motor.
+    //
+    // POR QUE: una NC que anula una factura exenta salia AFECTA si el usuario no
+    // marcaba la casilla -- que es lo que pasa siempre, porque la casilla habla
+    // de la NOTA y el usuario esta pensando en la factura que anula. El SII la
+    // rechaza y el folio ya esta quemado. Costo medido: NC 61 folio 6 del
+    // 04-09-2026 contra la factura exenta 34 folio 744, emitida con IVA de 5.698
+    // sobre un documento de 29.990 que nunca lo tuvo.
+    //
+    // El motor lo valida ademas por su cuenta (exigirLineasExentasSiLaRefEsExenta),
+    // y la vista marca y deshabilita la casilla en cuanto se teclea el tipo. Tres
+    // capas, como en el 34: al usuario no se le hace perder un folio por un
+    // descuido y al cliente no se le cree nunca.
+    $notaSobreExento = false;
+    if (in_array($tipoDte, [61, 56], true)) {
+        foreach (is_array($post['referencias'] ?? null) ? $post['referencias'] : [] as $ref) {
+            if (! is_array($ref)) {
+                continue;
+            }
+            $td = trim((string) ($ref['tipoDocumento'] ?? ''));
+            if (is_numeric($td) && TipoDte::esSinIva((int) $td)) {
+                $notaSobreExento = true;
+                break;
+            }
+        }
+    }
+
     $detalles = [];
     foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $d) {
         if (! is_array($d)) {
@@ -4940,7 +4971,11 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
             // DESHABILITADA, y una casilla deshabilitada no viaja en el POST, asi
             // que sin este forzado el documento saldria con todo afecto.
             // El motor lo valida ademas por su cuenta (validarDocumentoDte).
-            'exento'         => $tipoDte === 34 ? true : ! empty($d['exento']),
+            //
+            // $notaSobreExento es el mismo forzado corrido un documento hacia el
+            // lado: una NC/ND que corrige un documento sin IVA tampoco puede
+            // llevar lineas afectas. Ver la nota de arriba.
+            'exento'         => ($tipoDte === 34 || $notaSobreExento) ? true : ! empty($d['exento']),
         ];
         $unidad = trim((string) ($d['unidad'] ?? ''));
         if ($unidad !== '') {
