@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-04',
+        'version' => '1.63',
+        'titulo'  => 'La sesion del panel viaja protegida',
+        'tag'     => 'backend',
+        'items'   => [
+            'La cookie que te mantiene con sesion iniciada salia sin ninguna de las protecciones que hoy son estandar. Ahora lleva las cuatro.',
+            'La que mas importa: el navegador ya no deja que ningun script de la pagina lea esa cookie. Si algun dia se colara codigo malicioso en una pantalla, ya no podria robarse tu sesion.',
+            'La cookie tampoco viaja por conexiones sin cifrar, y no se manda cuando la navegacion viene desde otro sitio web. Es una defensa mas sobre el token de seguridad que los formularios ya usaban.',
+            'Y el sistema dejo de aceptar identificadores de sesion que no haya creado el mismo, que es como se intenta colar una sesion preparada de antemano.',
+            'Nada cambia para quien usa el panel: no hay que volver a entrar ni se toca ninguna pantalla.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-04',
         'version' => '1.62',
         'titulo'  => 'El aviso de folios ahora te dice cuantos dias te duran, no que porcentaje llevas',
         'tag'     => 'producto',
