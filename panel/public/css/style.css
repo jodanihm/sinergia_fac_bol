@@ -1161,6 +1161,12 @@ a.nav-item:hover { background: var(--color-nav-hover); }
 }
 .folio__relleno { display: block; height: 100%; background: var(--color-texto-tenue); }
 .folio__detalle { margin: 0; font-size: var(--txt-sm); color: var(--color-texto-suave); font-variant-numeric: tabular-nums; }
+/* La cuenta que justifica el color: "Te duran ~5 jornadas de emision". Va bajo
+   .folio__detalle y en el tono mas tenue, porque es la explicacion y no el dato:
+   quien mira de reojo lee el numero de disponibles, quien no entiende el rojo
+   baja una linea. El parentesis con el ritmo va todavia mas chico. */
+.folio__ritmo { margin: var(--esp-1) 0 0; font-size: var(--txt-sm); color: var(--color-texto-tenue); font-variant-numeric: tabular-nums; }
+.folio__ritmo-base { font-size: var(--txt-xs); }
 /* LOS DOS ESTADOS DE ALERTA CONSERVAN SU FONDO TENIDO, el estado OK no.
    Se probo dejar las tres en blanco y se descarto: quedarse sin folios detiene
    la facturacion, asi que ambar y rojo tienen que verse DE REOJO, sin leer, y

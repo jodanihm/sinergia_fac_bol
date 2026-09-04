@@ -33,6 +33,20 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-04',
+        'version' => '1.62',
+        'titulo'  => 'El aviso de folios ahora te dice cuantos dias te duran, no que porcentaje llevas',
+        'tag'     => 'producto',
+        'items'   => [
+            'El semaforo de folios del panel se pintaba segun el PORCENTAJE del talonario que quedaba. Eso contesta "cuanto llevas gastado", que no es lo que necesitas saber: lo que importa es si te vas a quedar sin folios.',
+            'Con eso, una empresa con 3 folios de nota de credito aparecia EN VERDE, porque esos 3 eran el 60% de su talonario. Y otra con 383 facturas exentas tambien salia en verde, aunque a su ritmo de emision son menos de seis dias de trabajo.',
+            'Ahora el color se calcula con cuanto te DURAN: los folios que quedan divididos por lo que emites en un dia de facturacion. Bajo 5 jornadas queda en rojo, bajo 15 en ambar.',
+            'Y la cuenta va escrita debajo, para que el color se entienda: "Te duran ~5 jornadas de emision (emites 68,7 al dia que facturas)". Si te queda menos de una jornada, lo dice con esas palabras.',
+            'El ritmo se mide sobre los dias en que realmente emitiste, no sobre el calendario. Quien factura por tandas una vez al mes no queda con un promedio diluido que avisa tarde.',
+            'La barra sigue mostrando el porcentaje consumido, que para una barra es lo natural. Puede verse una barra corta con la etiqueta "Critico": son dos cosas distintas y por eso la explicacion va escrita.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-04',
         'version' => '1.61',
         'titulo'  => 'La fecha del documento referenciado pasa a ser obligatoria',
         'tag'     => 'backend',

@@ -266,11 +266,68 @@ const DASH_TIPO_NOTA_CREDITO = 61;
  */
 const CAF_PENDIENTE_TTL = 900;
 
-/** Bajo este porcentaje de folios disponibles el indicador pasa a rojo. */
-const DASH_FOLIOS_UMBRAL_ROJO = 10;
+/**
+ * EL SEMAFORO DE FOLIOS SE MIDE EN JORNADAS, NO EN PORCENTAJE.
+ *
+ * POR QUE CAMBIO. Hasta el 04-09-2026 el nivel salia del PORCENTAJE del rango
+ * que quedaba (rojo bajo 10%, ambar bajo 25%). Ese numero contesta "cuanto de tu
+ * CAF gastaste", que NO es la pregunta: la pregunta es "me voy a quedar sin
+ * folios". Las dos se separan en cuanto el CAF es chico o el ritmo es alto, y en
+ * produccion pasaban las dos cosas a la vez. Medido ese dia:
+ *
+ *   78454034-0  nota de debito     1 folio    25%  ambar   <- UNA nota y se acaba
+ *   78454034-0  nota de credito    3 folios   75%  VERDE
+ *   78225195-3  nota de credito    3 folios   60%  VERDE
+ *   78225195-3  factura exenta   383 folios   65%  VERDE   <- 5,6 jornadas suyas
+ *
+ * El ultimo cierra el caso: 383 folios en verde parecen holgura, y a su ritmo
+ * son menos de seis dias de trabajo.
+ *
+ * POR QUE NO ALCANZA UN NUMERO ABSOLUTO, que era lo primero que se penso. Porque
+ * el consumo por jornada de emision, medido sobre produccion, no se parece entre
+ * emisores:
+ *
+ *   78225195-3  factura exenta   68,7 documentos por jornada  (maximo 70)
+ *   los demas   todos los tipos   1 a 3 por jornada
+ *
+ * Un umbral de 20 folios serian tres meses para uno y MENOS DE UNA JORNADA para
+ * el otro. El unico numero que significa lo mismo para los dos es cuanto DURA lo
+ * que queda.
+ *
+ * LA UNIDAD ES LA JORNADA DE EMISION, no el dia de calendario: el divisor son
+ * los documentos por dia CON EMISION, y los dias sin emitir no cuentan. Estos
+ * emisores facturan a rafagas -- creapyme hizo 206 exentas en 3 jornadas -- y
+ * promediar sobre el calendario diluiria la rafaga hasta volver el aviso inutil.
+ * Se lee "te quedan N jornadas como las tuyas", que es la unidad en la que
+ * piensa quien factura.
+ *
+ * LOS DOS UMBRALES SON UN JUICIO DE NEGOCIO Y NO SE DEDUCEN DE NINGUN DATO: un
+ * CAF nuevo no es instantaneo -- hay que pedirlo en el portal del SII y cargarlo
+ * --, asi que cinco jornadas es "anda a pedirlo ahora" y quince es "empieza el
+ * tramite". Se declaran aqui para poder discutirlos en un solo lugar.
+ */
+const DASH_FOLIOS_JORNADAS_ROJO  = 5;
+const DASH_FOLIOS_JORNADAS_AMBAR = 15;
 
-/** Bajo este porcentaje (y sobre el rojo) el indicador pasa a ambar. */
-const DASH_FOLIOS_UMBRAL_AMBAR = 25;
+/**
+ * Ritmo que se supone cuando el emisor NO tiene historial de ese tipo en la
+ * ventana: un documento por jornada.
+ *
+ * NO ES UN NUMERO INVENTADO, es el piso observado. De los ocho pares
+ * emisor/tipo con emisiones reales en produccion, seis marcan exactamente 1,0
+ * documentos por jornada y ninguno baja de ahi. Suponer ese piso hace que un
+ * emisor recien habilitado con tres folios salga en rojo, en vez del verde que
+ * daria un "sin historial no opino" -- que es justo el agujero que se vino a
+ * tapar.
+ */
+const DASH_FOLIOS_RITMO_MINIMO = 1.0;
+
+/**
+ * Ventana para medir el ritmo. 90 dias: entra al menos un ciclo de facturacion
+ * mensual -- que es como factura buena parte de la cartera -- y es corta para
+ * que un emisor que cambio de volumen no arrastre su ritmo viejo.
+ */
+const DASH_FOLIOS_VENTANA_DIAS = 90;
 
 /** Nombres de mes sin tildes, para las etiquetas de periodo. */
 const DASH_MESES = [
@@ -18701,9 +18758,14 @@ function dashResumen(array $porTipo): array
  * siempre. La diferencia aparece con un CAF MIGRADO desde otro proveedor, que
  * arranca a mitad de rango: ahi folio_desde contaria como consumo propio los
  * folios que el emisor gasto ANTES de llegar aqui, e inflaria el porcentaje
- * usado desde el primer dia. El semaforo mide lo que Sinergia puede emitir.
+ * usado desde el primer dia. La barra mide lo que Sinergia puede emitir.
  *
- * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, nivel:string}>
+ * EL NIVEL (rojo/ambar/ok) NO SALE DE ESE PORCENTAJE sino de las JORNADAS que
+ * duran los folios que quedan, con el ritmo que da dashRitmoPorTipo(). El por
+ * que esta en DASH_FOLIOS_JORNADAS_ROJO; en una linea: 383 folios pueden ser
+ * seis dias de trabajo, y el porcentaje los pintaba en verde.
+ *
+ * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, ritmo:float, jornadas:float, nivel:string}>
  */
 function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
 {
@@ -18721,29 +18783,92 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
     );
     $stmt->execute([':rut' => $rutEmisor]);
 
+    // Una sola consulta para todos los tipos, fuera del bucle.
+    $ritmoPorTipo = dashRitmoPorTipo($pdo, $rutEmisor);
+
     $salida = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
         $disponibles = (int) $fila['disponibles'];
         $totalRango  = (int) $fila['total_rango'];
         $pct         = $totalRango > 0 ? (int) round($disponibles * 100 / $totalRango) : 0;
+        $tipo        = (int) $fila['tipo_dte'];
 
-        if ($disponibles === 0 || $pct < DASH_FOLIOS_UMBRAL_ROJO) {
+        // EL NIVEL SALE DE LAS JORNADAS, NO DEL PORCENTAJE. El pct se sigue
+        // devolviendo porque la barra de la vista lo usa para dibujar el consumo
+        // -- eso si es "cuanto llevas gastado" y esta bien --, pero ya no decide
+        // el color. El por que completo esta en DASH_FOLIOS_JORNADAS_ROJO.
+        $ritmo    = $ritmoPorTipo[$tipo] ?? DASH_FOLIOS_RITMO_MINIMO;
+        $jornadas = $disponibles / $ritmo;
+
+        if ($disponibles === 0 || $jornadas < DASH_FOLIOS_JORNADAS_ROJO) {
             $nivel = 'rojo';
-        } elseif ($pct < DASH_FOLIOS_UMBRAL_AMBAR) {
+        } elseif ($jornadas < DASH_FOLIOS_JORNADAS_AMBAR) {
             $nivel = 'ambar';
         } else {
             $nivel = 'ok';
         }
 
         $salida[] = [
-            'tipo'          => (int) $fila['tipo_dte'],
+            'tipo'          => $tipo,
             'disponibles'   => $disponibles,
             'usados'        => (int) $fila['usados'],
             'totalRango'    => $totalRango,
             'cafs'          => (int) $fila['cafs'],
             'pctDisponible' => $pct,
+            'ritmo'         => $ritmo,
+            'jornadas'      => $jornadas,
             'nivel'         => $nivel,
         ];
+    }
+
+    return $salida;
+}
+
+/**
+ * Documentos por JORNADA DE EMISION de cada tipo, para el semaforo de folios.
+ *
+ * EL DIVISOR SON LOS DIAS CON EMISION, NO LOS DIAS DEL CALENDARIO. Es la
+ * decision que hace util al numero y esta explicada entera en
+ * DASH_FOLIOS_JORNADAS_ROJO: estos emisores facturan a rafagas, y un promedio
+ * sobre dias corridos las diluye hasta que el aviso llega tarde.
+ *
+ * SOLO PRODUCCION, igual que dashFoliosPorTipo(): los folios de certificacion no
+ * se gastan de verdad y meterlos inventaria un ritmo que no existe.
+ *
+ * UN TIPO SIN FILA AQUI NO ES RITMO CERO, es "sin historial", y el llamador cae
+ * a DASH_FOLIOS_RITMO_MINIMO. Devolver 0 haria una division por cero, y tratarlo
+ * como "no consume" dejaria en verde justo al emisor nuevo que todavia no sabe
+ * cuantos folios necesita.
+ *
+ * @return array<int,float> tipo_dte => documentos por jornada
+ */
+function dashRitmoPorTipo(PDO $pdo, string $rutEmisor): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT tipo_dte, COUNT(*) AS docs, COUNT(DISTINCT DATE(created_at)) AS jornadas '
+        . 'FROM dte_emitido '
+        . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
+        . '  AND created_at >= DATE_SUB(CURDATE(), INTERVAL :dias DAY) '
+        . 'GROUP BY tipo_dte'
+    );
+    $stmt->bindValue(':rut', $rutEmisor);
+    $stmt->bindValue(':dias', DASH_FOLIOS_VENTANA_DIAS, PDO::PARAM_INT);
+    $stmt->execute();
+
+    $salida = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $fila) {
+        $jornadas = (int) $fila['jornadas'];
+        if ($jornadas <= 0) {
+            continue;
+        }
+        // El piso se aplica TAMBIEN aqui: un ritmo medido por debajo de uno por
+        // jornada no puede existir (si hubo emisiones, hubo al menos una por
+        // jornada), pero si el redondeo lo dejara bajo el piso, dividir por el
+        // inflaria las jornadas y devolveria el verde optimista de siempre.
+        $salida[(int) $fila['tipo_dte']] = max(
+            DASH_FOLIOS_RITMO_MINIMO,
+            (int) $fila['docs'] / $jornadas,
+        );
     }
 
     return $salida;

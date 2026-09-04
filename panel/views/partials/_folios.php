@@ -10,6 +10,12 @@
  * La barra usa role="img" con aria-label en vez de <progress> porque necesita
  * el umbral de color; el numero exacto igual va escrito al lado, asi que un
  * lector de pantalla nunca depende de la barra.
+ *
+ * LA BARRA Y EL NIVEL MIDEN COSAS DISTINTAS, y es a proposito. La barra pinta el
+ * PORCENTAJE USADO del rango, que es lo que uno espera de una barra. El nivel
+ * sale de las JORNADAS que duran los folios que quedan. Pueden discrepar -- una
+ * barra corta con la etiqueta "Critico" -- y por eso debajo va escrita la cuenta:
+ * sin ella, un rojo sobre 383 folios disponibles parece un error.
  */
 $etiquetaNivel = ['rojo' => 'Critico', 'ambar' => 'Bajo', 'ok' => 'OK'];
 $iconoNivel    = ['rojo' => '&#9888;', 'ambar' => '&#9679;', 'ok' => '&#10003;'];
@@ -43,6 +49,27 @@ $iconoNivel    = ['rojo' => '&#9888;', 'ambar' => '&#9679;', 'ok' => '&#10003;']
                 (<?= number_format((float) $f['usados'], 0, ',', '.'); ?> usados,
                 <?= (int) $f['cafs']; ?> CAF)
             </p>
+            <?php
+                // LA CUENTA QUE JUSTIFICA EL COLOR, escrita. El nivel se decide
+                // por jornadas y no por porcentaje (ver DASH_FOLIOS_JORNADAS_ROJO),
+                // asi que si no se muestra el numero, el usuario ve un rojo sobre
+                // 383 folios y no puede saber de donde sale.
+                //
+                // Con cero disponibles no se escribe: "0 jornadas" no agrega nada
+                // sobre "0 disponibles", y la division ya no significa nada.
+                $jornadas = (float) $f['jornadas'];
+            ?>
+            <?php if ((int) $f['disponibles'] > 0): ?>
+                <p class="folio__ritmo">
+                    <?= $jornadas < 1
+                        ? 'No alcanzan para una jornada como las tuyas'
+                        : 'Te duran ~' . number_format(floor($jornadas), 0, ',', '.')
+                          . ($jornadas < 2 ? ' jornada' : ' jornadas') . ' de emision'; ?>
+                    <span class="folio__ritmo-base">
+                        (emites <?= number_format((float) $f['ritmo'], 1, ',', '.'); ?> al dia que facturas)
+                    </span>
+                </p>
+            <?php endif; ?>
         </li>
     <?php endforeach; ?>
 </ul>
