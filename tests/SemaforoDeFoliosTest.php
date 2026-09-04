@@ -129,6 +129,128 @@ final class SemaforoDeFoliosTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    //  Cuantos folios pedirle al SII
+    // -----------------------------------------------------------------------
+
+    private function sugeridos(float $porDia, int $docs = 999, int $dias = 999): int
+    {
+        $sirve = $docs >= self::constante('DASH_FOLIOS_HISTORIAL_MINIMO_DOCS')
+            && $dias >= self::constante('DASH_FOLIOS_HISTORIAL_MINIMO_DIAS');
+
+        $proyectado = $sirve ? (int) ceil($porDia * self::constante('DASH_FOLIOS_HORIZONTE_DIAS')) : 0;
+        $n = (int) max(self::constante('DASH_FOLIOS_SOLICITUD_MINIMA'), $proyectado);
+
+        foreach ([50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000] as $escalon) {
+            if ($n <= $escalon) {
+                return $escalon;
+            }
+        }
+
+        return (int) (ceil($n / 5000) * 5000);
+    }
+
+    /**
+     * EL UNICO CASO CON HISTORIAL DE VERDAD. creapyme emitio 206 facturas
+     * exentas en 32 dias corridos: 6,4 al dia, o sea ~1.159 para seis meses, que
+     * redondeado es 1.500. Coincide con las dos cuentas hechas a mano en la
+     * auditoria (por calendario y por jornadas), que daban ~1.240.
+     */
+    public function testElCasoConHistorialRealProyectaLoQueSeCalculoAMano(): void
+    {
+        self::assertSame(1500, $this->sugeridos(206 / 32, docs: 206, dias: 32));
+    }
+
+    /**
+     * CON HISTORIAL FLACO NO SE PROYECTA. Al probar esto contra los datos
+     * reales, la nota de credito de 78225195-3 sugeria 200 folios y lo
+     * justificaba con "2 emitidos en 2 dias" -- y esos dos eran los DOS INTENTOS
+     * FALLIDOS de esa semana. Proyectar seis meses desde ahi es fingir
+     * precision, asi que cae al piso y la pantalla lo admite.
+     */
+    public function testConHistorialFlacoCaeAlPisoAunqueLaProyeccionSeaAlta(): void
+    {
+        // 1 al dia proyectaria 180 folios; 2 documentos en 2 dias no dan para eso.
+        self::assertSame(50, $this->sugeridos(1.0, docs: 2, dias: 2));
+        // Muchos documentos pero en pocos dias: tampoco.
+        self::assertSame(50, $this->sugeridos(20.0, docs: 200, dias: 10));
+        // Muchos dias pero pocos documentos: tampoco.
+        self::assertSame(50, $this->sugeridos(0.1, docs: 4, dias: 41));
+    }
+
+    /**
+     * Y LOS DEMAS CAEN AL PISO, que es lo que tiene que pasar. A 3 documentos al
+     * mes la proyeccion da 18 folios, y pedirle 18 al SII es volver a la
+     * ventanilla en dos meses.
+     */
+    #[DataProvider('emisoresChicos')]
+    public function testUnEmisorChicoRecibeElPisoYNoLaProyeccion(float $porDia): void
+    {
+        self::assertSame(
+            (int) self::constante('DASH_FOLIOS_SOLICITUD_MINIMA'),
+            $this->sugeridos($porDia)
+        );
+    }
+
+    public static function emisoresChicos(): array
+    {
+        return [
+            '78454034-0 factura   (4 docs / 41 dias)' => [4 / 41],
+            '78454034-0 nota debito (3 / 40)'         => [3 / 40],
+            '77724622-4 factura   (1 doc / 37 dias)'  => [1 / 37],
+            'sin historial'                           => [0.0],
+        ];
+    }
+
+    /**
+     * NUNCA SE REDONDEA A LA BAJA: dejar la sugerencia por debajo de la
+     * proyeccion la convertiria en una que se queda corta, que es exactamente el
+     * problema del que venimos.
+     */
+    #[DataProvider('proyecciones')]
+    public function testElRedondeoNuncaQuedaBajoLaProyeccion(float $porDia): void
+    {
+        $proyectado = ceil($porDia * self::constante('DASH_FOLIOS_HORIZONTE_DIAS'));
+        self::assertGreaterThanOrEqual($proyectado, $this->sugeridos($porDia));
+    }
+
+    public static function proyecciones(): array
+    {
+        return array_map(
+            static fn (float $x): array => [$x],
+            [0.0, 0.1, 0.5, 1.0, 3.0, 6.4, 12.0, 40.0, 100.0]
+        );
+    }
+
+    /** Un emisor grande de verdad no queda atrapado en el ultimo escalon. */
+    public function testUnEmisorMuyGrandeEscalaMasAllaDeLaTabla(): void
+    {
+        // 100 documentos al dia son 18.000 en seis meses.
+        self::assertSame(20000, $this->sugeridos(100.0));
+    }
+
+    /**
+     * EL DENOMINADOR DEL RITMO DE CALENDARIO VA HASTA HOY y no hasta la ultima
+     * emision. Con "hasta la ultima", los 3 documentos que 78454034-0 emitio en
+     * UNA tarde darian 3 al dia y proyectarian 540 folios. Contando hasta hoy
+     * son 3 en 40 dias y cae al piso.
+     */
+    public function testUnaSolaJornadaNoSeProyectaComoRitmoDiario(): void
+    {
+        self::assertSame(50, $this->sugeridos(3 / 40, docs: 30, dias: 40));   // como se mide ahora
+        self::assertSame(750, $this->sugeridos(3 / 1, docs: 30, dias: 40));   // como se habria medido mal
+    }
+
+    public function testElRouterMideElCalendarioHastaHoy(): void
+    {
+        $fuente = (string) file_get_contents(self::ROUTER);
+        self::assertStringContainsString(
+            'DATEDIFF(CURDATE(), DATE(MIN(created_at)))',
+            $fuente,
+            'el ritmo de calendario dejo de medirse hasta hoy: una sola jornada volveria a proyectarse como ritmo diario'
+        );
+    }
+
+    // -----------------------------------------------------------------------
     //  Que la copia de arriba siga siendo fiel al router
     // -----------------------------------------------------------------------
 

@@ -70,6 +70,33 @@ $iconoNivel    = ['rojo' => '&#9888;', 'ambar' => '&#9679;', 'ok' => '&#10003;']
                     </span>
                 </p>
             <?php endif; ?>
+            <?php
+                // CUANTOS PEDIR. Solo cuando el semaforo ya dijo que hay algo
+                // que hacer: en verde seria ruido, y ademas una sugerencia que
+                // aparece siempre deja de leerse justo el dia que importa.
+                //
+                // VA CON SU FUNDAMENTO AL LADO, y esa es la parte que no se
+                // puede recortar. Un "pide 1.500" sin decir de donde sale no se
+                // puede juzgar -- ni creer ni corregir --, y el numero es una
+                // sugerencia, no una instruccion: el cupo real lo autoriza el
+                // SII por tramos segun el historial del contribuyente.
+                $sugeridos = (int) ($f['sugeridos'] ?? 0);
+            ?>
+            <?php if ($f['nivel'] !== 'ok' && $sugeridos > 0): ?>
+                <p class="folio__pedir">
+                    Conviene pedirle al SII
+                    <strong><?= number_format((float) $sugeridos, 0, ',', '.'); ?></strong> folios
+                    <span class="folio__pedir-base">
+                        <?php if (! empty($f['histSirve'])): ?>
+                            (<?= number_format((float) $f['histDocs'], 0, ',', '.'); ?>
+                            emitidos en <?= (int) $f['histDias']; ?> dias, proyectado a seis meses)
+                        <?php else: ?>
+                            (es el minimo que conviene pedir: todavia no hay
+                            historial suficiente de este tipo para proyectar)
+                        <?php endif; ?>
+                    </span>
+                </p>
+            <?php endif; ?>
         </li>
     <?php endforeach; ?>
 </ul>

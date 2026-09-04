@@ -1167,6 +1167,11 @@ a.nav-item:hover { background: var(--color-nav-hover); }
    baja una linea. El parentesis con el ritmo va todavia mas chico. */
 .folio__ritmo { margin: var(--esp-1) 0 0; font-size: var(--txt-sm); color: var(--color-texto-tenue); font-variant-numeric: tabular-nums; }
 .folio__ritmo-base { font-size: var(--txt-xs); }
+/* "Conviene pedirle al SII 1.500 folios". Solo aparece en ambar y rojo, asi que
+   se permite el color de la alerta: cuando esta, es lo unico accionable de la
+   tarjeta. El fundamento entre parentesis va en el tono tenue de siempre. */
+.folio__pedir { margin: var(--esp-1) 0 0; font-size: var(--txt-sm); color: var(--color-texto); }
+.folio__pedir-base { display: block; font-size: var(--txt-xs); color: var(--color-texto-tenue); }
 /* LOS DOS ESTADOS DE ALERTA CONSERVAN SU FONDO TENIDO, el estado OK no.
    Se probo dejar las tres en blanco y se descarto: quedarse sin folios detiene
    la facturacion, asi que ambar y rojo tienen que verse DE REOJO, sin leer, y

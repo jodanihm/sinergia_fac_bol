@@ -329,6 +329,47 @@ const DASH_FOLIOS_RITMO_MINIMO = 1.0;
  */
 const DASH_FOLIOS_VENTANA_DIAS = 90;
 
+/**
+ * Horizonte de la sugerencia de cuantos folios pedir: seis meses.
+ *
+ * Es un JUICIO, no un dato: pedir para menos condena a repetir el tramite en el
+ * portal del SII, y pedir para mucho mas choca con que el cupo lo autoriza el
+ * SII por tramos segun el historial. Medio ano es el punto donde el tramite
+ * deja de ser una molestia recurrente.
+ */
+const DASH_FOLIOS_HORIZONTE_DIAS = 180;
+
+/**
+ * Piso de la sugerencia. Es el criterio que manda en casi toda la cartera, y no
+ * por desconfiar de la proyeccion: la proyeccion contesta la pregunta
+ * equivocada para un emisor chico. A 3 documentos al mes proyecta 18 folios, y
+ * pedirle 18 al SII es volver a la ventanilla en dos meses. Un folio no cuesta
+ * nada y quedarse sin ellos detiene la facturacion, asi que el piso es
+ * deliberadamente generoso: a ese ritmo, 50 folios son mas de un ano.
+ */
+const DASH_FOLIOS_SOLICITUD_MINIMA = 50;
+
+/**
+ * EVIDENCIA MINIMA PARA PROYECTAR. Bajo cualquiera de las dos, la sugerencia
+ * cae al piso y la pantalla dice que todavia no hay historial suficiente.
+ *
+ * DE DONDE SALE. Al probar esto contra los datos reales, la nota de credito de
+ * 78225195-3 sugeria 200 folios y lo justificaba con "2 emitidos en 2 dias" --
+ * y esos dos documentos eran los DOS INTENTOS FALLIDOS de esa misma semana.
+ * El numero no era descabellado, pero el fundamento que se mostraba al lado no
+ * sostenia nada: proyectar seis meses desde dos documentos es fingir precision.
+ *
+ * 30 DIAS porque bajo un mes no se ha visto un ciclo de facturacion completo, y
+ * media cartera factura por mes. 10 DOCUMENTOS porque es donde un solo dia raro
+ * deja de mandar sobre el promedio.
+ *
+ * QUE ESTO NO SE LEA COMO DESCONFIANZA EN LA PROYECCION: cuando hay historial
+ * manda ella. Es que con menos de esto no hay proyeccion, hay una corazonada
+ * con decimales.
+ */
+const DASH_FOLIOS_HISTORIAL_MINIMO_DOCS = 10;
+const DASH_FOLIOS_HISTORIAL_MINIMO_DIAS = 30;
+
 /** Nombres de mes sin tildes, para las etiquetas de periodo. */
 const DASH_MESES = [
     1 => 'enero', 2 => 'febrero', 3 => 'marzo', 4 => 'abril',
@@ -18765,7 +18806,7 @@ function dashResumen(array $porTipo): array
  * que esta en DASH_FOLIOS_JORNADAS_ROJO; en una linea: 383 folios pueden ser
  * seis dias de trabajo, y el porcentaje los pintaba en verde.
  *
- * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, ritmo:float, jornadas:float, nivel:string}>
+ * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, ritmo:float, jornadas:float, nivel:string, sugeridos:int, histDocs:int, histDias:int, histSirve:bool}>
  */
 function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
 {
@@ -18797,7 +18838,8 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
         // devolviendo porque la barra de la vista lo usa para dibujar el consumo
         // -- eso si es "cuanto llevas gastado" y esta bien --, pero ya no decide
         // el color. El por que completo esta en DASH_FOLIOS_JORNADAS_ROJO.
-        $ritmo    = $ritmoPorTipo[$tipo] ?? DASH_FOLIOS_RITMO_MINIMO;
+        $medido   = $ritmoPorTipo[$tipo] ?? null;
+        $ritmo    = $medido['porJornada'] ?? DASH_FOLIOS_RITMO_MINIMO;
         $jornadas = $disponibles / $ritmo;
 
         if ($disponibles === 0 || $jornadas < DASH_FOLIOS_JORNADAS_ROJO) {
@@ -18818,6 +18860,20 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
             'ritmo'         => $ritmo,
             'jornadas'      => $jornadas,
             'nivel'         => $nivel,
+            // Cuantos pedir, y con que historial se calculo. Los dos viajan
+            // juntos a proposito: la vista tiene que poder decir en que se
+            // basa, porque un "pide 1.500" sin fundamento no se puede juzgar.
+            'sugeridos'     => dashFoliosSugeridos(
+                (float) ($medido['porDia'] ?? 0.0),
+                (int) ($medido['docs'] ?? 0),
+                (int) ($medido['dias'] ?? 0),
+            ),
+            'histDocs'      => (int) ($medido['docs'] ?? 0),
+            'histDias'      => (int) ($medido['dias'] ?? 0),
+            'histSirve'     => dashHistorialSuficiente(
+                (int) ($medido['docs'] ?? 0),
+                (int) ($medido['dias'] ?? 0),
+            ),
         ];
     }
 
@@ -18840,12 +18896,13 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
  * como "no consume" dejaria en verde justo al emisor nuevo que todavia no sabe
  * cuantos folios necesita.
  *
- * @return array<int,float> tipo_dte => documentos por jornada
+ * @return array<int,array{porJornada:float, porDia:float, docs:int, dias:int}> indexado por tipo_dte
  */
 function dashRitmoPorTipo(PDO $pdo, string $rutEmisor): array
 {
     $stmt = $pdo->prepare(
-        'SELECT tipo_dte, COUNT(*) AS docs, COUNT(DISTINCT DATE(created_at)) AS jornadas '
+        'SELECT tipo_dte, COUNT(*) AS docs, COUNT(DISTINCT DATE(created_at)) AS jornadas, '
+        . '       DATEDIFF(CURDATE(), DATE(MIN(created_at))) AS dias_desde_la_primera '
         . 'FROM dte_emitido '
         . "WHERE rut_emisor = :rut AND ambiente = 'produccion' "
         . '  AND created_at >= DATE_SUB(CURDATE(), INTERVAL :dias DAY) '
@@ -18861,17 +18918,93 @@ function dashRitmoPorTipo(PDO $pdo, string $rutEmisor): array
         if ($jornadas <= 0) {
             continue;
         }
-        // El piso se aplica TAMBIEN aqui: un ritmo medido por debajo de uno por
-        // jornada no puede existir (si hubo emisiones, hubo al menos una por
-        // jornada), pero si el redondeo lo dejara bajo el piso, dividir por el
-        // inflaria las jornadas y devolveria el verde optimista de siempre.
-        $salida[(int) $fila['tipo_dte']] = max(
-            DASH_FOLIOS_RITMO_MINIMO,
-            (int) $fila['docs'] / $jornadas,
-        );
+        $docs = (int) $fila['docs'];
+
+        // EL DENOMINADOR DEL RITMO DE CALENDARIO VA HASTA HOY, no hasta la
+        // ultima emision. Con "hasta la ultima" una sola jornada da un
+        // denominador de 1 dia: los 3 documentos que 78454034-0 emitio en una
+        // tarde de julio proyectarian 540 folios para seis meses. Contando
+        // hasta hoy son 3 en 40 dias, que es lo que de verdad ha pasado.
+        $diasCorridos = max(1, (int) $fila['dias_desde_la_primera']);
+
+        $salida[(int) $fila['tipo_dte']] = [
+            // El piso se aplica TAMBIEN aqui: un ritmo medido por debajo de uno
+            // por jornada no puede existir (si hubo emisiones, hubo al menos una
+            // por jornada), pero si el redondeo lo dejara bajo el piso, dividir
+            // por el inflaria las jornadas y devolveria el verde optimista de
+            // siempre.
+            'porJornada' => max(DASH_FOLIOS_RITMO_MINIMO, $docs / $jornadas),
+            'porDia'     => $docs / $diasCorridos,
+            'docs'       => $docs,
+            'dias'       => $diasCorridos,
+        ];
     }
 
     return $salida;
+}
+
+/**
+ * Cuantos folios conviene PEDIRLE AL SII para este tipo.
+ *
+ * DOS CRITERIOS, y gana el mayor:
+ *
+ *   la proyeccion   el ritmo de calendario por DASH_FOLIOS_HORIZONTE_DIAS. Es
+ *                   el numero honesto cuando hay historial de sobra.
+ *   el piso         DASH_FOLIOS_SOLICITUD_MINIMA. Es el que manda casi siempre,
+ *                   y no por pesimismo sobre la proyeccion sino porque la
+ *                   proyeccion contesta la pregunta equivocada para un emisor
+ *                   chico: a 3 documentos al mes proyecta 18 folios, y pedirle
+ *                   18 folios al SII es condenarse a repetir el tramite. Un
+ *                   folio no cuesta nada; quedarse sin ellos detiene la
+ *                   facturacion.
+ *
+ * SE DEVUELVE REDONDEADO A UNA CIFRA QUE UN HUMANO ESCRIBIRIA en el portal del
+ * SII. "1.159" es la proyeccion; nadie pide 1.159 folios, pide 1.500.
+ *
+ * LO QUE ESTE NUMERO NO SABE, y por eso la vista dice en que se basa: el SII no
+ * entrega lo que uno pida sin mas -- el cupo va por tramos segun el historial
+ * del contribuyente --, y un tipo que puede dispararse de golpe (la boleta de
+ * mostrador) no avisa en el historial hasta que ya paso. Es una sugerencia con
+ * su fundamento a la vista, no una cifra que haya que obedecer.
+ */
+function dashFoliosSugeridos(float $porDia, int $docs, int $dias): int
+{
+    if (! dashHistorialSuficiente($docs, $dias)) {
+        return dashRedondearSolicitud(DASH_FOLIOS_SOLICITUD_MINIMA);
+    }
+
+    $proyectado = (int) ceil($porDia * DASH_FOLIOS_HORIZONTE_DIAS);
+
+    return dashRedondearSolicitud(max(DASH_FOLIOS_SOLICITUD_MINIMA, $proyectado));
+}
+
+/**
+ * Si el historial da para proyectar. Lo consulta tambien la vista, para decir en
+ * que se basa el numero -- o para admitir que no se basa en nada todavia.
+ */
+function dashHistorialSuficiente(int $docs, int $dias): bool
+{
+    return $docs >= DASH_FOLIOS_HISTORIAL_MINIMO_DOCS
+        && $dias >= DASH_FOLIOS_HISTORIAL_MINIMO_DIAS;
+}
+
+/**
+ * Redondea HACIA ARRIBA a la siguiente cifra "de portal": 50, 100, 200, 300,
+ * 500, 750, 1.000, 1.500, 2.000, 3.000, 5.000 y de ahi en multiplos de 5.000.
+ *
+ * Hacia arriba y nunca hacia abajo: redondear a la baja convertiria una
+ * sugerencia en una que se queda corta, que es justo el problema del que
+ * venimos.
+ */
+function dashRedondearSolicitud(int $n): int
+{
+    foreach ([50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000] as $escalon) {
+        if ($n <= $escalon) {
+            return $escalon;
+        }
+    }
+
+    return (int) (ceil($n / 5000) * 5000);
 }
 
 /**

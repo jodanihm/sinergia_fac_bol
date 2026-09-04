@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-04',
+        'version' => '1.64',
+        'titulo'  => 'El panel te dice cuantos folios pedirle al SII',
+        'tag'     => 'producto',
+        'items'   => [
+            'Cuando un tipo de documento queda en rojo o en ambar, debajo aparece cuantos folios conviene pedir: "Conviene pedirle al SII 1.500 folios".',
+            'El numero sale de tu propio historial de emision, proyectado a seis meses. Y al lado va escrito en que se basa -- "206 emitidos en 32 dias" -- para que puedas juzgarlo en vez de creerlo a ciegas.',
+            'Si todavia no hay historial suficiente de ese tipo, no se inventa una proyeccion: sugiere un minimo y lo dice con esas palabras. Pedir muy poco obliga a repetir el tramite, y un folio no cuesta nada.',
+            'Solo aparece cuando hay algo que hacer. En verde no se muestra, para que el dia que aparezca se lea.',
+            'Es una sugerencia, no una instruccion: cuanto te autoriza el SII depende de tu historial como contribuyente, asi que puede darte menos de lo que pidas.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-04',
         'version' => '1.63',
         'titulo'  => 'La sesion del panel viaja protegida',
         'tag'     => 'backend',
