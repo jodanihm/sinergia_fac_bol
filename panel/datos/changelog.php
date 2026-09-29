@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-29',
+        'version' => '1.66',
+        'titulo'  => 'Una linea con descuento ya no puede descuadrar por un peso',
+        'tag'     => 'backend',
+        'items'   => [
+            'En algunas combinaciones de cantidad, precio y porcentaje de descuento, la linea salia con un peso de mas: 15 unidades a $33 con 10% de descuento daban $446 en vez de $445. El SII revisa que cada linea cuadre y rechaza el documento, y ese folio queda perdido.',
+            'Ahora el monto de la linea es siempre el precio por la cantidad menos el descuento, exactamente la cuenta que hace el SII.',
+            'Los documentos ya emitidos no cambian: revisamos todas las lineas con descuento que hay en el sistema y ninguna cae en el caso que descuadraba.',
+            'La nota de credito que anula una factura con items exentos con descuento usa la misma cuenta, para que calce con el documento original.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-29',
         'version' => '1.65',
         'titulo'  => 'Un error del sistema ya no le muestra al usuario detalles internos',
         'tag'     => 'devops',

@@ -404,22 +404,16 @@ final class DteXmlBuilder
 
     /**
      * Monto de una linea, con el descuento por linea ya aplicado y redondeado.
+     * La cuenta vive en Detalle para que la NC de anulacion use la misma.
      */
     private function montoItem(Detalle $d): int
     {
-        $monto = $d->cantidad * $d->precioUnitario;
-        if ($d->descuentoPorcentaje > 0) {
-            $monto *= (1 - $d->descuentoPorcentaje / 100);
-        }
-        return (int) round($monto);
+        return $d->montoItem();
     }
 
     private function descuentoMonto(Detalle $d): int
     {
-        if ($d->descuentoPorcentaje <= 0) {
-            return 0;
-        }
-        return (int) round($d->cantidad * $d->precioUnitario * $d->descuentoPorcentaje / 100);
+        return $d->montoDescuento();
     }
 
     private function buildDscRcgGlobal(DOMDocument $dom, float $pct): DOMElement

@@ -621,11 +621,8 @@ final class SiiDirectoFacturador implements FacturadorInterface
             if (! $detalle->exento) {
                 continue;
             }
-            $monto = $detalle->cantidad * $detalle->precioUnitario;
-            if ($detalle->descuentoPorcentaje > 0) {
-                $monto *= (1 - $detalle->descuentoPorcentaje / 100);
-            }
-            $total += (int) round($monto);
+            // La misma cuenta que el MontoItem del XML (DteXmlBuilder).
+            $total += $detalle->montoItem();
         }
         return $total;
     }

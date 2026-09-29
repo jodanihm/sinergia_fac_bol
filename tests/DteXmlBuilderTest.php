@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Plantiflex\FacturacionCl\Tests;
 
 use DOMDocument;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use Plantiflex\FacturacionCl\Dto\DatosEmisor;
 use Plantiflex\FacturacionCl\Dto\Detalle;
@@ -163,6 +164,59 @@ final class DteXmlBuilderTest extends TestCase
         self::assertSame('28900', $this->texto($dom, 'MntNeto'));
         self::assertSame('5491', $this->texto($dom, 'IVA'));
         self::assertSame('34391', $this->texto($dom, 'MntTotal'));
+    }
+
+    /**
+     * Regresion: MontoItem y DescuentoMonto se redondeaban cada uno por su lado,
+     * y cuando los dos caen en ,5 suben los dos. 15 x 33 al 10%: 445,5 -> 446 y
+     * 49,5 -> 50, que suman 496 contra un Qty x Prc de 495. El SII cuadra
+     * MontoItem = QtyItem x PrcItem - DescuentoMonto, asi que la linea no cuadra.
+     *
+     * @return iterable<string, array{float, float, float}>
+     */
+    public static function lineasConDescuentoQueCaenEnMedio(): iterable
+    {
+        yield 'caso de la auditoria: 15 x 33 al 10%' => [15, 33, 10.0];
+        yield '1005 x 1 al 50%'                     => [1005, 1, 50.0];
+        yield '1 x 1005 al 50%'                     => [1, 1005, 50.0];
+        yield '3 x 5 al 10%'                        => [3, 5, 10.0];
+    }
+
+    #[DataProvider('lineasConDescuentoQueCaenEnMedio')]
+    public function testMontoItemMasDescuentoMontoCuadraConCantidadPorPrecio(float $cantidad, float $precio, float $pct): void
+    {
+        $doc = new DocumentoTributario(
+            tipoDte: TipoDte::FacturaElectronica,
+            receptor: new Receptor('99999999-9', 'Empresa Cliente'),
+            detalles: [new Detalle('Item', $cantidad, $precio, descuentoPorcentaje: $pct)],
+            montosSonBrutos: false,
+        );
+
+        $dom = (new DteXmlBuilder())->build($doc, $this->emisor(), 50);
+
+        $montoItem      = (int) $this->texto($dom, 'MontoItem');
+        $descuentoMonto = (int) $this->texto($dom, 'DescuentoMonto');
+        self::assertSame((int) round($cantidad * $precio), $montoItem + $descuentoMonto);
+        // Y el neto del documento es la misma suma de lineas, no otra cuenta.
+        self::assertSame((string) $montoItem, $this->texto($dom, 'MntNeto'));
+    }
+
+    public function testCasoDeLaAuditoriaDaMontoItem445YDescuento50(): void
+    {
+        $doc = new DocumentoTributario(
+            tipoDte: TipoDte::FacturaElectronica,
+            receptor: new Receptor('99999999-9', 'Empresa Cliente'),
+            detalles: [new Detalle('Item', 15, 33, descuentoPorcentaje: 10.0)],
+            montosSonBrutos: false,
+        );
+
+        $dom = (new DteXmlBuilder())->build($doc, $this->emisor(), 50);
+
+        self::assertSame('50', $this->texto($dom, 'DescuentoMonto'));
+        self::assertSame('445', $this->texto($dom, 'MontoItem'));
+        self::assertSame('445', $this->texto($dom, 'MntNeto'));
+        self::assertSame('85', $this->texto($dom, 'IVA'));      // round(445 x 0,19) = round(84,55)
+        self::assertSame('530', $this->texto($dom, 'MntTotal'));
     }
 
     public function testCaso4DescuentoGlobalAplicaAlAfectoNeto(): void

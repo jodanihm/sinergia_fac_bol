@@ -83,6 +83,31 @@ final readonly class Detalle
     }
 
     /**
+     * Monto del descuento de esta linea (DescuentoMonto), redondeado a pesos.
+     */
+    public function montoDescuento(): int
+    {
+        if ($this->descuentoPorcentaje <= 0) {
+            return 0;
+        }
+        return (int) round($this->cantidad * $this->precioUnitario * $this->descuentoPorcentaje / 100);
+    }
+
+    /**
+     * Monto de la linea con su descuento ya aplicado (MontoItem).
+     *
+     * SE RESTA EL DESCUENTO YA REDONDEADO, en vez de redondear aparte
+     * cantidad x precio x (1 - pct). El SII cuadra la linea como
+     * MontoItem = QtyItem x PrcItem - DescuentoMonto, y dos redondeos
+     * independientes que caen en ,5 suben los dos: 15 x 33 al 10% daba
+     * MontoItem 446 con DescuentoMonto 50, que suman 496 y no 495.
+     */
+    public function montoItem(): int
+    {
+        return (int) round($this->cantidad * $this->precioUnitario) - $this->montoDescuento();
+    }
+
+    /**
      * @return array<string,mixed>
      */
     public function toArray(): array
