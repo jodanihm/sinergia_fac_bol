@@ -48,6 +48,11 @@ ENV OPENSSL_CONF=/etc/ssl/openssl-legacy.cnf
 RUN printf "memory_limit=256M\nmax_execution_time=300\n" \
     > "$PHP_INI_DIR/conf.d/zz-limites.ini"
 
+# Errores de PHP: nunca al navegador, siempre a stderr (lo recoge Docker), y
+# sin X-Powered-By. Sin esto valen los defaults de compilacion (display_errors
+# On, log_errors Off). Detalle en el propio archivo; es el mismo en el panel.
+COPY docker/php-produccion.ini "$PHP_INI_DIR/conf.d/zz-produccion.ini"
+
 WORKDIR /app
 
 # Dependencias primero, en su propia capa: mientras composer.json/lock no

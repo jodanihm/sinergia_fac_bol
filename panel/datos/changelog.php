@@ -32,6 +32,17 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-09-29',
+        'version' => '1.65',
+        'titulo'  => 'Un error del sistema ya no le muestra al usuario detalles internos',
+        'tag'     => 'devops',
+        'items'   => [
+            'Si algo falla por dentro -- por ejemplo, la base de datos no responde --, la pantalla ya no muestra la consulta, las rutas del servidor ni los datos de conexion. Antes podian quedar a la vista de cualquiera que estuviera usando el panel en ese momento.',
+            'Ahora cada error queda registrado en el log del servidor. Hasta hoy no quedaba anotado en ningun lado, y diagnosticar un problema dependia de que alguien alcanzara a sacarle una foto a la pantalla.',
+            'El servidor deja de anunciar que version de PHP usa, un dato que solo le sirve a quien busca por donde atacar.',
+        ],
+    ],
+    [
         'fecha'   => '2026-09-04',
         'version' => '1.64',
         'titulo'  => 'El panel te dice cuantos folios pedirle al SII',

@@ -36,6 +36,11 @@ ENV OPENSSL_CONF=/etc/ssl/openssl-legacy.cnf
 RUN printf "memory_limit=192M\nmax_execution_time=300\nupload_max_filesize=32M\npost_max_size=32M\n" \
     > "$PHP_INI_DIR/conf.d/zz-limites.ini"
 
+# Errores de PHP: nunca al navegador, siempre a stderr (lo recoge Docker), y
+# sin X-Powered-By. Sin esto valen los defaults de compilacion (display_errors
+# On, log_errors Off). Detalle en el propio archivo; es el mismo en el motor.
+COPY docker/php-produccion.ini "$PHP_INI_DIR/conf.d/zz-produccion.ini"
+
 # Workers de php-fpm acotados a proposito: 4 x 192M = 768M en el peor caso,
 # que es exactamente el mem_limit del contenedor. El default de la imagen
 # (pm.max_children=5, sin techo de memoria por worker) desbordaria el limite
