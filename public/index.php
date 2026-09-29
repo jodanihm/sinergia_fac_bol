@@ -52,6 +52,8 @@ use Plantiflex\FacturacionCl\Exceptions\ConsultaContribuyenteException;
 use Plantiflex\FacturacionCl\Providers\ApiGatewayContribuyente;
 use Plantiflex\FacturacionCl\Providers\BoletaFacturador;
 use Plantiflex\FacturacionCl\Providers\SiiDirectoFacturador;
+use Plantiflex\Integration\Facturacion\AnulacionEnCursoException;
+use Plantiflex\Integration\Facturacion\AnulacionUnica;
 use Plantiflex\Integration\Facturacion\CertificadoCrypto;
 use Plantiflex\Integration\Facturacion\MySqlDteEmitidoRepository;
 use Plantiflex\Integration\Facturacion\MySqlEmisorRepository;
@@ -184,6 +186,23 @@ function responder(int $status, array $payload): never
 function invalido(string $error, string $campo): never
 {
     responder(422, ['error' => $error, 'campo' => $campo]);
+}
+
+/**
+ * Idempotency-Key que manda el cliente ('' si no viene).
+ *
+ * El prefijo de AnulacionUnica esta reservado: esas claves las deriva el motor
+ * del documento anulado y viven en la misma tabla. Una emision con la clave
+ * "anulacion:33:10" ocuparia el candado de la anulacion de ese documento, y
+ * la anulacion devolveria como repeticion la respuesta de la emision.
+ */
+function claveIdempotenciaDelCliente(): string
+{
+    $clave = trim((string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''));
+    if (str_starts_with($clave, AnulacionUnica::PREFIJO_CLAVE)) {
+        invalido('Idempotency-Key no puede empezar con "' . AnulacionUnica::PREFIJO_CLAVE . '": es un prefijo reservado', 'Idempotency-Key');
+    }
+    return $clave;
 }
 
 /** Ambiente resuelto desde el tenant autenticado (api_key), nunca del cliente. */
@@ -1315,7 +1334,7 @@ function emitirDte(array $tenant): never
     // El rut_emisor sale del tenant autenticado, NUNCA del payload: es parte de
     // la PK de dte_idempotencia (migracion 001) y lo que impide que dos cuentas
     // que usen la misma Idempotency-Key se pisen entre si.
-    $clave = trim((string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''));
+    $clave = claveIdempotenciaDelCliente();
     $idem  = $clave !== '' ? new MySqlIdempotenciaRepository($pdo) : null;
     if ($idem !== null && ! $idem->reclamar($tenant['rut_emisor'], $ambiente, $clave)) {
         // La clave ya existe para este emisor en este ambiente.
@@ -1344,8 +1363,32 @@ function emitirDte(array $tenant): never
         rutSender: resolverRutSender($pdo, $tenant['rut_emisor'], $ambiente),
     );
 
+    // Una NC que ANULA documentos (CodRef=1) compite por el mismo candado que
+    // POST .../anular: mientras una anulacion de ese documento esta en curso,
+    // esta no sale. Es por donde anula el formulario del panel. Detalle en
+    // AnulacionUnica::emitirSinPisarse().
+    $anulados = AnulacionUnica::documentosQueAnula($doc->tipoDte->value, $v['referencias']);
+
     try {
-        $res = crearFacturador($pdo)->emitir($doc, $cred);
+        $res = (new AnulacionUnica(new MySqlIdempotenciaRepository($pdo)))->emitirSinPisarse(
+            $tenant['rut_emisor'],
+            $ambiente,
+            $anulados,
+            static fn () => crearFacturador($pdo)->emitir($doc, $cred),
+        );
+    } catch (AnulacionEnCursoException $e) {
+        // No se emitio nada ni se gasto folio: se suelta la reserva del
+        // cliente para que pueda reintentar con la MISMA clave apenas termine
+        // la otra anulacion, igual que con FoliosAgotadosException.
+        if ($idem !== null) {
+            $idem->liberar($tenant['rut_emisor'], $ambiente, $clave);
+        }
+        responder(409, [
+            'error'   => 'ya hay una anulacion en curso para un documento que esta nota anula',
+            'codigo'  => 'anulacion_en_curso',
+            'tipoDte' => $e->tipoDte,
+            'folio'   => $e->folio,
+        ]);
     } catch (SiiAutenticacionException $e) {
         responder(502, ['error' => 'fallo de autenticacion con el SII', 'estadoSii' => $e->estadoSii, 'glosaSii' => $e->glosaSii]);
     } catch (EnvioRechazadoException $e) {
@@ -1574,7 +1617,7 @@ function emitirDteLote(array $tenant): never
     // el payload corregido bajo la MISMA clave hasta que expire el TTL de 300 s
     // -- recibiria 409 "solicitud en proceso" por un lote que nunca existio. El
     // tope es un count() sin efectos, asi que ponerlo antes no cuesta nada.
-    $clave = trim((string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''));
+    $clave = claveIdempotenciaDelCliente();
     if ($clave === '') {
         invalido(
             'Idempotency-Key es obligatoria en POST /api/v1/dte/lote. Sin ella, un reintento tras '
@@ -1679,71 +1722,99 @@ function emitirDteLote(array $tenant): never
     $crypto = new CertificadoCrypto($bin);
     $folios = new MySqlFolioRepository($pdo, fn (string $c): string => $crypto->descifrar($c), cryptoKek: $crypto);
 
-    try {
-        // Asignar folios y armar los DTOs EN EL MISMO ORDEN del array recibido.
-        // Fecha unica para todo el lote: la FchEmis de cada documento y la
-        // FchRef de las referencias intra-lote deben coincidir.
-        $fechaStr     = date('Y-m-d');
-        $fechaEmision = new DateTimeImmutable($fechaStr);
-
-        $docs     = [];
-        $emitidos = [];
-        foreach ($validados as $v) {
-            $tipo  = TipoDte::from($v['tipoDte']);
-            $folio = $folios->asignarSiguienteFolio($tenant['rut_emisor'], $tipo, $ambiente);
-            $r     = $v['receptor'];
-
-            // Resolver referencias intra-lote: refIndiceLote -> TpoDocRef/
-            // FolioRef/FchRef reales del documento referenciado (siempre uno
-            // ANTERIOR, ya validado, asi que su folio ya esta en $emitidos).
-            // El orden del array se preserva tal cual (NroLinRef = posicion).
-            $referencias = [];
-            foreach ($v['referencias'] as $ref) {
-                if (is_array($ref) && array_key_exists('refIndiceLote', $ref)) {
-                    $k = $ref['refIndiceLote'];
-                    unset($ref['refIndiceLote']);
-                    $ref['tipoDocumento'] = (string) $emitidos[$k]['tipoDte'];
-                    $ref['folio']         = $emitidos[$k]['folio'];
-                    $ref['fecha']         = $fechaStr;
-                }
-                $referencias[] = $ref;
-            }
-
-            $docs[] = new DocumentoTributario(
-                tipoDte:         $tipo,
-                receptor:        new Receptor(
-                    rut: $r['rut'],
-                    razonSocial: $r['razonSocial'],
-                    giro: $r['giro'],
-                    direccion: $r['direccion'],
-                    comuna: $r['comuna'],
-                ),
-                detalles:        array_map(
-                    static fn (array $d): Detalle => new Detalle(
-                        $d['nombre'],
-                        (float) $d['cantidad'],
-                        (float) $d['precioUnitario'],
-                        exento: (bool) ($d['exento'] ?? false),
-                        descuentoPorcentaje: (float) ($d['descuentoPorcentaje'] ?? 0),
-                        codigoImpuestoAdicional: isset($d['codigoImpuestoAdicional']) ? trim((string) $d['codigoImpuestoAdicional']) : null,
-                tasaImpuestoAdicional:     isset($d['tasaImpuestoAdicional']) ? (float) $d['tasaImpuestoAdicional'] : null,
-                    ),
-                    $v['detalles'],
-                ),
-                montosSonBrutos: $v['montosSonBrutos'],
-                folio:           $folio,
-                fechaEmision:    $fechaEmision,
-                referencias:     $referencias,
-                descuentoGlobalPct: $v['descuentoGlobalPct'],
-                // El lote los transporta igual que el unitario, aunque hasta la
-                // entrega 2 la carga masiva no los manda y llegan en null.
-                formaPago:       $v['formaPago'],
-                fechaVencimiento: $v['fechaVencimiento'] !== null ? new DateTimeImmutable($v['fechaVencimiento']) : null,
-            );
-            $emitidos[] = ['tipoDte' => $v['tipoDte'], 'folio' => $folio];
+    // Las NC del sobre que ANULAN documentos (CodRef=1) toman el mismo candado
+    // que POST .../anular, TODAS antes de asignar el primer folio: si una esta
+    // ocupada no sale el sobre y no se gasta ningun folio. Detalle en
+    // AnulacionUnica::emitirSinPisarse().
+    $anulados = [];
+    foreach ($validados as $v) {
+        foreach (AnulacionUnica::documentosQueAnula($v['tipoDte'], $v['referencias']) as $d) {
+            $anulados[] = $d;
         }
+    }
 
-        $res = crearFacturador($pdo)->emitirLote($docs, $cred);
+    try {
+        $res = (new AnulacionUnica(new MySqlIdempotenciaRepository($pdo)))->emitirSinPisarse(
+            $tenant['rut_emisor'],
+            $ambiente,
+            $anulados,
+            static function () use ($validados, $folios, $tenant, $ambiente, $cred, $pdo, &$emitidos): array {
+                // Asignar folios y armar los DTOs EN EL MISMO ORDEN del array recibido.
+                // Fecha unica para todo el lote: la FchEmis de cada documento y la
+                // FchRef de las referencias intra-lote deben coincidir.
+                $fechaStr     = date('Y-m-d');
+                $fechaEmision = new DateTimeImmutable($fechaStr);
+
+                $docs     = [];
+                $emitidos = [];
+                foreach ($validados as $v) {
+                    $tipo  = TipoDte::from($v['tipoDte']);
+                    $folio = $folios->asignarSiguienteFolio($tenant['rut_emisor'], $tipo, $ambiente);
+                    $r     = $v['receptor'];
+
+                    // Resolver referencias intra-lote: refIndiceLote -> TpoDocRef/
+                    // FolioRef/FchRef reales del documento referenciado (siempre uno
+                    // ANTERIOR, ya validado, asi que su folio ya esta en $emitidos).
+                    // El orden del array se preserva tal cual (NroLinRef = posicion).
+                    $referencias = [];
+                    foreach ($v['referencias'] as $ref) {
+                        if (is_array($ref) && array_key_exists('refIndiceLote', $ref)) {
+                            $k = $ref['refIndiceLote'];
+                            unset($ref['refIndiceLote']);
+                            $ref['tipoDocumento'] = (string) $emitidos[$k]['tipoDte'];
+                            $ref['folio']         = $emitidos[$k]['folio'];
+                            $ref['fecha']         = $fechaStr;
+                        }
+                        $referencias[] = $ref;
+                    }
+
+                    $docs[] = new DocumentoTributario(
+                        tipoDte:         $tipo,
+                        receptor:        new Receptor(
+                            rut: $r['rut'],
+                            razonSocial: $r['razonSocial'],
+                            giro: $r['giro'],
+                            direccion: $r['direccion'],
+                            comuna: $r['comuna'],
+                        ),
+                        detalles:        array_map(
+                            static fn (array $d): Detalle => new Detalle(
+                                $d['nombre'],
+                                (float) $d['cantidad'],
+                                (float) $d['precioUnitario'],
+                                exento: (bool) ($d['exento'] ?? false),
+                                descuentoPorcentaje: (float) ($d['descuentoPorcentaje'] ?? 0),
+                                codigoImpuestoAdicional: isset($d['codigoImpuestoAdicional']) ? trim((string) $d['codigoImpuestoAdicional']) : null,
+                        tasaImpuestoAdicional:     isset($d['tasaImpuestoAdicional']) ? (float) $d['tasaImpuestoAdicional'] : null,
+                            ),
+                            $v['detalles'],
+                        ),
+                        montosSonBrutos: $v['montosSonBrutos'],
+                        folio:           $folio,
+                        fechaEmision:    $fechaEmision,
+                        referencias:     $referencias,
+                        descuentoGlobalPct: $v['descuentoGlobalPct'],
+                        // El lote los transporta igual que el unitario, aunque hasta la
+                        // entrega 2 la carga masiva no los manda y llegan en null.
+                        formaPago:       $v['formaPago'],
+                        fechaVencimiento: $v['fechaVencimiento'] !== null ? new DateTimeImmutable($v['fechaVencimiento']) : null,
+                    );
+                    $emitidos[] = ['tipoDte' => $v['tipoDte'], 'folio' => $folio];
+                }
+
+                return crearFacturador($pdo)->emitirLote($docs, $cred);
+            },
+        );
+    } catch (AnulacionEnCursoException $e) {
+        // Nada emitido ni folio gastado: se suelta la reserva del cliente, como
+        // en el unitario, para que reintente con la MISMA clave.
+        $idem->liberar($tenant['rut_emisor'], $ambiente, $clave);
+        responder(409, [
+            'error'   => 'ya hay una anulacion en curso para un documento que una nota del lote anula',
+            'codigo'  => 'anulacion_en_curso',
+            'tipoDte' => $e->tipoDte,
+            'folio'   => $e->folio,
+        ]);
     } catch (SiiAutenticacionException $e) {
         responder(502, ['error' => 'fallo de autenticacion con el SII', 'estadoSii' => $e->estadoSii, 'glosaSii' => $e->glosaSii]);
     } catch (EnvioRechazadoException $e) {
@@ -1939,7 +2010,7 @@ function emitirBoleta(array $tenant): never
     // Va DESPUES de armar $doc y ANTES de tocar el SII: validar primero deja que
     // un payload malformado se corrija y se reintente con la MISMA clave, en vez
     // de quedar atrapado 300 s tras un claim de algo que nunca se emitio.
-    $clave = trim((string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''));
+    $clave = claveIdempotenciaDelCliente();
     $idem  = $clave !== '' ? new MySqlIdempotenciaRepository($pdo) : null;
     if ($idem !== null && ! $idem->reclamar($tenant['rut_emisor'], $ambiente, $clave)) {
         $previo = $idem->obtener($tenant['rut_emisor'], $ambiente, $clave);
@@ -2703,9 +2774,32 @@ function anularDte(array $tenant, int $tipoDte, int $folio): never
         }
     }
 
+    // UNA SOLA NC POR DOCUMENTO. La Salvaguarda 1 de arriba es un SELECT: dos
+    // pedidos simultaneos la pasan los dos, y desde ahi hasta que la NC queda en
+    // dte_emitido corren la consulta al SII y el envio entero. El candado va
+    // aqui, despues de las verificaciones y antes de tocar un folio: las
+    // verificaciones solo leen, y reclamar antes obligaria a soltar el candado
+    // en cada una de sus salidas. Detalle en AnulacionUnica.
     try {
-        $original = reconstruirOriginal($xml, $tipoDte, $folio);
-        $res      = $facturador->anular($original, $motivo, TipoAnulacion::AnulaTotal, $cred);
+        $r = (new AnulacionUnica(new MySqlIdempotenciaRepository($pdo)))->ejecutar(
+            $rutEmisor,
+            $ambiente,
+            $tipoDte,
+            $folio,
+            yaAnulado: static fn (): bool => $emitido->existeAnulacion($rutEmisor, $ambiente, $tipoDte, $folio),
+            emitir: static function () use ($xml, $tipoDte, $folio, $motivo, $cred, $facturador): array {
+                $original = reconstruirOriginal($xml, $tipoDte, $folio);
+                $res      = $facturador->anular($original, $motivo, TipoAnulacion::AnulaTotal, $cred);
+                return [(int) $res->folio, [
+                    'ncFolio'    => $res->folio,
+                    'tipoDte'    => $res->tipoDte->value,
+                    'estado'     => $res->estado,
+                    'trackId'    => $res->trackId,
+                    'folioRef'   => $folio,
+                    'tipoDteRef' => $tipoDte,
+                ]];
+            },
+        );
     } catch (SiiAutenticacionException $e) {
         responder(502, ['error' => 'fallo de autenticacion con el SII', 'estadoSii' => $e->estadoSii, 'glosaSii' => $e->glosaSii]);
     } catch (EnvioRechazadoException $e) {
@@ -2714,14 +2808,10 @@ function anularDte(array $tenant, int $tipoDte, int $folio): never
         responder(500, ['error' => 'fallo la anulacion', 'detalle' => $e->getMessage()]);
     }
 
-    responder(201, [
-        'ncFolio'    => $res->folio,
-        'tipoDte'    => $res->tipoDte->value,
-        'estado'     => $res->estado,
-        'trackId'    => $res->trackId,
-        'folioRef'   => $folio,
-        'tipoDteRef' => $tipoDte,
-    ]);
+    if ($r['resultado'] === 'repetida') {
+        header('Idempotent-Replay: true');
+    }
+    responder($r['httpStatus'], $r['payload']);
 }
 
 /**

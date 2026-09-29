@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-09-29',
+        'version' => '1.67',
+        'titulo'  => 'Un documento ya no puede anularse dos veces por un doble clic',
+        'tag'     => 'backend',
+        'items'   => [
+            'Si llegaban dos pedidos de anulacion del mismo documento casi al mismo tiempo (un doble clic, un reintento despues de un corte), los dos podian emitir su propia nota de credito. El documento quedaba anulado dos veces y el IVA rebajado de mas, con dos folios gastados.',
+            'Ahora el primero que llega es el unico que emite. Mientras esa anulacion esta en curso, cualquier otro pedido sobre el mismo documento recibe "ya hay una anulacion en curso" y no emite nada.',
+            'Vale tambien entre caminos distintos: una nota de credito que anula un documento desde el formulario de emision o desde la facturacion masiva espera su turno frente a una anulacion por la API del mismo documento, y al reves. En la facturacion masiva, si una sola nota del lote choca, no sale el lote y no se gasta ningun folio.',
+            'Si el pedido se repite despues de terminar, se devuelve la misma nota de credito que ya se emitio, en vez de un error o de una segunda nota.',
+            'Si la anulacion falla antes de llegar al SII -- por ejemplo, porque el SII no deja iniciar sesion --, se puede volver a intentar de inmediato.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-09-29',
         'version' => '1.66',
         'titulo'  => 'Una linea con descuento ya no puede descuadrar por un peso',
         'tag'     => 'backend',
