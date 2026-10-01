@@ -1383,10 +1383,13 @@ function handleClienteNuevoPost(): void
     if ($errores === []) {
         try {
             $repo->crear($cuentaId, $datos);
+            // Tambien al CREAR: el documento pudo emitirse a un RUT que no
+            // estaba en el maestro, y quedar sin destinatario hasta hoy.
+            $encolados = $datos['email'] !== '' ? encolarCorreosPendientesDelCliente($cuentaId, $datos['rut_cliente']) : 0;
             // Se guarda igual y se avisa: bloquear romperia la edicion de los
             // clientes que ya existen con estos campos en NULL. Ver
             // CLIENTE_CAMPOS_PARA_FACTURAR.
-            flashSet('exito', mensajeClienteGuardado('Cliente creado.', $datos));
+            flashSet('exito', mensajeClienteGuardado('Cliente creado.', $datos) . mensajeCorreosEncolados($encolados));
             redirigirPrg('/maestros/clientes');
         } catch (ClienteDuplicadoException $e) {
             // Borde de carrera: otro request creo el mismo RUT entre el chequeo
@@ -1439,7 +1442,8 @@ function handleClienteEditarPost(int $id): void
     if ($errores === []) {
         try {
             $repo->actualizar($cuentaId, $id, $datos);
-            flashSet('exito', mensajeClienteGuardado('Cliente actualizado.', $datos));
+            $encolados = $datos['email'] !== '' ? encolarCorreosPendientesDelCliente($cuentaId, $datos['rut_cliente']) : 0;
+            flashSet('exito', mensajeClienteGuardado('Cliente actualizado.', $datos) . mensajeCorreosEncolados($encolados));
             redirigirPrg('/maestros/clientes');
         } catch (ClienteDuplicadoException $e) {
             $errores['rut_cliente'] = 'Ya existe otro cliente con ese RUT en tu empresa.';
@@ -1454,6 +1458,68 @@ function handleClienteEditarPost(int $id): void
         'errores'   => $errores,
         'navActivo' => 'maestros.clientes',
     ]);
+}
+
+/**
+ * Al guardar un cliente CON correo, pone en cola los envios de SUS documentos
+ * que quedaron 'sin_destinatario'. Devuelve cuantos.
+ *
+ * POR QUE: un documento emitido sin correo valido se queda en
+ * 'sin_destinatario' para siempre -- el runner nunca lo mira --, y antes habia
+ * que corregir el maestro Y ADEMAS ir a Ventas > Correos a pulsar "Buscar
+ * correo". El segundo paso se olvidaba: el caso real fue una carga masiva con
+ * correos mal escritos, corregidos despues en el maestro, cuyas facturas no
+ * habrian salido nunca.
+ *
+ * ES EXACTAMENTE EL BOTON, no un camino paralelo: la resolucion la hace
+ * reresolverDestinatarios(), que es lo que corre "Buscar correo". Solo cambia
+ * QUIEN elige las filas: aqui, las del RUT de este cliente.
+ *
+ * El cruce por RUT se hace EN PHP y normalizado, mismo motivo que en
+ * reresolverDestinatarios(): dte_emitido y cliente viven en collations
+ * distintas, y receptor_rut puede venir con puntos.
+ *
+ * NUNCA ROMPE EL GUARDADO: el cliente ya quedo grabado cuando se llega aqui.
+ * Cualquier fallo se registra y devuelve 0; el boton de Ventas > Correos sigue
+ * ahi como respaldo.
+ */
+function encolarCorreosPendientesDelCliente(int $cuentaId, string $rutCliente): int
+{
+    try {
+        $pdo  = Db::conexion();
+        $rut  = Rut::normalizar($rutCliente);
+        $stmt = $pdo->prepare(
+            'SELECT q.id, e.receptor_rut FROM dte_envio_correo q '
+            . 'JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+            . "WHERE q.cuenta_id = :c AND q.estado = 'sin_destinatario' ORDER BY q.id"
+        );
+        $stmt->execute([':c' => $cuentaId]);
+        $filas = array_values(array_filter(
+            $stmt->fetchAll(PDO::FETCH_ASSOC),
+            static fn (array $f): bool => Rut::normalizar((string) $f['receptor_rut']) === $rut
+        ));
+        if ($filas === []) {
+            return 0;
+        }
+
+        return reresolverDestinatarios($pdo, $cuentaId, $filas)['resueltas'];
+    } catch (Throwable $e) {
+        error_log(sprintf('cliente %s guardado, pero no se pudieron encolar sus correos pendientes - %s', $rutCliente, $e->getMessage()));
+
+        return 0;
+    }
+}
+
+/** El aviso que acompana al guardado cuando se encolaron correos. */
+function mensajeCorreosEncolados(int $n): string
+{
+    if ($n === 0) {
+        return '';
+    }
+
+    return $n === 1
+        ? ' Ademas, 1 documento suyo que no tenia a quien enviarse quedo en cola para este correo.'
+        : " Ademas, {$n} documentos suyos que no tenian a quien enviarse quedaron en cola para este correo.";
 }
 
 function handleClienteActivarPost(int $id): void

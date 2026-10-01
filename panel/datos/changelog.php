@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-01',
+        'version' => '1.70',
+        'titulo'  => 'Al corregir el correo de un cliente, sus facturas pendientes de envio salen solas',
+        'tag'     => 'backend',
+        'items'   => [
+            'Cuando una factura se emitia sin un correo valido (por ejemplo, porque venia mal escrito en la carga masiva), quedaba en Ventas > Correos como "sin destinatario" y ahi se quedaba.',
+            'Para que saliera habia que hacer dos cosas: corregir el correo en Maestros > Clientes y ademas ir a Ventas > Correos a pulsar "Buscar correo". El segundo paso era facil de olvidar, y esas facturas no le llegaban nunca al cliente.',
+            'Ahora basta con guardar el cliente con su correo: sus documentos que no tenian a quien enviarse quedan en cola automaticamente, y el aviso de guardado dice cuantos.',
+            'Solo se mueven los documentos de ESE cliente que estaban sin destinatario. Lo ya enviado no se vuelve a mandar. El boton de Ventas > Correos sigue ahi, por si acaso.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-01',
         'version' => '1.69',
         'titulo'  => 'El aviso de folios ya no grita "Critico" a quien factura una vez al mes',
         'tag'     => 'producto',
