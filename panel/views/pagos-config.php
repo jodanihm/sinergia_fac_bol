@@ -201,7 +201,10 @@ $enProduccion = $ambiente === 'produccion';
             <input type="text" name="url_retorno" id="url_retorno" value="<?= $val('url_retorno'); ?>"
                    placeholder="https://tuempresa.cl/gracias">
             <?= $err('url_retorno'); ?>
-            <small class="form-ayuda">Opcional. Si lo dejas vacio, Flow muestra su propia pagina.</small>
+            <?php // La misma url que arma ResolutorLinkPago cuando el campo va vacio. ?>
+            <small class="form-ayuda">Opcional. Si lo dejas vacio, el cliente vuelve a
+                <?= htmlspecialchars(rtrim(trim((string) getenv('PANEL_URL_PUBLICA')), '/') . RUTA_RETORNO_PAGO, ENT_QUOTES, 'UTF-8'); ?>,
+                una pagina nuestra que le dice si el pago quedo confirmado.</small>
         </div>
     </section>
 

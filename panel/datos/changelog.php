@@ -32,6 +32,16 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-10-01',
+        'version' => '1.68',
+        'titulo'  => 'La configuracion de pagos dice a donde vuelve de verdad quien paga',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En Configuracion > Pagos, la ayuda del campo "A donde vuelve el cliente despues de pagar" decia que, si se dejaba vacio, Flow mostraba su propia pagina. Ya no era asi: el cliente vuelve a una pagina nuestra que le dice si el pago quedo confirmado.',
+            'Ahora la ayuda muestra esa direccion completa, para que se sepa que dejar el campo vacio esta bien y no hace falta copiarla a mano.',
+        ],
+    ],
+    [
         'fecha'   => '2026-09-29',
         'version' => '1.67',
         'titulo'  => 'Un documento ya no puede anularse dos veces por un doble clic',
