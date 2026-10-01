@@ -13,7 +13,8 @@
  *
  * LA BARRA Y EL NIVEL MIDEN COSAS DISTINTAS, y es a proposito. La barra pinta el
  * PORCENTAJE USADO del rango, que es lo que uno espera de una barra. El nivel
- * sale de las JORNADAS que duran los folios que quedan. Pueden discrepar -- una
+ * sale de cuanto DURAN los folios que quedan (dias o jornadas, ver
+ * dashNivelFolios()). Pueden discrepar -- una
  * barra corta con la etiqueta "Critico" -- y por eso debajo va escrita la cuenta:
  * sin ella, un rojo sobre 383 folios disponibles parece un error.
  */
@@ -57,16 +58,31 @@ $iconoNivel    = ['rojo' => '&#9888;', 'ambar' => '&#9679;', 'ok' => '&#10003;']
                 //
                 // Con cero disponibles no se escribe: "0 jornadas" no agrega nada
                 // sobre "0 disponibles", y la division ya no significa nada.
+                //
+                // Con historial se escriben LOS DIAS, que son los que deciden el
+                // color (ver dashNivelFolios). Las jornadas van al lado porque
+                // contestan la otra pregunta: si la proxima tanda cabe.
                 $jornadas = (float) $f['jornadas'];
+                $dias     = $f['dias'] ?? null;
+                $nJornadas = number_format(floor($jornadas), 0, ',', '.') . ($jornadas < 2 ? ' jornada' : ' jornadas');
             ?>
             <?php if ((int) $f['disponibles'] > 0): ?>
                 <p class="folio__ritmo">
-                    <?= $jornadas < 1
-                        ? 'No alcanzan para una jornada como las tuyas'
-                        : 'Te duran ~' . number_format(floor($jornadas), 0, ',', '.')
-                          . ($jornadas < 2 ? ' jornada' : ' jornadas') . ' de emision'; ?>
+                    <?php if ($jornadas < 1): ?>
+                        No alcanzan para una jornada como las tuyas
+                    <?php elseif ($dias !== null): ?>
+                        Te duran ~<?= number_format(floor((float) $dias), 0, ',', '.'); ?>
+                        <?= $dias < 2 ? 'dia' : 'dias'; ?> a tu ritmo actual
+                    <?php else: ?>
+                        Te duran ~<?= $nJornadas; ?> de emision
+                    <?php endif; ?>
                     <span class="folio__ritmo-base">
-                        (emites <?= number_format((float) $f['ritmo'], 1, ',', '.'); ?> al dia que facturas)
+                        <?php if ($dias !== null && $jornadas >= 1): ?>
+                            (alcanzan para <?= $nJornadas; ?> como las tuyas, de
+                            <?= number_format((float) $f['ritmo'], 1, ',', '.'); ?> documentos cada una)
+                        <?php else: ?>
+                            (emites <?= number_format((float) $f['ritmo'], 1, ',', '.'); ?> al dia que facturas)
+                        <?php endif; ?>
                     </span>
                 </p>
             <?php endif; ?>
