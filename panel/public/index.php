@@ -310,6 +310,37 @@ const DASH_FOLIOS_JORNADAS_ROJO  = 5;
 const DASH_FOLIOS_JORNADAS_AMBAR = 15;
 
 /**
+ * CORRECCION DEL 01-10-2026: CON HISTORIAL, EL NIVEL LO MANDA EL CALENDARIO.
+ *
+ * Las jornadas de arriba exageraban justo con el emisor para el que se
+ * pensaron. 78225195-3 factura por tandas MENSUALES de ~70 exentas: tras su
+ * carga de septiembre le quedaban 312 folios, o sea 4,4 jornadas suyas -> ROJO,
+ * "Critico". Pero cuatro tandas mensuales son cuatro meses de facturacion. La
+ * jornada es la unidad correcta para saber si la PROXIMA TANDA CABE; para saber
+ * si hay que correr al SII, la unidad es el tiempo que pasa de verdad.
+ *
+ * Por eso, cuando el historial da para medir un ritmo de calendario
+ * (dashHistorialSuficiente), el nivel sale de DOS preguntas y gana la peor:
+ *
+ *   cabe la tanda    rojo si los folios no alcanzan para UNA jornada como las
+ *                    suyas (se quedaria sin folios a mitad de la proxima carga);
+ *                    ambar si no alcanzan para DOS.
+ *   cuanto dura      dias de calendario al ritmo medido: rojo bajo 15 (menos de
+ *                    lo que hay entre dos facturaciones mensuales), ambar bajo
+ *                    45 (hora de empezar el tramite del CAF con calma).
+ *
+ * SIN HISTORIAL SUFICIENTE se sigue usando la regla de jornadas de arriba, tal
+ * cual. Sin un ritmo de calendario creible no hay nada mejor que medir, y es la
+ * regla que deja en rojo al emisor nuevo con tres folios.
+ *
+ * Los cuatro numeros son, como los de arriba, un juicio de negocio.
+ */
+const DASH_FOLIOS_TANDAS_ROJO = 1;
+const DASH_FOLIOS_TANDAS_AMBAR = 2;
+const DASH_FOLIOS_DIAS_ROJO = 15;
+const DASH_FOLIOS_DIAS_AMBAR = 45;
+
+/**
  * Ritmo que se supone cuando el emisor NO tiene historial de ese tipo en la
  * ventana: un documento por jornada.
  *
@@ -18801,12 +18832,12 @@ function dashResumen(array $porTipo): array
  * folios que el emisor gasto ANTES de llegar aqui, e inflaria el porcentaje
  * usado desde el primer dia. La barra mide lo que Sinergia puede emitir.
  *
- * EL NIVEL (rojo/ambar/ok) NO SALE DE ESE PORCENTAJE sino de las JORNADAS que
- * duran los folios que quedan, con el ritmo que da dashRitmoPorTipo(). El por
- * que esta en DASH_FOLIOS_JORNADAS_ROJO; en una linea: 383 folios pueden ser
- * seis dias de trabajo, y el porcentaje los pintaba en verde.
+ * EL NIVEL (rojo/ambar/ok) NO SALE DE ESE PORCENTAJE sino de cuanto DURAN los
+ * folios que quedan, con el ritmo que da dashRitmoPorTipo(): en dias de
+ * calendario cuando hay historial, en jornadas cuando no. Ver dashNivelFolios()
+ * y DASH_FOLIOS_DIAS_ROJO.
  *
- * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, ritmo:float, jornadas:float, nivel:string, sugeridos:int, histDocs:int, histDias:int, histSirve:bool}>
+ * @return list<array{tipo:int, disponibles:int, usados:int, totalRango:int, cafs:int, pctDisponible:int, ritmo:float, jornadas:float, dias:?float, nivel:string, sugeridos:int, histDocs:int, histDias:int, histSirve:bool}>
  */
 function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
 {
@@ -18838,17 +18869,16 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
         // devolviendo porque la barra de la vista lo usa para dibujar el consumo
         // -- eso si es "cuanto llevas gastado" y esta bien --, pero ya no decide
         // el color. El por que completo esta en DASH_FOLIOS_JORNADAS_ROJO.
-        $medido   = $ritmoPorTipo[$tipo] ?? null;
-        $ritmo    = $medido['porJornada'] ?? DASH_FOLIOS_RITMO_MINIMO;
-        $jornadas = $disponibles / $ritmo;
+        $medido    = $ritmoPorTipo[$tipo] ?? null;
+        $ritmo     = $medido['porJornada'] ?? DASH_FOLIOS_RITMO_MINIMO;
+        $jornadas  = $disponibles / $ritmo;
+        $histSirve = dashHistorialSuficiente((int) ($medido['docs'] ?? 0), (int) ($medido['dias'] ?? 0));
+        $porDia    = (float) ($medido['porDia'] ?? 0.0);
 
-        if ($disponibles === 0 || $jornadas < DASH_FOLIOS_JORNADAS_ROJO) {
-            $nivel = 'rojo';
-        } elseif ($jornadas < DASH_FOLIOS_JORNADAS_AMBAR) {
-            $nivel = 'ambar';
-        } else {
-            $nivel = 'ok';
-        }
+        // Dias de calendario que duran, SOLO con historial que lo respalde: sin
+        // el, un ritmo diario medido sobre una sola carga reciente no dice nada.
+        $dias  = $histSirve && $porDia > 0 ? $disponibles / $porDia : null;
+        $nivel = dashNivelFolios($disponibles, $jornadas, $dias);
 
         $salida[] = [
             'tipo'          => $tipo,
@@ -18859,6 +18889,7 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
             'pctDisponible' => $pct,
             'ritmo'         => $ritmo,
             'jornadas'      => $jornadas,
+            'dias'          => $dias,
             'nivel'         => $nivel,
             // Cuantos pedir, y con que historial se calculo. Los dos viajan
             // juntos a proposito: la vista tiene que poder decir en que se
@@ -18870,14 +18901,43 @@ function dashFoliosPorTipo(PDO $pdo, string $rutEmisor): array
             ),
             'histDocs'      => (int) ($medido['docs'] ?? 0),
             'histDias'      => (int) ($medido['dias'] ?? 0),
-            'histSirve'     => dashHistorialSuficiente(
-                (int) ($medido['docs'] ?? 0),
-                (int) ($medido['dias'] ?? 0),
-            ),
+            'histSirve'     => $histSirve,
         ];
     }
 
     return $salida;
+}
+
+/**
+ * El semaforo de un tipo de documento. Funcion pura, aparte de
+ * dashFoliosPorTipo(), para que SemaforoDeFoliosTest pruebe la regla real y no
+ * una copia. El por que de cada umbral esta en DASH_FOLIOS_DIAS_ROJO.
+ *
+ * $dias null = no hay historial para medir el calendario: decide la regla de
+ * jornadas de siempre.
+ */
+function dashNivelFolios(int $disponibles, float $jornadas, ?float $dias): string
+{
+    if ($disponibles === 0) {
+        return 'rojo';
+    }
+
+    if ($dias === null) {
+        if ($jornadas < DASH_FOLIOS_JORNADAS_ROJO) {
+            return 'rojo';
+        }
+
+        return $jornadas < DASH_FOLIOS_JORNADAS_AMBAR ? 'ambar' : 'ok';
+    }
+
+    if ($jornadas < DASH_FOLIOS_TANDAS_ROJO || $dias < DASH_FOLIOS_DIAS_ROJO) {
+        return 'rojo';
+    }
+    if ($jornadas < DASH_FOLIOS_TANDAS_AMBAR || $dias < DASH_FOLIOS_DIAS_AMBAR) {
+        return 'ambar';
+    }
+
+    return 'ok';
 }
 
 /**

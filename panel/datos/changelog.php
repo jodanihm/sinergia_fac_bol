@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-01',
+        'version' => '1.69',
+        'titulo'  => 'El aviso de folios ya no grita "Critico" a quien factura una vez al mes',
+        'tag'     => 'producto',
+        'items'   => [
+            'El semaforo de folios contaba cuantas "jornadas de emision" te quedaban. Para quien factura por tandas una vez al mes eso exageraba: 312 folios a 70 facturas por tanda son 4 jornadas, y salia en rojo como "Critico", aunque en la practica son varios meses de facturacion.',
+            'Ahora, cuando ya hay historial suficiente, el color se calcula con los DIAS que te duran los folios al ritmo real de los ultimos meses: rojo si quedan menos de 15 dias, ambar si quedan menos de 45.',
+            'Y se sigue cuidando la tanda: si los folios no alcanzan para una carga como las tuyas sale en rojo, y si no alcanzan para dos, en ambar, aunque sobren dias.',
+            'Debajo de la barra ahora dice, por ejemplo, "Te duran ~66 dias a tu ritmo actual (alcanzan para 4 jornadas como las tuyas, de 70 documentos cada una)".',
+            'Las empresas sin historial suficiente siguen con la regla de antes, que es la prudente: con pocos folios y sin saber cuanto consumen, el aviso sale temprano.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-01',
         'version' => '1.68',
         'titulo'  => 'La configuracion de pagos dice a donde vuelve de verdad quien paga',
         'tag'     => 'frontend',

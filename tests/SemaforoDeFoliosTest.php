@@ -48,19 +48,32 @@ final class SemaforoDeFoliosTest extends TestCase
         return (float) $m[1];
     }
 
-    /** La decision, tal como la toma dashFoliosPorTipo(). */
-    private function nivel(int $disponibles, float $ritmo): string
+    /**
+     * LA REGLA REAL, no una copia: dashNivelFolios() es pura, asi que se extrae
+     * del router y se evalua aqui -- igual que NotasQueElSiiRechazaTest. Sus
+     * constantes se definen leyendolas del mismo router.
+     */
+    private static function cargarReglaDelRouter(): void
     {
-        $jornadas = $disponibles / $ritmo;
-
-        if ($disponibles === 0 || $jornadas < self::constante('DASH_FOLIOS_JORNADAS_ROJO')) {
-            return 'rojo';
+        if (function_exists(__NAMESPACE__ . '\\dashNivelFolios')) {
+            return;
         }
-        if ($jornadas < self::constante('DASH_FOLIOS_JORNADAS_AMBAR')) {
-            return 'ambar';
+        $fuente = (string) file_get_contents(self::ROUTER);
+        foreach (['JORNADAS_ROJO', 'JORNADAS_AMBAR', 'TANDAS_ROJO', 'TANDAS_AMBAR', 'DIAS_ROJO', 'DIAS_AMBAR'] as $c) {
+            if (! defined('DASH_FOLIOS_' . $c)) {
+                define('DASH_FOLIOS_' . $c, self::constante('DASH_FOLIOS_' . $c));
+            }
         }
+        self::assertSame(1, preg_match('/^function dashNivelFolios\\(.*?\\n\\}\\n/ms', $fuente, $m), 'dashNivelFolios() no esta en el router');
+        eval('namespace ' . __NAMESPACE__ . ";\n" . $m[0]);
+    }
 
-        return 'ok';
+    /** Sin historial de calendario: la regla de jornadas. */
+    private function nivel(int $disponibles, float $ritmo, ?float $porDia = null): string
+    {
+        self::cargarReglaDelRouter();
+
+        return dashNivelFolios($disponibles, $disponibles / $ritmo, $porDia === null ? null : $disponibles / $porDia);
     }
 
     // -----------------------------------------------------------------------
@@ -254,25 +267,58 @@ final class SemaforoDeFoliosTest extends TestCase
     //  Que la copia de arriba siga siendo fiel al router
     // -----------------------------------------------------------------------
 
-    public function testElRouterDecideElNivelPorJornadasYNoPorPorcentaje(): void
+    public function testElRouterDecideElNivelConDashNivelFolios(): void
     {
         $fuente = (string) file_get_contents(self::ROUTER);
 
         self::assertStringContainsString(
-            '$jornadas = $disponibles / $ritmo;',
+            '$nivel = dashNivelFolios($disponibles, $jornadas, $dias);',
             $fuente,
-            'dashFoliosPorTipo() ya no calcula las jornadas: este test quedo obsoleto'
+            'dashFoliosPorTipo() dejo de decidir el nivel con dashNivelFolios(): este test quedo obsoleto'
         );
-        self::assertMatchesRegularExpression(
-            '/if \(\$disponibles === 0 \|\| \$jornadas < DASH_FOLIOS_JORNADAS_ROJO\)/',
+        self::assertStringContainsString(
+            '$dias  = $histSirve && $porDia > 0 ? $disponibles / $porDia : null;',
             $fuente,
-            'el umbral rojo dejo de mirar las jornadas'
+            'los dias de calendario ya no exigen historial suficiente'
         );
-        self::assertMatchesRegularExpression(
-            '/\} elseif \(\$jornadas < DASH_FOLIOS_JORNADAS_AMBAR\)/',
-            $fuente,
-            'el umbral ambar dejo de mirar las jornadas'
-        );
+    }
+
+    // -----------------------------------------------------------------------
+    //  Con historial: el calendario manda, la tanda pone el piso
+    // -----------------------------------------------------------------------
+
+    /**
+     * EL CASO QUE MOTIVO LA CORRECCION (01-10-2026). 78225195-3 factura ~70
+     * exentas por tanda mensual; tras la carga de septiembre le quedaban 312.
+     * Son 4,4 jornadas suyas -- la regla de jornadas decia ROJO -- pero a su
+     * ritmo de calendario son meses. Ni critico ni bajo.
+     */
+    public function testUnEmisorPorTandasMensualesConVariasTandasNoEsCritico(): void
+    {
+        self::assertSame('rojo', $this->nivel(312, 70.0), 'sin historial sigue mandando la jornada');
+        self::assertSame('ok', $this->nivel(312, 70.0, 280 / 60));   // ~67 dias
+        self::assertSame('ok', $this->nivel(312, 70.0, 70 / 30));    // ~134 dias
+    }
+
+    /** Quien emite eso mismo TODOS los dias si esta en rojo: le duran dias. */
+    public function testElMismoVolumenEmitidoADiarioSigueEnRojo(): void
+    {
+        self::assertSame('rojo', $this->nivel(383, 68.7, 68.7));    // 5,6 dias
+        self::assertSame('ambar', $this->nivel(2000, 68.7, 68.7));  // 29 dias
+    }
+
+    /** Aunque el calendario sobre, si la proxima tanda no cabe es rojo. */
+    public function testSiLaProximaTandaNoCabeEsRojoAunqueSobrenDias(): void
+    {
+        self::assertSame('rojo', $this->nivel(60, 70.0, 0.5));      // 120 dias, pero no cabe una tanda
+        self::assertSame('ambar', $this->nivel(100, 70.0, 0.5));    // cabe una, no dos
+        self::assertSame('ok', $this->nivel(150, 70.0, 0.5));
+    }
+
+    public function testCeroDisponiblesEsRojoTambienConHistorial(): void
+    {
+        self::cargarReglaDelRouter();
+        self::assertSame('rojo', dashNivelFolios(0, 0.0, 0.0));
     }
 
     /**
