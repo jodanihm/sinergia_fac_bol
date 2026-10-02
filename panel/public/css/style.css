@@ -722,15 +722,19 @@ a.nav-item:hover { background: var(--color-nav-hover); }
    36 y habria que recalcular el area tactil ya verificada.
    flex:none para que no lo encoja un label largo ("Detalle documento a
    documento" es el mas largo del menu).
-   El color por defecto es --color-texto-tenue y no el --color-texto del label:
-   el icono acompana, no compite con la palabra que si hay que leer.
-
-   NO HAY REGLA PARA EL ICONO ACTIVO, y es deliberado: el <svg> pinta con
-   stroke="currentColor", y .nav-item--activo ya declara
-   color: var(--color-primario). El icono se tine solo por herencia. Una regla
-   extra aqui seria una segunda fuente de verdad para el mismo color. */
-.nav-item__icono { width: 18px; height: 18px; flex: none; color: var(--color-texto-tenue); }
-.nav-item--activo .nav-item__icono { color: inherit; }
+   COLOR (octubre 2026): todos los iconos en --color-primario, el azul SII,
+   UNO SOLO para todo el menu. Se descarto un color por grupo: el design
+   system fija "un color, un significado", y verde/rojo/ambar ya significan
+   exito/error/advertencia en el panel. #0061a0 sobre el fondo del menu da
+   6.07:1 (un icono pide 3:1).
+   El activo hereda el marino de su texto, y la opcion deshabilitada
+   (proximamente / sin produccion) vuelve al gris: un icono azul la haria
+   parecer clicable. */
+.nav-item__icono { width: 18px; height: 18px; flex: none; color: var(--color-primario); }
+.nav-item--activo .nav-item__icono,
+.sidebar__grupo--actual > .nav-grupo .nav-item__icono { color: inherit; }
+.nav-item--proximo .nav-item__icono,
+.nav-item--bloqueado .nav-item__icono { color: var(--color-texto-tenue); }
 
 /* El badge se va a la derecha por su cuenta, ahora que el item alinea a la
    izquierda. SCOPEADO al sidebar: .nav-item__badge tambien lo usa
