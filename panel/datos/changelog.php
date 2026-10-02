@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-02',
+        'version' => '1.76',
+        'titulo'  => 'El menu lateral pasa a grupos desplegables',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Ventas, Compras, Maestros, Informes, Configuracion y Configuracion empresa son ahora menus desplegables: se abren y se cierran con un clic, y el menu queda corto y facil de recorrer.',
+            'Cada grupo tiene su icono y todas sus opciones usan ese mismo icono, asi se reconoce de un vistazo a que grupo pertenece cada pantalla.',
+            'El grupo de la pantalla en que estas se abre solo, tambien al editar un cliente o un producto. Si lo cierras, su titulo queda marcado para que sigas sabiendo donde estas.',
+            'Cobro en linea, Usuarios y permisos y Auditoria quedan juntos dentro del nuevo grupo "Configuracion".',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-02',
         'version' => '1.75',
         'titulo'  => 'Nuevos colores estilo SII y todas las pantallas de Configuracion rehechas',
         'tag'     => 'frontend',

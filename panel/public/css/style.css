@@ -580,32 +580,55 @@ body.con-sidebar > main {
     padding: 0 var(--esp-2);
     margin: var(--esp-2) 0 var(--esp-1);
 }
-/* SECCION PLEGABLE (Configuracion empresa). El summary reusa el titulo de
-   seccion para que se lea como uno mas; lo unico propio es el cursor y la
-   flecha, que rota al abrir. Se quita el marcador nativo porque cada navegador
-   lo pinta distinto y no se alinea con el padding del titulo. */
-.sidebar__grupo--plegable > summary {
-    cursor: pointer;
-    list-style: none;
+/* GRUPO DESPLEGABLE (octubre 2026: todo grupo del menu es uno).
+   El summary se ve como un item mas (.nav-grupo: mismo alto, radio, padding e
+   icono de 18px que .nav-item), con peso 600 y un chevron a la derecha que
+   gira al abrir. Las opciones van con sangria y una linea vertical tenue, y
+   llevan el MISMO icono que el grupo (lo pone _nav.php): el dibujo dice de que
+   grupo es cada opcion; la etiqueta dice cual.
+   Se quita el marcador nativo porque cada navegador lo pinta distinto. */
+.sidebar__grupo--plegable { margin-bottom: var(--esp-1); }
+.nav-grupo {
     display: flex;
     align-items: center;
-    gap: var(--esp-1);
+    gap: var(--esp-2);
+    padding: var(--esp-2);
+    border-radius: var(--radio-md);
+    font-size: var(--txt-sm);
+    font-weight: 600;
+    color: var(--color-texto);
+    cursor: pointer;
+    list-style: none;
+    transition: background-color 150ms ease;
 }
-.sidebar__grupo--plegable > summary::-webkit-details-marker { display: none; }
-.sidebar__grupo--plegable > summary::after {
+.nav-grupo::-webkit-details-marker { display: none; }
+.nav-grupo__texto { flex: 1 1 auto; min-width: 0; }
+.nav-grupo::after {
     content: "";
+    flex: none;
     width: 0.4em;
     height: 0.4em;
+    margin-right: var(--esp-1);
     border-right: 2px solid currentColor;
     border-bottom: 2px solid currentColor;
     transform: rotate(-45deg);
-    transition: transform 0.15s ease;
+    transition: transform 150ms ease;
 }
-.sidebar__grupo--plegable[open] > summary::after { transform: rotate(45deg); }
-.sidebar__grupo--plegable > summary:hover { color: var(--color-texto); }
-.sidebar__grupo--plegable > summary:focus-visible { outline: 2px solid var(--color-primario); outline-offset: 2px; }
+.sidebar__grupo--plegable[open] > .nav-grupo::after { transform: rotate(45deg); }
+.nav-grupo:hover { background: var(--color-nav-hover); }
+.nav-grupo:focus-visible { border-radius: var(--radio-md); }
+/* Grupo que contiene la pagina actual: el titulo va en marino. Cuando alguien
+   lo pliega, sigue diciendo donde esta (el item activo queda escondido). */
+.sidebar__grupo--actual > .nav-grupo { color: var(--color-marino); }
+.sidebar__grupo--actual:not([open]) > .nav-grupo { background: var(--color-primario-suave); box-shadow: inset 3px 0 0 var(--color-acento); }
+.nav-grupo__opciones {
+    margin: var(--esp-1) 0 var(--esp-1) calc(var(--esp-2) + 9px);
+    padding-left: var(--esp-2);
+    border-left: 1px solid var(--color-borde-tenue);
+}
 @media (prefers-reduced-motion: reduce) {
-    .sidebar__grupo--plegable > summary::after { transition: none; }
+    .nav-grupo,
+    .nav-grupo::after { transition: none; }
 }
 
 /* Agrupacion ligera: una linea vertical y sangria, sin card ni fondo. El mismo
