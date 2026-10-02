@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-02',
+        'version' => '1.77',
+        'titulo'  => 'Iconos del menu en azul',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Los iconos del menu lateral pasan del gris al azul de la nueva paleta, asi el menu se ve con mas vida y se recorre mas rapido con la vista.',
+            'La opcion en que estas y su grupo llevan el icono en azul marino, igual que su texto.',
+            'Las opciones que todavia no se pueden usar mantienen el icono gris, para que no parezcan disponibles.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-02',
         'version' => '1.76',
         'titulo'  => 'El menu lateral pasa a grupos desplegables',
         'tag'     => 'frontend',
