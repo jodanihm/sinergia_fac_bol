@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-02',
+        'version' => '1.73',
+        'titulo'  => 'Cobro en linea: el boton Guardar muestra que esta trabajando sin saltar',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Si guardar tarda, el boton "Guardar cambios" muestra un indicador girando dentro de el, sin cambiar de tamano. Antes cambiaba su texto a "Guardando..." y se movia.',
+            'Si guarda rapido (menos de un tercio de segundo) no aparece ningun indicador: un destello que aparece y desaparece parece una falla, no una carga.',
+            'Un doble clic sigue sin poder enviar las llaves dos veces, y al volver con "Atras" el boton ya no queda girando para siempre.',
+            'Para quien usa lector de pantalla, el formulario se anuncia como ocupado mientras espera.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-02',
         'version' => '1.72',
         'titulo'  => 'Cobro en linea: pantalla rehecha para que se entienda de un vistazo',
         'tag'     => 'frontend',
