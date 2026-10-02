@@ -50,11 +50,12 @@ $navIcono = static function (?string $id): string {
  * Pinta un unico item segun su estado. Closure para no declarar funciones en un
  * partial (evita "cannot redeclare" si el archivo se incluye mas de una vez).
  */
-$navPintarItem = static function (array $item) use ($navPuedeEmitir, $navRutaActual, $navActivoClave, $navIcono): void {
+$navPintarItem = static function (array $item, ?string $iconoGrupo = null) use ($navPuedeEmitir, $navRutaActual, $navActivoClave, $navIcono): void {
     $label   = htmlspecialchars((string) $item['label']);
     $sub     = ! empty($item['sub']) ? ' nav-item--sub' : '';
     $estado  = navEstadoItem($item, $navPuedeEmitir);
-    $icono   = $navIcono($item['icono'] ?? null);
+    // Dentro de un grupo, el icono es el del GRUPO: las opciones lo heredan.
+    $icono   = $navIcono($iconoGrupo ?? ($item['icono'] ?? null));
 
     if ($estado === 'habilitado') {
         $destino = (string) $item['destino'];
@@ -91,18 +92,18 @@ $navPintarItem = static function (array $item) use ($navPuedeEmitir, $navRutaAct
  * exactamente como antes. El valor se sanea contra [a-z-] porque termina dentro
  * de un atributo class.
  */
-$navRender = static function (array $nodos) use (&$navRender, $navPintarItem): void {
+$navRender = static function (array $nodos, ?string $iconoGrupo = null) use (&$navRender, $navPintarItem): void {
     foreach ($nodos as $nodo) {
         if (isset($nodo['items'])) {
             $variante = preg_replace('/[^a-z-]/', '', (string) ($nodo['variante'] ?? ''));
             $claseSub = 'sidebar__subgrupo' . ($variante !== '' ? ' sidebar__subgrupo--' . $variante : '');
             echo '<div class="' . $claseSub . '">';
             echo '<div class="sidebar__subtitulo">' . htmlspecialchars((string) $nodo['label']) . '</div>';
-            $navRender($nodo['items']);
+            $navRender($nodo['items'], $iconoGrupo);
             echo '</div>';
             continue;
         }
-        $navPintarItem($nodo);
+        $navPintarItem($nodo, $iconoGrupo);
     }
 };
 
@@ -131,6 +132,12 @@ $navSeccionContieneActual = static function (array $seccion) use ($navRutaActual
             || ($navActivoClave === null && ($nodo['destino'] ?? null) === $navRutaActual)) {
             return true;
         }
+        // Una pantalla hija del destino (/maestros/clientes/7/editar) tambien
+        // abre el grupo: sin esto, editar un cliente lo dejaba cerrado.
+        $destino = (string) ($nodo['destino'] ?? '');
+        if ($destino !== '' && $destino !== '/' && str_starts_with($navRutaActual, $destino . '/')) {
+            return true;
+        }
     }
 
     return false;
@@ -144,12 +151,18 @@ $navMenu = definicionMenu();
     </div>
     <?php foreach ($navMenu as $seccion): ?>
         <?php if (isset($seccion['items']) && ! empty($seccion['plegable'])): ?>
-            <?php /* <details> nativo: se abre y cierra con teclado y lector de
-                     pantalla sin una linea de JS, y el summary es el titulo de
-                     la seccion, asi que se lee igual que los demas grupos. */ ?>
-            <details class="sidebar__grupo sidebar__grupo--plegable"<?= $navSeccionContieneActual($seccion) ? ' open' : ''; ?>>
-                <summary class="sidebar__grupo-titulo"><?= htmlspecialchars((string) $seccion['label']); ?></summary>
-                <?php $navRender($seccion['items']); ?>
+            <?php /* GRUPO DESPLEGABLE. <details> nativo: se abre y cierra con
+                     teclado y lector de pantalla sin una linea de JS. El
+                     summary lleva el icono del grupo, y las opciones de
+                     adentro heredan ESE icono. Abierto si la pagina actual es
+                     suya; --activo marca el summary cuando esta cerrado pero
+                     contiene la pagina (no pasa al cargar, si al plegarlo). */ ?>
+            <?php $navContiene = $navSeccionContieneActual($seccion); ?>
+            <details class="sidebar__grupo sidebar__grupo--plegable<?= $navContiene ? ' sidebar__grupo--actual' : ''; ?>"<?= $navContiene ? ' open' : ''; ?>>
+                <summary class="nav-grupo"><?= $navIcono($seccion['icono'] ?? null); ?><span class="nav-grupo__texto"><?= htmlspecialchars((string) $seccion['label']); ?></span></summary>
+                <div class="nav-grupo__opciones">
+                    <?php $navRender($seccion['items'], isset($seccion['icono']) ? (string) $seccion['icono'] : null); ?>
+                </div>
             </details>
         <?php elseif (isset($seccion['items'])): ?>
             <div class="sidebar__grupo">
