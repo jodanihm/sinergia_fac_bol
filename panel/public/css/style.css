@@ -2803,3 +2803,164 @@ body.auth-page > main {
     .auth-card__logo { max-height: 2.1rem; margin-bottom: var(--esp-3); }
     .auth-footer__nota { display: none; }
 }
+
+/* ==========================================================================
+   FORMULARIO DE CONFIGURACION EN UNA COLUMNA
+
+   Nacio con Configuracion > Cobro en linea, al pasarle el Quality Gate del
+   design system (/data/_dev-stack/design-system). Cada pieza que la pantalla
+   necesitaba y el panel no tenia se agrega AQUI, como componente, y no como
+   style="" en la vista: un arreglo local aprueba una pantalla y deja el
+   problema para todas las demas. Todo sale de los tokens de :root.
+   ========================================================================== */
+
+/* Ancho de lectura de un formulario: 720px. Mas ancho, la etiqueta y el campo
+   dejan de leerse como pareja. Es el tope del CONTENIDO bajo el encabezado, no
+   del <main>: el encabezado sigue alineado con el resto del panel. */
+.contenido-angosto { max-width: 720px; }
+.contenido-angosto > .tarjeta:first-child,
+.contenido-angosto form > .tarjeta:first-child { margin-top: 0; }
+
+/* Una linea de contexto bajo el h2 de una tarjeta. */
+.tarjeta__intro { margin: 0 0 var(--esp-4); font-size: var(--txt-base); color: var(--color-texto-medio); }
+
+/* Cuerpo de una .alerta con titulo y parrafos. La .alerta original solo
+   llevaba una frase; un aviso de estado necesita titulo + explicacion. */
+.alerta__cuerpo { min-width: 0; }
+.alerta__cuerpo p { margin: 0; }
+.alerta__cuerpo p + p { margin-top: var(--esp-1); }
+.alerta__titulo { font-weight: 600; }
+.alerta__lista { margin: var(--esp-1) 0 0; padding-left: var(--esp-4); }
+.alerta__lista li { margin: var(--esp-1) 0 0; }
+.alerta__cuerpo a { color: inherit; font-weight: 600; }
+/* Icono SVG de la alerta: el mismo color del texto y alineado a la primera
+   linea, no al centro del bloque. */
+svg.alerta__icono { margin-top: 0.05rem; }
+.panel-info__titulo svg { flex: none; }
+
+/* Pasos numerados dentro de un .panel-info ("para empezar: 1, 2, 3"). */
+.lista-pasos { margin: var(--esp-2) 0 0; padding-left: var(--esp-5); font-size: var(--txt-base); }
+.lista-pasos li { margin: var(--esp-1) 0; }
+
+/* Grupo de campos con titulo (fieldset + legend). El legend puede llevar un
+   badge de estado al lado del nombre. */
+.grupo-campos {
+    min-width: 0;
+    margin: 0 0 var(--esp-4);
+    padding: var(--esp-3) var(--esp-4) var(--esp-4);
+    border: 1px solid var(--color-borde-suave);
+    border-radius: var(--radio-md);
+}
+.grupo-campos:last-child { margin-bottom: 0; }
+.grupo-campos > legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--esp-2);
+    padding: 0 var(--esp-2);
+    font-size: var(--txt-md);
+    font-weight: 600;
+    color: var(--color-texto);
+}
+
+/* Error bajo un campo: icono + texto, nunca solo el borde rojo (WCAG 1.4.1 y
+   3.3.1). El control lleva aria-invalid y aria-describedby hacia este id. */
+.campo-error {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--esp-1);
+    margin: var(--esp-1) 0 0;
+    font-size: var(--txt-sm);
+    color: var(--color-error);
+}
+.campo-error svg { flex: none; margin-top: 0.05rem; }
+
+/* Opciones excluyentes con explicacion (radio grande). Para dos o tres
+   opciones que hay que entender antes de elegir: se ven todas a la vez, en vez
+   de esconderse en un desplegable. Toda la tarjeta es el objetivo de clic. El
+   estado elegido no depende solo del color: lo marca tambien el propio radio. */
+.opciones { display: grid; gap: var(--esp-2); min-width: 0; margin: 0; padding: 0; border: 0; }
+/* margin y peso: el <label> global trae margen arriba y negrita, pensados
+   para la etiqueta de un campo. Aqui la etiqueta ES el control. */
+.opcion,
+.interruptor { margin: 0; font-weight: 400; }
+.opcion {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--esp-3);
+    padding: var(--esp-3) var(--esp-4);
+    border: 1px solid var(--color-borde-suave);
+    border-radius: var(--radio-md);
+    background: var(--color-superficie);
+    cursor: pointer;
+}
+.opcion:hover { border-color: var(--color-primario); }
+.opcion:has(input:checked) { border-color: var(--color-primario); background: var(--color-primario-suave); }
+.form-compacto .opcion input[type="radio"] { margin-top: var(--esp-1); }
+.opcion__titulo { display: block; font-size: var(--txt-base); font-weight: 600; color: var(--color-texto); }
+.opcion__detalle { display: block; margin-top: var(--esp-1); font-size: var(--txt-sm); color: var(--color-texto-medio); }
+
+/* Interruptor con explicacion. Va con role="switch" sobre un checkbox real:
+   se envia en el POST, se opera con espacio y lo anuncia el lector de pantalla.
+   La linea de detalle se reescribe al cambiar de estado y dice que va a pasar
+   al guardar; la pista no comunica sola con su color. Si depende de otra cosa,
+   se deshabilita y la linea dice de que.
+
+   CONTRASTE: la pista apagada usa --color-texto-tenue (5.1:1 sobre blanco) y
+   no un gris de borde: es un control y necesita 3:1 (WCAG 1.4.11). 44x24 px:
+   el minimo de 24 de la SC 2.5.8, y toda la etiqueta es objetivo de clic. */
+.interruptor { display: flex; align-items: flex-start; gap: var(--esp-3); cursor: pointer; }
+.form-compacto .interruptor input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    position: relative;
+    flex: none;
+    width: 2.75rem;
+    height: 1.5rem;
+    margin: 0;
+    border: 1px solid var(--color-texto-tenue);
+    border-radius: var(--radio-pill);
+    background: var(--color-texto-tenue);
+    cursor: pointer;
+    transition: background-color 150ms ease, border-color 150ms ease;
+}
+.form-compacto .interruptor input[type="checkbox"]::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--color-superficie);
+    transition: transform 150ms ease;
+}
+.form-compacto .interruptor input[type="checkbox"]:checked {
+    border-color: var(--color-primario);
+    background: var(--color-primario);
+}
+.form-compacto .interruptor input[type="checkbox"]:checked::before { transform: translateX(20px); }
+/* El anillo global de foco redondea a --radio-sm: aqui tiene que seguir a la pastilla. */
+.form-compacto .interruptor input[type="checkbox"]:focus-visible { border-radius: var(--radio-pill); }
+.form-compacto .interruptor input[type="checkbox"]:disabled { opacity: 0.55; cursor: not-allowed; }
+.interruptor:has(input:disabled) { cursor: not-allowed; }
+.interruptor__texto { display: flex; flex-direction: column; gap: var(--esp-1); min-width: 0; }
+.interruptor__titulo { font-size: var(--txt-base); font-weight: 600; line-height: 1.5; color: var(--color-texto); }
+.interruptor__detalle { font-size: var(--txt-sm); line-height: 1.5; color: var(--color-texto-medio); }
+.interruptor + .lista-ayuda { margin-top: var(--esp-4); }
+
+/* Botonera final del formulario: abajo a la derecha y el primario el ultimo,
+   donde termina el recorrido de lectura. */
+.acciones-formulario { display: flex; justify-content: flex-end; gap: var(--esp-2); margin: var(--esp-5) 0 0; }
+.acciones-formulario button { margin-top: 0; }
+.boton-principal[aria-busy="true"] { cursor: progress; }
+
+@media (max-width: 720px) {
+    /* La accion principal a ancho completo y con alto de pulgar (44px). */
+    .acciones-formulario .boton-principal { width: 100%; min-height: 2.75rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .form-compacto .interruptor input[type="checkbox"],
+    .form-compacto .interruptor input[type="checkbox"]::before { transition: none; }
+}
