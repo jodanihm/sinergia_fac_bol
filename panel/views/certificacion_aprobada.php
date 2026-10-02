@@ -1,53 +1,76 @@
-<?php $titulo = 'Certificacion aprobada'; require __DIR__ . '/partials/header.php'; ?>
+<?php
+/**
+ * Certificacion aprobada: el tenant registra que el SII lo autorizo como
+ * emisor electronico. El SII no lo informa solo; es una declaracion propia.
+ * A la izquierda que hacer en el SII, a la derecha registrarlo aqui.
+ */
+$titulo = 'Certificacion aprobada';
+require __DIR__ . '/partials/header.php';
+?>
 
-<h1>Certificacion aprobada</h1>
+<div class="dash-header">
+    <div>
+        <h1>Certificacion aprobada</h1>
+    </div>
+    <div class="acciones-grupo acciones-grupo--header">
+        <a class="boton-secundario" href="/certificacion">Volver a certificacion</a>
+    </div>
+</div>
+<p class="dash-subtitulo">
+    El SII no avisa cuando tu empresa queda certificada: lo registras tu aqui cuando ocurra.
+</p>
 
-<?php if ($flash !== null): ?>
-    <?php if ($flash['tipo'] === 'error'): ?>
-    <p class="errores"><?= htmlspecialchars($flash['mensaje']); ?></p>
-    <?php else: ?>
-    <p style="color:#2e7d32;font-weight:600;"><?= htmlspecialchars($flash['mensaje']); ?></p>
-    <?php endif; ?>
-<?php endif; ?>
+<?php require __DIR__ . '/partials/certificacion/_flash.php'; ?>
 
 <?php if ($confirmadaAt !== null): ?>
 
-<p style="color:#2e7d32;font-weight:600;">Confirmaste la certificacion el
-<?= htmlspecialchars($confirmadaAt); ?>.</p>
-<p>Tu empresa quedo registrada en este panel como emisor electronico autorizado
-por el SII, segun tu propia declaracion.</p>
+<div class="alerta alerta--exito">
+    <?= iconoSvg('check', 20, 'alerta__icono'); ?>
+    <div class="alerta__cuerpo">
+        <p class="alerta__titulo">Confirmaste la certificacion el <?= htmlspecialchars($confirmadaAt); ?></p>
+        <p>Tu empresa quedo registrada en este panel como emisor electronico autorizado por el SII,
+        segun tu propia declaracion.</p>
+    </div>
+</div>
 
 <?php else: ?>
 
-<p>El SII <strong>no informa automaticamente</strong> cuando una empresa queda
-certificada: la aprobacion se declara manualmente en el portal del SII y este
-panel no puede detectarla por si solo.</p>
+<div class="config-columnas config-columnas--2">
+    <div class="panel-info">
+        <p class="panel-info__titulo"><?= iconoSvg('info', 20, 'panel-info__icono'); ?>El paso final es en el SII</p>
+        <p>Ya completaste el Set Basico (factura, nota de credito y nota de debito aceptadas).</p>
+        <ol class="lista-pasos">
+            <li>Entra a
+                <a href="https://maullin.sii.cl/cvc_cgi/dte/pe_avance7" target="_blank" rel="noopener noreferrer">Declarar Cumplimiento (pe_avance7)</a>.
+                <strong>No se puede deshacer en el SII</strong>: hazlo solo cuando el portal muestre todos
+                los sets en "REVISADO CONFORME".</li>
+            <li>Cuando el SII autorice a tu empresa como emisor electronico, vuelve aqui y registralo.</li>
+        </ol>
+    </div>
 
-<p>Ya completaste el set basico (factura, nota de credito y nota de debito
-aceptadas). El paso final lo haces tu en el portal del SII:</p>
+    <section class="tarjeta" aria-labelledby="titulo-registrar">
+        <h2 id="titulo-registrar">Registrar la autorizacion</h2>
+        <form method="post" action="/certificacion-aprobada/confirmar" class="form-compacto" data-espera
+              data-confirmar-titulo="Registrar la certificacion como aprobada?"
+              data-confirmar-texto="Queda registrado que tu empresa es emisor electronico autorizado por el SII. Hazlo solo si el SII ya te autorizo."
+              data-confirmar-boton="Si, registrar">
+            <?= csrfInput(); ?>
+            <div class="form-campo">
+                <label class="form-check" for="confirmo">
+                    <input type="checkbox" name="confirmo" id="confirmo" value="1"
+                           data-requerido="Marca la casilla: solo se registra cuando el SII ya te autorizo.">
+                    Declare cumplimiento en el portal del SII y mi empresa fue autorizada como emisor electronico
+                </label>
+            </div>
+            <div class="acciones-formulario">
+                <button type="submit" class="boton-principal">Registrar confirmacion</button>
+            </div>
+        </form>
+    </section>
+</div>
 
-<ol>
-    <li>Entra a
-        <a href="https://maullin.sii.cl/cvc_cgi/dte/pe_avance7" target="_blank" rel="noopener noreferrer">Declarar
-        Cumplimiento (pe_avance7)</a>.
-        <strong>Advertencia: este paso es IRREVERSIBLE en el SII.</strong> Hazlo
-        solo cuando el portal muestre todos los sets en "REVISADO CONFORME".</li>
-    <li>Cuando el SII autorice a tu empresa como emisor electronico, vuelve aqui
-        y registra la confirmacion.</li>
-</ol>
-
-<form method="post" action="/certificacion-aprobada/confirmar">
-    <?= csrfInput(); ?>
-    <label style="display:block;margin:1rem 0;">
-        <input type="checkbox" name="confirmo" value="1">
-        Confirmo que declare cumplimiento en el portal del SII y que mi empresa
-        fue autorizada como emisor electronico.
-    </label>
-    <button type="submit">Registrar confirmacion</button>
-</form>
+<?php require __DIR__ . '/partials/certificacion/_ux-formularios.php'; ?>
 
 <?php endif; ?>
-
-<p><a href="/panel">Volver al panel</a></p>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>

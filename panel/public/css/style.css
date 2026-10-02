@@ -19,8 +19,24 @@
      --color-exito       #2e7d32 sobre --color-exito-fondo        -> 4.75:1
      --color-alerta      #b45309 sobre --color-alerta-fondo       -> 4.77:1
      --color-error       #b00020 sobre --color-error-fondo        -> 6.41:1
-     --color-primario    #1a56db sobre --color-primario-suave     -> 5.39:1
+     --color-primario    #0061a0 sobre --color-primario-suave     -> 5.65:1
+     --color-primario    #0061a0 sobre blanco (y blanco sobre el)  -> 6.53:1
+     --color-marino      #002c48 sobre --color-primario-suave     -> 12.50:1
      --color-texto-tenue #6e6e6e sobre --color-superficie-tenue   -> 4.76:1
+     --color-texto-tenue #6e6e6e sobre --color-nav-fondo          -> 4.74:1
+     --color-alerta      #b45309 sobre --color-nav-fondo          -> 4.67:1
+
+   PALETA SII (octubre 2026). Los tres colores salen de las hojas de estilo de
+   www.sii.cl (h_estilos.css): marino #002c48 en sus barras y pie, azul
+   #0061a0 en sus enlaces, naranjo #ea510d en hover y activo. Quien usa este
+   panel vive entre el SII y su facturador; que se parezcan baja la friccion.
+
+   EL NARANJO ES SOLO ACENTO, NUNCA ESTADO NI ACCION. Da 3.70:1 sobre blanco:
+   no alcanza como texto (4.5:1) y si como barra o linea (3:1, WCAG 1.4.11).
+   Y como queda cerca del ambar de --color-alerta-borde, usarlo en un boton o
+   en un badge haria leer "advertencia" donde no la hay: un color, un
+   significado. Va en la barra del item activo del menu y en la linea bajo el
+   titulo de cada pagina, y en nada mas.
 
    OJO CON EL AMBAR: son DOS tokens distintos a proposito.
    --color-alerta-borde (#ed6c02) es solo para BORDES y RELLENOS, donde no hay
@@ -49,9 +65,17 @@
    ========================================================================== */
 :root {
     /* Color -- ver los contrastes medidos arriba */
-    --color-primario:         #1a56db;
-    --color-primario-hover:   #1546b0;
-    --color-primario-suave:   #e8f0fe;
+    --color-primario:         #0061a0;  /* azul de enlaces de sii.cl */
+    --color-primario-hover:   #002c48;  /* = --color-marino: el hover oscurece hacia la barra del SII */
+    --color-primario-suave:   #e6f0f7;
+    --color-primario-borde:   #b3cfe3;  /* borde de lo que se tine de primario; decorativo, no de control */
+
+    --color-marino:           #002c48;  /* barras y pie de sii.cl: titulos e item activo */
+    --color-acento:           #ea510d;  /* naranjo de sii.cl: SOLO barras y lineas, nunca texto (ver arriba) */
+
+    /* Fondo y borde de los bloques informativos (.panel-info y familia). */
+    --color-info-fondo:       #f5f9fc;
+    --color-info-borde:       #cfe0ec;
 
     --color-exito:            #2e7d32;
     --color-exito-fondo:      #f1f8f1;
@@ -92,8 +116,8 @@
        fondo, contra el 9.6% del par gris anterior. El tinte es un punto mas
        marcado que el del fondo (B-R = +10 contra +6), que es lo que hace que se
        lea como estado y no como una mancha gris sobre azul. */
-    --color-nav-fondo:        #f7f9fd;
-    --color-nav-hover:        #eceef6;
+    --color-nav-fondo:        #f4f7fa;
+    --color-nav-hover:        #e6edf3;
 
     /* Fondo del dashboard. El mismo azulado del sidebar y del login, con token
        propio por la misma razon: --color-nav-fondo es del menu y no debe
@@ -106,7 +130,7 @@
        #f7f9fd es un 5.38% mas oscuro que ese blanco: es lo que hace que una
        superficie blanca elevada se lea como tal. Verificado que ningun texto
        baja de AA con el cambio (el mas ajustado, #b45309, queda en 4.76:1). */
-    --color-dash-fondo:       #f7f9fd;
+    --color-dash-fondo:       #f4f7fa;
 
     /* Espaciado -- 7 pasos */
     --esp-1: 0.25rem;
@@ -142,7 +166,7 @@
          - 4px 0 16px al 5% -> el halo que da la profundidad.
        Menos de la mitad de difuminado y casi la mitad de opacidad que la card
        del login, que es lo que pide una superficie lateral fija. */
-    --sombra-borde: 1px 0 0 rgba(20, 40, 90, 0.08), 4px 0 16px rgba(20, 40, 90, 0.05);
+    --sombra-borde: 1px 0 0 rgba(0, 44, 72, 0.08), 4px 0 16px rgba(0, 44, 72, 0.05);
 
     /* Elevacion de las tarjetas del panel (KPI y tarjetas del dashboard).
        NO es --sombra-md: esa se calculo para la card de 500px del login y su
@@ -154,9 +178,9 @@
        Dos capas: la de 2px es el contacto, que define el borde y se comporta
        igual a cualquier tamano; la de 16px es la elevacion, que es la que
        escalaria mal si fuera grande. */
-    --sombra-tarjeta: 0 1px 2px rgba(20, 40, 90, 0.06), 0 6px 16px rgba(20, 40, 90, 0.07);
-    --sombra-md: 0 12px 34px rgba(20, 40, 90, 0.09);
-    --sombra-lg: 0 18px 45px rgba(20, 40, 90, 0.13);
+    --sombra-tarjeta: 0 1px 2px rgba(0, 44, 72, 0.06), 0 6px 16px rgba(0, 44, 72, 0.07);
+    --sombra-md: 0 12px 34px rgba(0, 44, 72, 0.09);
+    --sombra-lg: 0 18px 45px rgba(0, 44, 72, 0.13);
 }
 
 /* El atributo hidden GANA a cualquier display de una clase.
@@ -175,6 +199,12 @@ body {
     color: var(--color-texto);
 }
 h1 { font-size: 1.4rem; }
+/* Enlaces de texto con la paleta SII: azul de enlace, y marino al pasar el
+   mouse (sii.cl usa naranjo en el hover, pero como texto da 3.70:1 y no
+   cumple AA). :where() deja la especificidad en cero: cualquier componente que
+   ya fija su color (.boton-principal, .nav-item, .alerta a) sigue mandando. */
+:where(a) { color: var(--color-primario); }
+:where(a:hover) { color: var(--color-marino); }
 label { display: block; margin: var(--esp-3) 0 var(--esp-1); font-weight: 600; }
 input { display: block; width: 100%; padding: var(--esp-2); box-sizing: border-box; }
 button { margin-top: var(--esp-4); padding: var(--esp-2) var(--esp-4); }
@@ -693,11 +723,14 @@ a.nav-item:hover { background: var(--color-nav-hover); }
    sus vecinos, y quedaria recortado si el contenedor tuviera overflow. El
    inset-shadow no ocupa espacio de layout. El estado sigue comunicandose
    ademas por fondo, color y peso: la barra no es la unica senal. */
+/* PALETA SII: texto marino y barra NARANJA, como el activo de los menus de
+   sii.cl. La barra es la unica pieza naranja del menu (3.44:1 sobre el fondo
+   del sidebar, sobre el 3:1 que pide un indicador no textual). */
 .nav-item--activo {
     background: var(--color-primario-suave);
-    color: var(--color-primario);
+    color: var(--color-marino);
     font-weight: 600;
-    box-shadow: inset 3px 0 0 var(--color-primario);
+    box-shadow: inset 3px 0 0 var(--color-acento);
 }
 /* #6e6e6e y no #aaa: sobre #f7f7f8 da 4.76:1 (antes 2.17:1, no cumplia AA). */
 .nav-item--proximo,
@@ -727,7 +760,20 @@ a.nav-item:hover { background: var(--color-nav-hover); }
     border-bottom: 1px solid var(--color-borde-tenue);
     padding-bottom: var(--esp-3);
 }
-.dash-header h1 { margin: 0 0 var(--esp-1); }
+.dash-header h1 { margin: 0 0 var(--esp-1); color: var(--color-marino); }
+/* Linea naranja bajo el titulo, sobre el borde gris: el acento de sii.cl, en
+   la unica posicion fija de todas las pantallas. Decorativa (aria no aplica:
+   es un pseudo-elemento sin contenido). */
+.dash-header { position: relative; }
+.dash-header::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    bottom: -1px;
+    width: 3rem;
+    height: 3px;
+    background: var(--color-acento);
+}
 .dash-header__emisor { margin: 0; color: var(--color-texto-suave); }
 .dash-header__rut { color: var(--color-texto-tenue); font-size: var(--txt-sm); margin-left: var(--esp-2); }
 .dash-subtitulo { color: var(--color-texto-tenue); font-size: var(--txt-base); margin: var(--esp-2) 0 1.25rem; }
@@ -1380,7 +1426,7 @@ a.nav-item:hover { background: var(--color-nav-hover); }
      ok          #2e7d32 sobre #f1f8f1  4.75:1
      advertencia #b45309 sobre #fff8f0  4.77:1
      error       #b00020 sobre #fdecea  6.41:1
-     proceso     #1a56db sobre #e8f0fe  5.39:1
+     proceso     #0061a0 sobre #e6f0f7  5.65:1
      neutro      #5c5c5c sobre #eaeaea  5.56:1
      azul sobre blanco                  6.18:1
    ========================================================================== */
@@ -1481,15 +1527,15 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .badge--ok          { background: var(--color-exito-fondo); border-color: #cbe3cc; color: var(--color-exito); }
 .badge--advertencia { background: var(--color-alerta-fondo); border-color: #f3d9bb; color: var(--color-alerta); }
 .badge--error       { background: var(--color-error-fondo); border-color: #f2c9c4; color: var(--color-error); }
-.badge--proceso     { background: var(--color-primario-suave); border-color: #c6d8fb; color: var(--color-primario); }
+.badge--proceso     { background: var(--color-primario-suave); border-color: var(--color-primario-borde); color: var(--color-primario); }
 .badge--neutro      { background: #eaeaea; border-color: #d8d8d8; color: var(--color-texto-medio); }
 
 /* --------------------------------------------------------------------------
    Panel informativo (variante de .tarjeta para bloques de ayuda o resumen)
    -------------------------------------------------------------------------- */
 .panel-info {
-    border: 1px solid #dbe4f5;
-    background: #f8fafd;
+    border: 1px solid var(--color-info-borde);
+    background: var(--color-info-fondo);
     border-radius: var(--radio-md);
     padding: var(--esp-4) var(--esp-4);
     margin: 0 0 var(--esp-4);
@@ -1566,7 +1612,7 @@ a.stepper__contenido:hover { color: var(--color-primario); }
     vertical-align: middle;
     border-bottom: 1px solid #ececf0;
 }
-.tabla-datos tbody tr:hover { background: #f7f9fc; }
+.tabla-datos tbody tr:hover { background: var(--color-info-fondo); }
 .tabla-datos tbody th { font-weight: 600; }
 /* Alineacion numerica con cifras de ancho fijo, para comparar columnas de un
    vistazo. Equivalente a .num, pero acotado a estas tablas. */
@@ -1602,7 +1648,7 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .boton-secundario {
     background: var(--color-superficie);
     color: var(--color-primario);
-    border: 1px solid #c6d8fb;
+    border: 1px solid var(--color-primario-borde);
 }
 .boton-secundario:hover { background: var(--color-primario-suave); border-color: var(--color-primario); }
 .boton-texto {
@@ -1689,9 +1735,9 @@ a.stepper__contenido:hover { color: var(--color-primario); }
     align-items: center;
     gap: var(--esp-2);
     padding: 1.25rem var(--esp-4);
-    border: 2px dashed #c6d8fb;
+    border: 2px dashed var(--color-primario-borde);
     border-radius: 8px;
-    background: #f8fafd;
+    background: var(--color-info-fondo);
     text-align: center;
 }
 /* El foco del teclado cae en el input oculto: el anillo se dibuja en el area,
@@ -1894,7 +1940,7 @@ a.stepper__contenido:hover { color: var(--color-primario); }
     cursor: pointer;
 }
 .tabla-seleccion tbody tr.fila-seleccionada { background: var(--color-primario-suave); }
-.tabla-seleccion tbody tr.fila-seleccionada:hover { background: #dde8fd; }
+.tabla-seleccion tbody tr.fila-seleccionada:hover { background: #d6e6f2; }
 
 /* Progreso de la emision. Refleja unicamente el conteo que devuelve
    confirmar-sublote (facturada + error sobre total): no hay etapas ni
@@ -1903,9 +1949,9 @@ a.stepper__contenido:hover { color: var(--color-primario); }
     display: none;
     margin: var(--esp-4) 0 0;
     padding: var(--esp-3) var(--esp-4);
-    border: 1px solid #c6d8fb;
+    border: 1px solid var(--color-primario-borde);
     border-radius: var(--radio-md);
-    background: #f8fafd;
+    background: var(--color-info-fondo);
 }
 .progreso-emision--activo { display: block; }
 .progreso-emision--error { border-color: #f2c9c4; background: var(--color-error-fondo); }
@@ -2542,12 +2588,12 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 
    LO QUE SE QUEDA COMO LITERAL, a proposito:
 
-   1. Los colores propios del login (#1a2b4b de los titulos, #e6ebf5 de los
+   1. Los colores propios del login (#002c48 de los titulos, #e6ebf5 de los
       bordes, #d5dcea / #b9c4d9 / #9aa3b4 / #8a93a6 de los inputs y sus
-      placeholders, #1848b8 y #143c99 de hover y active del boton). Son de esta
+      placeholders, #004b7c y #002c48 de hover y active del boton). Son de esta
       pantalla y de ninguna otra. Meterlos en :root los presentaria como
       decisiones del sistema completo, que es lo contrario de lo que son.
-      OJO: #1848b8 NO es --color-primario-hover (#1546b0). Son dos azules
+      OJO: #004b7c NO es --color-primario-hover (#002c48). Son dos azules
       distintos; unificarlos cambiaria el color del boton de acceso.
 
    2. Los paddings y radios calibrados de la card (1.75 / 2.25 / 2.4 / 2.75 /
@@ -2561,7 +2607,7 @@ body.auth-page {
     max-width: none;
     margin: 0;
     padding: 0;
-    background: #f7f9fd;
+    background: var(--color-nav-fondo);
 }
 body.auth-page > main {
     display: block;
@@ -2648,8 +2694,8 @@ body.auth-page > main {
     inset: -12% -8% -12% -8%;
     border-radius: 28px;
     background:
-        radial-gradient(60% 60% at 20% 20%, rgba(26, 86, 219, 0.10), transparent 70%),
-        radial-gradient(50% 50% at 85% 80%, rgba(26, 86, 219, 0.08), transparent 70%);
+        radial-gradient(60% 60% at 20% 20%, rgba(0, 97, 160, 0.10), transparent 70%),
+        radial-gradient(50% 50% at 85% 80%, rgba(0, 97, 160, 0.08), transparent 70%);
 }
 .auth-visual__panel {
     position: relative;
@@ -2677,7 +2723,7 @@ body.auth-page > main {
     font-size: var(--txt-xl);      /* el h1 global es 1.4rem; aqui es el foco de la pantalla */
     font-weight: 700;
     text-align: center;
-    color: #1a2b4b;         /* 11.5:1 sobre #fff */
+    color: #002c48;         /* 11.5:1 sobre #fff */
 }
 .auth-card__bajada {
     margin: 0 0 var(--esp-5);
@@ -2697,7 +2743,7 @@ body.auth-page > main {
     margin: 0 0 var(--esp-2);     /* la regla global de label trae 0.75rem arriba */
     font-weight: 600;
     font-size: var(--txt-base);
-    color: #1a2b4b;
+    color: #002c48;
 }
 /* El icono se posiciona sobre el input y este reserva el espacio con
    padding-left, en vez de meterlo dentro del control: asi el area clickeable y
@@ -2749,8 +2795,8 @@ body.auth-page > main {
     line-height: 1.2;
     cursor: pointer;
 }
-.auth-page .auth-boton:hover { background: #1848b8; border-color: #1848b8; }
-.auth-page .auth-boton:active { background: #143c99; border-color: #143c99; }
+.auth-page .auth-boton:hover { background: #004b7c; border-color: #004b7c; }
+.auth-page .auth-boton:active { background: #002c48; border-color: #002c48; }
 
 /* --- Footer ------------------------------------------------------------- */
 .auth-footer {
@@ -2760,7 +2806,7 @@ body.auth-page > main {
     text-align: center;
 }
 .auth-footer p { margin: 0; }
-.auth-footer__marca { font-weight: 700; color: #1a2b4b; font-size: var(--txt-base); }
+.auth-footer__marca { font-weight: 700; color: #002c48; font-size: var(--txt-base); }
 .auth-footer__nota { margin-top: var(--esp-1); color: var(--color-texto-medio); font-size: var(--txt-sm); }
 .auth-footer__legal { margin-top: var(--esp-2); color: var(--color-texto-tenue); font-size: var(--txt-sm); }
 
@@ -3009,4 +3055,297 @@ svg.alerta__icono { margin-top: 0.05rem; }
     /* El spinner no se apaga: sin el, el boton parece colgado. Solo va mas lento. */
     .boton-principal[data-cargando="true"]::after,
     .boton-secundario[data-cargando="true"]::after { animation-duration: 2s; }
+}
+
+/* ==========================================================================
+   COMPONENTES DE LAS PANTALLAS DE CONFIGURACION (octubre 2026)
+
+   Salieron de pasar todo el menu Configuracion por el Quality Gate del design
+   system. Cuatro pasadas en paralelo pidieron piezas; donde dos pidieron lo
+   mismo con otro nombre (.tabla-datos--tarjetas / --cards, .dialogo /
+   .dialogo-confirmar) se dejo UNA y se renombraron las vistas: el mismo
+   componente con dos aspectos es justo lo que el sistema prohibe.
+   ========================================================================== */
+
+/* --- Tabla que en movil se lee como tarjetas ---------------------------------
+   overflow-x como plan de responsive esta prohibido. Cada <td> lleva
+   data-label con el nombre de su columna, que reaparece como rotulo de la
+   linea bajo 720px. El <thead> se oculta solo visualmente: los lectores de
+   pantalla siguen teniendo la tabla. data-label="" = celda sin rotulo. */
+@media (max-width: 720px) {
+    .tabla-datos--cards thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+    }
+    .tabla-datos--cards,
+    .tabla-datos--cards tbody,
+    .tabla-datos--cards tr,
+    .tabla-datos--cards td { display: block; width: 100%; box-sizing: border-box; }
+    .tabla-datos--cards caption { display: block; text-align: left; }
+    .tabla-datos--cards tr {
+        margin: 0 0 var(--esp-3);
+        padding: var(--esp-2) var(--esp-3);
+        border: 1px solid var(--color-borde-suave);
+        border-radius: var(--radio-md);
+        background: var(--color-superficie);
+    }
+    .tabla-datos--cards tbody tr:hover { background: var(--color-superficie); }
+    .tabla-datos--cards td {
+        display: grid;
+        grid-template-columns: minmax(6rem, 35%) minmax(0, 1fr);
+        gap: var(--esp-2);
+        padding: var(--esp-1) 0;
+        border: 0;
+        text-align: left;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    .tabla-datos--cards td::before {
+        content: attr(data-label);
+        font-size: var(--txt-xs);
+        font-weight: 600;
+        color: var(--color-texto-medio);
+    }
+    /* Cada valor al inicio de su columna: sin esto un badge se estira. */
+    .tabla-datos--cards td > * { justify-self: start; }
+    .tabla-datos--cards td > .tabla-datos__secundario { grid-column: 2; }
+    .tabla-datos--cards td[data-label=""],
+    .tabla-datos--cards td.tabla-datos__acciones { display: block; text-align: left; }
+    .tabla-datos--cards td[data-label=""]::before,
+    .tabla-datos--cards td.tabla-datos__acciones::before { content: none; }
+    /* Acciones de la fila con alto de pulgar. */
+    .tabla-datos--cards td.tabla-datos__acciones a,
+    .tabla-datos--cards td.tabla-datos__acciones button { margin-left: 0; min-height: 2.75rem; }
+    .tabla-scroll:has(> .tabla-datos--cards) { overflow-x: visible; }
+}
+
+/* --- Formularios de una sola accion dentro de una fila ---------------------
+   Reemplazan los style="display:inline" repetidos en las vistas. */
+.form-en-linea,
+.tabla-datos__acciones form { display: inline; margin: 0; }
+/* El <button> global trae margin-top: dentro de una celda descuadra la fila. */
+.tabla-datos .form-en-linea button,
+.tabla-datos__acciones form button { margin-top: 0; }
+/* Badges con texto largo en una celda: en movil se tienen que poder partir. */
+.tabla-datos td .badge { white-space: normal; margin: 0 var(--esp-1) var(--esp-1) 0; }
+
+/* --- Empty state con sus cuatro piezas -------------------------------------
+   Icono (32px), titulo, explicacion y accion. El titulo es clase y no h2: el
+   empty state casi siempre vive en una .tarjeta que ya tiene su h2. */
+.estado-vacio__icono { display: block; margin: 0 0 var(--esp-2); color: var(--color-primario); }
+.estado-vacio__titulo { margin: 0 0 var(--esp-1); font-size: var(--txt-lg); font-weight: 600; color: var(--color-texto); }
+.estado-vacio__titulo + p,
+.estado-vacio__icono ~ p { margin: 0 0 var(--esp-3); }
+/* Variante centrada, dentro de 420px (feedback.html). Modificador y no cambio
+   de .estado-vacio: la base la usa el dashboard con otra composicion. */
+.estado-vacio--centrado {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--esp-2);
+    max-width: 420px;
+    margin: var(--esp-4) auto;
+    padding: var(--esp-5) var(--esp-4);
+    text-align: center;
+    border: 0;
+    background: none;
+}
+.estado-vacio--centrado .estado-vacio__icono { margin: 0; }
+.estado-vacio--centrado h3 { margin: 0; font-size: var(--txt-md); color: var(--color-marino); }
+.estado-vacio--centrado p { margin: 0; color: var(--color-texto-medio); font-size: var(--txt-base); }
+.estado-vacio--centrado .estado-vacio__acciones { justify-content: center; margin-top: var(--esp-2); }
+
+/* --- Acciones destructivas -------------------------------------------------
+   En una fila: SUAVE (texto rojo, sin relleno), separada de lo principal.
+   --color-error sobre blanco da 6.9:1. Solida (.boton-peligro) solo dentro
+   de la confirmacion, donde es la accion de ese contexto. */
+.boton-texto--peligro { color: var(--color-error); }
+.boton-peligro {
+    display: inline-block;
+    padding: var(--esp-2) var(--esp-4);
+    border: 1px solid var(--color-error);
+    border-radius: var(--radio-sm);
+    background: var(--color-error);
+    color: var(--color-superficie);
+    font-size: var(--txt-base);
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+}
+.boton-peligro:hover { background: var(--color-texto); border-color: var(--color-texto); }
+
+/* Spinner (seccion 14) en los otros botones: mismo componente que
+   .boton-principal[data-cargando], con el color de cada boton. */
+.boton-texto[data-cargando="true"],
+.boton-peligro[data-cargando="true"] { position: relative; color: transparent; cursor: progress; }
+.boton-texto[data-cargando="true"]::after,
+.boton-peligro[data-cargando="true"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 16px;
+    height: 16px;
+    margin: auto;
+    box-sizing: border-box;
+    border: 2px solid var(--color-primario);
+    border-top-color: transparent;
+    border-radius: var(--radio-pill);
+    animation: boton-girar 640ms linear infinite;
+}
+.boton-peligro[data-cargando="true"]::after { border-color: var(--color-superficie); border-top-color: transparent; }
+@media (prefers-reduced-motion: reduce) {
+    .boton-texto[data-cargando="true"]::after,
+    .boton-peligro[data-cargando="true"]::after { animation-duration: 2s; }
+}
+
+/* --- Confirmacion de lo irreversible ---------------------------------------
+   <dialog> nativo: el foco entra, Escape cierra y el foco vuelve. Titulo con
+   la consecuencia, que pasa exactamente, y un boton que nombra la accion
+   (nunca "Aceptar"). Los botones van en .acciones-formulario. */
+.dialogo-confirmar {
+    max-width: min(30rem, calc(100vw - 2rem));
+    padding: var(--esp-5);
+    border: 1px solid var(--color-borde-suave);
+    border-radius: var(--radio-md);
+    box-shadow: var(--sombra-lg);
+    color: var(--color-texto);
+}
+.dialogo-confirmar::backdrop { background: rgba(0, 44, 72, 0.35); }
+.dialogo-confirmar__titulo { margin: 0 0 var(--esp-2); font-size: var(--txt-lg); color: var(--color-marino); }
+.dialogo-confirmar p { margin: 0 0 var(--esp-2); font-size: var(--txt-base); }
+.dialogo-confirmar .acciones-formulario { margin-top: var(--esp-4); }
+
+/* --- Carga de archivo: zona de arrastre ------------------------------------ */
+.upload__area[data-arrastrando="true"] { border-color: var(--color-primario); background: var(--color-primario-suave); }
+svg.upload__icono { color: var(--color-primario); }
+/* Error: el borde pasa a rojo ADEMAS del texto y del aria-invalid. */
+.form-campo--error .upload__area { border-color: var(--color-error); }
+
+/* --- Encabezados y titulos ------------------------------------------------- */
+/* Cabecera de TARJETA con titulo y una accion al lado. No se reusa
+   .dash-header: es el de PAGINA y arrastra su borde y la linea naranja. */
+.tarjeta__cabecera {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--esp-2) var(--esp-4);
+    margin: 0 0 var(--esp-2);
+}
+.tarjeta__cabecera h2 { margin: 0; }
+/* Un formulario como accion del encabezado (Generar API key). */
+.acciones-grupo--header form { margin: 0; }
+.acciones-grupo--header button { margin-top: 0; }
+/* Titulo de un grupo de solo lectura (la ficha ya configurada): se ve igual
+   que el legend de .grupo-campos. */
+.grupo-campos__titulo { margin: 0 0 var(--esp-2); font-size: var(--txt-md); font-weight: 600; color: var(--color-texto); }
+
+/* --- Columnas -------------------------------------------------------------- */
+.config-columnas--4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1024px) {
+    .config-columnas--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+    .config-columnas--4 { grid-template-columns: minmax(0, 1fr); }
+}
+/* Dentro de la grilla manda el gap, tambien para avisos y columnas que apilan
+   dos piezas (tarjeta + panel-info). */
+.config-columnas > .panel-info,
+.config-columnas > .seccion-manual { margin: 0; }
+.config-columnas > div > :first-child { margin-top: 0; }
+.config-columnas > div > :last-child { margin-bottom: 0; }
+/* Una segunda fila de columnas, o lo que sigue a una, necesita aire: la
+   grilla no tiene margen propio. */
+.config-ancho > .config-columnas,
+.config-ancho > form + .config-columnas { margin-top: var(--esp-5); }
+.config-ancho > .config-columnas:first-child { margin-top: 0; }
+.config-columnas + .alerta,
+.config-columnas + .panel-info,
+.config-columnas + .titulo-seccion { margin-top: var(--esp-4); }
+
+/* --- Botonera final --------------------------------------------------------
+   [Eliminar] ... espacio ... [Cancelar] [Guardar]: lo destructivo a la
+   izquierda. Bajo 720px se apila a ancho completo y el primario queda el
+   ULTIMO, abajo, al alcance del pulgar. */
+.acciones-formulario__aparte { margin-right: auto; }
+@media (max-width: 720px) {
+    .acciones-formulario { flex-direction: column; align-items: stretch; }
+    .acciones-formulario > a,
+    .acciones-formulario > button { text-align: center; min-height: 2.75rem; box-sizing: border-box; }
+    .acciones-formulario > a { display: flex; align-items: center; justify-content: center; }
+    .acciones-formulario__aparte { margin-right: 0; }
+}
+
+/* --- Filtros: una columna en movil ----------------------------------------- */
+@media (max-width: 720px) {
+    .filtros { flex-direction: column; align-items: stretch; }
+    .filtros__campo,
+    .filtros__input { width: 100%; min-width: 0; }
+    .filtros .boton-secundario { min-height: 2.75rem; }
+}
+
+/* --- Alerta neutra ---------------------------------------------------------
+   Un estado que no es exito, ni aviso, ni error ("Pendiente"). #444 sobre
+   --color-info-fondo: 9.20:1. */
+.alerta--info { background: var(--color-info-fondo); border-color: var(--color-info-borde); color: var(--color-texto-suave); }
+.alerta--info .alerta__icono { color: var(--color-texto-medio); }
+
+/* Track ID y fecha que se copian al portal del SII: un clic los selecciona. */
+.dato-copiable { user-select: all; }
+
+/* --- "Por pasos" (seccion 14): la barra de etapas de certificacion ---------
+   Lista ordenada en un <nav>, con resumen ("2 de 6 etapas listas. Te toca:
+   X") y el estado de cada etapa en texto, no solo en color. Acotado a
+   ol.progreso-etapas--lista: .progreso-etapas con <div> lo siguen usando
+   admin-tenants.php y boleta.php y no cambia. */
+.etapas { margin: var(--esp-4) 0 var(--esp-5); }
+.etapas__resumen { margin: 0 0 var(--esp-2); font-size: var(--txt-base); color: var(--color-texto-suave); }
+ol.progreso-etapas--lista { margin: 0; padding: 0; list-style: none; }
+ol.progreso-etapas--lista > li { flex: 1 1 0; min-width: 0; display: flex; }
+ol.progreso-etapas--lista .etapa { flex: 1 1 auto; }
+ol.progreso-etapas--lista .etapa__numero { display: flex; align-items: center; justify-content: center; gap: var(--esp-1); }
+ol.progreso-etapas--lista .etapa__estado { display: block; margin-top: var(--esp-1); font-weight: 400; font-size: var(--txt-xs); }
+ol.progreso-etapas--lista .etapa--no-gestionada,
+ol.progreso-etapas--lista .etapa--rechazada { cursor: pointer; }
+ol.progreso-etapas--lista span.etapa { cursor: default; }
+/* Seis etapas en fila no caben a 375px: dos columnas, mismo orden. */
+@media (max-width: 720px) {
+    ol.progreso-etapas--lista { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-2); }
+}
+
+/* --- Espera larga (seccion 14) ----------------------------------------------
+   Pasados 10 s se dice que se esta haciendo; sin final conocido, barra
+   INDETERMINADA: dos trozos con tiempos distintos (uno solo se lee como un
+   carrusel detenido) y role="progressbar" SIN aria-valuenow. */
+.espera-larga { margin: var(--esp-3) 0 0; }
+.espera-larga p { margin: var(--esp-2) 0 0; font-size: var(--txt-sm); color: var(--color-texto-suave); }
+.progreso-indeterminado {
+    position: relative;
+    height: 6px;
+    overflow: hidden;
+    border-radius: var(--radio-pill);
+    background: var(--color-primario-suave);
+}
+.progreso-indeterminado::before,
+.progreso-indeterminado::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: var(--radio-pill);
+    background: var(--color-primario);
+}
+.progreso-indeterminado::before { width: 40%; animation: progreso-ida 2100ms cubic-bezier(0.65, 0.05, 0.35, 1) infinite; }
+.progreso-indeterminado::after { width: 18%; animation: progreso-ida 2100ms cubic-bezier(0.25, 0.1, 0.25, 1) 1150ms infinite; }
+@keyframes progreso-ida {
+    from { left: -40%; }
+    to { left: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .progreso-indeterminado::before { animation: none; left: 0; }
+    .progreso-indeterminado::after { display: none; }
 }

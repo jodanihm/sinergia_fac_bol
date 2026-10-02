@@ -33,6 +33,23 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-02',
+        'version' => '1.75',
+        'titulo'  => 'Nuevos colores estilo SII y todas las pantallas de Configuracion rehechas',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El panel adopta los colores del sitio del SII: azul en botones y enlaces, azul marino en titulos y en la opcion del menu donde estas, y un acento naranjo bajo el titulo de cada pagina y en el menu. El naranjo solo decora: nunca marca un estado, para no confundirlo con los avisos de advertencia.',
+            'Todas las pantallas de Configuracion (Usuarios y permisos, Auditoria, Empresa, Certificado digital, Folios y CAF, API keys, en certificacion y en produccion, y Certificacion SII) usan ahora todo el ancho, repartido en columnas, igual que Cobro en linea.',
+            'En el celular las tablas se leen como tarjetas, una por fila, en vez de obligar a desplazarse hacia el lado.',
+            'Al guardar o enviar, el boton muestra que esta trabajando sin saltar. Lo que habla con el SII y tarda mas de 10 segundos dice que se esta haciendo y muestra una barra de espera.',
+            'La certificacion SII muestra sus 6 etapas con el estado de cada una escrito ("Lista", "Te toca", "Falta una anterior") y cuantas faltan.',
+            'Revocar una API key, eliminar un rol o enviar algo al SII pide confirmacion con un boton que dice exactamente que va a pasar ("Si, revocar la key").',
+            'Ahora aparece la confirmacion al revocar una key, al guardar el certificado de produccion, al guardar los datos de la empresa de produccion y al subir o quitar el logo. Antes esos avisos se perdian.',
+            'Los errores dicen que corregir: "El digito verificador no calza con el RUT" en vez de "RUT invalido (formato NNNNNNNN-DV)". Al importar el archivo del SII ya no aparece el error tecnico interno.',
+            'Al subir el certificado o un CAF, el tipo de archivo y el peso maximo se dicen antes de elegirlo, y se puede arrastrar el archivo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-02',
         'version' => '1.74',
         'titulo'  => 'Cobro en linea usa todo el ancho de la pantalla',
         'tag'     => 'frontend',

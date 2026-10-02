@@ -15,6 +15,16 @@
     // cual segmento corresponde a la pagina que se esta viendo AHORA, que es
     // independiente del color de progreso: podrias estar viendo la etapa 4
     // aunque lo que toca hacer todavia sea la etapa 2.
+    //
+    // ES EL COMPONENTE "POR PASOS" DE LA SECCION 14 DEL DESIGN SYSTEM (Efectos
+    // de carga): dice cuantas etapas faltan y cual es la actual, que es
+    // justamente lo que una barra continua no puede decir. Por eso:
+    //   - una linea de resumen arriba ("2 de 6 listas. Te toca: Simulacion");
+    //   - cada etapa dice su estado con icono + texto visible + color, y no solo
+    //     con el color (antes "aun no corresponde" vivia en un title, que en
+    //     tactil no existe);
+    //   - lista ordenada dentro de un <nav>, con aria-current en la pagina que
+    //     se esta viendo.
     $etapasEstado = [
         ['nombre' => 'Set de Prueba',             'completada' => $todosAprobados],
         ['nombre' => 'Simulacion',                'completada' => $etapasManuales['simulacion']['confirmada']],
@@ -37,14 +47,15 @@
         }
     }
     unset($e);
-?>
-<div class="progreso-etapas">
-    <?php foreach ($etapasEstado as $i => $e): ?>
-        <a href="/certificacion/etapa/<?= $i + 1; ?>"
-           class="etapa <?= $e['clase']; ?><?= ($etapaActual === $i + 1) ? ' etapa--actual' : ''; ?>"
-           <?php if ($e['clase'] === 'etapa--no-gestionada'): ?>title="Aun no corresponde: falta completar una etapa anterior."<?php endif; ?>>
-            <span class="etapa__numero"><?= $i + 1; ?></span>
-            <?= htmlspecialchars($e['nombre']); ?>
-        </a>
-    <?php endforeach; ?>
-</div>
+
+    $barraListas = count(array_filter($etapasEstado, static fn (array $e): bool => $e['completada']));
+    $barraToca   = null;
+    foreach ($etapasEstado as $e) {
+        if ($e['clase'] === 'etapa--activa') {
+            $barraToca = $e['nombre'];
+            break;
+        }
+    }
+    $barraSegmentos = $etapasEstado;
+    $barraEnlazada  = true;
+    require __DIR__ . '/_lista-etapas.php';
