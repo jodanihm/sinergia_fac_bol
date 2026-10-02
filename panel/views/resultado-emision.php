@@ -24,6 +24,12 @@
  *   - Monto exento: ni el 201 ni dte_emitido lo guardan (solo neto/iva/total).
  *   - Detalle de lineas: no existe en ninguna respuesta del motor.
  * No se derivan ni se recalculan: los montos se muestran tal como llegaron.
+ *
+ * DISENO (octubre 2026): el aviso de exito dice QUE se emitio (tipo y folio) y
+ * que falta (la aprobacion del SII); una sola accion primaria (ver el
+ * documento) y el enlace duplicado del encabezado se quito. Fechas en
+ * dd/mm/aaaa. "Emitir otro" vuelve al MISMO tipo de documento: antes la
+ * exenta y la boleta caian a la factura afecta.
  */
 $titulo = 'Documento emitido';
 require __DIR__ . '/partials/header.php';
@@ -36,6 +42,8 @@ $tipoDte = (int) ($resultado['tipoDte'] ?? 0);
 $tipoNombre = \Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe($tipoDte);
 
 $rutaNueva = match ($tipoDte) {
+    34 => '/ventas/factura-exenta',
+    39 => '/ventas/boleta',
     61 => '/ventas/nota-credito',
     56 => '/ventas/nota-debito',
     default => '/ventas/factura',
@@ -46,7 +54,12 @@ $fmt = static function ($v): string {
 };
 // Formato de monto igual al del listado de documentos: entero, miles con punto.
 $fmtMonto = static function ($v): string {
-    return '$ ' . number_format((float) $v, 0, ',', '.');
+    return '$' . number_format((float) $v, 0, ',', '.');
+};
+// Fecha chilena: 2026-10-02 -> 02/10/2026. Si llega en otro formato, tal cual.
+$fmtFecha = static function ($v) use ($fmt): string {
+    $t = (string) ($v ?? '');
+    return preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $t, $m) ? $m[3] . '/' . $m[2] . '/' . $m[1] : $fmt($v);
 };
 
 $folio = $resultado['folio'] ?? null;
@@ -69,22 +82,27 @@ foreach (['neto' => 'Neto', 'iva' => 'IVA', 'total' => 'Total'] as $clave => $et
     <div>
         <h1>Documento emitido</h1>
     </div>
-    <?php if ($rutaDetalle !== null): ?>
-        <a class="boton-secundario" href="<?= htmlspecialchars($rutaDetalle); ?>">Ver en el panel de emision</a>
-    <?php endif; ?>
 </div>
 <p class="dash-subtitulo">
-    El documento se genero, se firmo y el SII acepto el envio.
-    La aprobacion del SII se confirma consultando el estado en el detalle.
+    Se genero, se firmo y el SII recibio el envio. Su aprobacion se confirma en el detalle.
 </p>
 
-<p class="alerta alerta--exito" role="status">
-    <span class="alerta__icono" aria-hidden="true">&#10003;</span>
-    <span>Se emitio la <?= htmlspecialchars($tipoNombre); ?> correctamente.</span>
-</p>
+<div class="config-ancho">
 
-<div class="layout-principal-lateral">
-    <div>
+<div class="alerta alerta--exito" role="status">
+    <?= iconoSvg('check', 20, 'alerta__icono'); ?>
+    <div class="alerta__cuerpo">
+        <p class="alerta__titulo">
+            Se emitio la <?= htmlspecialchars($tipoNombre); ?><?= ($folio !== null && $folio !== '') ? ' N&deg; ' . htmlspecialchars((string) $folio) : ''; ?>
+        </p>
+        <p>
+            El SII recibio el envio<?= ! empty($resultado['trackId']) ? ' (Track ID ' . htmlspecialchars((string) $resultado['trackId']) . ')' : ''; ?>.
+            Todavia falta que lo apruebe: revisalo en unos minutos en el detalle del documento.
+        </p>
+    </div>
+</div>
+
+<div class="config-columnas config-columnas--2">
         <section class="tarjeta" aria-labelledby="titulo-documento">
             <h2 id="titulo-documento">Documento</h2>
             <dl class="ficha">
@@ -95,12 +113,13 @@ foreach (['neto' => 'Neto', 'iva' => 'IVA', 'total' => 'Total'] as $clave => $et
                 <dd><?= $fmt($folio); ?></dd>
 
                 <dt>Fecha de emision</dt>
-                <dd><?= $fmt($resultado['fchEmis'] ?? null); ?></dd>
+                <dd><?= $fmtFecha($resultado['fchEmis'] ?? null); ?></dd>
 
                 <dt>Estado</dt>
                 <dd>
                     <?php if (($resultado['estado'] ?? null) !== null && $resultado['estado'] !== ''): ?>
-                        <span class="badge badge--proceso"><?= htmlspecialchars((string) $resultado['estado']); ?></span>
+                        <?php // Enviado, aun sin respuesta final del SII: badge "en curso", con icono de reloj ademas del color. ?>
+                        <span class="badge badge--proceso"><?= iconoSvg('reloj', 16, 'badge__icono'); ?><?= htmlspecialchars((string) $resultado['estado']); ?></span>
                     <?php else: ?>
                         -
                     <?php endif; ?>
@@ -108,14 +127,12 @@ foreach (['neto' => 'Neto', 'iva' => 'IVA', 'total' => 'Total'] as $clave => $et
 
                 <?php if (! empty($resultado['trackId'])): ?>
                     <dt>Track ID</dt>
-                    <dd><?= $fmt($resultado['trackId']); ?></dd>
+                    <dd class="dato-copiable"><?= $fmt($resultado['trackId']); ?></dd>
                 <?php endif; ?>
             </dl>
             <p class="nota">El Track ID es el identificador del envio en el SII. Sirve para el seguimiento y para soporte.</p>
         </section>
-    </div>
 
-    <div>
         <?php if ($montos !== []): ?>
             <section class="tarjeta" aria-labelledby="titulo-totales">
                 <h2 id="titulo-totales">Totales del documento</h2>
@@ -128,17 +145,27 @@ foreach (['neto' => 'Neto', 'iva' => 'IVA', 'total' => 'Total'] as $clave => $et
                 </dl>
                 <p class="nota">Montos calculados por el motor al generar el documento. No son una estimacion.</p>
             </section>
+        <?php else: ?>
+            <div class="panel-info">
+                <p class="panel-info__titulo">
+                    <?= iconoSvg('info', 20, 'panel-info__icono'); ?>
+                    Totales en el detalle
+                </p>
+                <p>El motor no devolvio los montos en esta respuesta. Los ves en el detalle del documento y en su PDF.</p>
+            </div>
         <?php endif; ?>
-    </div>
 </div>
 
-<div class="acciones-grupo">
+<?php /* Una sola accion primaria. Lo que sale de aqui va a la izquierda. */ ?>
+<div class="acciones-formulario">
+    <a class="boton-texto acciones-formulario__aparte" href="/panel">Volver al panel</a>
+    <a class="boton-secundario" href="<?= htmlspecialchars($rutaNueva); ?>">Emitir otra <?= htmlspecialchars(strtolower($tipoNombre)); ?></a>
     <?php if ($rutaDetalle !== null): ?>
+        <a class="boton-secundario" href="<?= htmlspecialchars($rutaDetalle); ?>/pdf" target="_blank" rel="noopener">Descargar PDF<span class="visualmente-oculto"> (se abre en otra pestana)</span></a>
         <a class="boton-principal" href="<?= htmlspecialchars($rutaDetalle); ?>">Ver documento emitido</a>
-        <a class="boton-secundario" href="<?= htmlspecialchars($rutaDetalle); ?>/pdf" target="_blank" rel="noopener">Descargar PDF</a>
     <?php endif; ?>
-    <a class="boton-secundario" href="<?= htmlspecialchars($rutaNueva); ?>">Emitir otro documento</a>
-    <a class="boton-texto" href="/panel">Volver al panel</a>
+</div>
+
 </div>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>

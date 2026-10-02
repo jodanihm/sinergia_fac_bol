@@ -33,6 +33,24 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-02',
+        'version' => '1.78',
+        'titulo'  => 'Todas las pantallas de Ventas rehechas',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Emitir factura, factura exenta, boleta, nota de credito y nota de debito, el Panel de emision, Cotizaciones, Envio de correos, Carga masiva y Facturacion masiva usan ahora todo el ancho, repartido en columnas, igual que Configuracion.',
+            'Emitir un documento pide confirmacion con un boton que dice exactamente que se va a emitir ("Si, emitir la factura electronica"). Si el envio al SII tarda mas de 10 segundos, la pantalla lo dice y muestra una barra de espera.',
+            'Si el SII rechaza un dato, el aviso aparece junto al campo que hay que corregir, tambien si es una linea del detalle, con un resumen arriba que lleva a el.',
+            'En el Panel de emision los filtros aplicados se ven como etiquetas que se quitan con un clic, la tabla es mas angosta (el neto y el IVA van bajo el total) y el folio abre la ficha del documento.',
+            'La facturacion masiva muestra el avance real ("grupo 3 de 5") con su porcentaje, avisa antes de emitir si no alcanzan los folios y confirma cuantos documentos se van a emitir.',
+            'Reintentar correos, buscar destinatarios o enviar un correo sin link de pago confirman cuantos correos y que va a pasar.',
+            'En el celular, las tablas y las lineas del detalle se leen como tarjetas.',
+            'Corregido: al cotizar, si se quitaba una linea del medio y otra tenia un error, el aviso marcaba la linea equivocada.',
+            'Corregido: despues de emitir una boleta o una nota, el menu marcaba "Factura electronica" como la pagina actual.',
+            'Los mensajes de error dicen que corregir en vez de "invalido", y ya no muestran numeros internos de los envios de correo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-02',
         'version' => '1.77',
         'titulo'  => 'Iconos del menu en azul',
         'tag'     => 'frontend',

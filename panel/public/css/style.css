@@ -3376,3 +3376,285 @@ ol.progreso-etapas--lista span.etapa { cursor: default; }
     .progreso-indeterminado::before { animation: none; left: 0; }
     .progreso-indeterminado::after { display: none; }
 }
+
+/* ==========================================================================
+   COMPONENTES DE LAS PANTALLAS DE VENTAS (octubre 2026)
+
+   Mismo origen que el bloque de Configuracion: pasar el menu Ventas por el
+   Quality Gate del design system. Las dos pasadas que pidieron reglas para las
+   lineas EDITABLES en tarjetas (emision y cotizacion) se unificaron en un solo
+   juego de reglas.
+   ========================================================================== */
+
+/* --- Lineas editables (emision y cotizacion) --------------------------------- */
+/* Cifras del detalle de emision: alineadas a la derecha y tabulares, para
+   comparar cantidades y precios de un vistazo (formularios.html, Dinero).
+   No se agrega separador de miles DENTRO del input a proposito:
+   armarDocumentoEmision() hace (float) del texto y "1.000" seria 1. */
+.tabla-editable .col-cantidad input,
+.tabla-editable .col-precio input { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Control con error dentro de una celda (no hay .form-campo que lo envuelva):
+   el borde rojo acompana al texto de .campo-error y al aria-invalid. */
+.form-compacto .tabla-editable [aria-invalid="true"] { border-color: var(--color-error); }
+.tabla-editable .campo-error { font-size: var(--txt-xs); }
+
+/* Tabla EDITABLE que pasa a tarjetas (.tabla-datos--cards) bajo 720px.
+   Las clases de columna de .tabla-editable fijan anchos (6.5rem, 8rem...) con
+   mas especificidad que la regla generica de tarjetas: sin esto cada celda
+   quedaria de 6.5rem dentro de la tarjeta. Los inputs llenan su columna (la
+   regla generica alinea los hijos al inicio, pensada para badges). */
+@media (max-width: 720px) {
+    /* Rotulo ARRIBA del campo y no al lado: en una celda editable el input
+       necesita el ancho entero (un nombre de producto en 130px se corta). */
+    .tabla-datos--cards.tabla-editable td {
+        width: 100%;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--esp-1);
+        text-align: left;
+    }
+    .tabla-datos--cards.tabla-editable td > input:not([type="checkbox"]),
+    .tabla-datos--cards.tabla-editable td > .campo-error,
+    .tabla-datos--cards.tabla-editable td > .tabla-datos__secundario { justify-self: stretch; grid-column: 1; }
+    /* Exento: casilla al lado de su rotulo, que es como se lee una casilla. */
+    .tabla-datos--cards.tabla-editable td.col-exento { grid-template-columns: auto auto; justify-content: start; align-items: center; gap: var(--esp-2); }
+    .tabla-datos--cards.tabla-editable td.col-accion { text-align: right; }
+    /* Quitar linea con alto de pulgar en movil. */
+    .tabla-datos--cards.tabla-editable .quitar-linea { width: 2.75rem; height: 2.75rem; }
+}
+
+/* --- Panel de emision: filtros activos, cifras, lista de acciones ------------ */
+/* --- Filtros activos a la vista (Nielsen 6: reconocer antes que recordar) --
+   Bajo la barra de filtros: el periodo implicito ("mes actual") y un chip por
+   filtro aplicado, que se quita con un clic. El chip es un enlace real (se
+   alcanza con Tab) con aria-label "Quitar filtro X". 24px de alto minimo
+   (WCAG 2.5.8); en movil, 44px. */
+.filtros-activos {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--esp-2);
+    margin: 0 0 var(--esp-3);
+    font-size: var(--txt-sm);
+    color: var(--color-texto-suave);
+}
+.filtros-activos__periodo { display: inline-flex; align-items: center; gap: var(--esp-1); color: var(--color-texto-medio); }
+.filtros-activos__periodo svg { flex: none; color: var(--color-primario); }
+.filtros-activos__rotulo { font-weight: 600; }
+.filtros-activos__lista { display: flex; flex-wrap: wrap; gap: var(--esp-2); margin: 0; padding: 0; list-style: none; }
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--esp-1);
+    min-height: 1.5rem;
+    padding: 0 var(--esp-2) 0 var(--esp-3);
+    border: 1px solid var(--color-primario-borde);
+    border-radius: var(--radio-pill);
+    background: var(--color-primario-suave);
+    color: var(--color-marino);
+    font-weight: 600;
+    text-decoration: none;
+}
+.chip:hover { border-color: var(--color-primario); }
+.chip:focus-visible { border-radius: var(--radio-pill); }
+.chip__icono { flex: none; }
+@media (max-width: 720px) {
+    .chip { min-height: 2.75rem; }
+}
+
+/* --- Cifras en celdas y fichas -----------------------------------------------
+   Folio, fecha y Track ID con cifras de ancho fijo (igual que
+   .tabla-datos__num, pero sin alinear a la derecha: no son montos).
+   --destacado: el total de la fila, que es lo que se compara. Ya se usaba en
+   otra vista sin regla. */
+.tabla-datos__cifra { font-variant-numeric: tabular-nums; }
+.tabla-datos__num--destacado { font-weight: 600; color: var(--color-texto); }
+
+/* --- Lista de acciones con su explicacion -----------------------------------
+   Cada accion lleva al lado que va a pasar (no en un tooltip). __aparte separa
+   la destructiva: al final, con una linea encima. */
+.acciones-lista { display: grid; gap: var(--esp-3); margin: 0; padding: 0; list-style: none; }
+.acciones-lista li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--esp-1) var(--esp-3); }
+.acciones-lista li > a { flex: none; }
+.acciones-lista li > p { flex: 1 1 14rem; margin: 0; font-size: var(--txt-sm); color: var(--color-texto-medio); }
+.acciones-lista__aparte { padding-top: var(--esp-3); border-top: 1px solid var(--color-borde-tenue); }
+.acciones-lista .boton-texto { padding-left: 0; }
+
+/* La linea secundaria bajo un monto (Neto ... IVA ... bajo el total) si puede
+   partirse: .tabla-datos__num es nowrap para que la cifra no se corte, pero
+   heredado a esta linea ensanchaba la tabla del panel de emision hasta forzar
+   scroll lateral a 900px. */
+.tabla-datos__num .tabla-datos__secundario { white-space: normal; }
+
+/* Enlace como linea secundaria de una celda (el folio que abre la ficha en el
+   panel de emision). Con el gris de .tabla-datos__secundario no se leeria
+   como enlace: va en el azul de enlace, con 24px de objetivo (WCAG 2.5.8). */
+a.tabla-datos__secundario {
+    display: inline-flex;
+    align-items: center;
+    min-height: 1.5rem;
+    color: var(--color-primario);
+    font-weight: 600;
+}
+a.tabla-datos__secundario:hover { color: var(--color-marino); }
+
+/* El badge de estado no se parte ("Enviado al / SII"): la regla general que
+   deja partir badges largos en celdas es para etiquetas de texto libre, no
+   para estados cortos de la columna de estado. */
+.tabla-datos__estado .badge { white-space: nowrap; }
+
+/* --- Tabla a tarjetas por el ancho de SU caja -------------------------------- */
+/* TABLA QUE PASA A TARJETAS SEGUN SU PROPIO ANCHO, NO EL DE LA PANTALLA.
+   .tabla-datos--cards cambia bajo 720px de VENTANA. Pero con el menu lateral
+   abierto, a 900px de ventana el contenido mide ~560px y una tabla de seis u
+   ocho columnas (envios de correo, lineas de una cotizacion) quedaba cortada
+   detras de un scroll horizontal -- lo que el design system prohibe como plan
+   de responsive. Y una tabla en media columna (facturas de una cotizacion)
+   desborda incluso a 1200px.
+   Con esta clase ADEMAS de --cards, la tabla pasa a tarjetas cuando SU caja
+   (.tabla-scroll, que se vuelve container) mide menos de 800px. Son las mismas
+   reglas de --cards, repetidas bajo @container: un selector no puede vivir a
+   la vez en un @media y en un @container. */
+.tabla-scroll:has(> .tabla-datos--cards-auto) { container-type: inline-size; }
+@container (max-width: 800px) {
+    .tabla-datos--cards-auto thead {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+    }
+    .tabla-datos--cards-auto,
+    .tabla-datos--cards-auto tbody,
+    .tabla-datos--cards-auto tr,
+    .tabla-datos--cards-auto td { display: block; width: 100%; box-sizing: border-box; }
+    .tabla-datos--cards-auto caption { display: block; text-align: left; }
+    .tabla-datos--cards-auto tr {
+        margin: 0 0 var(--esp-3);
+        padding: var(--esp-2) var(--esp-3);
+        border: 1px solid var(--color-borde-suave);
+        border-radius: var(--radio-md);
+        background: var(--color-superficie);
+    }
+    .tabla-datos--cards-auto tbody tr:hover { background: var(--color-superficie); }
+    .tabla-datos--cards-auto td {
+        display: grid;
+        grid-template-columns: minmax(6rem, 35%) minmax(0, 1fr);
+        gap: var(--esp-2);
+        padding: var(--esp-1) 0;
+        border: 0;
+        text-align: left;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    .tabla-datos--cards-auto td::before {
+        content: attr(data-label);
+        font-size: var(--txt-xs);
+        font-weight: 600;
+        color: var(--color-texto-medio);
+    }
+    .tabla-datos--cards-auto td > * { justify-self: start; }
+    .tabla-datos--cards-auto td > .tabla-datos__secundario { grid-column: 2; }
+    .tabla-datos--cards-auto td[data-label=""],
+    .tabla-datos--cards-auto td.tabla-datos__acciones { display: block; text-align: left; }
+    .tabla-datos--cards-auto td[data-label=""]::before,
+    .tabla-datos--cards-auto td.tabla-datos__acciones::before { content: none; }
+    .tabla-datos--cards-auto td.tabla-datos__acciones a,
+    .tabla-datos--cards-auto td.tabla-datos__acciones button { margin-left: 0; min-height: 2.75rem; }
+    /* Lineas editables (cotizacion-form.php): cada celda es una fila entera y
+       el input ocupa su columna. */
+    .tabla-editable.tabla-datos--cards-auto td > input:not([type="checkbox"]) { justify-self: stretch; }
+    .tabla-editable.tabla-datos--cards-auto td.col-accion { text-align: right; }
+}
+
+/* --- Carga y facturacion masiva ------------------------------------------- */
+/* --- Stepper como "Por pasos" (seccion 14) ----------------------------------
+   Linea de resumen arriba ("Paso 2 de 3: Revisar carga. Queda 1 paso.") y el
+   estado de cada paso en texto VISIBLE bajo su nombre ("Listo", "Estas aqui",
+   "Pendiente"), no solo en color ni en un texto oculto. */
+.stepper__resumen { margin: 0 0 var(--esp-2); font-size: var(--txt-base); color: var(--color-texto-suave); }
+.stepper__texto { display: flex; flex-direction: column; min-width: 0; }
+.stepper__estado { font-size: var(--txt-xs); font-weight: 400; }
+/* La marca de "listo" pasa a SVG (check de 16px): centrada en el circulo. */
+.stepper__marca svg { display: block; }
+/* Tres pasos en fila no caben a 375px (las etiquetas no se parten): bajo
+   720px van uno debajo del otro, sin el conector horizontal. */
+@media (max-width: 720px) {
+    .stepper__lista { flex-direction: column; align-items: stretch; gap: var(--esp-1); }
+    .stepper__paso:not(:last-child)::after { content: none; }
+    .stepper__etiqueta { white-space: normal; }
+}
+
+/* --- Tabla a tarjetas: la celda de encabezado de fila (<th scope="row">) ----
+   .tabla-datos--cards solo cubre <td>; la tabla de columnas del Excel usa un
+   <th scope="row"> por fila (es el nombre de la columna) y en movil tiene que
+   comportarse igual que una celda: bloque, sin borde y con su rotulo. */
+@media (max-width: 720px) {
+    .tabla-datos--cards tbody th {
+        display: grid;
+        grid-template-columns: minmax(6rem, 35%) minmax(0, 1fr);
+        gap: var(--esp-2);
+        width: 100%;
+        box-sizing: border-box;
+        padding: var(--esp-1) 0;
+        border: 0;
+        text-align: left;
+        overflow-wrap: anywhere;
+    }
+    .tabla-datos--cards tbody th::before {
+        content: attr(data-label);
+        font-size: var(--txt-xs);
+        font-weight: 600;
+        color: var(--color-texto-medio);
+    }
+    .tabla-datos--cards tbody th > * { justify-self: start; }
+    /* La observacion de una fila con error no necesita su ancho minimo de
+       tabla dentro de una tarjeta. */
+    .tabla-datos--cards .celda-observacion { min-width: 0; }
+}
+
+/* --- Progreso de la emision masiva (seccion 14, barra DETERMINADA) ----------
+   El porcentaje va AL LADO de la barra, nunca dentro, con ancho minimo y
+   cifras tabulares para que la barra no salte al pasar de 9% a 10%. */
+.progreso-fila { display: flex; align-items: center; gap: var(--esp-3); }
+.progreso-fila .barra-progreso { flex: 1 1 auto; }
+.progreso-fila__pct {
+    flex: none;
+    min-width: 4ch;
+    text-align: right;
+    font-size: var(--txt-sm);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-texto-suave);
+}
+.progreso-emision__detalle { margin: var(--esp-2) 0 0; font-size: var(--txt-sm); color: var(--color-texto-suave); }
+.progreso-emision__titulo:empty,
+.progreso-emision__detalle:empty { display: none; }
+
+/* --- Seleccion de notas ------------------------------------------------------
+   Barra sobre la tabla con "Marcar todas": sale del <thead> porque en movil
+   el encabezado se oculta y con el se iba la unica forma de marcarlas todas. */
+.facturacion-masiva__barra { margin: var(--esp-3) 0 var(--esp-2); }
+/* Casilla de 24x24 (WCAG 2.5.8): la nativa mide 13px y en una lista de 500
+   notas es el control que mas se toca. */
+.tabla-seleccion .col-check input[type="checkbox"],
+.facturacion-masiva__barra input[type="checkbox"] { width: 1.5rem; height: 1.5rem; }
+
+/* --- Carga masiva ------------------------------------------------------------ */
+/* Descargar plantilla: antes del archivo, separado de la zona de carga. */
+.carga-masiva__plantilla { margin: 0 0 var(--esp-3); }
+/* El interruptor de tipo exento, separado de la zona de carga. */
+.carga-masiva__tipo { margin-top: var(--esp-4); }
+
+/* --- Barra de filtros ------------------------------------------------------
+   El <button> global trae margin-top: dentro de la barra deja "Filtrar notas"
+   mas abajo que el campo de al lado. */
+.filtros button { margin-top: 0; }
+
+/* La celda de la casilla centra su contenido en la tabla de escritorio
+   (.tabla-seleccion .col-check); como tarjeta, el rotulo y la casilla van
+   alineados a la izquierda como cualquier otra linea, y a todo el ancho. */
+@media (max-width: 720px) {
+    .tabla-datos--cards.tabla-seleccion td.col-check { width: 100%; text-align: left; }
+}

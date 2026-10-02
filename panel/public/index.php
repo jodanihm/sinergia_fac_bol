@@ -4652,25 +4652,27 @@ function validarCotizacion(array $post): array
     $errores = [];
 
     $rut = Rut::normalizar(trim((string) ($post['receptor_rut'] ?? '')));
-    if ($rut === '' || ! Rut::valido($rut)) {
-        $errores['receptor_rut'] = 'El RUT del cliente es obligatorio y debe ser valido.';
+    if ($rut === '') {
+        $errores['receptor_rut'] = 'Escribe el RUT del cliente, por ejemplo 77.724.622-4.';
+    } elseif (! Rut::valido($rut)) {
+        $errores['receptor_rut'] = 'El digito verificador no calza con el RUT. Revisalo, por ejemplo 77.724.622-4.';
     }
     $razon = trim((string) ($post['receptor_razon_social'] ?? ''));
     if ($razon === '') {
-        $errores['receptor_razon_social'] = 'La razon social del cliente es obligatoria.';
+        $errores['receptor_razon_social'] = 'Escribe la razon social del cliente.';
     }
 
     $fecha = trim((string) ($post['fecha'] ?? ''));
     if ($fecha === '' || ! fechaValida($fecha)) {
-        $errores['fecha'] = 'La fecha es obligatoria (AAAA-MM-DD).';
+        $errores['fecha'] = 'Elige la fecha de la cotizacion.';
     }
     $validaHasta = trim((string) ($post['valida_hasta'] ?? ''));
     if ($validaHasta !== '' && ! fechaValida($validaHasta)) {
-        $errores['valida_hasta'] = 'La fecha de vigencia no es valida.';
+        $errores['valida_hasta'] = 'Elige la fecha de vigencia en el calendario, o dejala vacia.';
     }
     if ($validaHasta !== '' && $fecha !== '' && fechaValida($fecha) && fechaValida($validaHasta)
         && $validaHasta < $fecha) {
-        $errores['valida_hasta'] = 'La vigencia no puede ser anterior a la fecha de la cotizacion.';
+        $errores['valida_hasta'] = 'La vigencia tiene que ser igual o posterior a la fecha de la cotizacion.';
     }
 
     // --- cliente_id SE RESUELVE EN EL SERVIDOR, DESDE EL RUT ---
@@ -4716,26 +4718,30 @@ function validarCotizacion(array $post): array
             continue;
         }
         if ($nombre === '') {
-            $errores["lineas[{$i}].nombre"] = 'El item necesita nombre.';
+            $errores["lineas[{$i}].nombre"] = 'Escribe el producto o servicio.';
         }
         // LA CANTIDAD ADMITE DECIMALES a proposito: media hora de servicio es un
         // caso legitimo y el saldo se lleva por cantidad. Se acepta coma o punto
         // porque el usuario escribe en teclado chileno.
         $cant = (float) str_replace(',', '.', $cantR);
         if ($cantR === '' || ! is_numeric(str_replace(',', '.', $cantR)) || $cant <= 0) {
-            $errores["lineas[{$i}].cantidad"] = 'La cantidad debe ser mayor que 0.';
+            $errores["lineas[{$i}].cantidad"] = 'Escribe una cantidad mayor que 0.';
         }
         $prec = (float) str_replace(',', '.', $precR);
         if ($precR === '' || ! is_numeric(str_replace(',', '.', $precR)) || $prec < 0) {
-            $errores["lineas[{$i}].precio_unitario"] = 'El precio debe ser 0 o mayor.';
+            $errores["lineas[{$i}].precio_unitario"] = 'Escribe un precio de 0 o mas.';
         }
         $dpct = trim((string) ($l['descuento_pct'] ?? ''));
         $dpctN = $dpct === '' ? 0.0 : (float) str_replace(',', '.', $dpct);
         if ($dpctN < 0 || $dpctN > 100) {
-            $errores["lineas[{$i}].descuento_pct"] = 'El descuento va entre 0 y 100.';
+            $errores["lineas[{$i}].descuento_pct"] = 'Escribe un descuento entre 0 y 100.';
         }
 
-        $lineas[] = [
+        // LA CLAVE DEL POST SE CONSERVA ($lineas[$i] y no $lineas[]): los
+        // errores se nombran "lineas[{$i}]...", y con una lista reindexada,
+        // tras quitar una fila del medio, el error caia en OTRA linea al volver
+        // al formulario. El repositorio recibe array_values() (ver handlers).
+        $lineas[$i] = [
             'producto_id'     => ctype_digit((string) ($l['producto_id'] ?? '')) ? (int) $l['producto_id'] : null,
             'nombre'          => $nombre,
             'descripcion'     => trim((string) ($l['descripcion'] ?? '')),
@@ -4748,7 +4754,7 @@ function validarCotizacion(array $post): array
     }
 
     if ($lineas === []) {
-        $errores['lineas'] = 'La cotizacion necesita al menos una linea.';
+        $errores['lineas'] = 'Agrega al menos una linea con su producto, cantidad y precio.';
     }
 
     return [$cabecera, $lineas, $errores];
@@ -4820,7 +4826,7 @@ function handleCotizacionNuevaPost(): void
     [$cabecera, $lineas, $errores] = validarCotizacion($_POST);
 
     if ($errores === []) {
-        [$id, $numero] = cotizacionRepo()->crear(Auth::cuentaId(), $cabecera, $lineas);
+        [$id, $numero] = cotizacionRepo()->crear(Auth::cuentaId(), $cabecera, array_values($lineas));
         flashSet('exito', "Cotizacion N° {$numero} creada.");
         redirigirPrg("/ventas/cotizaciones/{$id}");
     }
@@ -4874,7 +4880,7 @@ function handleCotizacionEditarPost(int $id): void
 
     if ($errores === []) {
         try {
-            $repo->actualizar($cuentaId, $id, $cabecera, $lineas);
+            $repo->actualizar($cuentaId, $id, $cabecera, array_values($lineas));
             flashSet('exito', 'Cotizacion actualizada.');
             redirigirPrg("/ventas/cotizaciones/{$id}");
         } catch (CotizacionFacturadaException $e) {
@@ -5501,7 +5507,7 @@ function handleEmisionPost(int $tipoDte): void
             $idemKey,
             $_POST,
             'receptor.rut',
-            'Revisa el RUT del receptor: no es un RUT valido. NO se emitio nada.',
+            'El digito verificador no calza con el RUT. Revisalo; NO se emitio nada.',
             null
         );
     }
@@ -5684,7 +5690,7 @@ function handleEmisionPost(int $tipoDte): void
             $idemKey,
             $_POST,
             (string) ($body['campo'] ?? ''),
-            (string) ($body['error'] ?? 'Hay un dato invalido en el documento.'),
+            (string) ($body['error'] ?? 'El SII no acepto un dato del documento. NO se emitio nada; revisa el campo marcado.'),
             null
         );
     }
@@ -5709,7 +5715,7 @@ function handleEmisionPost(int $tipoDte): void
         $_POST,
         null,
         null,
-        'Error del motor de emision. NO se emitio; intenta nuevamente.'
+        'Algo fallo de nuestro lado y NO se emitio nada. Intentalo de nuevo en unos minutos.'
     );
 }
 
@@ -5910,7 +5916,7 @@ function handleBoletaPost(): void
         $_POST,
         null,
         null,
-        'Error del motor de emision. NO se emitio; intenta nuevamente.'
+        'Algo fallo de nuestro lado y NO se emitio nada. Intentalo de nuevo en unos minutos.'
     );
 }
 
@@ -5920,9 +5926,11 @@ function handleEmisionResultadoGet(): void
     if (empty($flash['resultado'])) {
         redirigir('/ventas/factura');
     }
+    // El menu marca el tipo que se emitio: tras una boleta o una nota, marcar
+    // "Factura electronica" abria Ventas en la opcion equivocada.
     vista('resultado-emision', [
         'resultado' => $flash['resultado'],
-        'navActivo'  => 'ventas.factura',
+        'navActivo'  => metaTipoEmision((int) ($flash['resultado']['tipoDte'] ?? 33))[2],
     ]);
 }
 
@@ -6027,7 +6035,7 @@ function handleDocumentosListadoGet(): void
             'pagina'       => 1,
             'totalPaginas' => 1,
             'filtros'      => $filtros,
-            'errorMotor'   => 'No se pudo contactar el motor de emision.',
+            'errorMotor'   => 'No hubo respuesta del servicio de emision.',
             'navActivo'    => 'ventas.panel-emision',
         ]);
     }
@@ -6092,11 +6100,11 @@ function handleDocumentoDetalleGet(int $tipoDte, int $folio): void
                 [$documento] = resolverRazonSocialReceptores($cuentaId, $res['body']['items']);
             } elseif ($res['status'] !== 200) {
                 error_log('panel documentos: respuesta ' . $res['status'] . ' del motor al pedir detalle - ' . json_encode($res['body'], JSON_UNESCAPED_UNICODE));
-                $errorMotor = 'El motor de emision devolvio un error al buscar el documento.';
+                $errorMotor = 'El servicio de emision respondio con un error al buscar el documento.';
             }
         } catch (Throwable $e) {
             error_log('panel documentos: fallo de conexion al pedir detalle - ' . $e->getMessage());
-            $errorMotor = 'No se pudo contactar el motor de emision.';
+            $errorMotor = 'No hubo respuesta del servicio de emision.';
         }
     }
 
@@ -6946,7 +6954,7 @@ function handleCorreoBuscarDestinatarioPost(int $envioId): void
     $fila = $stmt->fetch(PDO::FETCH_ASSOC);
 
     if ($fila === false) {
-        flashSet('error', "No se pudo buscar el correo del envio {$envioId}.");
+        flashSet('error', 'No pudimos buscar el correo de ese envio. Intentalo de nuevo en un momento.');
         redirigirPrg('/ventas/correos');
     }
 
@@ -6962,7 +6970,7 @@ function handleCorreoBuscarDestinatarioPost(int $envioId): void
     } elseif ($email !== null) {
         // Se encontro el correo pero el UPDATE no toco nada: la fila dejo de
         // estar en 'sin_destinatario' entre la lectura y la escritura.
-        flashSet('error', "Envio {$envioId}: cambio de estado mientras se buscaba el correo. Vuelve a mirarlo.");
+        flashSet('error', 'Ese envio cambio de estado mientras buscabamos su correo. Revisa la lista de nuevo.');
     } else {
         flashSet('error', sprintf(
             'Envio %d: el receptor %s no tiene correo en el maestro de clientes. Sigue sin destinatario.',
@@ -8130,7 +8138,7 @@ function handleCargaMasivaPost(): void
         || $archivo['error'] !== UPLOAD_ERR_OK
         || ! is_uploaded_file($archivo['tmp_name'])
     ) {
-        $errorForm('Debes seleccionar un archivo .xlsx valido.');
+        $errorForm('Elige el archivo .xlsx con las notas. Si no lo tienes, parte por la plantilla.');
     }
 
     try {
@@ -8140,7 +8148,7 @@ function handleCargaMasivaPost(): void
     }
 
     if ($filas === []) {
-        $errorForm('El archivo no tiene filas de datos (fuera del encabezado).');
+        $errorForm('El archivo solo trae el encabezado. Agrega una fila por nota y vuelve a cargarlo.');
     }
 
     $externosVistos = [];
@@ -9259,8 +9267,8 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
         // Se informan las TRES cubetas siempre, incluso las que alcanzaban, que
         // es como venia comportandose este mensaje con las dos originales.
         responderJsonFacturacionMasiva(409, ['status' => 'error', 'mensaje' => sprintf(
-            'Folios insuficientes: faltan %d factura(s) (disponibles %d), %d factura(s) exenta(s) '
-            . '(disponibles %d) y %d nota(s) de credito (disponibles %d). No se toco ninguna nota.',
+            'No alcanzan los folios: necesitas %d factura(s) (quedan %d), %d factura(s) exenta(s) '
+            . '(quedan %d) y %d nota(s) de credito (quedan %d). No se emitio nada.',
             $necesita[33],
             $disponible[33],
             $necesita[34],
@@ -9275,7 +9283,7 @@ function handleFacturacionMasivaConfirmarSubLotePost(): void
     $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
     // Idem: inalcanzable hoy, comprobado para que no degenere en TypeError.
     if ($keyServicio === null) {
-        responderJsonFacturacionMasiva(409, ['status' => 'error', 'error' => 'sin credencial de servicio']);
+        responderJsonFacturacionMasiva(409, ['status' => 'error', 'mensaje' => 'Falta la credencial de emision de la cuenta. Revisa API keys de produccion.']);
     }
     facturarSubLote($pdo, $keyServicio, $subLote, $cuentaId, $rutEmisor);
 
