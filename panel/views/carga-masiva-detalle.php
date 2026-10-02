@@ -2,6 +2,9 @@
 /**
  * Paso 2 del flujo de facturacion masiva: revisar la carga.
  *
+ * TAREA DE LA PANTALLA, EN UNA FRASE: ver que filas del archivo quedaron listas
+ * para facturar y cuales hay que corregir, y seguir a la facturacion.
+ *
  * Recibe (sin cambios): $lote, $notas, $navActivo.
  *
  *   $lote:  id, nombre_archivo, total_filas, filas_validas, filas_error,
@@ -15,30 +18,53 @@
  *
  * Todo lo que se calcula aqui es PRESENTACION sobre datos ya entregados: no se
  * consulta la BD de nuevo, no se persiste nada y no se altera ninguna regla.
+ *
+ * ANCHO: cifras arriba, despues tres tarjetas lado a lado (lote, validacion y
+ * que sigue) y el detalle a ancho completo. Bajo 720px la tabla pasa a
+ * tarjetas, una por nota, con la etiqueta de cada dato.
+ *
+ * UNA SOLA ACCION PRIMARIA: "Ir a facturacion masiva". Volver es secundario,
+ * tambien en el empty state.
  */
 $titulo         = 'Resumen de carga';
 $pasoActual     = 2;
 $enlacesStepper = [1 => '/ventas/carga-masiva'];
 require __DIR__ . '/partials/header.php';
 
-$fmtMonto = static function ($v): string {
+$e = static fn (string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
+
+// Cantidades con punto de miles; el monto ademas con "$" (escritura.html).
+$fmtNum = static function ($v): string {
     return $v === null ? '-' : number_format((float) $v, 0, ',', '.');
 };
+$fmtMonto = static function ($v) use ($fmtNum): string {
+    return $v === null ? '-' : '$' . $fmtNum($v);
+};
 
+// Fechas en formato chileno: dd/mm/aaaa (y hh:mm cuando trae hora).
 $fmtFechaHora = static function ($v): string {
     $t = strtotime((string) $v);
-    return $t === false ? (string) $v : date('Y-m-d H:i', $t);
+    return $t === false ? (string) $v : date('d/m/Y H:i', $t);
+};
+$fmtFecha = static function ($v): string {
+    $s = trim((string) $v);
+    if ($s === '') {
+        return '';
+    }
+    $t = strtotime($s);
+    return $t === false ? $s : date('d/m/Y', $t);
 };
 
 /**
  * Estados reales de nota_venta (ENUM de la migracion 020). Solo se traduce la
- * etiqueta visible; el valor almacenado no se toca.
+ * etiqueta visible; el valor almacenado no se toca. Cada estado lleva icono +
+ * palabra + color (WCAG 1.4.1).
  */
 $estados = [
-    'pendiente'  => ['badge--neutro',  'Pendiente',  '&#9675;'],
-    'en_proceso' => ['badge--proceso', 'En proceso', '&#9679;'],
-    'facturada'  => ['badge--ok',      'Facturada',  '&#10003;'],
-    'error'      => ['badge--error',   'Error',      '&#10007;'],
+    'pendiente'  => ['badge--neutro',  'Pendiente',  'sin-cargar'],
+    'en_proceso' => ['badge--proceso', 'En proceso', 'reloj'],
+    'facturada'  => ['badge--ok',      'Facturada',  'check'],
+    'error'      => ['badge--error',   'Con error',  'alerta'],
 ];
 
 $total    = (int) $lote['total_filas'];
@@ -69,61 +95,59 @@ foreach ($notas as $n) {
     </div>
 </div>
 <p class="dash-subtitulo">
-    Revisa el resultado de la carga antes de continuar con la facturacion.
+    Revisa que filas quedaron listas para facturar y cuales hay que corregir en el Excel.
 </p>
 
 <?php require __DIR__ . '/partials/_stepper.php'; ?>
 
+<div class="config-ancho">
+
 <section class="dash-grid" aria-label="Resultado de la carga">
     <article class="kpi">
         <h2 class="kpi__etiqueta">Filas cargadas</h2>
-        <p class="kpi__valor"><?= $fmtMonto($total); ?></p>
+        <p class="kpi__valor"><?= $fmtNum($total); ?></p>
         <p class="kpi__formula">Filas con datos en el archivo</p>
     </article>
     <article class="kpi">
         <h2 class="kpi__etiqueta">Validas</h2>
-        <p class="kpi__valor"><?= $fmtMonto($validas); ?></p>
+        <p class="kpi__valor"><?= $fmtNum($validas); ?></p>
         <p class="kpi__formula"><?= $pct($validas, $total); ?> del total</p>
     </article>
     <article class="kpi<?= $conError > 0 ? ' kpi--rojo' : ''; ?>">
         <h2 class="kpi__etiqueta">Con error</h2>
-        <p class="kpi__valor"><?= $fmtMonto($conError); ?></p>
+        <p class="kpi__valor"><?= $fmtNum($conError); ?></p>
         <p class="kpi__formula"><?= $pct($conError, $total); ?> del total</p>
     </article>
     <article class="kpi">
         <h2 class="kpi__etiqueta">Monto estimado</h2>
-        <p class="kpi__valor">$<?= $fmtMonto($montoEstimado); ?></p>
+        <p class="kpi__valor"><?= $fmtMonto($montoEstimado); ?></p>
         <p class="kpi__formula">IVA incluido, calculado al cargar. No es el monto emitido.</p>
     </article>
 </section>
 
-<div class="dash-grid dash-grid--3">
-    <article class="tarjeta">
-        <h2>Resumen del lote</h2>
+<div class="config-columnas config-columnas--3">
+    <section class="tarjeta" aria-labelledby="titulo-lote">
+        <h2 id="titulo-lote">Lote</h2>
         <dl class="ficha">
             <dt>Archivo</dt>
-            <dd><?= htmlspecialchars((string) $lote['nombre_archivo']); ?></dd>
+            <dd><?= $e((string) $lote['nombre_archivo']); ?></dd>
             <dt>Fecha de carga</dt>
-            <dd><?= htmlspecialchars($fmtFechaHora($lote['created_at'])); ?></dd>
-            <dt>Lote</dt>
+            <dd><?= $e($fmtFechaHora($lote['created_at'])); ?></dd>
+            <dt>Numero</dt>
             <dd>#<?= (int) $lote['id']; ?></dd>
         </dl>
-    </article>
+    </section>
 
-    <article class="tarjeta">
-        <h2>Validacion de la carga</h2>
+    <section class="tarjeta" aria-labelledby="titulo-validacion">
+        <h2 id="titulo-validacion">Validacion</h2>
         <ul class="validacion">
             <li class="validacion__item">
-                <span class="badge badge--ok">
-                    <span class="badge__icono" aria-hidden="true">&#10003;</span>Validas
-                </span>
-                <span class="validacion__dato"><?= $fmtMonto($validas); ?> <span class="validacion__pct">(<?= $pct($validas, $total); ?>)</span></span>
+                <span class="badge badge--ok"><?= iconoSvg('check', 16, 'badge__icono'); ?>Validas</span>
+                <span class="validacion__dato"><?= $fmtNum($validas); ?> <span class="validacion__pct">(<?= $pct($validas, $total); ?>)</span></span>
             </li>
             <li class="validacion__item">
-                <span class="badge badge--error">
-                    <span class="badge__icono" aria-hidden="true">&#10007;</span>Con error
-                </span>
-                <span class="validacion__dato"><?= $fmtMonto($conError); ?> <span class="validacion__pct">(<?= $pct($conError, $total); ?>)</span></span>
+                <span class="badge badge--error"><?= iconoSvg('alerta', 16, 'badge__icono'); ?>Con error</span>
+                <span class="validacion__dato"><?= $fmtNum($conError); ?> <span class="validacion__pct">(<?= $pct($conError, $total); ?>)</span></span>
             </li>
         </ul>
         <p class="nota">
@@ -134,22 +158,23 @@ foreach ($notas as $n) {
                 Todas las filas del archivo quedaron validas.
             <?php endif; ?>
         </p>
-    </article>
+    </section>
 
-    <article class="tarjeta">
-        <h2>Acciones</h2>
-        <p class="nota">
-            Las notas validas quedan pendientes de facturar junto con las de otros lotes.
+    <section class="tarjeta" aria-labelledby="titulo-sigue">
+        <h2 id="titulo-sigue">Que sigue</h2>
+        <p class="tarjeta__intro">
+            Las notas validas quedan pendientes de facturar, junto con las de otros archivos.
+            Las eliges y las emites en el paso 3.
         </p>
-        <div class="acciones-grupo">
+        <div class="acciones-formulario">
+            <a class="boton-secundario" href="/ventas/carga-masiva">Cargar otro archivo</a>
             <a class="boton-principal" href="/ventas/facturacion-masiva">Ir a facturacion masiva</a>
-            <a class="boton-secundario" href="/ventas/carga-masiva">Volver a carga masiva</a>
         </div>
-    </article>
+    </section>
 </div>
 
-<section aria-labelledby="titulo-notas">
-    <h2 class="titulo-seccion" id="titulo-notas">Detalle de notas cargadas</h2>
+<section class="tarjeta" aria-labelledby="titulo-notas">
+    <h2 id="titulo-notas">Notas cargadas</h2>
 
     <?php
     /* POR QUE HAY MENOS FACTURAS QUE FILAS.
@@ -163,31 +188,35 @@ foreach ($notas as $n) {
     $documentos = (int) ($lote['total_documentos'] ?? 0);
     ?>
     <?php if ($documentos > 0 && $documentos < $validas): ?>
-        <p class="nota">
-            Las <strong><?= $validas; ?> filas validas</strong> del archivo produjeron
-            <strong><?= $documentos; ?> facturas</strong>: las filas de un mismo cliente se
-            juntaron en un solo documento con varias lineas. Dos filas del mismo cliente
-            quedan <em>separadas</em> cuando difieren en fecha, forma de pago, vencimiento o
-            boleta a anular &mdash; esas cuatro son condiciones del documento y no se pueden
-            mezclar en uno solo.
-        </p>
+        <div class="alerta alerta--info">
+            <?= iconoSvg('info', 20, 'alerta__icono'); ?>
+            <div class="alerta__cuerpo">
+                <p class="alerta__titulo"><?= $fmtNum($validas); ?> filas validas produjeron <?= $fmtNum($documentos); ?> facturas</p>
+                <p>
+                    Las filas de un mismo cliente se juntaron en un solo documento con varias lineas.
+                    Quedan separadas cuando difieren en fecha, forma de pago, vencimiento o boleta a
+                    anular: esas cuatro son condiciones del documento y no se pueden mezclar.
+                </p>
+            </div>
+        </div>
     <?php endif; ?>
 
     <?php if ($notas === []): ?>
-        <div class="estado-vacio">
-            <h2>Este lote no tiene filas</h2>
+        <div class="estado-vacio estado-vacio--centrado">
+            <?= iconoSvg('carga-masiva', 32, 'estado-vacio__icono'); ?>
+            <h3>Este lote no tiene filas</h3>
             <p>El archivo se registro pero no quedo ninguna nota asociada. Revisa el archivo
             original y vuelve a cargarlo.</p>
             <p class="estado-vacio__acciones">
-                <a class="boton-principal" href="/ventas/carga-masiva">Volver a carga masiva</a>
+                <a class="boton-secundario" href="/ventas/carga-masiva">Volver a carga masiva</a>
             </p>
         </div>
     <?php else: ?>
         <div class="tabla-scroll">
-            <table class="tabla-datos">
+            <table class="tabla-datos tabla-datos--cards">
                 <caption>
-                    El numero de la primera columna es el orden dentro de la carga, no la fila
-                    del Excel: las filas completamente vacias del archivo se omiten.
+                    <?= $fmtNum(count($notas)); ?> nota<?= count($notas) === 1 ? '' : 's'; ?>. El N&deg; es el orden
+                    dentro de la carga, no la fila del Excel: las filas vacias se omiten.
                 </caption>
                 <thead>
                     <tr>
@@ -206,12 +235,13 @@ foreach ($notas as $n) {
                             $estado = (string) $n['estado'];
                             [$claseBadge, $etiqueta, $icono] = $estados[$estado]
                                 // Un estado no mapeado se muestra crudo antes que ocultarse.
-                                ?? ['badge--neutro', $estado, '&#9675;'];
+                                ?? ['badge--neutro', $estado, 'sin-cargar'];
                             $esError = $estado === 'error';
                         ?>
                         <tr<?= $esError ? ' class="tabla-datos__fila--inactiva"' : ''; ?>>
-                            <td class="tabla-datos__num"><?= $i + 1; ?></td>
-                            <td>
+                            <td data-label="N&deg;" class="tabla-datos__num"><?= $i + 1; ?></td>
+                            <td data-label="Identificador">
+                                <span>
                                 <?php
                                 /* QUE FILAS DEL EXCEL FORMARON ESTA FACTURA.
                                    Desde el agrupamiento por cliente, una nota puede
@@ -221,33 +251,35 @@ foreach ($notas as $n) {
                                    anteriores hay uno solo y se ve igual que antes. */
                                 $origenes = is_array($n['origenes'] ?? null) ? $n['origenes'] : [];
                                 ?>
-                                <?= htmlspecialchars((string) ($origenes[0] ?? $n['identificador_externo'] ?? '')) ?: '&mdash;'; ?>
+                                <?= $e((string) ($origenes[0] ?? $n['identificador_externo'] ?? '')) ?: '&mdash;'; ?>
                                 <?php if (count($origenes) > 1): ?>
                                     <span class="tabla-datos__secundario">
                                         + <?= count($origenes) - 1; ?>
                                         fila<?= count($origenes) === 2 ? '' : 's'; ?> mas del mismo cliente:
-                                        <?= htmlspecialchars(implode(', ', array_slice($origenes, 1, 5))); ?><?= count($origenes) > 6 ? ', ...' : ''; ?>
+                                        <?= $e(implode(', ', array_slice($origenes, 1, 5))); ?><?= count($origenes) > 6 ? ', ...' : ''; ?>
                                     </span>
                                 <?php endif; ?>
                                 <?php if (! empty($n['boleta_ref_folio'])): ?>
                                     <span class="tabla-datos__secundario">Anula boleta <?= (int) $n['boleta_ref_folio']; ?></span>
                                 <?php endif; ?>
-                            </td>
-                            <td>
-                                <?= htmlspecialchars((string) ($n['receptor_rut'] ?? '')) ?: '&mdash;'; ?>
-                                <?php if (! empty($n['receptor_razon_social'])): ?>
-                                    <span class="tabla-datos__secundario"><?= htmlspecialchars((string) $n['receptor_razon_social']); ?></span>
-                                <?php endif; ?>
-                            </td>
-                            <td><?= htmlspecialchars((string) ($n['fecha_nota'] ?? '')) ?: '&mdash;'; ?></td>
-                            <td class="tabla-datos__num"><?= $esError ? '&mdash;' : $fmtMonto($n['monto_estimado']); ?></td>
-                            <td class="tabla-datos__estado">
-                                <span class="badge <?= $claseBadge; ?>">
-                                    <span class="badge__icono" aria-hidden="true"><?= $icono; ?></span><?= htmlspecialchars($etiqueta); ?>
                                 </span>
                             </td>
-                            <td class="celda-observacion">
+                            <td data-label="Receptor">
+                                <span>
+                                    <?= $e((string) ($n['receptor_rut'] ?? '')) ?: '&mdash;'; ?>
+                                    <?php if (! empty($n['receptor_razon_social'])): ?>
+                                        <span class="tabla-datos__secundario"><?= $e((string) $n['receptor_razon_social']); ?></span>
+                                    <?php endif; ?>
+                                </span>
+                            </td>
+                            <td data-label="Fecha nota"><?= $e($fmtFecha($n['fecha_nota'] ?? '')) ?: '&mdash;'; ?></td>
+                            <td data-label="Monto estimado" class="tabla-datos__num"><?= $esError ? '&mdash;' : $fmtMonto($n['monto_estimado']); ?></td>
+                            <td data-label="Estado" class="tabla-datos__estado">
+                                <span class="badge <?= $claseBadge; ?>"><?= iconoSvg($icono, 16, 'badge__icono'); ?><?= $e($etiqueta); ?></span>
+                            </td>
+                            <td data-label="Observacion" class="celda-observacion">
                                 <?php if ($esError && ! empty($n['error_mensaje'])): ?>
+                                    <div>
                                     <?php
                                         // error_mensaje es la union de los motivos con '; '
                                         // (ver crearNotaVentaError). Se separa solo para
@@ -256,11 +288,11 @@ foreach ($notas as $n) {
                                     ?>
                                     <ul class="motivos">
                                         <?php foreach ($motivos as $motivo): ?>
-                                            <li><?= htmlspecialchars($motivo); ?></li>
+                                            <li><?= $e($motivo); ?></li>
                                         <?php endforeach; ?>
                                     </ul>
                                     <?php
-                                        // fila_original es el JSON de los 14 valores crudos del
+                                        // fila_original es el JSON de los valores crudos del
                                         // Excel, no un numero de fila. Se decodifica y se muestra
                                         // como pares columna/valor: el dato sirve para encontrar
                                         // la fila en el archivo, pero volcar el JSON crudo no.
@@ -280,19 +312,22 @@ foreach ($notas as $n) {
                                                 <?php foreach (NOTA_VENTA_ENCABEZADOS as $columna): ?>
                                                     <?php $valor = (string) ($original[$columna] ?? ''); ?>
                                                     <?php if (trim($valor) === '') { continue; } ?>
-                                                    <dt><?= htmlspecialchars($columna); ?></dt>
-                                                    <dd><?= htmlspecialchars($valor); ?></dd>
+                                                    <dt><?= $e($columna); ?></dt>
+                                                    <dd><?= $e($valor); ?></dd>
                                                 <?php endforeach; ?>
                                             </dl>
                                         </details>
                                     <?php endif; ?>
+                                    </div>
                                 <?php elseif ($estado === 'facturada' && ! empty($n['resultado_documentos'])): ?>
+                                    <span>
                                     <?php foreach ((json_decode((string) $n['resultado_documentos'], true) ?: []) as $doc): ?>
                                         <span class="tabla-datos__secundario">
-                                            <?= htmlspecialchars(nombreTipoDte((int) ($doc['tipoDte'] ?? 0))); ?>
-                                            folio <?= htmlspecialchars((string) ($doc['folio'] ?? '-')); ?>
+                                            <?= $e(nombreTipoDte((int) ($doc['tipoDte'] ?? 0))); ?>
+                                            folio <?= $e((string) ($doc['folio'] ?? '-')); ?>
                                         </span>
                                     <?php endforeach; ?>
+                                    </span>
                                 <?php else: ?>
                                     &mdash;
                                 <?php endif; ?>
@@ -304,5 +339,7 @@ foreach ($notas as $n) {
         </div>
     <?php endif; ?>
 </section>
+
+</div>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>
