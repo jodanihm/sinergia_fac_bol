@@ -119,7 +119,7 @@ $fraseInicial = str_replace(
     Tus correos de factura pueden llevar un boton para pagarla. El dinero llega a tu cuenta de <?= $e($nombrePasarela); ?>, no a la nuestra.
 </p>
 
-<div class="contenido-angosto">
+<div class="config-ancho">
 
 <?php if (! empty($flash['mensaje'])): ?>
     <p class="alerta alerta--<?= ($flash['tipo'] ?? '') === 'exito' ? 'exito' : 'advertencia'; ?>" role="status">
@@ -229,9 +229,14 @@ $fraseInicial = str_replace(
                en blanco (lo que la propia pantalla recomienda al editar) juntaba
                la API key de un ambiente con la Secret key del otro. Separadas,
                eso no se puede escribir.
-               Dos columnas y no una: API key y Secret key son una pareja que se
-               lee junta, el unico caso en que el design system admite dos. */
+               LADO A LADO, un ambiente por columna: la pagina usa todo el ancho
+               repartiendolo en columnas, no estirando campos. Asi Sandbox y
+               Produccion se comparan de un vistazo (cual tiene llaves y cual
+               no), y cada input queda del ancho de su columna, que es donde la
+               etiqueta y el dato se siguen leyendo como pareja. Dentro de cada
+               bloque, API key arriba y Secret key abajo. */
         ?>
+        <div class="config-columnas config-columnas--2">
         <?php foreach ($ambientes as $amb => $a): ?>
             <fieldset class="grupo-campos" data-llaves="<?= $amb; ?>"
                       data-secreto-guardado="<?= $llavero[$amb]['tieneSecreto'] ? '1' : '0'; ?>">
@@ -244,7 +249,7 @@ $fraseInicial = str_replace(
                     <?php endif; ?>
                 </legend>
 
-                <div class="form-grid">
+                <div class="form-grid form-grid--1">
                     <div class="<?= $claseCampo('apikey_' . $amb); ?>">
                         <label for="apikey_<?= $amb; ?>">API key</label>
                         <input type="text" name="apikey_<?= $amb; ?>" id="apikey_<?= $amb; ?>"
@@ -272,8 +277,16 @@ $fraseInicial = str_replace(
                 </div>
             </fieldset>
         <?php endforeach; ?>
+        </div>
     </section>
 
+    <?php
+    /* LAS TRES DECISIONES CORTAS, EN UNA FILA. En pantalla ancha van lado a
+       lado y en el mismo orden del trabajo (de izquierda a derecha): ambiente,
+       regreso, encender. El orden del DOM es el visual, asi que con Tab y en
+       movil se recorren igual que antes. */
+    ?>
+    <div class="config-columnas config-columnas--3">
     <section class="tarjeta" aria-labelledby="titulo-ambiente">
         <h2 id="titulo-ambiente">Ambiente activo</h2>
         <fieldset class="opciones" role="radiogroup" aria-describedby="ayuda-ambiente error-ambiente_activo"
@@ -332,6 +345,7 @@ $fraseInicial = str_replace(
             <li>Para dejar fuera a un cliente concreto, hazlo desde su ficha en Maestros &gt; Clientes.</li>
         </ul>
     </section>
+    </div>
 
     <div class="acciones-formulario">
         <button type="submit" class="boton-principal" id="guardar-pagos">Guardar cambios</button>
