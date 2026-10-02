@@ -1,4 +1,9 @@
 <?php
+/**
+ * Certificacion de factura: una etapa. La barra de arriba dice donde estas y
+ * cual toca; abajo, lo que se hace en esta etapa, repartido en columnas para
+ * usar el ancho sin estirar texto ni campos.
+ */
 $titulosEtapa = [
     1 => 'Etapa 1: Set de Prueba',
     2 => 'Etapa 2: Simulacion',
@@ -7,35 +12,44 @@ $titulosEtapa = [
     5 => 'Etapa 5: Declaracion Cumplimiento',
     6 => 'Etapa 6: Autorizacion',
 ];
+$subtitulosEtapa = [
+    1 => 'Set Basico, Libro de Ventas y Libro de Compras: los tres tienen que quedar aceptados por el SII.',
+    2 => 'Un envio de 20 a 100 documentos con factura, nota de credito y nota de debito.',
+    3 => 'Respuestas de intercambio de informacion. Se hace fuera del panel y aqui se confirma.',
+    4 => 'PDF con muestras impresas para el SII. Se entrega fuera del panel y aqui se confirma.',
+    5 => 'Declarar Avance y Cumplimiento en el portal del SII, con los datos de esta pagina.',
+    6 => 'Cuando el SII autoriza a tu empresa como emisor electronico.',
+];
 $titulo = $titulosEtapa[$etapaActual];
 require __DIR__ . '/partials/header.php';
 ?>
 
-<h1><?= htmlspecialchars($titulosEtapa[$etapaActual]); ?></h1>
-
-<?php if ($flash !== null): ?>
-    <?php if ($flash['tipo'] === 'error'): ?>
-    <p class="errores"><?= htmlspecialchars($flash['mensaje']); ?></p>
-    <?php else: ?>
-    <p style="color:#2e7d32;font-weight:600;"><?= htmlspecialchars($flash['mensaje']); ?></p>
-    <?php endif; ?>
-    <?php if (isset($flash['simulacionTrackId'])): ?>
-    <div style="border:2px solid #2e7d32;border-radius:6px;padding:0.75rem 1rem;margin:0.5rem 0 1rem;background:#f1f8f1;">
-        <strong>Track ID del Set de Simulacion, listo para copiar:</strong>
-        <p style="font-family:monospace;word-break:break-all;background:#fff;padding:0.5rem;border:1px solid #ccc;border-radius:4px;margin:0.35rem 0 0;user-select:all;"><?= htmlspecialchars((string) $flash['simulacionTrackId']); ?></p>
-        <span style="color:#999;font-size:0.85em;">Pegalo en el campo "Track ID" de Simulacion aqui
-        abajo, cuando confirmes que el SII aprobo el contenido.</span>
+<div class="dash-header">
+    <div>
+        <h1><?= htmlspecialchars($titulosEtapa[$etapaActual]); ?></h1>
     </div>
-    <?php endif; ?>
-<?php endif; ?>
+    <div class="acciones-grupo acciones-grupo--header">
+        <a class="boton-secundario" href="/certificacion">Volver al resumen</a>
+    </div>
+</div>
+<p class="dash-subtitulo"><?= htmlspecialchars($subtitulosEtapa[$etapaActual]); ?></p>
+
+<?php
+    $flashTrackDestino = 'aqui abajo';
+    require __DIR__ . '/partials/certificacion/_flash.php';
+?>
 
 <?php require __DIR__ . '/partials/certificacion/_barra-etapas.php'; ?>
 
 <?php switch ($etapaActual):
     case 1: ?>
         <?php require __DIR__ . '/partials/certificacion/_tarjeta-set-basico.php'; ?>
-        <?php require __DIR__ . '/partials/certificacion/_tarjeta-libro-ventas.php'; ?>
-        <?php require __DIR__ . '/partials/certificacion/_tarjeta-libro-compras.php'; ?>
+        <?php // Ventas y Compras lado a lado: mismo formato, se comparan de un vistazo. ?>
+        <div class="config-columnas config-columnas--2">
+            <?php require __DIR__ . '/partials/certificacion/_tarjeta-libro-ventas.php'; ?>
+            <?php require __DIR__ . '/partials/certificacion/_tarjeta-libro-compras.php'; ?>
+        </div>
+        <?php require __DIR__ . '/partials/certificacion/_ayuda-libros.php'; ?>
         <?php break;
     case 2: ?>
         <?php require __DIR__ . '/partials/certificacion/_tarjeta-etapa-simulacion.php'; ?>
@@ -54,7 +68,6 @@ require __DIR__ . '/partials/header.php';
         <?php break;
 endswitch; ?>
 
-<p><a href="/certificacion">&larr; Volver al resumen</a></p>
-<p><a href="/panel">Volver al panel</a></p>
+<?php require __DIR__ . '/partials/certificacion/_ux-formularios.php'; ?>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>

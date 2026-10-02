@@ -9560,10 +9560,10 @@ function guardarPermisosDeRol(PDO $pdo, int $rolId, array $pares): void
 function validarNombreRol(string $nombre): ?string
 {
     if ($nombre === '') {
-        return 'El nombre del rol es obligatorio.';
+        return 'Escribe un nombre para el rol, por ejemplo Cajero.';
     }
     if (mb_strlen($nombre) > 60) {
-        return 'El nombre del rol no puede superar los 60 caracteres.';
+        return 'Acorta el nombre: puede tener hasta 60 caracteres.';
     }
     return null;
 }
@@ -9630,7 +9630,7 @@ function handleRolesEditarGet(int $rolId): void
 
     $rol = rolDeCuenta($pdo, Auth::cuentaId(), $rolId);
     if ($rol === null) {
-        flashSet('error', 'Rol no encontrado.');
+        flashSet('error', 'Ese rol ya no existe. Puede que alguien lo haya eliminado.');
         redirigirPrg('/configuracion/usuarios');
     }
 
@@ -9649,7 +9649,7 @@ function handleRolesEditarPost(int $rolId): void
 
     $antes = rolDeCuenta($pdo, $cuentaId, $rolId);
     if ($antes === null) {
-        flashSet('error', 'Rol no encontrado.');
+        flashSet('error', 'Ese rol ya no existe. Puede que alguien lo haya eliminado.');
         redirigirPrg('/configuracion/usuarios');
     }
 
@@ -9699,7 +9699,7 @@ function handleRolesEliminarPost(int $rolId): void
 
     $rol = rolDeCuenta($pdo, $cuentaId, $rolId);
     if ($rol === null) {
-        flashSet('error', 'Rol no encontrado.');
+        flashSet('error', 'Ese rol ya no existe. Puede que alguien lo haya eliminado.');
         redirigirPrg('/configuracion/usuarios');
     }
 
@@ -9759,7 +9759,7 @@ function handleUsuarioInvitarPost(): void
     $email    = trim((string) ($_POST['email'] ?? ''));
 
     if ($email === '' || ! filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        flashSet('error', 'Email invalido.');
+        flashSet('error', 'Ese correo no esta completo. Escribelo con @ y dominio, por ejemplo nombre@empresa.cl.');
         redirigirPrg('/configuracion/usuarios');
     }
 
@@ -9811,7 +9811,7 @@ function handleUsuarioActivarPost(int $id): void
     $stmt->execute([':id' => $id, ':c' => $cuentaId]);
     $fila = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($fila === false) {
-        flashSet('error', 'Usuario no encontrado.');
+        flashSet('error', 'Ese usuario ya no existe en tu cuenta.');
         redirigirPrg('/configuracion/usuarios');
     }
     if ($fila['activacion_token'] !== null) {
@@ -9843,7 +9843,7 @@ function handleUsuarioDesactivarPost(int $id): void
     $stmt->execute([':id' => $id, ':c' => $cuentaId]);
     $estadoActual = $stmt->fetchColumn();
     if ($estadoActual === false) {
-        flashSet('error', 'Usuario no encontrado.');
+        flashSet('error', 'Ese usuario ya no existe en tu cuenta.');
         redirigirPrg('/configuracion/usuarios');
     }
     if ($estadoActual !== 'activo') {
@@ -12555,7 +12555,9 @@ function handleEmpresaGet(): void
     $rutLogo = rutEmisorDeLaCuenta($pdo, Auth::cuentaId());
     $logo    = $rutLogo === null ? null : LogoEmpresa::metadatos($pdo, $rutLogo);
 
-    vista('empresa', ['errores' => [], 'emisor' => $emisor, 'logo' => $logo]);
+    // El flash lo dejan el logo (subir/quitar) por PRG; sin tomarlo aqui se
+    // perdia y aparecia en la siguiente pantalla que leyera el flash.
+    vista('empresa', ['errores' => [], 'emisor' => $emisor, 'logo' => $logo, 'flash' => flashTomar()]);
 }
 
 // ===========================================================================
@@ -12605,8 +12607,10 @@ function handleEmpresaImportarDatosSiiPost(): void
     try {
         $datos = (new DatosContribuyenteSiiParser())->parse($contenido);
     } catch (RuntimeException $e) {
+        // El detalle del parser va al log, no a la pantalla: es texto tecnico.
+        error_log('panel importar datos SII: ' . $e->getMessage());
         vista('empresa-importar-datos-sii', [
-            'error' => 'El archivo no corresponde al formato esperado de Datos para Construccion DTE: ' . $e->getMessage(),
+            'error' => 'Ese archivo no es el de Datos para Construccion DTE. Descargalo de nuevo desde pe_construccion_dte y vuelve a subirlo.',
             'datos' => null,
         ]);
     }
@@ -12659,7 +12663,7 @@ function handleEmpresaConsultarSiiPost(): void
     // tiene por que costar un credito.
     if (! Rut::valido($rut)) {
         vista('empresa-consultar-sii', [
-            'error'  => 'RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).',
+            'error'  => 'El digito verificador no calza con el RUT. Revisalo, por ejemplo 77724622-4.',
             'motivo' => 'rut_invalido',
             'datos'  => null,
             'rut'    => $rutCrudo,
@@ -12878,25 +12882,25 @@ function handleEmpresaPost(): void
     $errores = [];
 
     if (! Rut::valido($rut)) {
-        $errores['rut_emisor'] = 'RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).';
+        $errores['rut_emisor'] = 'El digito verificador no calza con el RUT. Revisalo, por ejemplo 77724622-4.';
     }
     if ($razon === '') {
-        $errores['razon_social'] = 'La razon social es obligatoria.';
+        $errores['razon_social'] = 'Escribe la razon social tal como la tiene el SII.';
     }
     if ($giro === '') {
-        $errores['giro'] = 'El giro es obligatorio.';
+        $errores['giro'] = 'Escribe el giro comercial registrado en el SII.';
     }
     if (! ctype_digit($actecoRaw)) {
-        $errores['acteco'] = 'El codigo de actividad economica debe ser un numero entero.';
+        $errores['acteco'] = 'Escribe solo numeros, por ejemplo 620100.';
     }
     if ($dir === '') {
-        $errores['dir_origen'] = 'La direccion es obligatoria.';
+        $errores['dir_origen'] = 'Escribe la direccion de origen tal como la tiene el SII.';
     }
     if ($cmna === '') {
-        $errores['cmna_origen'] = 'La comuna es obligatoria.';
+        $errores['cmna_origen'] = 'Escribe la comuna de la direccion de origen.';
     }
     if (! fechaValida($resFecha)) {
-        $errores['resolucion_fecha'] = 'Fecha de resolucion invalida (formato YYYY-MM-DD).';
+        $errores['resolucion_fecha'] = 'Elige la fecha de la resolucion en el calendario.';
     }
     $datosForm = [
         'rut_emisor'        => $rutCrudo,
@@ -13054,6 +13058,7 @@ function handleEmpresaProduccionGet(): void
             'errores'       => [],
             'emisor'        => null,
             'rutEditable'   => false,
+            'flash'         => flashTomar(),
         ]);
     }
 
@@ -13072,6 +13077,7 @@ function handleEmpresaProduccionGet(): void
         'errores'       => [],
         'emisor'        => ($emisorCert ?? $vacio) + ['resolucion_fecha' => '', 'resolucion_numero' => ''],
         'rutEditable'   => $emisorCert === null,
+        'flash'         => flashTomar(),
     ]);
 }
 
@@ -13148,27 +13154,27 @@ function handleEmpresaProduccionPost(): void
         $rutEcho = trim((string) ($_POST['rut_emisor'] ?? ''));
         $rut     = Rut::normalizar($rutEcho);
         if (! Rut::valido($rut)) {
-            $errores['rut_emisor'] = 'RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).';
+            $errores['rut_emisor'] = 'El digito verificador no calza con el RUT. Revisalo, por ejemplo 77724622-4.';
         }
     }
 
     if ($razon === '') {
-        $errores['razon_social'] = 'La razon social es obligatoria.';
+        $errores['razon_social'] = 'Escribe la razon social tal como la tiene el SII.';
     }
     if ($giro === '') {
-        $errores['giro'] = 'El giro es obligatorio.';
+        $errores['giro'] = 'Escribe el giro comercial registrado en el SII.';
     }
     if (! ctype_digit($actecoRaw)) {
-        $errores['acteco'] = 'El codigo de actividad economica debe ser un numero entero.';
+        $errores['acteco'] = 'Escribe solo numeros, por ejemplo 620100.';
     }
     if ($dir === '') {
-        $errores['dir_origen'] = 'La direccion es obligatoria.';
+        $errores['dir_origen'] = 'Escribe la direccion de origen tal como la tiene el SII.';
     }
     if ($cmna === '') {
-        $errores['cmna_origen'] = 'La comuna es obligatoria.';
+        $errores['cmna_origen'] = 'Escribe la comuna de la direccion de origen.';
     }
     if (! fechaValida($resFecha)) {
-        $errores['resolucion_fecha'] = 'Fecha de resolucion invalida (formato YYYY-MM-DD).';
+        $errores['resolucion_fecha'] = 'Elige la fecha de la resolucion en el calendario.';
     }
     if (! ctype_digit($resNumRaw) || (int) $resNumRaw <= 0) {
         $errores['resolucion_numero'] = 'El numero de resolucion debe ser un numero entero positivo.';
@@ -13227,6 +13233,7 @@ function handleEmpresaProduccionPost(): void
         ]);
     }
 
+    flashSet('exito', 'Datos de la empresa de produccion guardados.');
     redirigir('/empresa-produccion');
 }
 
@@ -13268,7 +13275,7 @@ function procesarCertificadoGet(string $ambiente, string $vista, string $rutaEmp
         redirigir($rutaEmpresa);
     }
 
-    vista($vista, ['error' => null]);
+    vista($vista, ['error' => null, 'flash' => flashTomar()]);
 }
 
 // ===========================================================================
@@ -13329,7 +13336,7 @@ function procesarCertificadoPost(string $ambiente, string $vista, string $rutaEm
         || $archivo['error'] !== UPLOAD_ERR_OK
         || ! is_uploaded_file($archivo['tmp_name'])
     ) {
-        vista($vista, ['error' => 'Debes seleccionar un archivo de certificado (.pfx/.p12) valido.']);
+        vista($vista, ['error' => 'Elige el archivo .pfx o .p12 del certificado.']);
     }
     if ($clave === '') {
         vista($vista, ['error' => 'La clave del certificado es obligatoria.']);
@@ -13346,7 +13353,7 @@ function procesarCertificadoPost(string $ambiente, string $vista, string $rutaEm
     if (! openssl_pkcs12_read($contenidoPfx, $certs, $clave)) {
         // NUNCA logear la clave ni el contenido del archivo.
         error_log(sprintf('panel certificado (%s): PKCS12 invalido o clave incorrecta (cuenta %d)', $ambiente, $cuentaId));
-        vista($vista, ['error' => 'Certificado o clave invalidos.']);
+        vista($vista, ['error' => 'No pudimos abrir el certificado con esa clave. Revisa la clave o elige otro archivo .pfx.']);
     }
     $contenidoPfx = null;
 
@@ -13356,7 +13363,7 @@ function procesarCertificadoPost(string $ambiente, string $vista, string $rutaEm
     $certs   = null;
     if (! is_string($certPem) || $certPem === '' || ! is_string($pkeyPem) || $pkeyPem === '') {
         error_log(sprintf('panel certificado (%s): PKCS12 sin cert/pkey extraible (cuenta %d)', $ambiente, $cuentaId));
-        vista($vista, ['error' => 'Certificado o clave invalidos.']);
+        vista($vista, ['error' => 'No pudimos abrir el certificado con esa clave. Revisa la clave o elige otro archivo .pfx.']);
     }
 
     // --- e. Extraccion tolerante del RUT del FIRMANTE (sender) desde el certificado ---
@@ -13433,6 +13440,11 @@ function procesarCertificadoPost(string $ambiente, string $vista, string $rutaEm
         vista($vista, ['error' => 'No se pudo guardar el certificado. Intenta nuevamente.']);
     }
 
+    // Confirmacion solo en produccion: en certificacion se vuelve a /panel, que
+    // no pinta el flash, y el aviso apareceria despues en otra pantalla.
+    if ($ambiente === 'produccion') {
+        flashSet('exito', 'Certificado guardado.');
+    }
     redirigir($ambiente === 'produccion' ? '/certificado-produccion' : '/panel');
 }
 
@@ -13561,7 +13573,7 @@ function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, s
         || ! is_uploaded_file($archivo['tmp_name'])
     ) {
         vista($vista, [
-            'error' => 'Debes seleccionar un archivo CAF (.xml) valido.',
+            'error' => 'Elige el archivo .xml del CAF que descargaste del SII.',
             'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
         ]);
     }
@@ -13587,7 +13599,7 @@ function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, s
     libxml_use_internal_errors(false);
     if (! $xmlOk) {
         vista($vista, [
-            'error' => 'El archivo no es un CAF valido.',
+            'error' => 'Ese archivo no es un CAF. Descargalo de nuevo desde el SII.',
             'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
         ]);
     }
@@ -13610,7 +13622,7 @@ function procesarCafPost(string $ambiente, string $vista, string $rutaEmpresa, s
     $hasta = (int) $h;
     if ($tipo <= 0 || $desde <= 0 || $hasta < $desde) {
         vista($vista, [
-            'error' => 'Valores invalidos en el CAF (tipo o rango de folios).',
+            'error' => 'El CAF trae un tipo o un rango de folios que no reconocemos. Descargalo de nuevo desde el SII.',
             'cafs'  => listarCafs($pdo, (string) $rutEmisor, $ambiente),
         ]);
     }
@@ -13716,14 +13728,15 @@ function confirmarCafPost(string $ambiente, string $rutaExito): void
     if ($declaradoRaw === '') {
         $proximoInicial = $desde;
     } elseif (! ctype_digit($declaradoRaw)) {
-        $error = 'El proximo folio debe ser un numero entero, sin puntos ni espacios.';
+        $error = sprintf('Escribe solo el numero, sin puntos ni espacios. Por ejemplo: %d.', $desde);
     } else {
         $proximoInicial = (int) $declaradoRaw;
         if ($proximoInicial < $desde || $proximoInicial > $hasta) {
             $error = sprintf(
-                'El proximo folio debe estar dentro del rango que autoriza este CAF (%d a %d).',
+                'Escribe un folio entre %d y %d, o dejalo vacio para partir en %d.',
                 $desde,
-                $hasta
+                $hasta,
+                $desde
             );
         }
     }
@@ -13818,6 +13831,7 @@ function handleApiKeysGet(): void
         'keys'     => listarApiKeys($pdo, $cuentaId),
         'keyNueva' => null,
         'error'    => null,
+        'flash'    => flashTomar(),
     ]);
 }
 
@@ -13907,6 +13921,7 @@ function handleApiKeysRevocarPost(): void
         Db::conexion()
             ->prepare("UPDATE api_key SET estado = 'revocada' WHERE id = :id AND cuenta_id = :cuenta_id")
             ->execute([':id' => $id, ':cuenta_id' => $cuentaId]);
+        flashSet('exito', 'Key revocada. Los sistemas que la usaban ya no pueden llamar al motor.');
     }
 
     redirigir('/apikeys');
@@ -13930,6 +13945,7 @@ function handleApiKeysProduccionGet(): void
         'keys'     => listarApiKeysProduccion($pdo, $cuentaId),
         'keyNueva' => null,
         'error'    => null,
+        'flash'    => flashTomar(),
     ]);
 }
 
@@ -14017,6 +14033,7 @@ function handleApiKeysProduccionRevocarPost(): void
         Db::conexion()
             ->prepare("UPDATE api_key SET estado = 'revocada' WHERE id = :id AND cuenta_id = :cuenta_id")
             ->execute([':id' => $id, ':cuenta_id' => $cuentaId]);
+        flashSet('exito', 'Key de produccion revocada. Los sistemas que la usaban ya no pueden emitir.');
     }
 
     redirigir('/apikeys-produccion');
