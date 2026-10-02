@@ -550,6 +550,34 @@ body.con-sidebar > main {
     padding: 0 var(--esp-2);
     margin: var(--esp-2) 0 var(--esp-1);
 }
+/* SECCION PLEGABLE (Configuracion empresa). El summary reusa el titulo de
+   seccion para que se lea como uno mas; lo unico propio es el cursor y la
+   flecha, que rota al abrir. Se quita el marcador nativo porque cada navegador
+   lo pinta distinto y no se alinea con el padding del titulo. */
+.sidebar__grupo--plegable > summary {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--esp-1);
+}
+.sidebar__grupo--plegable > summary::-webkit-details-marker { display: none; }
+.sidebar__grupo--plegable > summary::after {
+    content: "";
+    width: 0.4em;
+    height: 0.4em;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.15s ease;
+}
+.sidebar__grupo--plegable[open] > summary::after { transform: rotate(45deg); }
+.sidebar__grupo--plegable > summary:hover { color: var(--color-texto); }
+.sidebar__grupo--plegable > summary:focus-visible { outline: 2px solid var(--color-primario); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+    .sidebar__grupo--plegable > summary::after { transition: none; }
+}
+
 /* Agrupacion ligera: una linea vertical y sangria, sin card ni fondo. El mismo
    tratamiento vale para Ventas > Emision y para los dos subgrupos de ambiente
    de Configuracion empresa: es el mismo componente y no se disena uno distinto
