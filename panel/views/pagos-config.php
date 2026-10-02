@@ -437,7 +437,41 @@ $fraseInicial = str_replace(
     };
     var boton = document.getElementById('guardar-pagos');
 
+    /* ESPERA AL GUARDAR -- seccion 14 del design system, Efectos de carga.
+       - El doble envio se corta EN EL ACTO, pero sin nada visible: un
+         indicador que aparece y se va en menos de 300 ms se lee como un
+         parpadeo defectuoso, no como carga.
+       - Pasados 300 ms, el boton entra en carga: spinner DENTRO del boton,
+         texto transparente y mismo ancho (nunca "Guardando...", que lo
+         encoge o lo estira), aria-busy en el boton y en el formulario.
+       - La permanencia minima de 400 ms la da sola la navegacion: el spinner
+         sigue hasta que el navegador pinta la pantalla siguiente.
+       - El resultado lo anuncia la pantalla de llegada: "Cambios guardados"
+         (role="status") o el resumen de errores (role="alert").
+       - El foco no se mueve durante la espera. */
+    var enviando = false;
+    var umbral = null;
+    function ocupado(si) {
+        if (si) {
+            boton.setAttribute('data-cargando', 'true');
+            boton.setAttribute('aria-busy', 'true');
+            form.setAttribute('aria-busy', 'true');
+            boton.disabled = true;
+        } else {
+            boton.removeAttribute('data-cargando');
+            boton.removeAttribute('aria-busy');
+            form.removeAttribute('aria-busy');
+            boton.disabled = false;
+        }
+    }
+    /* Volver con "Atras" restaura la pagina de la cache del navegador tal como
+       quedo: con el boton girando para siempre. */
+    window.addEventListener('pageshow', function (ev) {
+        if (ev.persisted) { clearTimeout(umbral); enviando = false; ocupado(false); }
+    });
+
     form.addEventListener('submit', function (ev) {
+        if (enviando) { ev.preventDefault(); return; }
         var malos = [];
         Object.keys(reglas).forEach(function (campo) {
             var msg = reglas[campo]();
@@ -473,9 +507,8 @@ $fraseInicial = str_replace(
         }
 
         // Un doble clic no puede mandar dos veces las llaves.
-        boton.disabled = true;
-        boton.setAttribute('aria-busy', 'true');
-        boton.textContent = 'Guardando...';
+        enviando = true;
+        umbral = setTimeout(function () { ocupado(true); }, 300);
     });
 
     /* Tras un POST con errores, el foco va directo al primer campo con problema. */

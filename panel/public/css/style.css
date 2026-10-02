@@ -2953,7 +2953,31 @@ svg.alerta__icono { margin-top: 0.05rem; }
    donde termina el recorrido de lectura. */
 .acciones-formulario { display: flex; justify-content: flex-end; gap: var(--esp-2); margin: var(--esp-5) 0 0; }
 .acciones-formulario button { margin-top: 0; }
-.boton-principal[aria-busy="true"] { cursor: progress; }
+
+/* Boton trabajando -- seccion 14 del design system, Efectos de carga.
+   El texto se vuelve transparente pero sigue ahi, asi que el boton NO cambia
+   de ancho (un boton que se encoge mueve todo lo que tiene al lado, y vuelve a
+   moverlo al terminar). El spinner va encima, centrado, a 640 ms por vuelta.
+   Lo activa el JavaScript de la vista con data-cargando="true" + aria-busy +
+   disabled, y solo pasados 300 ms: por debajo de eso no se muestra nada. */
+.boton-principal[data-cargando="true"],
+.boton-secundario[data-cargando="true"] { position: relative; color: transparent; cursor: progress; }
+.boton-principal[data-cargando="true"]::after,
+.boton-secundario[data-cargando="true"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    width: 16px;
+    height: 16px;
+    margin: auto;
+    box-sizing: border-box;
+    border: 2px solid var(--color-superficie);
+    border-top-color: transparent;
+    border-radius: var(--radio-pill);
+    animation: boton-girar 640ms linear infinite;
+}
+.boton-secundario[data-cargando="true"]::after { border-color: var(--color-primario); border-top-color: transparent; }
+@keyframes boton-girar { to { transform: rotate(360deg); } }
 
 @media (max-width: 720px) {
     /* La accion principal a ancho completo y con alto de pulgar (44px). */
@@ -2963,4 +2987,7 @@ svg.alerta__icono { margin-top: 0.05rem; }
 @media (prefers-reduced-motion: reduce) {
     .form-compacto .interruptor input[type="checkbox"],
     .form-compacto .interruptor input[type="checkbox"]::before { transition: none; }
+    /* El spinner no se apaga: sin el, el boton parece colgado. Solo va mas lento. */
+    .boton-principal[data-cargando="true"]::after,
+    .boton-secundario[data-cargando="true"]::after { animation-duration: 2s; }
 }
