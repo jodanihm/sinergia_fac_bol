@@ -145,6 +145,15 @@ const ICONOS = [
         . '<path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
     'impuesto' => '<line x1="19" y1="5" x2="5" y2="19"/>'
         . '<circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
+
+    // -- Estados de una pantalla de configuracion (Cobro en linea) --
+    // 'info' acompana un aviso que da contexto sin pedir nada ('info' de
+    // Feather). 'sin-cargar' es el badge de algo que todavia no se configuro
+    // ('minus-circle'): el estado neutro necesita su propia forma, porque un
+    // badge que solo cambia de color no se distingue en gris (WCAG 1.4.1).
+    'info' => '<circle cx="12" cy="12" r="10"/>'
+        . '<line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+    'sin-cargar' => '<circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/>',
 ];
 
 /**

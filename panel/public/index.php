@@ -6259,6 +6259,9 @@ function handlePagosConfigGet(): void
         'credenciales' => credencialesPorAmbiente($pdo, $cuentaId, (string) ($config['proveedor'] ?? 'flow')),
         'errores'     => [],
         'proveedores' => FabricaPasarela::proveedores(),
+        // La confirmacion de guardar llega por PRG. Sin tomarla aqui se quedaba
+        // en sesion y aparecia en la SIGUIENTE pantalla que leyera el flash.
+        'flash'       => flashTomar(),
         'navActivo'   => 'config.pagos',
     ]);
 }
@@ -6351,13 +6354,15 @@ function handlePagosConfigPost(): void
     $ambienteAnterior = $filaPrevia === false ? null : (string) $filaPrevia['ambiente_activo'];
 
     // --- validacion ---------------------------------------------------------
-    $errores = [];
+    // Los mensajes dicen el ambiente como lo ve la pantalla, no como se guarda.
+    $rotuloAmb = ['sandbox' => 'Sandbox', 'produccion' => 'Produccion'];
+    $errores   = [];
 
     if (! in_array($proveedor, FabricaPasarela::proveedores(), true)) {
         $errores['proveedor'] = 'Esa pasarela no esta disponible.';
     }
     if ($urlRetorno !== '' && ! str_starts_with($urlRetorno, 'https://')) {
-        $errores['url_retorno'] = 'La direccion tiene que empezar por https://';
+        $errores['url_retorno'] = 'La direccion tiene que empezar por https://, por ejemplo https://tuempresa.cl/gracias.';
     }
 
     foreach ($entradas as $amb => $dato) {
@@ -6368,11 +6373,12 @@ function handlePagosConfigPost(): void
         // SECRETO EN BLANCO AL CREAR = rechazar. Una apiKey sin su secreto no
         // sirve para nada y guardarla daria la impresion de que ya esta.
         if ($dato['apiKey'] !== '' && $dato['secreto'] === '' && ! $yaTenia) {
-            $errores['secreto_' . $amb] = 'Falta la Secret Key de ' . $amb . '. '
-                . 'Las dos llaves van juntas: una API Key sin su secreto no sirve para cobrar.';
+            $errores['secreto_' . $amb] = 'Pega la Secret key de ' . $rotuloAmb[$amb]
+                . ': una API key sin su secreto no sirve para cobrar.';
         }
         if ($dato['apiKey'] === '' && $dato['secreto'] !== '') {
-            $errores['apikey_' . $amb] = 'Falta la API Key de ' . $amb . '.';
+            $errores['apikey_' . $amb] = 'Pega la API key de ' . $rotuloAmb[$amb]
+                . ': la Secret key sola no sirve para cobrar.';
         }
     }
 
@@ -6385,10 +6391,9 @@ function handlePagosConfigPost(): void
 
         if (! $tendraApi || ! $tendraSecre) {
             $errores['ambiente_activo'] = sprintf(
-                'Para cobrar en %s hacen falta la API Key Y la Secret Key de %s. '
-                . 'Sin ellas, todos tus correos se quedarian esperando un link que no llegaria.',
-                $ambClave,
-                $ambClave
+                'Faltan las llaves de %s. Cargalas arriba o elige el otro ambiente: '
+                . 'sin ellas, tus correos se quedarian esperando un link que no llegaria.',
+                $rotuloAmb[$ambClave]
             );
         }
     }
@@ -6478,16 +6483,10 @@ function handlePagosConfigPost(): void
         ]
     );
 
-    if (! $habilitado) {
-        flashSet('exito', 'Guardado. El cobro en linea esta desactivado: tus correos salen sin boton de pago. '
-            . 'Los links ya enviados siguen funcionando y sus pagos se siguen registrando.');
-    } elseif ($ambiente->esProduccion()) {
-        flashSet('exito', 'Cobro en linea activado EN PRODUCCION: los pagos son reales. '
-            . 'Las facturas que emitas de ahora en adelante llevaran el boton de pago.');
-    } else {
-        flashSet('advertencia', 'Cobro en linea activado en SANDBOX: los pagos NO son reales y el '
-            . 'dinero no llega a tu cuenta. Sirve para probar. Cambia a Produccion cuando quieras cobrar de verdad.');
-    }
+    // LA CONFIRMACION ES CORTA A PROPOSITO. Que se cobra de verdad, que se esta
+    // en pruebas o que esta apagado lo dice el aviso de estado de la pantalla,
+    // que es permanente; repetirlo aqui pintaba dos avisos iguales seguidos.
+    flashSet('exito', 'Cambios guardados.');
     redirigirPrg('/configuracion/pagos');
 }
 

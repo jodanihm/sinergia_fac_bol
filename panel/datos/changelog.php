@@ -32,6 +32,21 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-10-02',
+        'version' => '1.72',
+        'titulo'  => 'Cobro en linea: pantalla rehecha para que se entienda de un vistazo',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Arriba de todo se ve ahora en que estado esta el cobro: cobrando dinero real, en pruebas (Sandbox) o apagado. Si nunca se configuro, la pantalla explica los cuatro pasos para empezar.',
+            'Al guardar aparece la confirmacion "Cambios guardados" en la misma pantalla. Antes ese aviso se perdia y salia mas tarde en otra pagina cualquiera.',
+            'La pantalla sigue el orden real del trabajo: primero las llaves de Flow, despues el ambiente, la pagina de regreso y, al final, el interruptor para encender el cobro.',
+            'El interruptor dice que va a pasar al guardar, y no deja encenderse mientras falten las llaves del ambiente elegido.',
+            'Elegir entre Sandbox y Produccion es ahora una eleccion visible con la explicacion de cada uno, en vez de un desplegable.',
+            'Los errores se avisan al salir de cada campo, con un resumen arriba que lleva al campo a corregir, y dicen que hacer: "Pega la Secret key de Produccion" en vez de "Falta la Secret Key de produccion".',
+            'El boton "Guardar cambios" se bloquea mientras guarda, para que un doble clic no envie las llaves dos veces. En el celular ocupa todo el ancho.',
+        ],
+    ],
+    [
         'fecha'   => '2026-10-01',
         'version' => '1.71',
         'titulo'  => '"Configuracion empresa" pasa al final del menu, plegada',
