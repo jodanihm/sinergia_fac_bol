@@ -106,6 +106,36 @@ $navRender = static function (array $nodos) use (&$navRender, $navPintarItem): v
     }
 };
 
+/**
+ * Si la pagina actual pertenece a una seccion plegable: alguno de sus items es
+ * el activo (mismo criterio que $navPintarItem) o la ruta cae bajo uno de sus
+ * 'prefijos'. Decide si el <details> se pinta abierto, para que nadie aterrice
+ * en una pantalla de configuracion con su grupo cerrado.
+ */
+$navSeccionContieneActual = static function (array $seccion) use ($navRutaActual, $navActivoClave): bool {
+    foreach ((array) ($seccion['prefijos'] ?? []) as $prefijo) {
+        if ($navRutaActual === $prefijo
+            || str_starts_with($navRutaActual, $prefijo . '/')
+            || str_starts_with($navRutaActual, $prefijo . '-')) {
+            return true;
+        }
+    }
+    $pendientes = $seccion['items'];
+    while ($pendientes !== []) {
+        $nodo = array_shift($pendientes);
+        if (isset($nodo['items'])) {
+            array_push($pendientes, ...$nodo['items']);
+            continue;
+        }
+        if (($navActivoClave !== null && ($nodo['clave'] ?? null) === $navActivoClave)
+            || ($navActivoClave === null && ($nodo['destino'] ?? null) === $navRutaActual)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 $navMenu = definicionMenu();
 ?>
 <nav class="sidebar" aria-label="Menu principal">
@@ -113,7 +143,15 @@ $navMenu = definicionMenu();
         <img src="/img/logo.png" alt="Sinergia" class="sidebar__logo">
     </div>
     <?php foreach ($navMenu as $seccion): ?>
-        <?php if (isset($seccion['items'])): ?>
+        <?php if (isset($seccion['items']) && ! empty($seccion['plegable'])): ?>
+            <?php /* <details> nativo: se abre y cierra con teclado y lector de
+                     pantalla sin una linea de JS, y el summary es el titulo de
+                     la seccion, asi que se lee igual que los demas grupos. */ ?>
+            <details class="sidebar__grupo sidebar__grupo--plegable"<?= $navSeccionContieneActual($seccion) ? ' open' : ''; ?>>
+                <summary class="sidebar__grupo-titulo"><?= htmlspecialchars((string) $seccion['label']); ?></summary>
+                <?php $navRender($seccion['items']); ?>
+            </details>
+        <?php elseif (isset($seccion['items'])): ?>
             <div class="sidebar__grupo">
                 <div class="sidebar__grupo-titulo"><?= htmlspecialchars((string) $seccion['label']); ?></div>
                 <?php $navRender($seccion['items']); ?>

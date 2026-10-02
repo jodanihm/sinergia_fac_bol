@@ -1093,6 +1093,16 @@ function definicionMenu(): array
                 // sigue viva como redireccion permanente.
             ],
         ],
+        // Fuera de "Configuracion empresa" a proposito: no tiene ambiente. Antes
+        // quedaba al final de esa seccion, justo despues del bloque de
+        // produccion, y se leia como si perteneciera a el. Aqui hace pareja con
+        // Auditoria, que es lo que es: administracion transversal del tenant.
+        // Fuera de "Configuracion empresa" y junto a Usuarios, por el mismo
+        // motivo que aquel: no tiene ambiente. La cuenta de cobro de una empresa
+        // es una sola y mueve dinero de verdad; no hay una de certificacion.
+        ['clave' => 'config.pagos', 'label' => 'Cobro en linea', 'destino' => '/configuracion/pagos', 'icono' => 'apikeys', 'construido' => true, 'requiereProduccion' => false],
+        ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'icono' => 'usuarios', 'construido' => true, 'requiereProduccion' => false],
+        ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'icono' => 'auditoria', 'construido' => true, 'requiereProduccion' => false],
         // CERTIFICACION Y PRODUCCION SON DOS SUBGRUPOS HERMANOS, de peso visual
         // identico. Antes los cuatro items de certificacion colgaban sueltos de
         // "Configuracion" -- sin decir en ninguna parte que eran de
@@ -1110,8 +1120,19 @@ function definicionMenu(): array
         // 'variante' la lee partials/_nav.php para agregar la clase modificadora
         // del subgrupo; un subgrupo sin ella se pinta como siempre.
         [
-            'label' => 'Configuracion empresa',
-            'items' => [
+            'label'    => 'Configuracion empresa',
+            // PLEGADA Y AL FINAL DEL MENU (01-10-2026). Todo esto se usa al
+            // dar de alta la empresa -- certificacion completa y la carga de
+            // produccion -- y despues casi nunca: tenerlo abierto en medio del
+            // menu era ruido de todos los dias. No se esconde: queda como un
+            // grupo cerrado que se abre con un clic, y se abre SOLO cuando la
+            // pagina actual es una de las suyas (ver 'prefijos' y _nav.php).
+            'plegable' => true,
+            // Rutas que cuentan como "dentro" del grupo para abrirlo. Hacen
+            // falta ademas de los destinos porque /certificacion/* tiene ~20
+            // pantallas que no son el destino del item.
+            'prefijos' => ['/empresa', '/certificado', '/caf', '/apikeys', '/certificacion'],
+            'items'    => [
                 [
                     'label'    => 'Certificacion',
                     'variante' => 'certificacion',
@@ -1145,16 +1166,6 @@ function definicionMenu(): array
                 ],
             ],
         ],
-        // Fuera de "Configuracion empresa" a proposito: no tiene ambiente. Antes
-        // quedaba al final de esa seccion, justo despues del bloque de
-        // produccion, y se leia como si perteneciera a el. Aqui hace pareja con
-        // Auditoria, que es lo que es: administracion transversal del tenant.
-        // Fuera de "Configuracion empresa" y junto a Usuarios, por el mismo
-        // motivo que aquel: no tiene ambiente. La cuenta de cobro de una empresa
-        // es una sola y mueve dinero de verdad; no hay una de certificacion.
-        ['clave' => 'config.pagos', 'label' => 'Cobro en linea', 'destino' => '/configuracion/pagos', 'icono' => 'apikeys', 'construido' => true, 'requiereProduccion' => false],
-        ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'icono' => 'usuarios', 'construido' => true, 'requiereProduccion' => false],
-        ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'icono' => 'auditoria', 'construido' => true, 'requiereProduccion' => false],
     ];
 }
 

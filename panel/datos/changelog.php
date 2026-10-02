@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-01',
+        'version' => '1.71',
+        'titulo'  => '"Configuracion empresa" pasa al final del menu, plegada',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Todo lo de "Configuracion empresa" (certificacion ante el SII y la carga de empresa, certificado, folios y API keys de produccion) se usa sobre todo al comenzar, y despues quedaba en medio del menu estorbando.',
+            'Ahora esta al final del menu, como un grupo cerrado que se abre con un clic en su titulo. No se escondio nada: todas las opciones siguen ahi.',
+            'Si entras a una de esas pantallas, el grupo aparece abierto solo, para que siempre veas donde estas.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-01',
         'version' => '1.70',
         'titulo'  => 'Al corregir el correo de un cliente, sus facturas pendientes de envio salen solas',
         'tag'     => 'backend',
