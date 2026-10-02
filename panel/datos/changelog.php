@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-02',
+        'version' => '1.74',
+        'titulo'  => 'Cobro en linea usa todo el ancho de la pantalla',
+        'tag'     => 'frontend',
+        'items'   => [
+            'La pantalla ya no queda en una columna angosta a la izquierda con medio monitor vacio: ahora ocupa todo el ancho.',
+            'Las llaves de Sandbox y de Produccion van lado a lado, asi se ve de un vistazo cual ambiente tiene sus llaves cargadas y cual no.',
+            'Ambiente activo, pagina de regreso y el interruptor de activacion quedan en una misma fila, en el orden en que se completan. Se ve todo sin bajar tanto.',
+            'Los campos no se estiran de lado a lado: cada uno mide lo que su columna, para que la etiqueta y lo escrito se sigan leyendo juntos. En pantallas medianas pasa a dos columnas y en el celular a una.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-02',
         'version' => '1.73',
         'titulo'  => 'Cobro en linea: el boton Guardar muestra que esta trabajando sin saltar',
         'tag'     => 'frontend',

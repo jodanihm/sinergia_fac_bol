@@ -2814,12 +2814,31 @@ body.auth-page > main {
    problema para todas las demas. Todo sale de los tokens de :root.
    ========================================================================== */
 
-/* Ancho de lectura de un formulario: 720px. Mas ancho, la etiqueta y el campo
-   dejan de leerse como pareja. Es el tope del CONTENIDO bajo el encabezado, no
-   del <main>: el encabezado sigue alineado con el resto del panel. */
-.contenido-angosto { max-width: 720px; }
-.contenido-angosto > .tarjeta:first-child,
-.contenido-angosto form > .tarjeta:first-child { margin-top: 0; }
+/* Pantalla de configuracion a todo el ancho del <main>. El ancho se reparte
+   en COLUMNAS, no estirando campos: un input de 1300px separa tanto la
+   etiqueta del dato que dejan de leerse como pareja. Cada control queda del
+   ancho de su columna (~400-650px en un monitor normal).
+
+   .config-columnas--2 y --3 bajan a menos columnas antes de que una columna
+   quede tan angosta que un texto de ayuda se parta en cinco lineas, con los
+   mismos cortes del resto del panel: bajo 1024px la fila de 3 pasa a 2 y su
+   ultima pieza ocupa la fila entera (en una sola columna, la url de regreso
+   llegaba a 818px); bajo 720px todo va en una columna. */
+.config-ancho form > .tarjeta:first-child { margin-top: 0; }
+.config-columnas { display: grid; gap: var(--esp-4); align-items: stretch; }
+.config-columnas--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.config-columnas--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: var(--esp-4) 0 0; }
+/* Dentro de la grilla manda el gap, no los margenes propios de cada pieza. */
+.config-columnas > .tarjeta,
+.config-columnas > .grupo-campos { margin: 0; }
+@media (max-width: 1024px) {
+    .config-columnas--3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .config-columnas--3 > :last-child { grid-column: 1 / -1; }
+}
+@media (max-width: 720px) {
+    .config-columnas--2,
+    .config-columnas--3 { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* Una linea de contexto bajo el h2 de una tarjeta. */
 .tarjeta__intro { margin: 0 0 var(--esp-4); font-size: var(--txt-base); color: var(--color-texto-medio); }
