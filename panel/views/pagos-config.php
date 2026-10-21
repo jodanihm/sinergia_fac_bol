@@ -197,7 +197,7 @@ $fraseInicial = str_replace(
     <?php endif; ?>
 <?php endif; ?>
 
-<form method="post" action="/configuracion/pagos" class="form-compacto" id="form-pagos" novalidate>
+<form method="post" action="/configuracion/pagos" class="form-compacto" id="form-pagos" novalidate data-validacion-propia>
     <?= csrfInput(); ?>
 
     <section class="tarjeta" aria-labelledby="titulo-llaves">

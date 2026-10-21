@@ -47,6 +47,12 @@ $cssHref    = '/css/style.css' . ($cssVersion ? '?v=' . $cssVersion : '');
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= htmlspecialchars($titulo ?? 'Panel'); ?></title>
 <link rel="stylesheet" href="<?= htmlspecialchars($cssHref); ?>">
+<?php
+// Validacion compartida de formularios (ver el encabezado del archivo). Misma
+// version por filemtime que la hoja de estilos, por la misma razon.
+$jsValidarVersion = @filemtime(__DIR__ . '/../../public/js/validar-campos.js');
+?>
+<script src="/js/validar-campos.js<?= $jsValidarVersion ? '?v=' . $jsValidarVersion : ''; ?>" defer></script>
 </head>
 <body class="<?= htmlspecialchars($bodyClaseExtra); ?>">
 <?php if ($panelAutenticado): ?>

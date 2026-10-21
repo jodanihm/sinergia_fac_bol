@@ -160,7 +160,7 @@ if (isset($errores['lineas'])) {
    DENTRO de la tabla de lineas cuelga de esa clase. Sin ella los campos salen
    a tamaño completo dentro de celdas pensadas para el compacto. */
 ?>
-<form id="form-cotizacion" method="post" action="<?= $e((string) $accion); ?>" class="form-compacto" novalidate>
+<form id="form-cotizacion" method="post" action="<?= $e((string) $accion); ?>" class="form-compacto" novalidate data-validacion-propia>
     <?php
     /* EL TOKEN CSRF VA AQUI, PRIMERO Y SIEMPRE. Su ausencia dejo esta pantalla
        IMPOSIBLE DE USAR en produccion: el chequeo es CENTRAL, antes de
@@ -171,12 +171,12 @@ if (isset($errores['lineas'])) {
     <?= csrfInput(); ?>
 
     <div class="config-columnas config-columnas--2">
-        <section class="tarjeta" aria-labelledby="titulo-cliente">
+        <section class="tarjeta" aria-labelledby="titulo-cliente" data-autoguardar="/ventas/guardar-cliente">
             <h2 id="titulo-cliente">Cliente</h2>
             <div class="form-grid">
                 <div class="<?= $claseCampo('receptor_rut'); ?>">
                     <label for="receptor_rut">RUT</label>
-                    <input type="text" list="clientes-list" name="receptor_rut" id="receptor_rut" value="<?= $v('receptor_rut'); ?>"
+                    <input type="text" list="clientes-list" name="receptor_rut" id="receptor_rut" data-guardar="rut" value="<?= $v('receptor_rut'); ?>"
                            placeholder="77.724.622-4" inputmode="text" autocomplete="off" spellcheck="false"
                            <?= $aria('receptor_rut', 'rut-aviso'); ?>>
                     <?= $campoError('receptor_rut'); ?>
@@ -185,29 +185,36 @@ if (isset($errores['lineas'])) {
                 </div>
                 <div class="<?= $claseCampo('receptor_razon_social'); ?>">
                     <label for="receptor_razon_social">Razon social</label>
-                    <input type="text" name="receptor_razon_social" id="receptor_razon_social" value="<?= $v('receptor_razon_social'); ?>"
+                    <input type="text" name="receptor_razon_social" id="receptor_razon_social" data-guardar="razonSocial" data-obligatorio="Escribe la razon social del cliente." value="<?= $v('receptor_razon_social'); ?>"
                            <?= $aria('receptor_razon_social'); ?>>
                     <?= $campoError('receptor_razon_social'); ?>
                 </div>
                 <div class="form-campo">
                     <label for="receptor_giro">Giro (opcional)</label>
-                    <input type="text" name="receptor_giro" id="receptor_giro" value="<?= $v('receptor_giro'); ?>" aria-describedby="ayuda-giro">
+                    <input type="text" name="receptor_giro" id="receptor_giro" data-guardar="giro" value="<?= $v('receptor_giro'); ?>" aria-describedby="ayuda-giro">
                     <small class="form-ayuda" id="ayuda-giro">El SII lo exige recien al facturar.</small>
                 </div>
                 <div class="<?= $claseCampo('receptor_email'); ?>">
                     <label for="receptor_email">Correo (opcional)</label>
-                    <input type="email" name="receptor_email" id="receptor_email" value="<?= $v('receptor_email'); ?>"
+                    <input type="email" name="receptor_email" id="receptor_email" data-guardar="email" value="<?= $v('receptor_email'); ?>"
                            inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false"
                            placeholder="nombre@empresa.cl" <?= $aria('receptor_email'); ?>>
                     <?= $campoError('receptor_email'); ?>
                 </div>
                 <div class="form-campo">
                     <label for="receptor_direccion">Direccion (opcional)</label>
-                    <input type="text" name="receptor_direccion" id="receptor_direccion" value="<?= $v('receptor_direccion'); ?>">
+                    <input type="text" name="receptor_direccion" id="receptor_direccion" data-guardar="direccion" value="<?= $v('receptor_direccion'); ?>">
                 </div>
                 <div class="form-campo">
                     <label for="receptor_comuna">Comuna (opcional)</label>
-                    <input type="text" name="receptor_comuna" id="receptor_comuna" value="<?= $v('receptor_comuna'); ?>">
+                    <input type="text" name="receptor_comuna" id="receptor_comuna" data-guardar="comuna" value="<?= $v('receptor_comuna'); ?>">
+                </div>
+                <?php /* GUARDAR SIN GUARDAR LA COTIZACION: lo hace solo al salir
+                   de la comuna, el ultimo campo, o con este boton. Ver
+                   js/validar-campos.js (data-autoguardar). */ ?>
+                <div class="form-campo form-campo--ancho">
+                    <p><button type="button" class="boton-principal" data-autoguardar-boton>Guardar cliente</button></p>
+                    <small class="form-ayuda" data-autoguardar-aviso aria-live="polite">Lo agrega a tus clientes sin guardar la cotizacion. Tambien se guarda solo al salir de la comuna, si el RUT y la razon social estan bien.</small>
                 </div>
             </div>
             <?php
@@ -406,8 +413,10 @@ if (isset($errores['lineas'])) {
         },
         receptor_email: function () {
             var v = document.getElementById('receptor_email').value.trim();
-            return v !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
-                ? 'Escribe un correo completo, por ejemplo nombre@empresa.cl, o dejalo vacio.' : '';
+            if (v === '') { return ''; }
+            // Mismas reglas de correo que todo el panel (js/validar-campos.js).
+            if (window.validarCampos) { return window.validarCampos.msgCorreo(v); }
+            return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? '' : 'Escribe un correo completo, por ejemplo nombre@empresa.cl, o dejalo vacio.';
         },
         fecha: function () {
             return document.getElementById('fecha').value === '' ? 'Elige la fecha de la cotizacion.' : '';
@@ -468,10 +477,12 @@ if (isset($errores['lineas'])) {
                 if (data.estado === 'no_encontrado') {
                     // NO ES UN ERROR: se cotiza a prospectos que todavia no son
                     // clientes. Se guarda igual, con cliente_id en null.
-                    aviso.textContent = 'Cliente nuevo: completa sus datos y se guardan con la cotizacion.';
+                    aviso.textContent = 'Cliente nuevo: completa sus datos; se guarda en tus clientes al salir de la comuna.';
                     return;
                 }
                 var c = data.cliente || {};
+                // Ya esta en el maestro: el guardado automatico no lo repite.
+                rut.closest('[data-autoguardar]').setAttribute('data-ya-guardado', vRut.replace(/[^0-9kK]/g, '').toUpperCase());
                 // Solo se rellena lo que este VACIO: nunca se pisa lo que el
                 // usuario ya escribio.
                 [['receptor_razon_social', c.razon_social], ['receptor_giro', c.giro],
@@ -479,6 +490,7 @@ if (isset($errores['lineas'])) {
                  ['receptor_email', c.email]].forEach(function (par) {
                     var el = document.getElementById(par[0]);
                     if (el && el.value === '' && par[1]) { el.value = par[1]; }
+                    if (el && el.value !== '' && window.validarCampos) { window.validarCampos.revisar(el); }
                 });
                 if (tocados.receptor_razon_social) { pintar('receptor_razon_social', reglas.receptor_razon_social()); }
                 aviso.textContent = c.activo === false

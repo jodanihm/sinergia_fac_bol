@@ -136,7 +136,7 @@ $flashError = ! empty($flash['mensaje']) && ($flash['tipo'] ?? '') !== 'exito';
             </div>
         </div>
 
-        <form method="post" action="/configuracion/usuarios" class="form-compacto" id="form-invitar" novalidate data-espera>
+        <form method="post" action="/configuracion/usuarios" class="form-compacto" id="form-invitar" novalidate data-espera data-validacion-propia>
             <?= csrfInput(); ?>
             <div class="form-grid form-grid--1">
                 <div class="form-campo">
@@ -416,7 +416,9 @@ $flashError = ! empty($flash['mensaje']) && ($flash['tipo'] ?? '') !== 'exito';
     function errorEmail() {
         var v = email.value.trim();
         if (v === '') { return 'Escribe el correo de la persona que quieres invitar.'; }
-        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) { return 'Escribe un correo completo, por ejemplo nombre@empresa.cl.'; }
+        // Mismas reglas de correo que todo el panel (js/validar-campos.js).
+        var malCorreo = window.validarCampos ? window.validarCampos.msgCorreo(v) : (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? '' : 'Escribe un correo completo, por ejemplo nombre@empresa.cl.');
+        if (malCorreo) { return malCorreo; }
         return '';
     }
     function pintarEmail(msg) {

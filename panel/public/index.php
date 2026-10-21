@@ -693,6 +693,9 @@ const PERMISOS_RUTA = [
     'GET /compras/proveedores/nuevo'             => ['compras', 'ver'],
     'POST /compras/proveedores/nuevo'            => ['compras', 'gestionar'],
     'GET /compras/proveedor-por-rut'             => ['compras', 'ver'],
+    // Lo dispara la orden de compra, pero da de alta una ficha del maestro de
+    // proveedores: el mismo permiso que el alta normal.
+    'POST /compras/guardar-proveedor'            => ['compras', 'gestionar'],
     'GET /compras/ordenes'                       => ['compras', 'ver'],
     'GET /compras/ordenes/nueva'                 => ['compras', 'ver'],
     'POST /compras/ordenes/nueva'                => ['compras', 'gestionar'],
@@ -1878,6 +1881,49 @@ function handleProveedorNuevoGet(): void
 {
     vista('proveedor-form', ['modo' => 'nuevo', 'accion' => '/compras/proveedores/nuevo',
         'proveedor' => [], 'errores' => [], 'navActivo' => 'compras.proveedores']);
+}
+
+/**
+ * Endpoint JSON del guardado automatico de la orden de compra: da de alta al
+ * proveedor en el maestro SIN guardar la orden. Mismo contrato que
+ * handleGuardarClienteDesdeEmisionPost(): valida como el alta normal
+ * (validarProveedor) y no pisa un proveedor que ya existe.
+ */
+function handleGuardarProveedorDesdeOrdenPost(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $d        = is_array($_POST['datos'] ?? null) ? $_POST['datos'] : [];
+    [$datos, $errores] = validarProveedor([
+        'rut_proveedor' => $d['rut'] ?? '',
+        'razon_social'  => $d['razonSocial'] ?? '',
+        'giro'          => $d['giro'] ?? '',
+        'direccion'     => $d['direccion'] ?? '',
+        'comuna'        => $d['comuna'] ?? '',
+        'email'         => $d['email'] ?? '',
+        'contacto'      => $d['contacto'] ?? '',
+    ]);
+
+    $responder = function (array $cuerpo): never {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($cuerpo, JSON_UNESCAPED_UNICODE);
+        exit;
+    };
+    $yaExiste = ['estado' => 'existe', 'mensaje' => 'Este proveedor ya esta en tus proveedores. No se modifico.'];
+
+    if ($errores !== []) {
+        $responder(['estado' => 'error', 'mensaje' => implode(' ', $errores)]);
+    }
+    $repo = proveedorRepo();
+    if ($repo->buscarPorRut($cuentaId, $datos['rut_proveedor']) !== null) {
+        $responder($yaExiste);
+    }
+    try {
+        $repo->crear($cuentaId, $datos);
+    } catch (ProveedorDuplicadoException $e) {
+        $responder($yaExiste);
+    }
+
+    $responder(['estado' => 'ok', 'mensaje' => 'Proveedor guardado en tus proveedores. La orden aun no se guarda.']);
 }
 
 function handleProveedorNuevoPost(): void
@@ -10100,7 +10146,9 @@ function handleClientePorRutGet(): void
 function handleGuardarClienteDesdeEmisionPost(): void
 {
     $cuentaId = Auth::cuentaId();
-    $r        = is_array($_POST['receptor'] ?? null) ? $_POST['receptor'] : [];
+    // 'receptor' lo manda el formulario de emision; 'datos', el guardado
+    // automatico compartido (js/validar-campos.js) de las demas pantallas.
+    $r        = is_array($_POST['receptor'] ?? null) ? $_POST['receptor'] : (is_array($_POST['datos'] ?? null) ? $_POST['datos'] : []);
     [$datos, $errores] = validarCliente([
         'rut_cliente'  => $r['rut'] ?? '',
         'razon_social' => $r['razonSocial'] ?? '',
@@ -11684,6 +11732,11 @@ if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/desactivar$#',
 if ($metodo === 'GET' && $ruta === '/ventas/cliente-por-rut') {
     Auth::requerirSesion();
     handleClientePorRutGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/compras/guardar-proveedor') {
+    Auth::requerirSesion();
+    handleGuardarProveedorDesdeOrdenPost();
 }
 
 if ($metodo === 'POST' && $ruta === '/ventas/guardar-cliente') {

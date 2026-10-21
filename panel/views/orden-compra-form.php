@@ -57,41 +57,48 @@ foreach ($productos as $p) {
 <form id="form-orden" method="post" action="<?= htmlspecialchars($accion); ?>" class="form-compacto">
     <?= csrfInput(); ?>
 
-    <section class="tarjeta" aria-labelledby="titulo-proveedor">
+    <section class="tarjeta" aria-labelledby="titulo-proveedor" data-autoguardar="/compras/guardar-proveedor">
         <h2 id="titulo-proveedor">Proveedor</h2>
         <div class="form-grid">
             <div class="form-campo">
                 <label for="proveedor_rut">RUT</label>
-                <input type="text" list="proveedores-list" name="proveedor_rut" id="proveedor_rut"
+                <input type="text" list="proveedores-list" name="proveedor_rut" id="proveedor_rut" data-guardar="rut" data-obligatorio="Escribe el RUT del proveedor, por ejemplo 76.543.210-3."
                        value="<?= $v('proveedor_rut'); ?>" placeholder="76543210-9"
                        aria-describedby="rut-aviso"<?= $err('proveedor_rut'); ?>>
                 <small class="form-ayuda" id="rut-aviso" aria-live="polite">Elige uno de tus proveedores o escribe un RUT nuevo.</small>
             </div>
             <div class="form-campo form-campo--ancho">
                 <label for="proveedor_razon_social">Razon social</label>
-                <input type="text" name="proveedor_razon_social" id="proveedor_razon_social"
+                <input type="text" name="proveedor_razon_social" id="proveedor_razon_social" data-guardar="razonSocial" data-obligatorio="Escribe la razon social del proveedor."
                        value="<?= $v('proveedor_razon_social'); ?>"<?= $err('proveedor_razon_social'); ?>>
             </div>
             <div class="form-campo">
                 <label for="proveedor_giro">Giro</label>
-                <input type="text" name="proveedor_giro" id="proveedor_giro" value="<?= $v('proveedor_giro'); ?>">
+                <input type="text" name="proveedor_giro" id="proveedor_giro" data-guardar="giro" value="<?= $v('proveedor_giro'); ?>">
             </div>
             <div class="form-campo">
                 <label for="proveedor_direccion">Direccion</label>
-                <input type="text" name="proveedor_direccion" id="proveedor_direccion" value="<?= $v('proveedor_direccion'); ?>">
+                <input type="text" name="proveedor_direccion" id="proveedor_direccion" data-guardar="direccion" value="<?= $v('proveedor_direccion'); ?>">
             </div>
             <div class="form-campo">
                 <label for="proveedor_comuna">Comuna</label>
-                <input type="text" name="proveedor_comuna" id="proveedor_comuna" value="<?= $v('proveedor_comuna'); ?>">
+                <input type="text" name="proveedor_comuna" id="proveedor_comuna" data-guardar="comuna" value="<?= $v('proveedor_comuna'); ?>">
             </div>
             <div class="form-campo">
                 <label for="proveedor_contacto">Contacto</label>
-                <input type="text" name="proveedor_contacto" id="proveedor_contacto" value="<?= $v('proveedor_contacto'); ?>">
+                <input type="text" name="proveedor_contacto" id="proveedor_contacto" data-guardar="contacto" value="<?= $v('proveedor_contacto'); ?>">
             </div>
             <div class="form-campo">
                 <label for="proveedor_email">Correo</label>
-                <input type="email" name="proveedor_email" id="proveedor_email" value="<?= $v('proveedor_email'); ?>">
+                <input type="email" name="proveedor_email" id="proveedor_email" data-guardar="email" value="<?= $v('proveedor_email'); ?>">
                 <small class="form-ayuda">A esta direccion se enviara la orden.</small>
+            </div>
+            <?php /* GUARDAR SIN GUARDAR LA ORDEN: lo hace solo al salir del
+               correo, el ultimo campo, o con este boton. Ver
+               js/validar-campos.js (data-autoguardar). */ ?>
+            <div class="form-campo form-campo--ancho">
+                <p><button type="button" class="boton-principal" data-autoguardar-boton>Guardar proveedor</button></p>
+                <small class="form-ayuda" data-autoguardar-aviso aria-live="polite">Lo agrega a tus proveedores sin guardar la orden. Tambien se guarda solo al salir del correo, si el RUT y la razon social estan bien.</small>
             </div>
         </div>
         <?php
@@ -117,7 +124,7 @@ foreach ($productos as $p) {
         <div class="form-grid">
             <div class="form-campo form-campo--corto">
                 <label for="fecha">Fecha</label>
-                <input type="date" name="fecha" id="fecha" value="<?= $v('fecha'); ?>"<?= $err('fecha'); ?>>
+                <input type="date" name="fecha" id="fecha" data-obligatorio="Elige la fecha de la orden." value="<?= $v('fecha'); ?>"<?= $err('fecha'); ?>>
             </div>
             <div class="form-campo form-campo--corto">
                 <label for="fecha_entrega">Fecha de entrega</label>
@@ -253,16 +260,19 @@ foreach ($productos as $p) {
                 if (data.estado === 'rut_invalido') { aviso.textContent = 'RUT invalido.'; return; }
                 if (data.estado === 'no_encontrado') {
                     // NO ES UN ERROR: se compra a proveedores ocasionales.
-                    aviso.textContent = 'Proveedor nuevo: completa sus datos y se guardan con la orden.';
+                    aviso.textContent = 'Proveedor nuevo: completa sus datos; se guarda en tus proveedores al salir del correo.';
                     return;
                 }
                 var p = data.proveedor || {};
+                // Ya esta en el maestro: el guardado automatico no lo repite.
+                rut.closest('[data-autoguardar]').setAttribute('data-ya-guardado', vRut.replace(/[^0-9kK]/g, '').toUpperCase());
                 [['proveedor_razon_social', p.razon_social], ['proveedor_giro', p.giro],
                  ['proveedor_direccion', p.direccion], ['proveedor_comuna', p.comuna],
                  ['proveedor_email', p.email], ['proveedor_contacto', p.contacto],
                  ['condiciones_pago', p.condiciones_pago]].forEach(function (par) {
                     var el = document.getElementById(par[0]);
                     if (el && el.value === '' && par[1]) { el.value = par[1]; }
+                    if (el && el.value !== '' && window.validarCampos) { window.validarCampos.revisar(el); }
                 });
                 aviso.textContent = p.activo === false || p.activo === 0
                     ? 'Proveedor encontrado (INACTIVO en tus maestros).'

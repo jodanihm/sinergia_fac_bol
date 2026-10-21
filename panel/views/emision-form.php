@@ -254,7 +254,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     </div>
 </div>
 
-<form method="post" action="<?= htmlspecialchars($accion); ?>" id="form-emision" class="form-compacto">
+<form method="post" action="<?= htmlspecialchars($accion); ?>" id="form-emision" class="form-compacto" data-validacion-propia>
     <?= csrfInput(); ?>
     <input type="hidden" name="idem_key" value="<?= htmlspecialchars($idemKey); ?>">
     <?php if ($cotizacionId !== null): ?>

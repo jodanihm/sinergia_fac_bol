@@ -64,7 +64,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <div class="form-grid">
                     <div class="<?= $claseCampo('nombre', 'form-campo--ancho'); ?>">
                         <label for="nombre">Nombre <?= $req; ?></label>
-                        <input type="text" name="nombre" id="nombre" value="<?= $val('nombre'); ?>" placeholder="Servicio de ejemplo" required>
+                        <input type="text" name="nombre" id="nombre" data-obligatorio="Escribe el nombre del producto o servicio." value="<?= $val('nombre'); ?>" placeholder="Servicio de ejemplo" required>
                         <?php if ($err('nombre')): ?>
                             <p class="error"><?= htmlspecialchars($err('nombre')); ?></p>
                         <?php else: ?>

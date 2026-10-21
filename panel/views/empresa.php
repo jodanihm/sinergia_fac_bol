@@ -111,7 +111,7 @@ $logo = $logo ?? null;
     </div>
 </div>
 
-<form method="post" action="/empresa" class="form-compacto" id="form-empresa" novalidate data-validar-form data-espera>
+<form method="post" action="/empresa" class="form-compacto" id="form-empresa" novalidate data-validar-form data-espera data-validacion-propia>
     <?= csrfInput(); ?>
 
     <section class="tarjeta" aria-labelledby="titulo-emisor">
