@@ -33,6 +33,15 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-21',
+        'version' => '1.82',
+        'titulo'  => 'Sin boton "Guardar cliente" al emitir: se guarda solo',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al emitir una factura, boleta o nota ya no esta el boton azul "Guardar cliente": el cliente nuevo se guarda solo en tus clientes al completar sus datos y salir del correo, y el resultado se avisa en el mismo lugar.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-21',
         'version' => '1.81',
         'titulo'  => 'Todos los formularios avisan campo por campo si el dato esta bien',
         'tag'     => 'frontend',

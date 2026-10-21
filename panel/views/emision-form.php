@@ -330,12 +330,10 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                             Guardar en mis clientes
                         </label>
                     </div>
-                    <?php /* GUARDAR SIN EMITIR. type="button" y fuera del submit: no
-                       toca el folio ni el formulario, solo da de alta al receptor
-                       en el maestro por /ventas/guardar-cliente. */ ?>
+                    <?php /* GUARDADO AUTOMATICO SIN EMITIR: aqui se anuncia el
+                       resultado (region viva). Ver el JS del receptor. */ ?>
                     <div class="form-campo form-campo--ancho">
-                        <p><button type="button" class="boton-principal" id="boton-guardar-cliente">Guardar cliente</button></p>
-                        <small class="form-ayuda" id="guardar-cliente-aviso" aria-live="polite">Lo agrega a tus clientes sin emitir el documento. Tambien se guarda solo al salir del correo, si los datos estan completos.</small>
+                        <small class="form-ayuda" id="guardar-cliente-aviso" aria-live="polite">Si es un cliente nuevo, se guarda solo en tus clientes al salir del correo, sin emitir el documento.</small>
                     </div>
                 </div>
             </section>
@@ -452,7 +450,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     </p>
                     <ul class="panel-info__lista">
                         <li>El detalle necesita al menos una linea, con cantidad mayor que 0.</li>
-                        <li>Si el receptor no esta en tus clientes, se guarda solo al completar sus datos y salir del correo (o con el boton "Guardar cliente").</li>
+                        <li>Si el receptor no esta en tus clientes, se guarda solo al completar sus datos y salir del correo.</li>
                         <li>Cada emision aceptada consume un folio de tu CAF.</li>
                     </ul>
                 </div>
@@ -790,73 +788,54 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             .catch(function () { aviso.textContent = ''; });
     });
 
-    // Guardar cliente SIN emitir. Espera segun seccion 14: nada bajo 300 ms,
-    // despues spinner dentro del boton (mismo ancho), aria-busy y disabled.
-    //
-    // GUARDADO AUTOMATICO: al salir del correo, que es el ultimo campo del
-    // receptor, si todo lo obligatorio esta correcto se guarda solo, por el
-    // mismo camino que el boton. No se repite para un RUT que ya esta en el
-    // maestro (lo trajo el autocompletado, o ya se guardo en esta pantalla).
-    var botonCliente = document.getElementById('boton-guardar-cliente');
+    // GUARDADO AUTOMATICO SIN EMITIR: al salir del correo, que es el ultimo
+    // campo del receptor, si todo lo obligatorio esta correcto se da de alta
+    // al receptor en el maestro (/ventas/guardar-cliente). No toca el folio ni
+    // el formulario. No se repite para un RUT que ya esta en el maestro (lo
+    // trajo el autocompletado, o ya se guardo en esta pantalla). Corre de fondo
+    // y sin boton: solo se anuncia el resultado en #guardar-cliente-aviso.
     var avisoCliente = document.getElementById('guardar-cliente-aviso');
-    if (botonCliente) {
-        var guardandoCliente = false;
-        var correoReceptor = document.getElementById('receptor-email');
-        if (correoReceptor) {
-            correoReceptor.addEventListener('blur', function () {
-                var ux = window.emisionUx;
-                if (guardandoCliente || !ux || !ux.receptorListo()) { return; }
-                if (rut.value.trim() === rutYaEnClientes) { return; }
-                guardarCliente();
-            });
-        }
-        botonCliente.addEventListener('click', guardarCliente);
-        function guardarCliente() {
-            if (guardandoCliente) { return; }
-            var form = document.getElementById('form-emision');
-            var v = rut.value.trim();
-            if (v === '' || (window.emisionUx && !window.emisionUx.ordenarRut(v).valido)) {
-                window.emisionUx && window.emisionUx.pintar('receptor-rut', v === '' ? 'Escribe el RUT del cliente para guardarlo.' : window.emisionUx.MSG_RUT);
-                rut.focus();
-                return;
-            }
-            var datos = new URLSearchParams();
-            datos.append('csrf_token', form.querySelector('[name="csrf_token"]').value);
-            ['rut', 'razonSocial', 'giro', 'direccion', 'comuna', 'email'].forEach(function (c) {
-                var el = document.getElementById('receptor-' + c);
-                datos.append('receptor[' + c + ']', el ? el.value.trim() : '');
-            });
-            guardandoCliente = true;
-            var umbral = setTimeout(function () {
-                botonCliente.setAttribute('data-cargando', 'true');
-                botonCliente.setAttribute('aria-busy', 'true');
-            }, 300);
-            botonCliente.disabled = true;
-            fetch('/ventas/guardar-cliente', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: datos.toString(),
+    var correoReceptor = document.getElementById('receptor-email');
+    var guardandoCliente = false;
+    if (correoReceptor && avisoCliente) {
+        correoReceptor.addEventListener('blur', function () {
+            var ux = window.emisionUx;
+            if (guardandoCliente || !ux || !ux.receptorListo()) { return; }
+            if (rut.value.trim() === rutYaEnClientes) { return; }
+            guardarCliente();
+        });
+    }
+    function guardarCliente() {
+        var form = document.getElementById('form-emision');
+        var datos = new URLSearchParams();
+        datos.append('csrf_token', form.querySelector('[name="csrf_token"]').value);
+        ['rut', 'razonSocial', 'giro', 'direccion', 'comuna', 'email'].forEach(function (c) {
+            var el = document.getElementById('receptor-' + c);
+            datos.append('receptor[' + c + ']', el ? el.value.trim() : '');
+        });
+        guardandoCliente = true;
+        avisoCliente.setAttribute('aria-busy', 'true');
+        fetch('/ventas/guardar-cliente', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: datos.toString(),
+        })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                avisoCliente.textContent = (data && data.mensaje) || 'No se pudo guardar el cliente.';
+                if (data && (data.estado === 'ok' || data.estado === 'existe')) {
+                    rutYaEnClientes = datos.get('receptor[rut]');
+                    var marca = document.getElementById('guardar-cliente');
+                    if (marca) { marca.checked = false; }
+                }
             })
-                .then(function (r) { return r.json(); })
-                .then(function (data) {
-                    avisoCliente.textContent = (data && data.mensaje) || 'No se pudo guardar el cliente.';
-                    if (data && (data.estado === 'ok' || data.estado === 'existe')) {
-                        rutYaEnClientes = datos.get('receptor[rut]');
-                        var marca = document.getElementById('guardar-cliente');
-                        if (marca) { marca.checked = false; }
-                    }
-                })
-                .catch(function () {
-                    avisoCliente.textContent = 'No se pudo guardar el cliente. Revisa tu conexion o tus permisos y vuelve a intentarlo.';
-                })
-                .then(function () {
-                    clearTimeout(umbral);
-                    guardandoCliente = false;
-                    botonCliente.disabled = false;
-                    botonCliente.removeAttribute('data-cargando');
-                    botonCliente.removeAttribute('aria-busy');
-                });
-        }
+            .catch(function () {
+                avisoCliente.textContent = 'No se pudo guardar el cliente. Puedes marcar "Guardar en mis clientes" para que se guarde al emitir.';
+            })
+            .then(function () {
+                guardandoCliente = false;
+                avisoCliente.removeAttribute('aria-busy');
+            });
     }
 })();
 </script>
