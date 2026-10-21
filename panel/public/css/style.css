@@ -2276,6 +2276,19 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .form-compacto .form-campo--error select,
 .form-compacto .form-campo--error textarea { border-color: var(--color-error); }
 
+/* Campo CORRECTO: borde verde y un check dentro del campo, a la derecha. El
+   check es lo que hace que no sea solo color (design system, Formularios). Lo
+   pone el JS de la vista al validar; un opcional vacio queda neutro. Misma
+   especificidad que el error, por la misma razon de :focus-visible. */
+.form-compacto .form-campo--ok input {
+    border-color: var(--color-exito);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232e7d32' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right var(--esp-2) center;
+    background-size: 16px 16px;
+    padding-right: calc(var(--esp-2) * 2 + 16px);
+}
+
 /* --------------------------------------------------------------------------
    Checkbox y radio. Sin esto la regla global los estira a todo el ancho con
    0.4rem de padding. Se mantiene el control nativo: nada de JS ni de sustitutos

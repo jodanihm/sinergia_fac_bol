@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-21',
+        'version' => '1.80',
+        'titulo'  => 'El cliente se guarda solo y cada dato avisa si esta bien',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al emitir, si el receptor es nuevo y sus datos estan completos, se guarda solo en tus clientes al salir del campo del correo, sin emitir el documento. Si ya estaba en tus clientes, no se toca.',
+            'Cada dato del receptor se revisa al salir del campo: si esta bien, el campo queda en verde con un check; si falta o esta mal, queda en rojo con lo que hay que corregir.',
+            'El correo se valida: avisa si falta la @, la parte despues del punto (.cl, .com) o si tiene espacios, antes de emitir.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-21',
         'version' => '1.79',
         'titulo'  => 'Guardar un cliente sin emitir el documento',
         'tag'     => 'frontend',
