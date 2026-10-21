@@ -330,6 +330,13 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                             Guardar en mis clientes
                         </label>
                     </div>
+                    <?php /* GUARDAR SIN EMITIR. type="button" y fuera del submit: no
+                       toca el folio ni el formulario, solo da de alta al receptor
+                       en el maestro por /ventas/guardar-cliente. */ ?>
+                    <div class="form-campo form-campo--ancho">
+                        <p><button type="button" class="boton-principal" id="boton-guardar-cliente">Guardar cliente</button></p>
+                        <small class="form-ayuda" id="guardar-cliente-aviso" aria-live="polite">Lo agrega a tus clientes sin emitir el documento.</small>
+                    </div>
                 </div>
             </section>
 
@@ -779,6 +786,59 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             })
             .catch(function () { aviso.textContent = ''; });
     });
+
+    // Guardar cliente SIN emitir. Espera segun seccion 14: nada bajo 300 ms,
+    // despues spinner dentro del boton (mismo ancho), aria-busy y disabled.
+    var botonCliente = document.getElementById('boton-guardar-cliente');
+    var avisoCliente = document.getElementById('guardar-cliente-aviso');
+    if (botonCliente) {
+        var guardandoCliente = false;
+        botonCliente.addEventListener('click', function () {
+            if (guardandoCliente) { return; }
+            var form = document.getElementById('form-emision');
+            var v = rut.value.trim();
+            if (v === '' || (window.emisionUx && !window.emisionUx.ordenarRut(v).valido)) {
+                window.emisionUx && window.emisionUx.pintar('receptor-rut', v === '' ? 'Escribe el RUT del cliente para guardarlo.' : window.emisionUx.MSG_RUT);
+                rut.focus();
+                return;
+            }
+            var datos = new URLSearchParams();
+            datos.append('csrf_token', form.querySelector('[name="csrf_token"]').value);
+            ['rut', 'razonSocial', 'giro', 'direccion', 'comuna', 'email'].forEach(function (c) {
+                var el = document.getElementById('receptor-' + c);
+                datos.append('receptor[' + c + ']', el ? el.value.trim() : '');
+            });
+            guardandoCliente = true;
+            var umbral = setTimeout(function () {
+                botonCliente.setAttribute('data-cargando', 'true');
+                botonCliente.setAttribute('aria-busy', 'true');
+            }, 300);
+            botonCliente.disabled = true;
+            fetch('/ventas/guardar-cliente', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: datos.toString(),
+            })
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    avisoCliente.textContent = (data && data.mensaje) || 'No se pudo guardar el cliente.';
+                    if (data && (data.estado === 'ok' || data.estado === 'existe')) {
+                        var marca = document.getElementById('guardar-cliente');
+                        if (marca) { marca.checked = false; }
+                    }
+                })
+                .catch(function () {
+                    avisoCliente.textContent = 'No se pudo guardar el cliente. Revisa tu conexion o tus permisos y vuelve a intentarlo.';
+                })
+                .then(function () {
+                    clearTimeout(umbral);
+                    guardandoCliente = false;
+                    botonCliente.disabled = false;
+                    botonCliente.removeAttribute('data-cargando');
+                    botonCliente.removeAttribute('aria-busy');
+                });
+        });
+    }
 })();
 </script>
 
