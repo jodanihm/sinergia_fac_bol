@@ -47,13 +47,13 @@ $err = static fn (string $c): string => isset($errores[$c]) ? ' style="border-co
         <div class="form-grid">
             <div class="form-campo">
                 <label for="rut_proveedor">RUT</label>
-                <input type="text" name="rut_proveedor" id="rut_proveedor" value="<?= $v('rut_proveedor'); ?>"
+                <input type="text" name="rut_proveedor" id="rut_proveedor" data-obligatorio="Escribe el RUT del proveedor, por ejemplo 76.543.210-3." value="<?= $v('rut_proveedor'); ?>"
                        placeholder="76543210-9"<?= $err('rut_proveedor'); ?>>
                 <small class="form-ayuda">Con guion y digito verificador.</small>
             </div>
             <div class="form-campo form-campo--ancho">
                 <label for="razon_social">Razon social</label>
-                <input type="text" name="razon_social" id="razon_social" value="<?= $v('razon_social'); ?>"<?= $err('razon_social'); ?>>
+                <input type="text" name="razon_social" id="razon_social" data-obligatorio="Escribe la razon social del proveedor." value="<?= $v('razon_social'); ?>"<?= $err('razon_social'); ?>>
             </div>
             <div class="form-campo form-campo--ancho">
                 <label for="giro">Giro</label>

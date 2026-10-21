@@ -42,6 +42,12 @@ $adminEmail = (string) ($adminStmtEmail->fetchColumn() ?: '');
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= htmlspecialchars($titulo ?? 'Panel de control'); ?></title>
 <link rel="stylesheet" href="<?= htmlspecialchars($adminCssHref); ?>">
+<?php
+// Validacion compartida de formularios (ver el encabezado del archivo). Misma
+// version por filemtime que la hoja de estilos, por la misma razon.
+$jsValidarVersion = @filemtime(__DIR__ . '/../../../public/js/validar-campos.js');
+?>
+<script src="/js/validar-campos.js<?= $jsValidarVersion ? '?v=' . $jsValidarVersion : ''; ?>" defer></script>
 </head>
 <body>
 <a class="skip-link" href="#contenido">Saltar al contenido</a>

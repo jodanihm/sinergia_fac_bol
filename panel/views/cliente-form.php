@@ -73,7 +73,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <div class="form-grid">
                     <div class="<?= $claseCampo('rut_cliente'); ?>">
                         <label for="rut_cliente">RUT <?= $req; ?></label>
-                        <input type="text" name="rut_cliente" id="rut_cliente" value="<?= $val('rut_cliente'); ?>" placeholder="77724622-4" required>
+                        <input type="text" name="rut_cliente" id="rut_cliente" data-obligatorio="Escribe el RUT del cliente, por ejemplo 77.724.622-4." value="<?= $val('rut_cliente'); ?>" placeholder="77724622-4" required>
                         <?php if ($err('rut_cliente')): ?>
                             <p class="error"><?= htmlspecialchars($err('rut_cliente')); ?></p>
                         <?php else: ?>
@@ -83,7 +83,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
                     <div class="<?= $claseCampo('razon_social'); ?>">
                         <label for="razon_social">Razon social <?= $req; ?></label>
-                        <input type="text" name="razon_social" id="razon_social" value="<?= $val('razon_social'); ?>" placeholder="Cliente SpA" required>
+                        <input type="text" name="razon_social" id="razon_social" data-obligatorio="Escribe la razon social del cliente." value="<?= $val('razon_social'); ?>" placeholder="Cliente SpA" required>
                         <?php if ($err('razon_social')): ?>
                             <p class="error"><?= htmlspecialchars($err('razon_social')); ?></p>
                         <?php endif; ?>

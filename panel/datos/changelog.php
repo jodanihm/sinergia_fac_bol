@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-21',
+        'version' => '1.81',
+        'titulo'  => 'Todos los formularios avisan campo por campo si el dato esta bien',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En todos los formularios del panel (clientes, productos, proveedores, ordenes de compra, cotizaciones, empresa, usuarios, roles, cobro en linea, registro y cambio de clave) cada dato se revisa al salir del campo: en verde con un check si esta bien, en rojo con lo que hay que corregir si falta o esta mal.',
+            'El correo se valida igual en todas partes: avisa si falta la @, la parte despues del punto (.cl, .com) o si tiene espacios. El RUT revisa su digito verificador y queda escrito como 12.345.678-9.',
+            'Si al guardar queda algo por corregir, el formulario no se envia y el cursor va al primer dato con problema.',
+            'En la cotizacion, el cliente nuevo se guarda solo en tus clientes al salir de la comuna (o con el boton azul "Guardar cliente"), sin guardar la cotizacion.',
+            'En la orden de compra, el proveedor nuevo se guarda solo en tus proveedores al salir del correo (o con el boton azul "Guardar proveedor"), sin guardar la orden.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-21',
         'version' => '1.80',
         'titulo'  => 'El cliente se guarda solo y cada dato avisa si esta bien',
         'tag'     => 'frontend',

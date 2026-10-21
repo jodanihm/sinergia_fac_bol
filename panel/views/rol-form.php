@@ -97,7 +97,7 @@ $flashError = ! empty($flash['mensaje']) && ($flash['tipo'] ?? '') !== 'exito';
     </div>
 </div>
 
-<form method="post" action="<?= $e($accion); ?>" class="form-compacto" id="form-rol" novalidate>
+<form method="post" action="<?= $e($accion); ?>" class="form-compacto" id="form-rol" novalidate data-validacion-propia>
     <?= csrfInput(); ?>
 
     <div class="config-columnas config-columnas--2">
