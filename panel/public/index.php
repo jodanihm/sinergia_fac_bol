@@ -684,6 +684,9 @@ const PERMISOS_RUTA = [
     // emision, pero devuelve una ficha del maestro de clientes: con
     // 'ventas:ver' se estarian leyendo maestros sin permiso de maestros.
     'GET /ventas/cliente-por-rut'                => ['maestros', 'ver'],
+    // Mismo criterio: lo dispara el formulario de emision, pero da de alta una
+    // ficha del maestro de clientes. No emite nada.
+    'POST /ventas/guardar-cliente'               => ['maestros', 'gestionar'],
 
     // --- compras ---
     'GET /compras/proveedores'                   => ['compras', 'ver'],
@@ -10087,6 +10090,58 @@ function handleClientePorRutGet(): void
 }
 
 /**
+ * Endpoint JSON del boton "Guardar cliente" del formulario de emision: da de
+ * alta al receptor en el maestro de clientes SIN emitir el documento.
+ *
+ * Valida con validarCliente(), el mismo criterio que /maestros/clientes/nuevo,
+ * y NO pisa un cliente que ya existe: si el RUT ya esta en el maestro responde
+ * 'existe' y no toca la ficha (corregirla es cosa de la pantalla de clientes).
+ */
+function handleGuardarClienteDesdeEmisionPost(): void
+{
+    $cuentaId = Auth::cuentaId();
+    $r        = is_array($_POST['receptor'] ?? null) ? $_POST['receptor'] : [];
+    [$datos, $errores] = validarCliente([
+        'rut_cliente'  => $r['rut'] ?? '',
+        'razon_social' => $r['razonSocial'] ?? '',
+        'giro'         => $r['giro'] ?? '',
+        'direccion'    => $r['direccion'] ?? '',
+        'comuna'       => $r['comuna'] ?? '',
+        'email'        => $r['email'] ?? '',
+        // El alta normal la trae marcada por defecto; aqui no hay casilla.
+        'pago_link'    => '1',
+    ]);
+
+    $responder = function (array $cuerpo): never {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode($cuerpo, JSON_UNESCAPED_UNICODE);
+        exit;
+    };
+
+    if ($errores !== []) {
+        $responder(['estado' => 'error', 'mensaje' => implode(' ', $errores)]);
+    }
+
+    $repo = clienteRepo();
+    if ($repo->buscarPorRut($cuentaId, $datos['rut_cliente']) !== null) {
+        $responder(['estado' => 'existe', 'mensaje' => 'Este cliente ya esta en tus clientes. No se modifico.']);
+    }
+
+    try {
+        $repo->crear($cuentaId, $datos);
+    } catch (ClienteDuplicadoException $e) {
+        $responder(['estado' => 'existe', 'mensaje' => 'Este cliente ya esta en tus clientes. No se modifico.']);
+    }
+    $encolados = $datos['email'] !== '' ? encolarCorreosPendientesDelCliente($cuentaId, $datos['rut_cliente']) : 0;
+
+    $responder([
+        'estado'  => 'ok',
+        'mensaje' => mensajeClienteGuardado('Cliente guardado en tus clientes. El documento aun no se emite.', $datos)
+            . mensajeCorreosEncolados($encolados),
+    ]);
+}
+
+/**
  * Exige el onboarding base completo (empresa + certificado + >=1 CAF) para
  * llegar a /apikeys: redirige a la etapa pendiente si falta algo. Devuelve el
  * rut_emisor de la cuenta cuando todo esta completo.
@@ -11629,6 +11684,11 @@ if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/desactivar$#',
 if ($metodo === 'GET' && $ruta === '/ventas/cliente-por-rut') {
     Auth::requerirSesion();
     handleClientePorRutGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/ventas/guardar-cliente') {
+    Auth::requerirSesion();
+    handleGuardarClienteDesdeEmisionPost();
 }
 
 if ($metodo === 'GET' && $ruta === '/ventas/resultado') {

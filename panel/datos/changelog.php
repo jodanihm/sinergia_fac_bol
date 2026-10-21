@@ -32,6 +32,16 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-10-21',
+        'version' => '1.79',
+        'titulo'  => 'Guardar un cliente sin emitir el documento',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al emitir una factura, boleta o nota, el bloque "Datos del receptor" trae un boton azul "Guardar cliente": agrega a ese cliente a tus clientes en el momento, sin emitir el documento ni usar un folio.',
+            'Si el cliente ya estaba guardado, lo avisa y no cambia su ficha. Si le faltan datos para facturarle (giro, direccion, comuna), se guarda igual y te dice cuales faltan.',
+        ],
+    ],
+    [
         'fecha'   => '2026-10-02',
         'version' => '1.78',
         'titulo'  => 'Todas las pantallas de Ventas rehechas',
