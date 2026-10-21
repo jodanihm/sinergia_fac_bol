@@ -335,7 +335,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                        en el maestro por /ventas/guardar-cliente. */ ?>
                     <div class="form-campo form-campo--ancho">
                         <p><button type="button" class="boton-principal" id="boton-guardar-cliente">Guardar cliente</button></p>
-                        <small class="form-ayuda" id="guardar-cliente-aviso" aria-live="polite">Lo agrega a tus clientes sin emitir el documento.</small>
+                        <small class="form-ayuda" id="guardar-cliente-aviso" aria-live="polite">Lo agrega a tus clientes sin emitir el documento. Tambien se guarda solo al salir del correo, si los datos estan completos.</small>
                     </div>
                 </div>
             </section>
@@ -452,7 +452,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     </p>
                     <ul class="panel-info__lista">
                         <li>El detalle necesita al menos una linea, con cantidad mayor que 0.</li>
-                        <li>Si el receptor no esta en tus clientes, marca "Guardar en mis clientes" para reutilizarlo despues.</li>
+                        <li>Si el receptor no esta en tus clientes, se guarda solo al completar sus datos y salir del correo (o con el boton "Guardar cliente").</li>
                         <li>Cada emision aceptada consume un folio de tu CAF.</li>
                     </ul>
                 </div>
@@ -745,6 +745,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     // vuelve a normalizar (Rut::normalizar) y a validar antes del motor.
     var rut = document.getElementById('receptor-rut');
     var aviso = document.getElementById('rut-aviso');
+    var rutYaEnClientes = '';
     rut.addEventListener('blur', function () {
         var v = rut.value.trim();
         if (v === '') { aviso.textContent = ''; window.emisionUx && window.emisionUx.pintar('receptor-rut', ''); return; }
@@ -763,7 +764,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     return;
                 }
                 if (data.estado === 'no_encontrado') {
-                    aviso.textContent = 'Cliente nuevo: completa sus datos y marca "Guardar en mis clientes" si lo vas a reutilizar.';
+                    aviso.textContent = 'Cliente nuevo: completa sus datos y se guarda solo en tus clientes al salir del correo.';
                     return;
                 }
                 var c = data.cliente || {};
@@ -780,6 +781,8 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 poner('receptor-direccion', c.direccion);
                 poner('receptor-comuna', c.comuna);
                 poner('receptor-email', c.email);
+                rutYaEnClientes = rut.value.trim();
+                window.emisionUx && window.emisionUx.revisarReceptor(true);
                 aviso.textContent = c.activo === false
                     ? 'Cliente encontrado, pero esta inactivo en tus clientes. Datos completados.'
                     : 'Cliente encontrado: datos completados.';
@@ -789,11 +792,26 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
     // Guardar cliente SIN emitir. Espera segun seccion 14: nada bajo 300 ms,
     // despues spinner dentro del boton (mismo ancho), aria-busy y disabled.
+    //
+    // GUARDADO AUTOMATICO: al salir del correo, que es el ultimo campo del
+    // receptor, si todo lo obligatorio esta correcto se guarda solo, por el
+    // mismo camino que el boton. No se repite para un RUT que ya esta en el
+    // maestro (lo trajo el autocompletado, o ya se guardo en esta pantalla).
     var botonCliente = document.getElementById('boton-guardar-cliente');
     var avisoCliente = document.getElementById('guardar-cliente-aviso');
     if (botonCliente) {
         var guardandoCliente = false;
-        botonCliente.addEventListener('click', function () {
+        var correoReceptor = document.getElementById('receptor-email');
+        if (correoReceptor) {
+            correoReceptor.addEventListener('blur', function () {
+                var ux = window.emisionUx;
+                if (guardandoCliente || !ux || !ux.receptorListo()) { return; }
+                if (rut.value.trim() === rutYaEnClientes) { return; }
+                guardarCliente();
+            });
+        }
+        botonCliente.addEventListener('click', guardarCliente);
+        function guardarCliente() {
             if (guardandoCliente) { return; }
             var form = document.getElementById('form-emision');
             var v = rut.value.trim();
@@ -823,6 +841,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 .then(function (data) {
                     avisoCliente.textContent = (data && data.mensaje) || 'No se pudo guardar el cliente.';
                     if (data && (data.estado === 'ok' || data.estado === 'existe')) {
+                        rutYaEnClientes = datos.get('receptor[rut]');
                         var marca = document.getElementById('guardar-cliente');
                         if (marca) { marca.checked = false; }
                     }
@@ -837,7 +856,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     botonCliente.removeAttribute('data-cargando');
                     botonCliente.removeAttribute('aria-busy');
                 });
-        });
+        }
     }
 })();
 </script>
@@ -900,9 +919,82 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         p.hidden = msg === '';
         var campo = control.closest('.form-campo');
         if (campo) { campo.classList.toggle('form-campo--error', msg !== ''); }
+        if (campo && msg !== '') { campo.classList.remove('form-campo--ok'); }
         if (msg === '') { control.removeAttribute('aria-invalid'); } else { control.setAttribute('aria-invalid', 'true'); }
     }
-    window.emisionUx = { ordenarRut: ordenarRut, pintar: pintar, MSG_RUT: MSG_RUT };
+    /* RECEPTOR: validar al salir del campo y, desde ahi, mientras se corrige
+       (design system, Formularios > Validacion). Un dato correcto deja el
+       campo en verde con un check (.form-campo--ok): color mas icono, nunca
+       solo color. Un opcional vacio queda neutro. Obligatorios segun el motor,
+       los mismos que llevan el asterisco: en boleta no hay ninguno. */
+    var CAMPOS_RECEPTOR = ['receptor-rut', 'receptor-razonSocial', 'receptor-giro', 'receptor-direccion', 'receptor-comuna', 'receptor-email'];
+    var FALTA_RECEPTOR = ES_BOLETA ? {} : {
+        'receptor-rut': 'Escribe el RUT del receptor, por ejemplo 77.724.622-4.',
+        'receptor-razonSocial': 'Escribe la razon social del receptor.',
+        'receptor-giro': 'Escribe el giro del receptor: el SII lo exige.',
+        'receptor-direccion': 'Escribe la direccion del receptor.',
+        'receptor-comuna': 'Escribe la comuna del receptor.'
+    };
+    function msgCorreo(v) {
+        if (/\s/.test(v)) { return 'El correo no puede tener espacios.'; }
+        var at = v.indexOf('@');
+        if (at < 0) { return 'Falta la @, por ejemplo contacto@empresa.cl.'; }
+        if (at === 0) { return 'Falta la parte antes de la @, por ejemplo contacto@empresa.cl.'; }
+        if (v.indexOf('@', at + 1) >= 0) { return 'El correo tiene mas de una @.'; }
+        var dominio = v.slice(at + 1);
+        if (dominio === '') { return 'Falta el dominio despues de la @, por ejemplo empresa.cl.'; }
+        if (!/^[^.]+(\.[^.]+)*\.[A-Za-z]{2,}$/.test(dominio)) { return 'Falta la parte despues del punto, por ejemplo .cl o .com.'; }
+        return '';
+    }
+    // '' = correcto, texto = error, null = opcional vacio (neutro).
+    function validarCampoReceptor(id) {
+        var c = document.getElementById(id);
+        if (!c) { return null; }
+        var v = c.value.trim();
+        if (v === '') { return FALTA_RECEPTOR[id] || null; }
+        if (id === 'receptor-email') { return msgCorreo(v); }
+        if (id === 'receptor-rut') { return ordenarRut(v).valido ? '' : MSG_RUT; }
+        return '';
+    }
+    function revisarCampoReceptor(id) {
+        var c = document.getElementById(id);
+        if (!c) { return null; }
+        var r = validarCampoReceptor(id);
+        pintar(id, r || '');
+        var campo = c.closest('.form-campo');
+        if (campo) { campo.classList.toggle('form-campo--ok', r === ''); }
+        return r;
+    }
+    // soloLlenos: tras el autocompletado se pintan los campos que trajeron
+    // dato, sin marcar en rojo los vacios que nadie ha tocado todavia.
+    function revisarReceptor(soloLlenos) {
+        CAMPOS_RECEPTOR.forEach(function (id) {
+            var c = document.getElementById(id);
+            if (!c || (soloLlenos && c.value.trim() === '')) { return; }
+            c.setAttribute('data-tocado', '1');
+            revisarCampoReceptor(id);
+        });
+    }
+    // Listo para guardarse como cliente: obligatorios correctos y correo
+    // correcto o vacio. En boleta, que no exige nada, al menos RUT y razon
+    // social, que es lo minimo que pide el maestro de clientes.
+    function receptorListo() {
+        var ok = true;
+        CAMPOS_RECEPTOR.forEach(function (id) {
+            var r = validarCampoReceptor(id);
+            if (r !== null && r !== '') { ok = false; }
+        });
+        if (ES_BOLETA && (validarCampoReceptor('receptor-rut') !== '' || validarCampoReceptor('receptor-razonSocial') !== '')) { ok = false; }
+        return ok;
+    }
+    CAMPOS_RECEPTOR.forEach(function (id) {
+        var c = document.getElementById(id);
+        if (!c) { return; }
+        c.addEventListener('blur', function () { c.setAttribute('data-tocado', '1'); revisarCampoReceptor(id); });
+        c.addEventListener('input', function () { if (c.hasAttribute('data-tocado')) { revisarCampoReceptor(id); } });
+    });
+
+    window.emisionUx = { ordenarRut: ordenarRut, pintar: pintar, MSG_RUT: MSG_RUT, revisarReceptor: revisarReceptor, receptorListo: receptorListo };
 
     function visible(el) { return !el.disabled && !el.closest('[hidden]'); }
     function revisar() {
@@ -914,12 +1006,10 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             pintar(c.id, msg);
             if (msg) { malos.push([c.id, msg]); }
         });
-        var v = rut.value.trim();
-        var msgRut = '';
-        if (v === '' && !ES_BOLETA) { msgRut = 'Escribe el RUT del receptor, por ejemplo 77.724.622-4.'; }
-        else if (v !== '' && !ordenarRut(v).valido) { msgRut = MSG_RUT; }
-        pintar('receptor-rut', msgRut);
-        if (msgRut) { malos.push(['receptor-rut', msgRut]); }
+        CAMPOS_RECEPTOR.forEach(function (id) {
+            var r = revisarCampoReceptor(id);
+            if (r) { malos.push([id, r]); }
+        });
         // En el orden de la pantalla.
         malos.sort(function (a, b) {
             return document.getElementById(a[0]).compareDocumentPosition(document.getElementById(b[0])) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
