@@ -17,9 +17,9 @@
  * formatea a cero decimales como los montos ya emitidos del panel de emision --
  * ahi los valores son enteros definitivos, aca es un precio de catalogo. Se
  * muestran hasta 4 decimales sin ceros de relleno, igual que antes, ahora con
- * separador de miles. No se calcula IVA ni se convierte neto a bruto: el precio
- * se guarda tal como lo escribio el usuario y asi viaja al detalle del
- * documento.
+ * separador de miles. El guardado es el precio SIN IVA y asi viaja al detalle
+ * del documento; bajo el va, en linea secundaria, el precio final que paga el
+ * cliente (con IVA, o el mismo si el item es exento), redondeado a pesos.
  *
  * EXENTO: columna booleana del maestro. Es una caracteristica tributaria del
  * item, no un estado del registro, asi que va con badge de etiqueta y no con
@@ -112,7 +112,7 @@ $fmtPrecio = static function ($v): ?string {
             <thead>
                 <tr>
                     <th>Producto o servicio</th>
-                    <th class="tabla-datos__num">Precio unitario</th>
+                    <th class="tabla-datos__num">Precio sin IVA</th>
                     <th>Unidad</th>
                     <th>IVA</th>
                     <th class="tabla-datos__estado">Estado</th>
@@ -134,6 +134,9 @@ $fmtPrecio = static function ($v): ?string {
                         </td>
                         <td class="tabla-datos__num">
                             <?= $precio !== null ? htmlspecialchars($precio) : '<span class="dash-vacio-inline">&mdash;</span>'; ?>
+                            <?php if ($precio !== null): ?>
+                                <span class="tabla-datos__secundario">Final <?= '$ ' . number_format(round((float) $p['precio_unitario'] * ($p['exento'] ? 1 : 1.19)), 0, ',', '.'); ?></span>
+                            <?php endif; ?>
                         </td>
                         <td><?= $oVacio($p['unidad'] ?? null); ?></td>
                         <td><span class="badge badge--etiqueta"><?= $p['exento'] ? 'Exento' : 'Afecto'; ?></span></td>

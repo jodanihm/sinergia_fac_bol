@@ -4191,7 +4191,7 @@ function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
 /**
  * El .xlsx de la carga masiva a partir de las cotizaciones ya creadas.
  *
- * LAS 16 COLUMNAS DE NOTA_VENTA_ENCABEZADOS, EN SU ORDEN, y tomadas de la propia
+ * LAS 17 COLUMNAS DE NOTA_VENTA_ENCABEZADOS, EN SU ORDEN, y tomadas de la propia
  * constante: leerFilasExcelCargaMasiva() compara la fila 1 con === estricto
  * contra ella, asi que escribir la lista a mano aqui garantizaria el rechazo el
  * dia que alguien agregue una columna alla.
@@ -4239,6 +4239,7 @@ function chatArmadoExcel(int $cuentaId, array $ids): string
                 '',   // fecha_vencimiento: solo obligatoria con CREDITO
                 '',   // folio_boleta_a_anular
                 '',   // fecha_boleta_a_anular
+                '',   // precio_final: la cotizacion guarda el precio sin IVA
             ], null, 'A' . $fila);
             $fila++;
         }
@@ -7321,6 +7322,26 @@ const NOTA_VENTA_ENCABEZADOS = [
     // columnas de anulacion de boleta, que casi siempre van vacias.
     'forma_pago', 'fecha_vencimiento',
     'folio_boleta_a_anular', 'fecha_boleta_a_anular',
+    // PRECIO FINAL, AL FINAL Y OPCIONAL (octubre 2026). Quien llena el Excel
+    // escribe el precio que conoce: el sin IVA en precio_unitario o el que paga
+    // el cliente aqui. Va ultima y no junto a precio_unitario para no correr
+    // las letras de las columnas (las fechas tienen formato por letra en la
+    // plantilla) y para que el archivo de 16 columnas siga sirviendo: ver
+    // NOTA_VENTA_ENCABEZADOS_V2.
+    'precio_final',
+];
+
+/**
+ * Las 16 columnas de antes de precio_final. A diferencia de la V1, este archivo
+ * SI se acepta: no le falta nada obligatorio, solo la columna opcional, que se
+ * lee como vacia.
+ */
+const NOTA_VENTA_ENCABEZADOS_V2 = [
+    'identificador_externo', 'rut_receptor', 'razon_social_receptor', 'giro_receptor',
+    'direccion_receptor', 'comuna_receptor', 'email_receptor', 'fecha_nota',
+    'producto_servicio', 'cantidad', 'precio_unitario', 'exento',
+    'forma_pago', 'fecha_vencimiento',
+    'folio_boleta_a_anular', 'fecha_boleta_a_anular',
 ];
 
 /**
@@ -7462,9 +7483,19 @@ function handlePlantillaExcelGet(): void
         . ' Dejar vacia con CONTADO o SIN COSTO. ' . $ayuda
     );
 
-    $hoja->getStyle('A1:P1')->getFont()->setBold(true);
+    // K precio_unitario y Q precio_final: se llena uno de los dos.
+    $hoja->getComment('K1')->getText()->createText(
+        'Precio SIN IVA. Si no lo sabes, deja esta celda vacia y escribe en precio_final'
+        . ' (ultima columna) lo que paga el cliente: el IVA se calcula solo.'
+    );
+    $hoja->getComment('Q1')->getText()->createText(
+        'Opcional. Precio final que paga el cliente, con IVA incluido. Si lo escribes,'
+        . ' no hace falta precio_unitario: el documento suma exactamente este precio.'
+    );
+
+    $hoja->getStyle('A1:Q1')->getFont()->setBold(true);
     $hoja->freezePane('A2');
-    foreach (range('A', 'P') as $col) {
+    foreach (range('A', 'Q') as $col) {
         $hoja->getColumnDimension($col)->setAutoSize(true);
     }
 
@@ -7687,6 +7718,18 @@ function leerFilasExcelCargaMasiva(string $rutaArchivo): array
     }
 
     $encabezados = array_map(static fn ($v): string => trim((string) $v), array_shift($filasCrudas));
+    // La plantilla sin precio_final se acepta: se completa con la celda vacia.
+    // Una celda de mas al final (la 17 en blanco) se recorta antes de comparar.
+    $sinPrecioFinal = array_slice($encabezados, 0, count(NOTA_VENTA_ENCABEZADOS_V2)) === NOTA_VENTA_ENCABEZADOS_V2
+        && array_filter(array_slice($encabezados, count(NOTA_VENTA_ENCABEZADOS_V2)), static fn ($v): bool => $v !== '') === [];
+    if ($sinPrecioFinal) {
+        $encabezados = NOTA_VENTA_ENCABEZADOS;
+        foreach ($filasCrudas as &$filaV2) {
+            $filaV2 = array_slice(array_pad($filaV2, count(NOTA_VENTA_ENCABEZADOS_V2), ''), 0, count(NOTA_VENTA_ENCABEZADOS_V2));
+            $filaV2[] = '';
+        }
+        unset($filaV2);
+    }
     if ($encabezados !== NOTA_VENTA_ENCABEZADOS) {
         // La plantilla ANTERIOR se reconoce y se nombra. Un archivo hecho con
         // ella no tiene nada malformado: simplemente le faltan las dos columnas
@@ -7799,9 +7842,16 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
         $errores[] = 'cantidad debe ser un numero mayor que 0';
     }
 
-    $precioRaw = $fila['precio_unitario'];
-    if ($precioRaw === '' || ! is_numeric($precioRaw) || (float) $precioRaw < 0) {
-        $errores[] = 'precio_unitario debe ser un numero mayor o igual a 0';
+    // PRECIO SIN IVA O PRECIO FINAL: se escribe uno de los dos. Si vienen los
+    // dos manda el final, que es el que la persona conoce de verdad (el sin IVA
+    // casi siempre es una cuenta hecha a mano).
+    $precioFinalRaw = $fila['precio_final'] ?? '';
+    $usaPrecioFinal = $precioFinalRaw !== '';
+    $precioRaw      = $usaPrecioFinal ? $precioFinalRaw : $fila['precio_unitario'];
+    if ($precioRaw === '') {
+        $errores[] = 'falta el precio: escribe precio_unitario (sin IVA) o precio_final (lo que paga el cliente)';
+    } elseif (! is_numeric($precioRaw) || (float) $precioRaw < 0) {
+        $errores[] = ($usaPrecioFinal ? 'precio_final' : 'precio_unitario') . ' debe ser un numero mayor o igual a 0';
     }
 
     $exentoRaw = strtoupper($fila['exento']);
@@ -7955,6 +8005,11 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
     }
 
     $montoNeto = (float) $cantidadRaw * (float) $precioRaw;
+    // Con precio final la linea guarda ESE precio y la marca precioIncluyeIva:
+    // armarDocumentosSubLote() emite el documento bruto y el total queda
+    // exactamente igual al que se escribio. En una linea exenta no hay IVA que
+    // separar y la marca no hace falta.
+    $lineaBruta = $usaPrecioFinal && ! $exento;
 
     return [
         'status'        => 'ok',
@@ -7973,12 +8028,12 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
                 'cantidad'       => (float) $cantidadRaw,
                 'precioUnitario' => (float) $precioRaw,
                 'exento'         => $exento,
-            ]],
+            ] + ($lineaBruta ? ['precioIncluyeIva' => true] : [])],
             'forma_pago'            => $formaPago,
             'forma_pago_raw'        => $formaPagoRaw,
             'fecha_vencimiento'     => $vencimiento,
             'fecha_vencimiento_raw' => $vencimientoRaw,
-            'monto_estimado'        => (int) round($exento ? $montoNeto : $montoNeto * 1.19),
+            'monto_estimado'        => (int) round($exento || $lineaBruta ? $montoNeto : $montoNeto * 1.19),
             'boleta_ref_tipo'       => $folioBoleta !== null ? 39 : null,
             'boleta_ref_folio'      => $folioBoleta,
             'boleta_ref_fecha'      => $fechaBoleta,
@@ -9031,6 +9086,37 @@ function mensajeRechazoSubLote(string $error, array $notas): string
     return $error;
 }
 
+/**
+ * Quita la marca precioIncluyeIva del detalle de una nota (el motor no la
+ * conoce) y dice si el documento va bruto. Va bruto cuando todas las lineas
+ * afectas la traen, que con una linea por nota es el caso de siempre. Si alguna
+ * vez se mezclaran, las marcadas se pasan a sin IVA con 6 decimales, igual que
+ * preciosDelDetalle() en la emision.
+ *
+ * @param list<array<string,mixed>> $detalle
+ */
+function notaDetalleSinMarcaDeIva(array &$detalle): bool
+{
+    $marcadas = 0;
+    $afectas  = 0;
+    foreach ($detalle as $l) {
+        if (empty($l['exento'])) {
+            $afectas++;
+            $marcadas += empty($l['precioIncluyeIva']) ? 0 : 1;
+        }
+    }
+    $brutos = $marcadas > 0 && $marcadas === $afectas;
+    foreach ($detalle as &$l) {
+        if (! empty($l['precioIncluyeIva']) && ! $brutos) {
+            $l['precioUnitario'] = round((float) $l['precioUnitario'] / 1.19, 6);
+        }
+        unset($l['precioIncluyeIva']);
+    }
+    unset($l);
+
+    return $brutos;
+}
+
 /** Arma los documentos del sub-lote para POST /api/v1/dte/lote, en el mismo
  *  orden de $notas (factura primero, NC despues si aplica). La NC anula la
  *  boleta original: mismo detalle/montos que la factura de reemplazo. */
@@ -9039,6 +9125,7 @@ function armarDocumentosSubLote(array $notas): array
     $documentos = [];
     foreach ($notas as $nota) {
         $detalle  = json_decode((string) $nota['detalle'], true);
+        $brutos   = notaDetalleSinMarcaDeIva($detalle);
         $receptor = [
             'rut'         => $nota['receptor_rut'],
             'razonSocial' => $nota['receptor_razon_social'],
@@ -9059,7 +9146,7 @@ function armarDocumentosSubLote(array $notas): array
             'tipoDte'         => $tipos[0],
             'receptor'        => $receptor,
             'detalles'        => $detalle,
-            'montosSonBrutos' => false,
+            'montosSonBrutos' => $brutos,
         ];
 
         // FORMA DE PAGO Y VENCIMIENTO, si la nota los trae. Las notas cargadas
@@ -9081,7 +9168,7 @@ function armarDocumentosSubLote(array $notas): array
                 'tipoDte'         => 61,
                 'receptor'        => $receptor,
                 'detalles'        => $detalle,
-                'montosSonBrutos' => false,
+                'montosSonBrutos' => $brutos,
                 'referencias'     => [[
                     'tipoDocumento' => (int) ($nota['boleta_ref_tipo'] ?? 39),
                     'folio'         => (int) $nota['boleta_ref_folio'],

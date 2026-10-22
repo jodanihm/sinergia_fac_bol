@@ -61,7 +61,7 @@ $requisitos = [
     'fecha_nota'            => ['obligatorio', 'Fecha de la venta original. Formatos: ' . FechaExcel::FORMATOS . '.'],
     'producto_servicio'     => ['obligatorio', 'Descripcion que aparece en el detalle del documento.'],
     'cantidad'              => ['obligatorio', 'Numero mayor que 0.'],
-    'precio_unitario'       => ['obligatorio', 'Numero mayor o igual a 0, sin IVA.'],
+    'precio_unitario'       => ['condicional', 'Precio sin IVA, numero mayor o igual a 0. Puedes dejarlo vacio si escribes precio_final.'],
     'exento'                => ['opcional',    'SI, NO, o dejar vacio.'],
     // SIN ESTAS DOS ENTRADAS la tabla las pintaba "Opcional" por el fallback de
     // abajo, y esta pantalla le habria dicho al usuario justo lo contrario de lo
@@ -70,6 +70,7 @@ $requisitos = [
     'fecha_vencimiento'     => ['condicional', 'Obligatoria cuando forma_pago es CREDITO; vacia con CONTADO o SIN COSTO. Formatos: ' . FechaExcel::FORMATOS . '.'],
     'folio_boleta_a_anular' => ['opcional',    'Numero entero mayor que 0. Solo si esta nota reemplaza una boleta ya emitida.'],
     'fecha_boleta_a_anular' => ['condicional', 'Obligatoria cuando viene folio_boleta_a_anular.'],
+    'precio_final'          => ['opcional',    'Lo que paga el cliente, con IVA incluido. Si lo escribes, no hace falta precio_unitario y el documento suma exactamente este precio. Un archivo sin esta columna tambien se acepta.'],
 ];
 
 // Requisito de una columna NO es un estado: no se usan verde/rojo. El peso
@@ -203,7 +204,7 @@ $fraseExentoOff = 'Las notas salen como factura afecta (33), igual que siempre. 
                 <li>Las filas completamente vacias se ignoran, no cuentan como error.</li>
                 <li>Una fila con problemas no detiene la carga: se guarda con el motivo para que puedas corregirla.</li>
                 <li>El identificador de cada nota evita que la misma venta se cargue dos veces.</li>
-                <li>Los montos van sin IVA; el impuesto se calcula al emitir.</li>
+                <li>El precio va en una de dos columnas: precio_unitario (sin IVA) o precio_final (lo que paga el cliente). El IVA se calcula solo.</li>
             </ul>
         </div>
 

@@ -29,6 +29,9 @@
  *   - id/clase que usa el JS: #form-cotizacion, #tabla-lineas, #agregar-linea,
  *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list,
  *     #clientes-list, #receptor_rut y #rut-aviso.
+ *   - data-precio="neto|final|cantidad|descuento|exento" y data-precios en la
+ *     tabla: los usa js/precio-iva.js para el precio final y el resumen. El
+ *     precio final no tiene name: se guarda solo el sin IVA.
  *   - La fila esta duplicada: aqui en PHP y en nuevaFilaHTML() del JS. Las dos
  *     deben producir el mismo DOM (incluidos los data-label, que son los que
  *     convierten cada fila en tarjeta bajo 720px). Mismo criterio que
@@ -263,14 +266,16 @@ if (isset($errores['lineas'])) {
         <p class="tarjeta__intro">
             Elige un producto de tu catalogo para traer su precio y unidad, o escribe uno nuevo.
             La cantidad admite decimales: media hora de servicio es 0,5.
+            Escribe el precio que conozcas, el precio final que paga el cliente o el precio sin IVA: el otro se calcula solo.
         </p>
         <div class="tabla-scroll">
-            <table id="tabla-lineas" class="tabla-datos tabla-editable tabla-datos--cards tabla-datos--cards-auto" tabindex="-1">
+            <table id="tabla-lineas" class="tabla-datos tabla-editable tabla-datos--cards tabla-datos--cards-auto" tabindex="-1" data-precios data-precios-resumen="resumen-cotizacion" data-precios-iva="exacto">
                 <thead>
                     <tr>
                         <th scope="col" class="col-producto">Producto / servicio</th>
                         <th scope="col" class="col-cantidad">Cantidad</th>
-                        <th scope="col" class="col-precio">Precio unit.</th>
+                        <th scope="col" class="col-precio">Precio sin IVA</th>
+                        <th scope="col" class="col-precio">Precio final</th>
                         <th scope="col" class="col-unidad">Unidad</th>
                         <th scope="col" class="col-descuento">Desc. %</th>
                         <th scope="col" class="col-exento">Exento</th>
@@ -282,11 +287,12 @@ if (isset($errores['lineas'])) {
                         <?php $i = (int) $i; ?>
                         <tr>
                             <td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[<?= $i; ?>][nombre]" id="lin-<?= $i; ?>-nombre" value="<?= $e((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" aria-label="Producto o servicio"<?= $ariaLinea("lineas[{$i}].nombre"); ?>></td>
-                            <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][cantidad]" id="lin-<?= $i; ?>-cantidad" value="<?= $e((string) ($l['cantidad'] ?? '')); ?>" aria-label="Cantidad"<?= $ariaLinea("lineas[{$i}].cantidad"); ?>></td>
-                            <td class="col-precio" data-label="Precio unit."><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][precio_unitario]" id="lin-<?= $i; ?>-precio_unitario" value="<?= $e((string) ($l['precio_unitario'] ?? '')); ?>" class="lin-precio" aria-label="Precio unitario"<?= $ariaLinea("lineas[{$i}].precio_unitario"); ?>></td>
+                            <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][cantidad]" id="lin-<?= $i; ?>-cantidad" value="<?= $e((string) ($l['cantidad'] ?? '')); ?>" aria-label="Cantidad" data-precio="cantidad"<?= $ariaLinea("lineas[{$i}].cantidad"); ?>></td>
+                            <td class="col-precio" data-label="Precio sin IVA"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][precio_unitario]" id="lin-<?= $i; ?>-precio_unitario" value="<?= $e((string) ($l['precio_unitario'] ?? '')); ?>" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"<?= $ariaLinea("lineas[{$i}].precio_unitario"); ?>></td>
+                            <td class="col-precio" data-label="Precio final"><input type="text" inputmode="decimal" id="lin-<?= $i; ?>-precio_final" aria-label="Precio final unitario que paga el cliente, con IVA" data-precio="final"></td>
                             <td class="col-unidad" data-label="Unidad"><input type="text" name="lineas[<?= $i; ?>][unidad]" id="lin-<?= $i; ?>-unidad" value="<?= $e((string) ($l['unidad'] ?? '')); ?>" class="lin-unidad" aria-label="Unidad"></td>
-                            <td class="col-descuento" data-label="Desc. %"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][descuento_pct]" id="lin-<?= $i; ?>-descuento_pct" value="<?= $e((string) ($l['descuento_pct'] ?? '')); ?>" aria-label="Descuento por linea"<?= $ariaLinea("lineas[{$i}].descuento_pct"); ?>></td>
-                            <td class="col-exento" data-label="Exento"><input type="checkbox" name="lineas[<?= $i; ?>][exento]" value="1" aria-label="Exento de IVA" <?= ! empty($l['exento']) ? 'checked' : ''; ?>></td>
+                            <td class="col-descuento" data-label="Desc. %"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][descuento_pct]" id="lin-<?= $i; ?>-descuento_pct" value="<?= $e((string) ($l['descuento_pct'] ?? '')); ?>" aria-label="Descuento por linea" data-precio="descuento"<?= $ariaLinea("lineas[{$i}].descuento_pct"); ?>></td>
+                            <td class="col-exento" data-label="Exento"><input type="checkbox" name="lineas[<?= $i; ?>][exento]" value="1" aria-label="Exento de IVA" data-precio="exento" <?= ! empty($l['exento']) ? 'checked' : ''; ?>></td>
                             <td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
                         </tr>
                     <?php endforeach; ?>
@@ -303,6 +309,9 @@ if (isset($errores['lineas'])) {
                 <option value="<?= $e((string) $p['nombre']); ?>"></option>
             <?php endforeach; ?>
         </datalist>
+        <?php /* Lo llena js/precio-iva.js mientras se escribe, con la formula de cotizacion-detalle.php. */ ?>
+        <h3 id="titulo-resumen-cotizacion">Resumen</h3>
+        <dl class="ficha ficha--montos" id="resumen-cotizacion" aria-labelledby="titulo-resumen-cotizacion"></dl>
     </section>
 
     <div class="config-columnas config-columnas--2">
@@ -322,7 +331,7 @@ if (isset($errores['lineas'])) {
             </p>
             <ul class="panel-info__lista">
                 <li>El numero de la cotizacion se asigna al guardar.</li>
-                <li>Los totales con IVA se ven en el detalle y en el PDF.</li>
+                <li>El total con IVA se ve en el resumen bajo el detalle mientras escribes, y en el PDF.</li>
                 <li>Mientras no se facture, la puedes editar cuantas veces quieras.</li>
             </ul>
         </div>
@@ -347,11 +356,12 @@ if (isset($errores['lineas'])) {
     function nuevaFilaHTML(i) {
         return '<tr>'
             + '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[' + i + '][nombre]" id="lin-' + i + '-nombre" class="lin-nombre" aria-label="Producto o servicio"></td>'
-            + '<td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[' + i + '][cantidad]" id="lin-' + i + '-cantidad" aria-label="Cantidad"></td>'
-            + '<td class="col-precio" data-label="Precio unit."><input type="text" inputmode="decimal" name="lineas[' + i + '][precio_unitario]" id="lin-' + i + '-precio_unitario" class="lin-precio" aria-label="Precio unitario"></td>'
+            + '<td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[' + i + '][cantidad]" id="lin-' + i + '-cantidad" aria-label="Cantidad" data-precio="cantidad"></td>'
+            + '<td class="col-precio" data-label="Precio sin IVA"><input type="text" inputmode="decimal" name="lineas[' + i + '][precio_unitario]" id="lin-' + i + '-precio_unitario" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"></td>'
+            + '<td class="col-precio" data-label="Precio final"><input type="text" inputmode="decimal" id="lin-' + i + '-precio_final" aria-label="Precio final unitario que paga el cliente, con IVA" data-precio="final"></td>'
             + '<td class="col-unidad" data-label="Unidad"><input type="text" name="lineas[' + i + '][unidad]" id="lin-' + i + '-unidad" class="lin-unidad" aria-label="Unidad"></td>'
-            + '<td class="col-descuento" data-label="Desc. %"><input type="text" inputmode="decimal" name="lineas[' + i + '][descuento_pct]" id="lin-' + i + '-descuento_pct" aria-label="Descuento por linea"></td>'
-            + '<td class="col-exento" data-label="Exento"><input type="checkbox" name="lineas[' + i + '][exento]" value="1" aria-label="Exento de IVA"></td>'
+            + '<td class="col-descuento" data-label="Desc. %"><input type="text" inputmode="decimal" name="lineas[' + i + '][descuento_pct]" id="lin-' + i + '-descuento_pct" aria-label="Descuento por linea" data-precio="descuento"></td>'
+            + '<td class="col-exento" data-label="Exento"><input type="checkbox" name="lineas[' + i + '][exento]" value="1" aria-label="Exento de IVA" data-precio="exento"></td>'
             + '<td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>'
             + '</tr>';
     }
@@ -514,9 +524,14 @@ if (isset($errores['lineas'])) {
         var precio = fila.querySelector('.lin-precio');
         var unidad = fila.querySelector('.lin-unidad');
         var exento = fila.querySelector('input[type=checkbox]');
-        if (precio && precio.value === '' && p.precio !== '') { precio.value = p.precio; }
         if (unidad && unidad.value === '') { unidad.value = p.unidad; }
         if (exento && p.exento) { exento.checked = true; }
+        // El precio del catalogo es sin IVA; 'input' hace que precio-iva.js
+        // complete el precio final y el resumen.
+        if (precio && precio.value === '' && p.precio !== '') {
+            precio.value = p.precio;
+            precio.dispatchEvent(new Event('input', { bubbles: true }));
+        }
     });
 
     /* --- ENVIO: resumen + foco al primero (design system, Formularios) y la
