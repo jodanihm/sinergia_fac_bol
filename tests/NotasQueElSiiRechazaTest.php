@@ -107,6 +107,11 @@ final class NotasQueElSiiRechazaTest extends TestCase
         // panel/public/index.php es otro front controller de 19.000 lineas que
         // al incluirlo arranca sesion, base de datos y router.
         $panel = (string) file_get_contents(self::PANEL);
+        // preciosDelDetalle() decide que precio viaja (sin IVA o final) y si el
+        // documento va bruto; armarDocumentoEmision() la llama.
+        $ok = preg_match('/^function preciosDelDetalle.*?\n\}\n/ms', $panel, $m);
+        self::assertSame(1, $ok, 'no se encontro preciosDelDetalle() en el panel');
+        eval('namespace ' . __NAMESPACE__ . ";\n" . $m[0]);
         $ok = preg_match('/^function armarDocumentoEmision.*?\n\}\n/ms', $panel, $m);
         self::assertSame(1, $ok, 'no se encontro armarDocumentoEmision() en el panel');
         eval(
@@ -619,5 +624,49 @@ final class NotasQueElSiiRechazaTest extends TestCase
                     . ' repite la lista de tipos sin IVA: usa TipoDte::SIN_IVA.'
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    //  Precio sin IVA o precio final: la casilla "brutos" ya no existe
+    // -----------------------------------------------------------------------
+
+    /** @param list<array<string,mixed>> $detalles */
+    private function armarFactura(array $detalles, array $extra = []): array
+    {
+        return $this->armar(33, ['receptor' => ['rut' => '77.724.622-4'], 'detalles' => $detalles] + $extra);
+    }
+
+    public function testSiTodoSeEscribioComoPrecioFinalElDocumentoVaBrutoConEsosPrecios(): void
+    {
+        $doc = $this->armarFactura([
+            ['nombre' => 'A', 'cantidad' => '1', 'precioUnitario' => '71429', 'precioFinal' => '85000', 'origen' => 'bruto'],
+            ['nombre' => 'B', 'cantidad' => '2', 'precioUnitario' => '1000', 'precioFinal' => '1000', 'origen' => 'neto', 'exento' => '1'],
+        ]);
+        self::assertTrue($doc['montosSonBrutos']);
+        self::assertSame([85000.0, 1000.0], array_column($doc['detalles'], 'precioUnitario'));
+    }
+
+    public function testSiHayUnaLineaSinIvaTodoVaNetoYElPrecioFinalSePasaANeto(): void
+    {
+        $doc = $this->armarFactura([
+            ['nombre' => 'A', 'cantidad' => '1', 'precioUnitario' => '840', 'precioFinal' => '1000', 'origen' => 'bruto'],
+            ['nombre' => 'B', 'cantidad' => '1', 'precioUnitario' => '1000', 'precioFinal' => '1190', 'origen' => 'neto'],
+        ]);
+        self::assertFalse($doc['montosSonBrutos']);
+        self::assertSame([840.336134, 1000.0], array_column($doc['detalles'], 'precioUnitario'));
+    }
+
+    public function testSinJavascriptMandaElUnicoPrecioQueVenga(): void
+    {
+        $doc = $this->armarFactura([['nombre' => 'A', 'cantidad' => '1', 'precioUnitario' => '', 'precioFinal' => '1190']]);
+        self::assertTrue($doc['montosSonBrutos']);
+        self::assertSame(1190.0, $doc['detalles'][0]['precioUnitario']);
+    }
+
+    public function testElPostViejoConLaCasillaBrutosSeLeeComoAntes(): void
+    {
+        $doc = $this->armarFactura([['nombre' => 'A', 'cantidad' => '1', 'precioUnitario' => '1190']], ['montosSonBrutos' => '1']);
+        self::assertTrue($doc['montosSonBrutos']);
+        self::assertSame(1190.0, $doc['detalles'][0]['precioUnitario']);
     }
 }

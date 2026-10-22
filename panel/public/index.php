@@ -5176,6 +5176,79 @@ function renderEmisionForm(int $tipoDte, string $idemKey, array $form, ?string $
     ]);
 }
 
+/**
+ * PRECIO SIN IVA O PRECIO FINAL: QUIEN EMITE NO TIENE QUE SABER CUAL ES CUAL.
+ *
+ * Cada linea del detalle trae dos precios -- precioUnitario (sin IVA) y
+ * precioFinal (con IVA, lo que paga el cliente) -- y 'origen', que dice cual
+ * de los dos escribio la persona; el otro lo calculo el JS de la vista. Aqui se
+ * decide que precio viaja al motor y si el documento va con montosSonBrutos:
+ *
+ *   - Si TODAS las lineas afectas con precio se escribieron como precio final,
+ *     el documento va bruto con esos precios. El motor saca el IVA por
+ *     diferencia (DteXmlBuilder::totales), asi que el total emitido es
+ *     exactamente la suma de los precios finales que se tipearon.
+ *   - Si hay al menos una escrita sin IVA, el documento va neto, y las que se
+ *     escribieron como precio final se pasan a neto con 6 decimales (lo que
+ *     admite PrcItem). Ahi si puede haber $1 de diferencia por redondeo.
+ *
+ * Las lineas exentas no deciden: sin IVA los dos precios son el mismo numero.
+ * La boleta pasa $respetaExento=false porque su endpoint ignora 'exento'.
+ *
+ * Sin JavaScript llega uno solo de los dos precios y sin 'origen': manda el
+ * que venga. Y el POST viejo, con la casilla montosSonBrutos y sin
+ * precioFinal, se sigue leyendo como antes: precioUnitario era el bruto.
+ *
+ * @return array{brutos: bool, precios: array<int|string, string>}
+ */
+function preciosDelDetalle(array $post, bool $todoExento, bool $respetaExento): array
+{
+    $filas  = is_array($post['detalles'] ?? null) ? $post['detalles'] : [];
+    $legado = ! empty($post['montosSonBrutos']);
+    $lineas = [];
+    $hayNeto = false;
+    $hayBruto = false;
+    foreach ($filas as $k => $d) {
+        if (! is_array($d)) {
+            continue;
+        }
+        $neto  = trim((string) ($d['precioUnitario'] ?? ''));
+        $final = trim((string) ($d['precioFinal'] ?? ''));
+        if ($legado && ! array_key_exists('precioFinal', $d)) {
+            [$final, $neto] = [$neto, ''];
+        }
+        $origen = (string) ($d['origen'] ?? '');
+        if (($origen === 'neto' && $neto === '') || ($origen === 'bruto' && $final === '') || ! in_array($origen, ['neto', 'bruto'], true)) {
+            $origen = $neto !== '' ? 'neto' : ($final !== '' ? 'bruto' : '');
+        }
+        $exento = $respetaExento && ($todoExento || ! empty($d['exento']));
+        if (! $exento && $origen === 'neto') {
+            $hayNeto = true;
+        } elseif (! $exento && $origen === 'bruto') {
+            $hayBruto = true;
+        }
+        $lineas[$k] = [$neto, $final, $origen, $exento];
+    }
+
+    $brutos  = $hayBruto && ! $hayNeto;
+    $precios = [];
+    foreach ($lineas as $k => [$neto, $final, $origen, $exento]) {
+        if ($origen === '') {
+            $precios[$k] = '';
+        } elseif ($exento) {
+            $precios[$k] = $origen === 'neto' ? $neto : $final;
+        } elseif ($brutos) {
+            $precios[$k] = $final;
+        } elseif ($origen === 'bruto' && is_numeric($final)) {
+            $precios[$k] = (string) round((float) $final / 1.19, 6);
+        } else {
+            $precios[$k] = $origen === 'neto' ? $neto : $final;
+        }
+    }
+
+    return ['brutos' => $brutos, 'precios' => $precios];
+}
+
 /** Arma el JSON del DocumentoTributario que espera POST /api/v1/dte desde $_POST. */
 function armarDocumentoEmision(int $tipoDte, array $post): array
 {
@@ -5230,14 +5303,15 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
         }
     }
 
+    $precios  = preciosDelDetalle($post, $tipoDte === 34 || $notaSobreExento, true);
     $detalles = [];
-    foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $d) {
+    foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $k => $d) {
         if (! is_array($d)) {
             continue;
         }
         $nombre = trim((string) ($d['nombre'] ?? ''));
         $cantR  = trim((string) ($d['cantidad'] ?? ''));
-        $precR  = trim((string) ($d['precioUnitario'] ?? ''));
+        $precR  = $precios['precios'][$k] ?? '';
         if ($nombre === '' && $cantR === '' && $precR === '') {
             continue; // linea totalmente vacia: se ignora
         }
@@ -5271,7 +5345,7 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
         'tipoDte'         => $tipoDte,
         'receptor'        => $receptor,
         'detalles'        => $detalles,
-        'montosSonBrutos' => ! empty($post['montosSonBrutos']),
+        'montosSonBrutos' => $precios['brutos'],
     ];
 
     // FORMA DE PAGO Y VENCIMIENTO (migracion 026). Solo para FACTURA y FACTURA
@@ -5812,14 +5886,15 @@ function armarDocumentoBoleta(array $post): array
 
     // giro/direccion/comuna NO se mandan: no aplican a boleta y el endpoint del
     // motor no los lee. La vista tampoco los muestra para el tipo 39.
+    $precios  = preciosDelDetalle($post, false, false);
     $detalles = [];
-    foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $d) {
+    foreach (is_array($post['detalles'] ?? null) ? $post['detalles'] : [] as $k => $d) {
         if (! is_array($d)) {
             continue;
         }
         $nombre = trim((string) ($d['nombre'] ?? ''));
         $cantR  = trim((string) ($d['cantidad'] ?? ''));
-        $precR  = trim((string) ($d['precioUnitario'] ?? ''));
+        $precR  = $precios['precios'][$k] ?? '';
         if ($nombre === '' && $cantR === '' && $precR === '') {
             continue; // linea totalmente vacia: se ignora, igual que en factura
         }
@@ -5833,7 +5908,7 @@ function armarDocumentoBoleta(array $post): array
     return [
         'receptor'        => $receptor,
         'detalles'        => $detalles,
-        'montosSonBrutos' => ! empty($post['montosSonBrutos']),
+        'montosSonBrutos' => $precios['brutos'],
     ];
 }
 

@@ -10,10 +10,18 @@
  * Recibe (sin cambios respecto de antes): $tipoDte, $tituloDoc, $accion,
  * $idemKey, $form, $errorCampo, $errorMsg, $flashError, $productos, $navActivo.
  *
+ * PRECIO SIN IVA O PRECIO FINAL (octubre 2026). Cada linea tiene los dos y se
+ * escribe el que se conozca; el otro lo calcula el JS. Ya no existe la casilla
+ * "los precios incluyen IVA (brutos)": quien decide si el documento va bruto o
+ * neto es preciosDelDetalle() en public/index.php, mirando .det-origen. En
+ * boleta va primero el precio final, que es como piensa quien vende al publico.
+ *
+ * RESUMEN DE TOTALES EN VIVO. Los totales definitivos los calcula el motor
+ * (DteXmlBuilder::totales()) al construir el XML; el resumen de abajo repite
+ * esa misma formula en JS (calcularTotales) para que se vea antes de emitir.
+ * Si cambia la formula del motor, cambia tambien la de aqui.
+ *
  * LO QUE ESTA PANTALLA NO PUEDE PROMETER, y por eso no aparece:
- *   - Totales antes de emitir. Neto/exento/IVA/total se calculan en el motor
- *     (DteXmlBuilder::totales()) al construir el XML, o sea DESPUES de asignar
- *     folio. Aqui no existe ese numero y no se estima.
  *   - Fecha de emision, forma de pago, vencimiento y moneda: no existen en el
  *     payload ni en el motor. La fecha la pone el motor al emitir.
  *   - Descripcion y descuento por linea: el backend los lee, pero no forman
@@ -23,8 +31,9 @@
  *   - name de cada control (incluida la sintaxis de arrays) y el hidden
  *     idem_key, que es lo que impide una doble emision con folio real.
  *   - id/clase que usa el JS: #form-emision, #tabla-detalle, #agregar-linea,
- *     .quitar-linea, .det-nombre, .det-precio, .det-unidad, .det-exento,
- *     #productos-list, #receptor-* y #rut-aviso.
+ *     .quitar-linea, .det-nombre, .det-precio, .det-precio-final, .det-origen,
+ *     .det-unidad, .det-exento, #productos-list, #resumen-totales,
+ *     #receptor-* y #rut-aviso.
  *   - La fila del detalle esta duplicada: aqui en PHP y en nuevaFilaHTML() del
  *     JS. Las dos deben producir el mismo DOM.
  *
@@ -390,12 +399,6 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                             <small class="form-ayuda" id="ayuda-vencimiento">Obligatoria cuando la forma de pago es Credito.</small>
                         </div>
                     <?php endif; ?>
-                    <div class="form-campo">
-                        <label class="form-check" for="montos-brutos">
-                            <input type="checkbox" name="montosSonBrutos" id="montos-brutos" value="1" <?= ! empty($form['montosSonBrutos']) ? 'checked' : ''; ?>>
-                            Los precios ingresados incluyen IVA (brutos)
-                        </label>
-                    </div>
                     <div class="<?= $cc('descuento-global', 'form-campo--corto'); ?>">
                         <label for="descuento-global">Descuento global % (opcional)</label>
                         <input type="text" inputmode="decimal" name="descuentoGlobalPct" id="descuento-global" value="<?= htmlspecialchars((string) ($form['descuentoGlobalPct'] ?? '')); ?>" aria-describedby="error-descuento-global ayuda-descuento"<?= $inv('descuento-global'); ?>>
@@ -575,13 +578,20 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 </div>
             </div>
         <?php endif; ?>
+        <p class="form-ayuda" id="ayuda-precios">Escribe el precio que conozcas: el precio final que paga el cliente o el precio sin IVA. El otro se calcula solo.</p>
         <div class="tabla-scroll">
             <table id="tabla-detalle" class="tabla-datos tabla-editable tabla-datos--cards">
                 <thead>
                     <tr>
                         <th class="col-producto">Producto / servicio</th>
                         <th class="col-cantidad">Cantidad</th>
-                        <th class="col-precio">Precio unit. ($)</th>
+                        <?php if ($esBoleta): ?>
+                            <th class="col-precio">Precio final ($)</th>
+                            <th class="col-precio">Precio sin IVA ($)</th>
+                        <?php else: ?>
+                            <th class="col-precio">Precio sin IVA ($)</th>
+                            <th class="col-precio">Precio final ($)</th>
+                        <?php endif; ?>
                         <th class="col-unidad">Unidad</th>
                         <th class="col-exento">Exento</th>
                         <th class="col-accion"><span class="visualmente-oculto">Accion</span></th>
@@ -592,7 +602,11 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <tr>
                             <td class="col-producto" data-label="Producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" id="det-<?= $i; ?>-nombre" aria-label="Producto o servicio"<?= $inv("det-{$i}-nombre"); ?>><?= $campoError("det-{$i}-nombre"); ?><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
                             <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" id="det-<?= $i; ?>-cantidad" aria-label="Cantidad"<?= $inv("det-{$i}-cantidad"); ?>><?= $campoError("det-{$i}-cantidad"); ?></td>
-                            <td class="col-precio" data-label="Precio unit. ($)"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][precioUnitario]" value="<?= htmlspecialchars((string) ($d['precioUnitario'] ?? '')); ?>" class="det-precio" id="det-<?= $i; ?>-precioUnitario" aria-label="Precio unitario en pesos"<?= $inv("det-{$i}-precioUnitario"); ?>><?= $campoError("det-{$i}-precioUnitario"); ?></td>
+                            <?php
+                            $celdaNeto  = '<td class="col-precio" data-label="Precio sin IVA ($)"><input type="hidden" name="detalles[' . $i . '][origen]" value="' . htmlspecialchars((string) ($d['origen'] ?? '')) . '" class="det-origen"><input type="text" inputmode="decimal" name="detalles[' . $i . '][precioUnitario]" value="' . htmlspecialchars((string) ($d['precioUnitario'] ?? '')) . '" class="det-precio" id="det-' . $i . '-precioUnitario" aria-label="Precio unitario sin IVA, en pesos"' . $inv("det-{$i}-precioUnitario") . '>' . $campoError("det-{$i}-precioUnitario") . '</td>';
+                            $celdaFinal = '<td class="col-precio" data-label="Precio final, con IVA ($)"><input type="text" inputmode="decimal" name="detalles[' . $i . '][precioFinal]" value="' . htmlspecialchars((string) ($d['precioFinal'] ?? '')) . '" class="det-precio-final" id="det-' . $i . '-precioFinal" aria-label="Precio final unitario que paga el cliente, con IVA, en pesos"></td>';
+                            echo $esBoleta ? $celdaFinal . $celdaNeto : $celdaNeto . $celdaFinal;
+                            ?>
                             <td class="col-unidad" data-label="Unidad"><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" id="det-<?= $i; ?>-unidad" aria-label="Unidad"<?= $inv("det-{$i}-unidad"); ?>><?= $campoError("det-{$i}-unidad"); ?></td>
                             <td class="col-exento" data-label="Exento"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" aria-label="Exento de IVA" <?= $exentoForzado || ! empty($d['exento']) ? 'checked' : ''; ?><?= $exentoForzado ? ' disabled' : ''; ?>></td>
                             <td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
@@ -607,6 +621,15 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             <?php endforeach; ?>
         </datalist>
         <p><button type="button" id="agregar-linea" class="boton-secundario">Agregar linea</button></p>
+        <?php /* Misma formula que DteXmlBuilder::totales(): ver calcularTotales(). */ ?>
+        <h3 id="titulo-resumen">Resumen</h3>
+        <dl class="ficha ficha--montos" id="resumen-totales" aria-labelledby="titulo-resumen">
+            <dt>Subtotal sin IVA</dt><dd data-total="neto">$0</dd>
+            <dt data-fila="desc" hidden>Descuento</dt><dd data-total="desc" data-fila="desc" hidden>$0</dd>
+            <dt>IVA (19%)</dt><dd data-total="iva">$0</dd>
+            <dt data-fila="exento" hidden>Sin IVA (exento)</dt><dd data-total="exento" data-fila="exento" hidden>$0</dd>
+            <dt class="ficha__total">Total a pagar</dt><dd class="ficha__total" data-total="total">$0</dd>
+        </dl>
     </section>
 
     <?php /* Botonera: lo que sale va a la izquierda, separado; emitir es el
@@ -645,6 +668,10 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     // (movil: depende de lo que se teclee en #ref-tipo). Antes esto era ES_EXENTA
     // y solo cubria el primero.
     var exentoForzado = <?= $exentoForzado ? 'true' : 'false'; ?>;
+    // La boleta ignora 'exento' (su endpoint no lo lee) y no lleva descuento
+    // global: calcularTotales() la trata toda como afecta, igual que el motor.
+    var ES_BOLETA = <?= $esBoleta ? 'true' : 'false'; ?>;
+    var TASA_IVA = 19;
     var tbody = document.querySelector('#tabla-detalle tbody');
     var idx = <?= count($detalles); ?>;
 
@@ -655,22 +682,120 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         var precio = fila.querySelector('.det-precio');
         var unidad = fila.querySelector('.det-unidad');
         var exento = fila.querySelector('.det-exento');
-        if (precio && p.precio !== null && precio.value === '') { precio.value = p.precio; }
+        var final = fila.querySelector('.det-precio-final');
         if (unidad && unidad.value === '') { unidad.value = p.unidad || ''; }
         // En una factura exenta el maestro NO manda: un producto afecto no puede
         // desmarcar la casilla, porque en un 34 no existe la linea afecta.
         if (exento && !exentoForzado) { exento.checked = p.exento === 1; }
+        // El precio del maestro es sin IVA (igual que en la carga masiva).
+        if (precio && p.precio !== null && precio.value === '' && final.value === '') {
+            precio.value = p.precio;
+            sincronizarFila(fila, 'neto');
+        }
     }
+
+    // --- PRECIO SIN IVA <-> PRECIO FINAL ---
+    //
+    // .det-origen guarda cual de los dos escribio la persona; ese es el que
+    // manda en preciosDelDetalle() del servidor. El otro solo se muestra,
+    // redondeado a pesos. En una linea exenta los dos son el mismo numero.
+    function numero(v) {
+        v = (v || '').trim();
+        if (v === '' || !/^\d+(\.\d+)?$/.test(v)) { return null; }
+        return parseFloat(v);
+    }
+    function esExenta(fila) {
+        var ex = fila.querySelector('.det-exento');
+        return !ES_BOLETA && !!ex && ex.checked;
+    }
+    function sincronizarFila(fila, desde) {
+        var neto = fila.querySelector('.det-precio');
+        var final = fila.querySelector('.det-precio-final');
+        var origen = fila.querySelector('.det-origen');
+        if (desde) { origen.value = desde; }
+        if (!origen.value) { origen.value = neto.value.trim() !== '' ? 'neto' : (final.value.trim() !== '' ? 'bruto' : ''); }
+        var factor = esExenta(fila) ? 1 : 1 + TASA_IVA / 100;
+        if (origen.value === 'neto') {
+            var n = numero(neto.value);
+            final.value = n === null ? '' : String(Math.round(n * factor));
+        } else if (origen.value === 'bruto') {
+            var f = numero(final.value);
+            neto.value = f === null ? '' : String(Math.round(f / factor));
+        }
+    }
+
+    // MISMA FORMULA QUE preciosDelDetalle() + DteXmlBuilder::totales(): si
+    // todas las lineas afectas se escribieron con precio final, el documento va
+    // bruto y el IVA sale por diferencia; si no, va neto. Si cambia alla,
+    // cambia aqui.
+    function calcularTotales() {
+        var lineas = [], hayNeto = false, hayBruto = false;
+        Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (fila) {
+            var cant = numero((fila.querySelector('[name$="[cantidad]"]') || {}).value);
+            var origen = fila.querySelector('.det-origen').value;
+            var ex = esExenta(fila);
+            if (cant === null || origen === '') { return; }
+            if (!ex) { if (origen === 'neto') { hayNeto = true; } else { hayBruto = true; } }
+            lineas.push({ cant: cant, origen: origen, exento: ex,
+                neto: numero(fila.querySelector('.det-precio').value),
+                final: numero(fila.querySelector('.det-precio-final').value) });
+        });
+        var brutos = hayBruto && !hayNeto;
+        var afecto = 0, exento = 0;
+        lineas.forEach(function (l) {
+            var precio;
+            if (l.exento) { precio = l.origen === 'neto' ? l.neto : l.final; }
+            else if (brutos) { precio = l.final; }
+            else if (l.origen === 'bruto') { precio = l.final === null ? null : Math.round(l.final / (1 + TASA_IVA / 100) * 1e6) / 1e6; }
+            else { precio = l.neto; }
+            if (precio === null) { return; }
+            var monto = Math.round(l.cant * precio);
+            if (l.exento) { exento += monto; } else { afecto += monto; }
+        });
+        var neto = 0, iva = 0, desc = 0;
+        if (afecto > 0) {
+            neto = brutos ? Math.round(afecto / (1 + TASA_IVA / 100)) : afecto;
+            var campoDesc = document.getElementById('descuento-global');
+            var pct = ES_BOLETA || !campoDesc ? null : numero(campoDesc.value);
+            if (pct !== null && pct > 0) {
+                desc = Math.round(neto * pct / 100);
+                neto -= desc;
+            }
+            iva = brutos && desc === 0 ? afecto - neto : Math.round(neto * TASA_IVA / 100);
+        }
+        return { neto: neto, desc: desc, iva: iva, exento: exento, total: neto + iva + exento };
+    }
+    function pesos(n) { return '$' + n.toLocaleString('es-CL'); }
+    function pintarTotales() {
+        var t = calcularTotales();
+        var dl = document.getElementById('resumen-totales');
+        ['neto', 'desc', 'iva', 'exento', 'total'].forEach(function (k) {
+            // El subtotal se muestra ANTES del descuento, que va restando abajo.
+            var valor = k === 'neto' ? t.neto + t.desc : t[k];
+            dl.querySelector('[data-total="' + k + '"]').textContent = (k === 'desc' && t.desc ? '-' : '') + pesos(valor);
+        });
+        Array.prototype.forEach.call(dl.querySelectorAll('[data-fila="desc"]'), function (e) { e.hidden = t.desc === 0; });
+        Array.prototype.forEach.call(dl.querySelectorAll('[data-fila="exento"]'), function (e) { e.hidden = t.exento === 0; });
+        return t;
+    }
+    // El dialogo de confirmacion (otro bloque de esta vista) muestra el total.
+    window.emisionTotales = pintarTotales;
 
     // Debe producir el MISMO DOM que la fila que renderiza el PHP de arriba
     // (mismas celdas, clases de columna, clases de control, aria-label y
     // nombres con el indice). Si cambia una, cambia la otra.
+    function celdaNeto(n) {
+        return '<td class="col-precio" data-label="Precio sin IVA ($)"><input type="hidden" name="detalles[' + n + '][origen]" value="" class="det-origen"><input type="text" inputmode="decimal" name="detalles[' + n + '][precioUnitario]" class="det-precio" id="det-' + n + '-precioUnitario" aria-label="Precio unitario sin IVA, en pesos"></td>';
+    }
+    function celdaFinal(n) {
+        return '<td class="col-precio" data-label="Precio final, con IVA ($)"><input type="text" inputmode="decimal" name="detalles[' + n + '][precioFinal]" class="det-precio-final" id="det-' + n + '-precioFinal" aria-label="Precio final unitario que paga el cliente, con IVA, en pesos"></td>';
+    }
     function nuevaFilaHTML(n) {
         // Sin .campo-error en las celdas: una linea recien agregada no puede
         // traer el error de un 422 anterior (el PHP solo lo pinta en la que fallo).
         return '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="detalles[' + n + '][nombre]" class="det-nombre" id="det-' + n + '-nombre" aria-label="Producto o servicio"></td>' +
             '<td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="detalles[' + n + '][cantidad]" id="det-' + n + '-cantidad" aria-label="Cantidad"></td>' +
-            '<td class="col-precio" data-label="Precio unit. ($)"><input type="text" inputmode="decimal" name="detalles[' + n + '][precioUnitario]" class="det-precio" id="det-' + n + '-precioUnitario" aria-label="Precio unitario en pesos"></td>' +
+            (ES_BOLETA ? celdaFinal(n) + celdaNeto(n) : celdaNeto(n) + celdaFinal(n)) +
             '<td class="col-unidad" data-label="Unidad"><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" id="det-' + n + '-unidad" aria-label="Unidad"></td>' +
             '<td class="col-exento" data-label="Exento"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento" aria-label="Exento de IVA"' + (exentoForzado ? ' checked disabled' : '') + '></td>' +
             '<td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>';
@@ -684,12 +809,25 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
     tbody.addEventListener('click', function (e) {
         if (e.target.classList.contains('quitar-linea')) {
-            if (tbody.querySelectorAll('tr').length > 1) { e.target.closest('tr').remove(); }
+            if (tbody.querySelectorAll('tr').length > 1) { e.target.closest('tr').remove(); pintarTotales(); }
         }
     });
     tbody.addEventListener('change', function (e) {
         if (e.target.classList.contains('det-nombre')) { rellenarDesdeProducto(e.target.closest('tr')); }
+        if (e.target.classList.contains('det-exento')) { sincronizarFila(e.target.closest('tr')); }
+        pintarTotales();
     });
+    tbody.addEventListener('input', function (e) {
+        var fila = e.target.closest('tr');
+        if (e.target.classList.contains('det-precio')) { sincronizarFila(fila, 'neto'); }
+        if (e.target.classList.contains('det-precio-final')) { sincronizarFila(fila, 'bruto'); }
+        pintarTotales();
+    });
+    var campoDescuento = document.getElementById('descuento-global');
+    if (campoDescuento) { campoDescuento.addEventListener('input', pintarTotales); }
+    // Al cargar (y al volver tras un 422): completar el precio que falte.
+    Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (fila) { sincronizarFila(fila); });
+    pintarTotales();
 
     // EXENTO FORZADO EN VIVO SEGUN EL TIPO DE DOCUMENTO REFERENCIADO.
     //
@@ -715,6 +853,8 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             }
             var aviso = document.getElementById('aviso-ref-exenta');
             if (aviso) { aviso.hidden = !exentoForzado; }
+            Array.prototype.forEach.call(tbody.querySelectorAll('tr'), function (fila) { sincronizarFila(fila); });
+            pintarTotales();
         };
         refTipo.addEventListener('input', aplicarExento);
     }
@@ -1069,7 +1209,8 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             var lineas = Array.prototype.filter.call(form.querySelectorAll('.det-nombre'), function (i) { return i.value.trim() !== ''; }).length;
             dlg.querySelector('[data-confirmar-resumen]').textContent =
                 'Receptor: ' + (rs || (r ? r : 'Consumidor Final')) + (r && rs ? ' (' + r + ')' : '') + '. ' +
-                lineas + (lineas === 1 ? ' linea' : ' lineas') + ' de detalle.';
+                lineas + (lineas === 1 ? ' linea' : ' lineas') + ' de detalle.' +
+                (window.emisionTotales ? ' Total a pagar: ' + window.emisionTotales().total.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' }) + '.' : '');
             dlg.returnValue = '';
             dlg.showModal();
             return;
