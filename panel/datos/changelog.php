@@ -32,6 +32,18 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-10-22',
+        'version' => '1.83',
+        'titulo'  => 'Al emitir, escribe el precio que conozcas: el otro se calcula solo',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En factura, boleta y notas cada linea tiene dos precios: el precio final que paga el cliente y el precio sin IVA. Escribes el que sepas y el otro se completa solo.',
+            'Ya no hay que marcar la casilla "Los precios ingresados incluyen IVA (brutos)": el sistema entiende solo cual escribiste. Si escribes precios finales, el total del documento es exactamente la suma de esos precios.',
+            'Debajo del detalle aparece un resumen que se actualiza mientras escribes: subtotal, descuento, IVA, lo exento y el total a pagar. El total tambien se muestra al confirmar la emision.',
+            'En la boleta el precio final va primero, porque es el que conoce quien vende al publico.',
+        ],
+    ],
+    [
         'fecha'   => '2026-10-21',
         'version' => '1.82',
         'titulo'  => 'Sin boton "Guardar cliente" al emitir: se guarda solo',
