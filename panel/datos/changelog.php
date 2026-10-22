@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-22',
+        'version' => '1.84',
+        'titulo'  => 'Precio final o sin IVA en cotizaciones, ordenes de compra, productos y carga masiva',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En la cotizacion y la orden de compra cada linea tiene "Precio sin IVA" y "Precio final": escribes el que conozcas y el otro se calcula solo. Debajo del detalle hay un resumen con subtotal, IVA, lo exento y el total, que se actualiza mientras escribes.',
+            'En la ficha del producto puedes escribir el precio final (lo que paga el cliente) y el precio sin IVA se calcula solo. En el listado de productos se ve tambien el precio final bajo cada precio.',
+            'En la carga masiva hay una columna nueva y opcional al final de la plantilla, precio_final: si escribes ahi lo que paga el cliente, no hace falta el precio sin IVA y la factura suma exactamente ese precio. Los archivos sin esa columna se siguen aceptando.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-22',
         'version' => '1.83',
         'titulo'  => 'Al emitir, escribe el precio que conozcas: el otro se calcula solo',
         'tag'     => 'frontend',

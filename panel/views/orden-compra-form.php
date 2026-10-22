@@ -13,6 +13,10 @@
  *   - id/clase que usa el JS: #form-orden, #tabla-lineas, #agregar-linea,
  *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list,
  *     #proveedores-list, #proveedor_rut y #rut-aviso.
+ *   - data-precio="neto|final|cantidad|descuento|exento" y data-precios en la
+ *     tabla: los usa js/precio-iva.js para el precio final y el resumen, con la
+ *     formula de MySqlOrdenCompraRepository::totales(). El precio final no
+ *     tiene name: se guarda solo el sin IVA.
  *   - La fila esta duplicada: aqui en PHP y en nuevaFilaHTML() del JS. Las dos
  *     deben producir el mismo DOM.
  */
@@ -144,13 +148,15 @@ foreach ($productos as $p) {
 
     <section class="tarjeta" aria-labelledby="titulo-lineas">
         <h2 id="titulo-lineas">Detalle</h2>
+        <p class="form-ayuda">Escribe el precio que conozcas, el precio final con IVA que te cobra el proveedor o el precio sin IVA: el otro se calcula solo.</p>
         <div class="tabla-scroll">
-            <table id="tabla-lineas" class="tabla-datos tabla-editable">
+            <table id="tabla-lineas" class="tabla-datos tabla-editable" data-precios data-precios-resumen="resumen-orden">
                 <thead>
                     <tr>
                         <th class="col-producto">Producto / servicio</th>
                         <th class="col-cantidad">Cantidad</th>
-                        <th class="col-precio">Precio unit.</th>
+                        <th class="col-precio">Precio sin IVA</th>
+                        <th class="col-precio">Precio final</th>
                         <th class="col-unidad">Unidad</th>
                         <th class="col-descuento">Desc. %</th>
                         <th class="col-exento">Exento</th>
@@ -161,11 +167,12 @@ foreach ($productos as $p) {
                     <?php foreach ($filas as $i => $l): ?>
                         <tr>
                             <td class="col-producto"><input type="text" list="productos-list" name="lineas[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" aria-label="Producto o servicio"<?= $err("lineas[{$i}].nombre"); ?>></td>
-                            <td class="col-cantidad"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($l['cantidad'] ?? '')); ?>" aria-label="Cantidad"<?= $err("lineas[{$i}].cantidad"); ?>></td>
-                            <td class="col-precio"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][precio_unitario]" value="<?= htmlspecialchars((string) ($l['precio_unitario'] ?? '')); ?>" class="lin-precio" aria-label="Precio unitario"<?= $err("lineas[{$i}].precio_unitario"); ?>></td>
+                            <td class="col-cantidad"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($l['cantidad'] ?? '')); ?>" aria-label="Cantidad" data-precio="cantidad"<?= $err("lineas[{$i}].cantidad"); ?>></td>
+                            <td class="col-precio"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][precio_unitario]" value="<?= htmlspecialchars((string) ($l['precio_unitario'] ?? '')); ?>" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"<?= $err("lineas[{$i}].precio_unitario"); ?>></td>
+                            <td class="col-precio"><input type="text" inputmode="decimal" aria-label="Precio final unitario, con IVA" data-precio="final"></td>
                             <td class="col-unidad"><input type="text" name="lineas[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($l['unidad'] ?? '')); ?>" class="lin-unidad" aria-label="Unidad"></td>
-                            <td class="col-descuento"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][descuento_pct]" value="<?= htmlspecialchars((string) ($l['descuento_pct'] ?? '')); ?>" aria-label="Descuento por linea"<?= $err("lineas[{$i}].descuento_pct"); ?>></td>
-                            <td class="col-exento"><input type="checkbox" name="lineas[<?= $i; ?>][exento]" value="1" aria-label="Exento de IVA" <?= ! empty($l['exento']) ? 'checked' : ''; ?>></td>
+                            <td class="col-descuento"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][descuento_pct]" value="<?= htmlspecialchars((string) ($l['descuento_pct'] ?? '')); ?>" aria-label="Descuento por linea" data-precio="descuento"<?= $err("lineas[{$i}].descuento_pct"); ?>></td>
+                            <td class="col-exento"><input type="checkbox" name="lineas[<?= $i; ?>][exento]" value="1" aria-label="Exento de IVA" data-precio="exento" <?= ! empty($l['exento']) ? 'checked' : ''; ?>></td>
                             <td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
                         </tr>
                     <?php endforeach; ?>
@@ -178,6 +185,9 @@ foreach ($productos as $p) {
             <?php endforeach; ?>
         </datalist>
         <p><button type="button" id="agregar-linea" class="boton-secundario">+ Agregar linea</button></p>
+        <?php /* Lo llena js/precio-iva.js mientras se escribe. */ ?>
+        <h3 id="titulo-resumen-orden">Resumen</h3>
+        <dl class="ficha ficha--montos" id="resumen-orden" aria-labelledby="titulo-resumen-orden"></dl>
         <p class="nota">
             La cantidad admite decimales. El IVA se calcula sobre las lineas afectas, una sola
             vez sobre el total &mdash; no linea por linea.
@@ -209,11 +219,12 @@ foreach ($productos as $p) {
     function nuevaFilaHTML(i) {
         return '<tr>'
             + '<td class="col-producto"><input type="text" list="productos-list" name="lineas[' + i + '][nombre]" class="lin-nombre" aria-label="Producto o servicio"></td>'
-            + '<td class="col-cantidad"><input type="text" inputmode="decimal" name="lineas[' + i + '][cantidad]" aria-label="Cantidad"></td>'
-            + '<td class="col-precio"><input type="text" inputmode="decimal" name="lineas[' + i + '][precio_unitario]" class="lin-precio" aria-label="Precio unitario"></td>'
+            + '<td class="col-cantidad"><input type="text" inputmode="decimal" name="lineas[' + i + '][cantidad]" aria-label="Cantidad" data-precio="cantidad"></td>'
+            + '<td class="col-precio"><input type="text" inputmode="decimal" name="lineas[' + i + '][precio_unitario]" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"></td>'
+            + '<td class="col-precio"><input type="text" inputmode="decimal" aria-label="Precio final unitario, con IVA" data-precio="final"></td>'
             + '<td class="col-unidad"><input type="text" name="lineas[' + i + '][unidad]" class="lin-unidad" aria-label="Unidad"></td>'
-            + '<td class="col-descuento"><input type="text" inputmode="decimal" name="lineas[' + i + '][descuento_pct]" aria-label="Descuento por linea"></td>'
-            + '<td class="col-exento"><input type="checkbox" name="lineas[' + i + '][exento]" value="1" aria-label="Exento de IVA"></td>'
+            + '<td class="col-descuento"><input type="text" inputmode="decimal" name="lineas[' + i + '][descuento_pct]" aria-label="Descuento por linea" data-precio="descuento"></td>'
+            + '<td class="col-exento"><input type="checkbox" name="lineas[' + i + '][exento]" value="1" aria-label="Exento de IVA" data-precio="exento"></td>'
             + '<td class="col-accion"><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>'
             + '</tr>';
     }
@@ -240,9 +251,14 @@ foreach ($productos as $p) {
         var precio = fila.querySelector('.lin-precio');
         var unidad = fila.querySelector('.lin-unidad');
         var exento = fila.querySelector('input[type=checkbox]');
-        if (precio && precio.value === '' && p.precio !== '') { precio.value = p.precio; }
         if (unidad && unidad.value === '') { unidad.value = p.unidad; }
         if (exento && p.exento) { exento.checked = true; }
+        // El precio del catalogo es sin IVA; 'input' hace que precio-iva.js
+        // complete el precio final y el resumen.
+        if (precio && precio.value === '' && p.precio !== '') {
+            precio.value = p.precio;
+            precio.dispatchEvent(new Event('input', { bubbles: true }));
+        }
     });
 
     // AUTOCOMPLETADO DEL PROVEEDOR POR RUT. Reusa el endpoint propio

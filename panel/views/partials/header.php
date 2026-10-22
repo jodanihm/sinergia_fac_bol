@@ -53,6 +53,12 @@ $cssHref    = '/css/style.css' . ($cssVersion ? '?v=' . $cssVersion : '');
 $jsValidarVersion = @filemtime(__DIR__ . '/../../public/js/validar-campos.js');
 ?>
 <script src="/js/validar-campos.js<?= $jsValidarVersion ? '?v=' . $jsValidarVersion : ''; ?>" defer></script>
+<?php
+// Precio sin IVA <-> precio final (cotizacion, orden de compra, productos).
+// Solo actua donde hay un [data-precios]; en el resto no hace nada.
+$jsPrecioVersion = @filemtime(__DIR__ . '/../../public/js/precio-iva.js');
+?>
+<script src="/js/precio-iva.js<?= $jsPrecioVersion ? '?v=' . $jsPrecioVersion : ''; ?>" defer></script>
 </head>
 <body class="<?= htmlspecialchars($bodyClaseExtra); ?>">
 <?php if ($panelAutenticado): ?>

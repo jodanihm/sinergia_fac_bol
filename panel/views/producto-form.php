@@ -61,7 +61,9 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         <div>
             <section class="tarjeta" aria-labelledby="titulo-producto">
                 <h2 id="titulo-producto">Datos del producto o servicio</h2>
-                <div class="form-grid">
+                <?php /* data-precios: js/precio-iva.js calcula el precio final a partir
+                         del sin IVA y al reves. Se guarda solo precio_unitario (sin IVA). */ ?>
+                <div class="form-grid" data-precios>
                     <div class="<?= $claseCampo('nombre', 'form-campo--ancho'); ?>">
                         <label for="nombre">Nombre <?= $req; ?></label>
                         <input type="text" name="nombre" id="nombre" data-obligatorio="Escribe el nombre del producto o servicio." value="<?= $val('nombre'); ?>" placeholder="Servicio de ejemplo" required>
@@ -95,8 +97,8 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     </div>
 
                     <div class="<?= $claseCampo('precio_unitario', 'form-campo--corto'); ?>">
-                        <label for="precio_unitario">Precio unitario</label>
-                        <input type="text" inputmode="decimal" name="precio_unitario" id="precio_unitario" value="<?= $val('precio_unitario'); ?>" placeholder="1990 o 1990.50">
+                        <label for="precio_unitario">Precio sin IVA</label>
+                        <input type="text" inputmode="decimal" name="precio_unitario" id="precio_unitario" value="<?= $val('precio_unitario'); ?>" placeholder="1672" data-precio="neto">
                         <?php if ($err('precio_unitario')): ?>
                             <p class="error"><?= htmlspecialchars($err('precio_unitario')); ?></p>
                         <?php else: ?>
@@ -104,9 +106,15 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <?php endif; ?>
                     </div>
 
+                    <div class="form-campo form-campo--corto">
+                        <label for="precio_final">Precio final (con IVA)</label>
+                        <input type="text" inputmode="decimal" id="precio_final" placeholder="1990" data-precio="final">
+                        <small class="form-ayuda">Lo que paga el cliente. Escribe este o el sin IVA: el otro se calcula solo.</small>
+                    </div>
+
                     <div class="form-campo form-campo--ancho">
                         <label class="form-check" for="exento">
-                            <input type="checkbox" name="exento" id="exento" value="1" <?= ! empty($producto['exento']) ? 'checked' : ''; ?>>
+                            <input type="checkbox" name="exento" id="exento" value="1" data-precio="exento" <?= ! empty($producto['exento']) ? 'checked' : ''; ?>>
                             Exento de IVA
                         </label>
                         <small class="form-ayuda">Marca esta casilla solo si el item es exento de IVA.</small>
@@ -124,7 +132,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <ul class="panel-info__lista">
                     <li>Al escribir su nombre en el detalle de un documento, se sugiere y completa su precio y unidad.</li>
                     <li>Si esta marcado como exento, la linea del documento se marca exenta.</li>
-                    <li>El precio se guarda tal como lo escribes: no se le calcula ni se le quita IVA.</li>
+                    <li>Se guarda el precio sin IVA. Si escribes el precio final, el sin IVA se calcula solo, y en el documento se vuelve a sumar el IVA.</li>
                 </ul>
             </div>
         </div>
