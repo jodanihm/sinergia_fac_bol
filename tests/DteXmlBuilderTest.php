@@ -323,4 +323,41 @@ final class DteXmlBuilderTest extends TestCase
         self::assertSame('13570', $this->texto($dom, 'IVA'));
         self::assertSame('84990', $this->texto($dom, 'MntTotal'));
     }
+
+    public function testTextosMasLargosQueElXsdSeRecortanYElDteValida(): void
+    {
+        // Caso real: factura folio 41 de EASY AGENDA SPA, rechazada con RSC
+        // porque GiroRecep llevaba 69 caracteres y el XSD admite 40.
+        $doc = new DocumentoTributario(
+            tipoDte: TipoDte::FacturaElectronica,
+            receptor: new Receptor(
+                '65160259-9',
+                'Organización no gubernamental de desarrollo social proyecto simbiosis u ong proyecto simbiosis',
+                'Otros Servicios De Atención De La Salud Humana Prestados Por Empresas',
+                'Coronel Santiago Bueras 1814, Valdivia, Región de Los Ríos.',
+                'Valdivia',
+            ),
+            detalles: [new Detalle(str_repeat('Suscripción mensual ', 6), 1, 50000)],
+            montosSonBrutos: false,
+        );
+
+        $dom = (new DteXmlBuilder())->build($doc, $this->emisor(), 41);
+
+        self::assertSame('Otros Servicios De Atención De La Salud', $this->texto($dom, 'GiroRecep'));
+        self::assertLessThanOrEqual(80, mb_strlen((string) $this->texto($dom, 'NmbItem')));
+
+        // El <DTE> suelto valida contra DTE_v10.xsd: se mide con el esquema
+        // del SII, no con nuestra lista de largos.
+        libxml_use_internal_errors(true);
+        libxml_clear_errors();
+        $valido = $dom->schemaValidate(__DIR__ . '/../docs/18_Schema_XML_DTE/DTE_v10.xsd');
+        $errores = array_map(static fn ($e) => trim($e->message), libxml_get_errors());
+        libxml_clear_errors();
+        $errores = array_values(array_filter(
+            $errores,
+            // Sin firmar ni timbrar: faltan TED/TmstFirma/Signature, que no son de este test.
+            static fn (string $m) => !str_contains($m, 'TED') && !str_contains($m, 'Signature') && !str_contains($m, 'TmstFirma') && !str_contains($m, 'Missing child element'),
+        ));
+        self::assertSame([], $errores, $valido ? '' : implode("\n", $errores));
+    }
 }
