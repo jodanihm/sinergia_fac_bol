@@ -28,6 +28,36 @@ final class DteXmlBuilder
     private const NS_SII   = 'http://www.sii.cl/SiiDte';
     private const TASA_IVA = 19;
 
+    // LARGO MAXIMO DE CADA CAMPO DE TEXTO LIBRE, copiado del XSD
+    // (docs/18_Schema_XML_DTE/DTE_v10.xsd; RznSocLargaType = 100, ComunaType =
+    // 20). Un solo caracter de mas y el SII rechaza el sobre ENTERO con RSC
+    // ("Rechazado por Error en Schema"), sin decir que campo fue.
+    //
+    // Medido en produccion con la factura folio 41 de EASY AGENDA SPA (track
+    // 12614809998): el giro del receptor venia del SII con 69 caracteres
+    // ("Otros Servicios De Atencion De La Salud Humana Prestados Por
+    // Empresas") y GiroRecep admite 40. El builder lo pasaba entero porque
+    // nadie recortaba: el dato es valido para el SII como giro, pero no cabe en
+    // el DTE. Se recorta igual que hace LibreDTE, aqui y en un solo lugar, para
+    // que ningun camino de emision (panel, API, carga masiva) dependa de que el
+    // formulario lo haya recortado antes.
+    private const LARGO_MAX = [
+        'RznSoc'       => 100,
+        'RznSocEmisor' => 100,
+        'GiroEmis'     => 80,
+        'GiroEmisor'   => 80,
+        'DirOrigen'    => 70,
+        'CmnaOrigen'   => 20,
+        'RznSocRecep'  => 100,
+        'GiroRecep'    => 40,
+        'DirRecep'     => 70,
+        'CmnaRecep'    => 20,
+        'NmbItem'      => 80,
+        'DscItem'      => 1000,
+        'UnmdItem'     => 4,
+        'RazonRef'     => 90,
+    ];
+
     public function build(DocumentoTributario $doc, DatosEmisor $emisor, int $folio): DOMDocument
     {
         $dom = new DOMDocument('1.0', 'UTF-8');
@@ -459,6 +489,9 @@ final class DteXmlBuilder
 
     private function el(DOMDocument $dom, string $name, string $value): DOMElement
     {
+        if (isset(self::LARGO_MAX[$name])) {
+            $value = rtrim(mb_substr(trim($value), 0, self::LARGO_MAX[$name]));
+        }
         // createTextNode escapa & < > correctamente (createElementNS con valor NO lo hace).
         $el = $dom->createElementNS(self::NS_SII, $name);
         $el->appendChild($dom->createTextNode($value));

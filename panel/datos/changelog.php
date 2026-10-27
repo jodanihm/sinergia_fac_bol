@@ -32,6 +32,16 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-10-27',
+        'version' => '1.85',
+        'titulo'  => 'El SII ya no rechaza facturas por textos demasiado largos',
+        'tag'     => 'backend',
+        'items'   => [
+            'Cuando el giro, la razon social, la direccion o el nombre de un producto superaban el largo que el SII acepta en el documento electronico, el SII rechazaba el envio completo con "Rechazado por Error en Schema", sin decir que dato fallaba.',
+            'Paso con una factura a un cliente cuyo giro registrado en el SII tiene 69 letras, cuando el documento solo admite 40. Ahora esos textos se recortan solos al largo permitido antes de firmar, en todas las formas de emitir (panel, API y carga masiva).',
+        ],
+    ],
+    [
         'fecha'   => '2026-10-22',
         'version' => '1.84',
         'titulo'  => 'Precio final o sin IVA en cotizaciones, ordenes de compra, productos y carga masiva',
