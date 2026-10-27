@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-27',
+        'version' => '1.87',
+        'titulo'  => 'Contador de caracteres en clientes, productos, cotizaciones y datos de la empresa',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El mismo contador de la factura de venta ahora esta en la ficha del cliente, en el producto, en la cotizacion y en los datos de tu empresa: en cada texto que termina impreso en el documento que se envia al SII ves cuantos caracteres llevas y cuantos acepta.',
+            'Asi el giro o la razon social se pueden abreviar una sola vez en la ficha, y cada factura que se emita despues ya sale con el texto correcto, sin recortes.',
+            'La orden de compra no lleva contador porque no se envia al SII, y la descripcion y el codigo del producto tampoco, porque solo se usan dentro de tu catalogo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-27',
         'version' => '1.86',
         'titulo'  => 'Contador de caracteres en la factura de venta',
         'tag'     => 'frontend',

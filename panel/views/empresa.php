@@ -138,7 +138,7 @@ $logo = $logo ?? null;
 
                     <div class="<?= $claseCampo('razon_social'); ?>">
                         <label for="razon_social">Razon social</label>
-                        <input type="text" name="razon_social" id="razon_social" value="<?= $val('razon_social'); ?>"
+                        <input type="text" name="razon_social" id="razon_social" data-max-sii="100" value="<?= $val('razon_social'); ?>"
                                autocomplete="organization"
                                data-validar="requerido" data-normalizar="mayusculas" data-etiqueta="<?= $e($etiquetas['razon_social']); ?>"
                                data-msg-requerido="Escribe la razon social tal como la tiene el SII."
@@ -149,7 +149,7 @@ $logo = $logo ?? null;
 
                     <div class="<?= $claseCampo('giro'); ?>">
                         <label for="giro">Giro</label>
-                        <input type="text" name="giro" id="giro" value="<?= $val('giro'); ?>"
+                        <input type="text" name="giro" id="giro" data-max-sii="80" value="<?= $val('giro'); ?>"
                                data-validar="requerido" data-etiqueta="<?= $e($etiquetas['giro']); ?>"
                                data-msg-requerido="Escribe el giro comercial registrado en el SII."
                                <?= $aria('giro'); ?>>
@@ -175,7 +175,7 @@ $logo = $logo ?? null;
                 <div class="form-grid form-grid--1">
                     <div class="<?= $claseCampo('dir_origen'); ?>">
                         <label for="dir_origen">Direccion</label>
-                        <input type="text" name="dir_origen" id="dir_origen" value="<?= $val('dir_origen'); ?>"
+                        <input type="text" name="dir_origen" id="dir_origen" data-max-sii="70" value="<?= $val('dir_origen'); ?>"
                                autocomplete="street-address"
                                data-validar="requerido" data-normalizar="mayusculas" data-etiqueta="<?= $e($etiquetas['dir_origen']); ?>"
                                data-msg-requerido="Escribe la direccion de origen tal como la tiene el SII."
@@ -186,7 +186,7 @@ $logo = $logo ?? null;
 
                     <div class="<?= $claseCampo('cmna_origen'); ?>">
                         <label for="cmna_origen">Comuna</label>
-                        <input type="text" name="cmna_origen" id="cmna_origen" value="<?= $val('cmna_origen'); ?>"
+                        <input type="text" name="cmna_origen" id="cmna_origen" data-max-sii="20" value="<?= $val('cmna_origen'); ?>"
                                data-validar="requerido" data-normalizar="mayusculas" data-etiqueta="<?= $e($etiquetas['cmna_origen']); ?>"
                                data-msg-requerido="Escribe la comuna de la direccion de origen."
                                <?= $aria('cmna_origen'); ?>>
