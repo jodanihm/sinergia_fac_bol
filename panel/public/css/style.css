@@ -2190,6 +2190,17 @@ a.stepper__contenido:hover { color: var(--color-primario); }
    tocarlos todavia. #6e6e6e sobre blanco da 5.60:1. */
 .form-ayuda { display: block; margin: var(--esp-1) 0 0; font-size: var(--txt-xs); color: var(--color-texto-tenue); }
 
+/* Contador de caracteres de un texto que viaja al SII (js/contador-caracteres.js).
+   Cifra a la derecha, misma escala que .form-ayuda. Cerca del tope pasa a ambar
+   y pasado el tope dice con que texto saldra el documento; el cambio de estado
+   va en el texto, no solo en el color. */
+.form-contador { display: block; margin: var(--esp-1) 0 0; font-size: var(--txt-xs); color: var(--color-texto-tenue); text-align: right; font-variant-numeric: tabular-nums; }
+.form-contador[hidden] { display: none; }
+.form-contador--cerca .form-contador__cifra { color: var(--color-alerta); }
+.form-contador--excede .form-contador__cifra { color: var(--color-alerta); font-weight: 600; }
+.form-contador__aviso:empty { display: none; }
+.form-contador__aviso { display: block; text-align: left; color: var(--color-alerta); }
+
 /* Ayuda de varias lineas bajo un campo, cuando lo que hay que explicar es una
    enumeracion y no una frase. Misma escala y color que .form-ayuda: es el mismo
    nivel de informacion, solo cambia la forma. Hoy la usa el codigo de

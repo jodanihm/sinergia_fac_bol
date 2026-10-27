@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-10-27',
+        'version' => '1.86',
+        'titulo'  => 'Contador de caracteres en la factura de venta',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al emitir, la razon social, el giro, la direccion y la comuna del cliente muestran cuantos caracteres llevan y cuantos acepta el SII (por ejemplo "52 / 40"). El nombre del producto y la unidad lo muestran al escribir en ellos o cuando se acercan al limite.',
+            'Si un texto se pasa, el campo avisa en ambar y muestra exactamente como saldra en el documento, para que puedas abreviarlo a tu gusto antes de emitir en vez de que quede cortado a mitad de palabra. Tambien funciona cuando los datos se completan solos al buscar el cliente por RUT.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-10-27',
         'version' => '1.85',
         'titulo'  => 'El SII ya no rechaza facturas por textos demasiado largos',
         'tag'     => 'backend',
