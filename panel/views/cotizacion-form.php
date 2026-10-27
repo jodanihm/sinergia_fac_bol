@@ -188,13 +188,13 @@ if (isset($errores['lineas'])) {
                 </div>
                 <div class="<?= $claseCampo('receptor_razon_social'); ?>">
                     <label for="receptor_razon_social">Razon social</label>
-                    <input type="text" name="receptor_razon_social" id="receptor_razon_social" data-guardar="razonSocial" data-obligatorio="Escribe la razon social del cliente." value="<?= $v('receptor_razon_social'); ?>"
+                    <input type="text" name="receptor_razon_social" id="receptor_razon_social" data-max-sii="100" data-guardar="razonSocial" data-obligatorio="Escribe la razon social del cliente." value="<?= $v('receptor_razon_social'); ?>"
                            <?= $aria('receptor_razon_social'); ?>>
                     <?= $campoError('receptor_razon_social'); ?>
                 </div>
                 <div class="form-campo">
                     <label for="receptor_giro">Giro (opcional)</label>
-                    <input type="text" name="receptor_giro" id="receptor_giro" data-guardar="giro" value="<?= $v('receptor_giro'); ?>" aria-describedby="ayuda-giro">
+                    <input type="text" name="receptor_giro" id="receptor_giro" data-max-sii="40" data-guardar="giro" value="<?= $v('receptor_giro'); ?>" aria-describedby="ayuda-giro">
                     <small class="form-ayuda" id="ayuda-giro">El SII lo exige recien al facturar.</small>
                 </div>
                 <div class="<?= $claseCampo('receptor_email'); ?>">
@@ -206,11 +206,11 @@ if (isset($errores['lineas'])) {
                 </div>
                 <div class="form-campo">
                     <label for="receptor_direccion">Direccion (opcional)</label>
-                    <input type="text" name="receptor_direccion" id="receptor_direccion" data-guardar="direccion" value="<?= $v('receptor_direccion'); ?>">
+                    <input type="text" name="receptor_direccion" id="receptor_direccion" data-max-sii="70" data-guardar="direccion" value="<?= $v('receptor_direccion'); ?>">
                 </div>
                 <div class="form-campo">
                     <label for="receptor_comuna">Comuna (opcional)</label>
-                    <input type="text" name="receptor_comuna" id="receptor_comuna" data-guardar="comuna" value="<?= $v('receptor_comuna'); ?>">
+                    <input type="text" name="receptor_comuna" id="receptor_comuna" data-max-sii="20" data-guardar="comuna" value="<?= $v('receptor_comuna'); ?>">
                 </div>
                 <?php /* GUARDAR SIN GUARDAR LA COTIZACION: lo hace solo al salir
                    de la comuna, el ultimo campo, o con este boton. Ver
@@ -286,11 +286,11 @@ if (isset($errores['lineas'])) {
                     <?php foreach ($filas as $i => $l): ?>
                         <?php $i = (int) $i; ?>
                         <tr>
-                            <td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[<?= $i; ?>][nombre]" id="lin-<?= $i; ?>-nombre" value="<?= $e((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" aria-label="Producto o servicio"<?= $ariaLinea("lineas[{$i}].nombre"); ?>></td>
+                            <td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[<?= $i; ?>][nombre]" id="lin-<?= $i; ?>-nombre" value="<?= $e((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $ariaLinea("lineas[{$i}].nombre"); ?>></td>
                             <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][cantidad]" id="lin-<?= $i; ?>-cantidad" value="<?= $e((string) ($l['cantidad'] ?? '')); ?>" aria-label="Cantidad" data-precio="cantidad"<?= $ariaLinea("lineas[{$i}].cantidad"); ?>></td>
                             <td class="col-precio" data-label="Precio sin IVA"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][precio_unitario]" id="lin-<?= $i; ?>-precio_unitario" value="<?= $e((string) ($l['precio_unitario'] ?? '')); ?>" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"<?= $ariaLinea("lineas[{$i}].precio_unitario"); ?>></td>
                             <td class="col-precio" data-label="Precio final"><input type="text" inputmode="decimal" id="lin-<?= $i; ?>-precio_final" aria-label="Precio final unitario que paga el cliente, con IVA" data-precio="final"></td>
-                            <td class="col-unidad" data-label="Unidad"><input type="text" name="lineas[<?= $i; ?>][unidad]" id="lin-<?= $i; ?>-unidad" value="<?= $e((string) ($l['unidad'] ?? '')); ?>" class="lin-unidad" aria-label="Unidad"></td>
+                            <td class="col-unidad" data-label="Unidad"><input type="text" name="lineas[<?= $i; ?>][unidad]" id="lin-<?= $i; ?>-unidad" value="<?= $e((string) ($l['unidad'] ?? '')); ?>" class="lin-unidad" data-max-sii="4" data-contador="discreto" aria-label="Unidad"></td>
                             <td class="col-descuento" data-label="Desc. %"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][descuento_pct]" id="lin-<?= $i; ?>-descuento_pct" value="<?= $e((string) ($l['descuento_pct'] ?? '')); ?>" aria-label="Descuento por linea" data-precio="descuento"<?= $ariaLinea("lineas[{$i}].descuento_pct"); ?>></td>
                             <td class="col-exento" data-label="Exento"><input type="checkbox" name="lineas[<?= $i; ?>][exento]" value="1" aria-label="Exento de IVA" data-precio="exento" <?= ! empty($l['exento']) ? 'checked' : ''; ?>></td>
                             <td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
@@ -355,11 +355,11 @@ if (isset($errores['lineas'])) {
     // MISMA FILA QUE LA DE PHP. Si cambia una, cambia la otra.
     function nuevaFilaHTML(i) {
         return '<tr>'
-            + '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[' + i + '][nombre]" id="lin-' + i + '-nombre" class="lin-nombre" aria-label="Producto o servicio"></td>'
+            + '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[' + i + '][nombre]" id="lin-' + i + '-nombre" class="lin-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"></td>'
             + '<td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[' + i + '][cantidad]" id="lin-' + i + '-cantidad" aria-label="Cantidad" data-precio="cantidad"></td>'
             + '<td class="col-precio" data-label="Precio sin IVA"><input type="text" inputmode="decimal" name="lineas[' + i + '][precio_unitario]" id="lin-' + i + '-precio_unitario" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"></td>'
             + '<td class="col-precio" data-label="Precio final"><input type="text" inputmode="decimal" id="lin-' + i + '-precio_final" aria-label="Precio final unitario que paga el cliente, con IVA" data-precio="final"></td>'
-            + '<td class="col-unidad" data-label="Unidad"><input type="text" name="lineas[' + i + '][unidad]" id="lin-' + i + '-unidad" class="lin-unidad" aria-label="Unidad"></td>'
+            + '<td class="col-unidad" data-label="Unidad"><input type="text" name="lineas[' + i + '][unidad]" id="lin-' + i + '-unidad" class="lin-unidad" data-max-sii="4" data-contador="discreto" aria-label="Unidad"></td>'
             + '<td class="col-descuento" data-label="Desc. %"><input type="text" inputmode="decimal" name="lineas[' + i + '][descuento_pct]" id="lin-' + i + '-descuento_pct" aria-label="Descuento por linea" data-precio="descuento"></td>'
             + '<td class="col-exento" data-label="Exento"><input type="checkbox" name="lineas[' + i + '][exento]" value="1" aria-label="Exento de IVA" data-precio="exento"></td>'
             + '<td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>'

@@ -66,7 +66,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <div class="form-grid" data-precios>
                     <div class="<?= $claseCampo('nombre', 'form-campo--ancho'); ?>">
                         <label for="nombre">Nombre <?= $req; ?></label>
-                        <input type="text" name="nombre" id="nombre" data-obligatorio="Escribe el nombre del producto o servicio." value="<?= $val('nombre'); ?>" placeholder="Servicio de ejemplo" required>
+                        <input type="text" name="nombre" id="nombre" data-max-sii="80" data-obligatorio="Escribe el nombre del producto o servicio." value="<?= $val('nombre'); ?>" placeholder="Servicio de ejemplo" required>
                         <?php if ($err('nombre')): ?>
                             <p class="error"><?= htmlspecialchars($err('nombre')); ?></p>
                         <?php else: ?>
@@ -86,7 +86,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
                     <div class="<?= $claseCampo('unidad'); ?>">
                         <label for="unidad">Unidad</label>
-                        <input type="text" name="unidad" id="unidad" value="<?= $val('unidad'); ?>" placeholder="UN, KG, HH...">
+                        <input type="text" name="unidad" id="unidad" data-max-sii="4" value="<?= $val('unidad'); ?>" placeholder="UN, KG, HH...">
                         <small class="form-ayuda">Opcional. Unidad de medida.</small>
                     </div>
 

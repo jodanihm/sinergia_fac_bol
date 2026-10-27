@@ -83,7 +83,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
                     <div class="<?= $claseCampo('razon_social'); ?>">
                         <label for="razon_social">Razon social <?= $req; ?></label>
-                        <input type="text" name="razon_social" id="razon_social" data-obligatorio="Escribe la razon social del cliente." value="<?= $val('razon_social'); ?>" placeholder="Cliente SpA" required>
+                        <input type="text" name="razon_social" id="razon_social" data-max-sii="100" data-obligatorio="Escribe la razon social del cliente." value="<?= $val('razon_social'); ?>" placeholder="Cliente SpA" required>
                         <?php if ($err('razon_social')): ?>
                             <p class="error"><?= htmlspecialchars($err('razon_social')); ?></p>
                         <?php endif; ?>
@@ -91,19 +91,19 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
                     <div class="<?= $claseCampo('giro', 'form-campo--ancho'); ?>">
                         <label for="giro">Giro</label>
-                        <input type="text" name="giro" id="giro" value="<?= $val('giro'); ?>">
+                        <input type="text" name="giro" id="giro" data-max-sii="40" value="<?= $val('giro'); ?>">
                         <small class="form-ayuda">Necesario para emitir documentos a este cliente.</small>
                     </div>
 
                     <div class="<?= $claseCampo('direccion', 'form-campo--ancho'); ?>">
                         <label for="direccion">Direccion</label>
-                        <input type="text" name="direccion" id="direccion" value="<?= $val('direccion'); ?>">
+                        <input type="text" name="direccion" id="direccion" data-max-sii="70" value="<?= $val('direccion'); ?>">
                         <small class="form-ayuda">Necesario para emitir documentos a este cliente.</small>
                     </div>
 
                     <div class="<?= $claseCampo('comuna'); ?>">
                         <label for="comuna">Comuna</label>
-                        <input type="text" name="comuna" id="comuna" value="<?= $val('comuna'); ?>">
+                        <input type="text" name="comuna" id="comuna" data-max-sii="20" value="<?= $val('comuna'); ?>">
                         <small class="form-ayuda">Necesario para emitir documentos a este cliente.</small>
                     </div>
 
