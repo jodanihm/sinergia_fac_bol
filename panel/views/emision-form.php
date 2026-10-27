@@ -298,7 +298,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     </div>
                     <div class="<?= $cc('receptor-razonSocial'); ?>">
                         <label for="receptor-razonSocial">Razon social <?= $esBoleta ? '(opcional)' : $req; ?></label>
-                        <input type="text" name="receptor[razonSocial]" id="receptor-razonSocial" value="<?= $vr('razonSocial'); ?>" aria-describedby="error-receptor-razonSocial"<?= $inv('receptor-razonSocial'); ?>>
+                        <input type="text" name="receptor[razonSocial]" id="receptor-razonSocial" data-max-sii="100" value="<?= $vr('razonSocial'); ?>" aria-describedby="error-receptor-razonSocial"<?= $inv('receptor-razonSocial'); ?>>
                         <?= $campoError('receptor-razonSocial'); ?>
                     </div>
                     <?php
@@ -313,17 +313,17 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     <?php if (! $esBoleta): ?>
                     <div class="<?= $cc('receptor-giro', 'form-campo--ancho'); ?>">
                         <label for="receptor-giro">Giro <?= $req; ?></label>
-                        <input type="text" name="receptor[giro]" id="receptor-giro" value="<?= $vr('giro'); ?>" aria-describedby="error-receptor-giro"<?= $inv('receptor-giro'); ?>>
+                        <input type="text" name="receptor[giro]" id="receptor-giro" data-max-sii="40" value="<?= $vr('giro'); ?>" aria-describedby="error-receptor-giro"<?= $inv('receptor-giro'); ?>>
                         <?= $campoError('receptor-giro'); ?>
                     </div>
                     <div class="<?= $cc('receptor-direccion', 'form-campo--ancho'); ?>">
                         <label for="receptor-direccion">Direccion <?= $req; ?></label>
-                        <input type="text" name="receptor[direccion]" id="receptor-direccion" value="<?= $vr('direccion'); ?>" aria-describedby="error-receptor-direccion"<?= $inv('receptor-direccion'); ?>>
+                        <input type="text" name="receptor[direccion]" id="receptor-direccion" data-max-sii="70" value="<?= $vr('direccion'); ?>" aria-describedby="error-receptor-direccion"<?= $inv('receptor-direccion'); ?>>
                         <?= $campoError('receptor-direccion'); ?>
                     </div>
                     <div class="<?= $cc('receptor-comuna'); ?>">
                         <label for="receptor-comuna">Comuna <?= $req; ?></label>
-                        <input type="text" name="receptor[comuna]" id="receptor-comuna" value="<?= $vr('comuna'); ?>" aria-describedby="error-receptor-comuna"<?= $inv('receptor-comuna'); ?>>
+                        <input type="text" name="receptor[comuna]" id="receptor-comuna" data-max-sii="20" value="<?= $vr('comuna'); ?>" aria-describedby="error-receptor-comuna"<?= $inv('receptor-comuna'); ?>>
                         <?= $campoError('receptor-comuna'); ?>
                     </div>
                     <?php endif; ?>
@@ -538,7 +538,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <div class="<?= $cc('ref-razon', 'form-campo--ancho'); ?>">
                             <label for="ref-razon">Razon de la referencia (opcional)</label>
                             <?php // maxlength 90: es el tope de RazonRef en el esquema del SII. Pasarse rompe el sobre entero. ?>
-                            <input type="text" name="referencias[0][razon]" id="ref-razon" value="<?= $vref('razon'); ?>" maxlength="90" placeholder="Anula factura N..." aria-describedby="error-ref-razon ayuda-ref-razon"<?= $inv('ref-razon'); ?>>
+                            <input type="text" name="referencias[0][razon]" id="ref-razon" value="<?= $vref('razon'); ?>" maxlength="90" data-max-sii="90" placeholder="Anula factura N..." aria-describedby="error-ref-razon ayuda-ref-razon"<?= $inv('ref-razon'); ?>>
                             <?= $campoError('ref-razon'); ?>
                             <small class="form-ayuda" id="ayuda-ref-razon">Hasta 90 caracteres.</small>
                         </div>
@@ -600,14 +600,14 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <tbody>
                     <?php foreach ($detalles as $i => $d): ?>
                         <tr>
-                            <td class="col-producto" data-label="Producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" id="det-<?= $i; ?>-nombre" aria-label="Producto o servicio"<?= $inv("det-{$i}-nombre"); ?>><?= $campoError("det-{$i}-nombre"); ?><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
+                            <td class="col-producto" data-label="Producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" id="det-<?= $i; ?>-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $inv("det-{$i}-nombre"); ?>><?= $campoError("det-{$i}-nombre"); ?><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
                             <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" id="det-<?= $i; ?>-cantidad" aria-label="Cantidad"<?= $inv("det-{$i}-cantidad"); ?>><?= $campoError("det-{$i}-cantidad"); ?></td>
                             <?php
                             $celdaNeto  = '<td class="col-precio" data-label="Precio sin IVA ($)"><input type="hidden" name="detalles[' . $i . '][origen]" value="' . htmlspecialchars((string) ($d['origen'] ?? '')) . '" class="det-origen"><input type="text" inputmode="decimal" name="detalles[' . $i . '][precioUnitario]" value="' . htmlspecialchars((string) ($d['precioUnitario'] ?? '')) . '" class="det-precio" id="det-' . $i . '-precioUnitario" aria-label="Precio unitario sin IVA, en pesos"' . $inv("det-{$i}-precioUnitario") . '>' . $campoError("det-{$i}-precioUnitario") . '</td>';
                             $celdaFinal = '<td class="col-precio" data-label="Precio final, con IVA ($)"><input type="text" inputmode="decimal" name="detalles[' . $i . '][precioFinal]" value="' . htmlspecialchars((string) ($d['precioFinal'] ?? '')) . '" class="det-precio-final" id="det-' . $i . '-precioFinal" aria-label="Precio final unitario que paga el cliente, con IVA, en pesos"></td>';
                             echo $esBoleta ? $celdaFinal . $celdaNeto : $celdaNeto . $celdaFinal;
                             ?>
-                            <td class="col-unidad" data-label="Unidad"><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" id="det-<?= $i; ?>-unidad" aria-label="Unidad"<?= $inv("det-{$i}-unidad"); ?>><?= $campoError("det-{$i}-unidad"); ?></td>
+                            <td class="col-unidad" data-label="Unidad"><input type="text" name="detalles[<?= $i; ?>][unidad]" value="<?= htmlspecialchars((string) ($d['unidad'] ?? '')); ?>" class="det-unidad" id="det-<?= $i; ?>-unidad" data-max-sii="4" data-contador="discreto" aria-label="Unidad"<?= $inv("det-{$i}-unidad"); ?>><?= $campoError("det-{$i}-unidad"); ?></td>
                             <td class="col-exento" data-label="Exento"><input type="checkbox" name="detalles[<?= $i; ?>][exento]" value="1" class="det-exento" aria-label="Exento de IVA" <?= $exentoForzado || ! empty($d['exento']) ? 'checked' : ''; ?><?= $exentoForzado ? ' disabled' : ''; ?>></td>
                             <td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>
                         </tr>
@@ -793,10 +793,10 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     function nuevaFilaHTML(n) {
         // Sin .campo-error en las celdas: una linea recien agregada no puede
         // traer el error de un 422 anterior (el PHP solo lo pinta en la que fallo).
-        return '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="detalles[' + n + '][nombre]" class="det-nombre" id="det-' + n + '-nombre" aria-label="Producto o servicio"></td>' +
+        return '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="detalles[' + n + '][nombre]" class="det-nombre" id="det-' + n + '-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"></td>' +
             '<td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="detalles[' + n + '][cantidad]" id="det-' + n + '-cantidad" aria-label="Cantidad"></td>' +
             (ES_BOLETA ? celdaFinal(n) + celdaNeto(n) : celdaNeto(n) + celdaFinal(n)) +
-            '<td class="col-unidad" data-label="Unidad"><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" id="det-' + n + '-unidad" aria-label="Unidad"></td>' +
+            '<td class="col-unidad" data-label="Unidad"><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" id="det-' + n + '-unidad" data-max-sii="4" data-contador="discreto" aria-label="Unidad"></td>' +
             '<td class="col-exento" data-label="Exento"><input type="checkbox" name="detalles[' + n + '][exento]" value="1" class="det-exento" aria-label="Exento de IVA"' + (exentoForzado ? ' checked disabled' : '') + '></td>' +
             '<td class="col-accion" data-label=""><button type="button" class="quitar-linea" title="Quitar linea" aria-label="Quitar linea">&times;</button></td>';
     }

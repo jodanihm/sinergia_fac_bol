@@ -59,6 +59,12 @@ $jsValidarVersion = @filemtime(__DIR__ . '/../../public/js/validar-campos.js');
 $jsPrecioVersion = @filemtime(__DIR__ . '/../../public/js/precio-iva.js');
 ?>
 <script src="/js/precio-iva.js<?= $jsPrecioVersion ? '?v=' . $jsPrecioVersion : ''; ?>" defer></script>
+<?php
+// Contador de caracteres de los textos que viajan al SII. Solo actua donde hay
+// un [data-max-sii]; en el resto no hace nada.
+$jsContadorVersion = @filemtime(__DIR__ . '/../../public/js/contador-caracteres.js');
+?>
+<script src="/js/contador-caracteres.js<?= $jsContadorVersion ? '?v=' . $jsContadorVersion : ''; ?>" defer></script>
 </head>
 <body class="<?= htmlspecialchars($bodyClaseExtra); ?>">
 <?php if ($panelAutenticado): ?>
