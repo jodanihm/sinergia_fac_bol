@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-02',
+        'version' => '1.90',
+        'titulo'  => 'Adaptar archivo: la fecha para todas las filas se elige con calendario',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al completar una fecha que el archivo no trae, el campo rechazaba las barras ("Escribe solo numeros") y, escrita sin separadores, el sistema no la entendia y seguia pidiendo la fecha. Ahora se elige con el calendario.',
+            'Si un valor indicado para todas las filas no se puede usar, ahora la pantalla lo dice en vez de ignorarlo sin aviso.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-02',
         'version' => '1.89',
         'titulo'  => 'Importar archivos de clientes que no vienen en la plantilla',
         'tag'     => 'backend',
