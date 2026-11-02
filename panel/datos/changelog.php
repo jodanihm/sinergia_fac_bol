@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-02',
+        'version' => '1.94',
+        'titulo'  => 'Importar notas de venta avisa el tipo de factura y los folios antes de importar',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Si todas las lineas del archivo vienen exentas de IVA y no se marco "Son facturas exentas", la pantalla lo pregunta antes de importar: un boton las deja como factura exenta (34), o hay que confirmar que son afectas (33). Antes se descubria al facturar, con el aviso de que no alcanzaban los folios.',
+            'El resumen antes de importar dice con que tipo de factura saldran las notas.',
+            'Si no hay folios suficientes de ese tipo, se avisa antes de importar, no despues.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-02',
         'version' => '1.93',
         'titulo'  => 'Facturacion masiva en dos pasos: importar y facturar',
         'tag'     => 'frontend',

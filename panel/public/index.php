@@ -812,7 +812,7 @@ const PERMISOS_RUTA_PATRON = [
     ['GET',  '#^/ventas/carga-masiva/(\d+)$#',           'ventas', 'ver'],
     ['GET',  '#^/ventas/carga-masiva/adaptar/(\d+)$#',   'ventas', 'ver'],
     ['GET',  '#^/ventas/carga-masiva/adaptar/(\d+)/(original|corregido)$#', 'ventas', 'ver'],
-    ['POST', '#^/ventas/carga-masiva/adaptar/(\d+)/(equivalencias|descartar)$#', 'ventas', 'gestionar'],
+    ['POST', '#^/ventas/carga-masiva/adaptar/(\d+)/(equivalencias|descartar|tipo)$#', 'ventas', 'gestionar'],
     // Importar crea notas igual que la carga: 'gestionar'. No emite nada al SII.
     ['POST', '#^/ventas/carga-masiva/adaptar/(\d+)/importar$#', 'ventas', 'gestionar'],
     ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)$#',        'ventas', 'ver'],
@@ -8745,6 +8745,15 @@ function calcularAdaptacion(PDO $pdo, int $cuentaId, array $adaptacion): array
     // recalcula y tiene que dar lo mismo.
     $base['huella'] = hash('sha256', json_encode([$aplicado['filas'], $esExento], JSON_UNESCAPED_UNICODE));
 
+    // TODAS LAS LINEAS EXENTAS SIN MARCAR "FACTURAS EXENTAS": casi siempre es un
+    // olvido, y se descubre recien al facturar, cuando faltan folios del 33.
+    // Se pregunta antes de importar (vista) y el import exige la respuesta.
+    $validos = array_filter($base['revision']['items'], static fn (array $it): bool => $it['status'] === 'ok');
+    $base['todoExento'] = $validos !== [] && array_filter(
+        $validos,
+        static fn (array $it): bool => array_filter($it['datos']['detalle'], static fn (array $l): bool => empty($l['exento'])) !== []
+    ) === [];
+
     return $base;
 }
 
@@ -8892,9 +8901,9 @@ function handleAdaptarPost(): void
 
 function handleAdaptarDetalleGet(int $id): void
 {
-    $pdo      = Db::conexion();
-    $cuentaId = Auth::cuentaId();
-    exigirProduccionCompleto($pdo, $cuentaId);
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId);
 
     $adaptacion = obtenerAdaptacion($pdo, $cuentaId, $id, true);
     if ($adaptacion === null) {
@@ -8918,6 +8927,9 @@ function handleAdaptarDetalleGet(int $id): void
         'adaptacion'   => $adaptacion,
         'calculo'      => $calculo,
         'errorLectura' => $errorLectura,
+        // Para avisar ANTES de importar si no alcanzan los folios del tipo
+        // elegido: es la misma cuenta que hace Facturar notas.
+        'folios'       => [33 => sumarFoliosDisponibles($pdo, $rutEmisor, 33), 34 => sumarFoliosDisponibles($pdo, $rutEmisor, 34)],
         'flash'        => flashTomar(),
         'navActivo'    => 'ventas.carga-masiva',
     ]);
@@ -9068,6 +9080,10 @@ function handleAdaptarImportarPost(int $id): void
             $pdo->rollBack();
             $volver('Ninguna fila del archivo se importaria: todas tienen error. No se importo nada.');
         }
+        if ($calculo['todoExento'] && ! (bool) $adaptacion['es_exento'] && ($_POST['confirmo_afecta'] ?? '') !== '1') {
+            $pdo->rollBack();
+            $volver('Todas las lineas vienen exentas de IVA: indica si son facturas exentas (34) o confirma que son afectas (33). No se importo nada.');
+        }
 
         // NINGUNA FILA PERDIDA NI DUPLICADA, ANTES DE ESCRIBIR: cada fila de
         // datos del archivo es o una fila vacia descartada o exactamente un
@@ -9175,6 +9191,22 @@ function handleAdaptarDescartarPost(int $id): void
     $pdo->prepare("UPDATE carga_adaptacion SET estado = 'descartada' WHERE id = ? AND cuenta_id = ? AND estado = 'borrador'")
         ->execute([$id, $cuentaId]);
     redirigirPrg('/ventas/carga-masiva/adaptar');
+}
+
+/**
+ * Responde la pregunta "¿son facturas exentas?" del paso 3 sin reenviar todo
+ * el formulario de respuestas. Solo cambia es_exento; la huella cambia con el
+ * y la vista previa se recalcula.
+ */
+function handleAdaptarTipoPost(int $id): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $pdo->prepare("UPDATE carga_adaptacion SET es_exento = ? WHERE id = ? AND cuenta_id = ? AND estado = 'borrador'")
+        ->execute([($_POST['tipo'] ?? '') === '34' ? 1 : 0, $id, $cuentaId]);
+    redirigirPrg("/ventas/carga-masiva/adaptar/{$id}#vista-previa");
 }
 
 /** Descarga el original o el corregido. Solo de esta cuenta. */
@@ -12734,6 +12766,11 @@ if ($metodo === 'POST' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)/impor
 if ($metodo === 'POST' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)/descartar$#', $ruta, $mAdapt)) {
     Auth::requerirSesion();
     handleAdaptarDescartarPost((int) $mAdapt[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)/tipo$#', $ruta, $mAdapt)) {
+    Auth::requerirSesion();
+    handleAdaptarTipoPost((int) $mAdapt[1]);
 }
 
 if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/plantilla') {

@@ -589,10 +589,52 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                     </div>
                 </div>
             <?php else: ?>
+                <?php
+                // EL TIPO SE DICE EN EL RESUMEN Y SE CRUZA CON LOS FOLIOS: un
+                // archivo importado con el tipo equivocado se descubre recien al
+                // facturar, con "no te alcanzan los folios".
+                $esExento     = (bool) $adaptacion['es_exento'];
+                $tipoElegido  = $esExento ? 34 : 33;
+                $nombreTipo   = $esExento ? 'factura exenta (34)' : 'factura afecta con IVA (33)';
+                $preguntarTipo = ! empty($calculo['todoExento']) && ! $esExento;
+                $foliosTipo   = (int) ($folios[$tipoElegido] ?? 0);
+                ?>
+                <?php if ($preguntarTipo): ?>
+                    <div class="alerta alerta--advertencia" role="status" id="pregunta-tipo">
+                        <?= iconoSvg('alerta', 20, 'alerta__icono'); ?>
+                        <div class="alerta__cuerpo">
+                            <p class="alerta__titulo">Todas las lineas de este archivo vienen exentas de IVA</p>
+                            <p>
+                                ¿Son facturas exentas? Si lo son, importalas como factura exenta (34): tienes
+                                <?= $fmtNum((int) ($folios[34] ?? 0)); ?> folios de ese tipo. Si las importas como factura
+                                afecta (33) consumen folios del 33, y tienes <?= $fmtNum((int) ($folios[33] ?? 0)); ?>.
+                            </p>
+                            <form method="post" action="/ventas/carga-masiva/adaptar/<?= $id; ?>/tipo" data-espera>
+                                <?= csrfInput(); ?>
+                                <input type="hidden" name="tipo" value="34">
+                                <button class="boton-principal" type="submit">Si, son facturas exentas</button>
+                            </form>
+                        </div>
+                    </div>
+                <?php endif; ?>
+                <?php if ($notas > $foliosTipo): ?>
+                    <div class="alerta alerta--advertencia" role="status">
+                        <?= iconoSvg('alerta', 20, 'alerta__icono'); ?>
+                        <div class="alerta__cuerpo">
+                            <p class="alerta__titulo">No te alcanzan los folios para facturar todo</p>
+                            <p>
+                                Vas a crear <?= $fmtNum($notas); ?> nota<?= $notas === 1 ? '' : 's'; ?> como <?= $nombreTipo; ?> y
+                                <?= $foliosTipo === 1 ? 'queda 1 folio' : 'quedan ' . $fmtNum($foliosTipo) . ' folios'; ?> de ese tipo.
+                                Puedes importarlas igual, pero para facturarlas tendras que cargar un CAF nuevo en Folios y CAF de produccion.
+                            </p>
+                        </div>
+                    </div>
+                <?php endif; ?>
                 <p class="resumen-importacion">
                     <?= $notas === 1 ? 'Se va a crear' : 'Se van a crear'; ?> <strong><?= $fmtNum($notas); ?> nota<?= $notas === 1 ? '' : 's'; ?> de venta</strong>
                     a partir de <?= $fmtNum($validas); ?> fila<?= $validas === 1 ? '' : 's'; ?> del archivo,
-                    por un total estimado de <strong>$<?= $fmtNum($monto); ?></strong> con IVA.
+                    por un total estimado de <strong>$<?= $fmtNum($monto); ?></strong>.
+                    Se facturan como <strong><?= $nombreTipo; ?></strong>.
                     <?php if ($rutsNuevos !== []): ?>
                         <?= count($rutsNuevos) === 1 ? 'Se agrega 1 cliente nuevo' : 'Se agregan ' . count($rutsNuevos) . ' clientes nuevos'; ?> a tus clientes.
                     <?php endif; ?>
@@ -630,6 +672,14 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                         </label>
                         <small class="form-ayuda">Queda registrado con tu usuario y la hora. El archivo original se guarda.</small>
                     </div>
+                    <?php if ($preguntarTipo): ?>
+                        <div class="form-campo">
+                            <label class="form-check" for="confirmo_afecta">
+                                <input type="checkbox" name="confirmo_afecta" id="confirmo_afecta" value="1" required>
+                                No son exentas: importarlas como factura afecta (33)
+                            </label>
+                        </div>
+                    <?php endif; ?>
                     <div class="acciones-formulario">
                         <button class="boton-principal" type="submit">Importar <?= $fmtNum($notas); ?> nota<?= $notas === 1 ? '' : 's'; ?> de venta</button>
                     </div>
