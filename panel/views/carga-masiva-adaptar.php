@@ -1,11 +1,15 @@
 <?php
 /**
- * Adaptar un archivo de cliente a la plantilla: paso 1, subirlo.
+ * Importar notas de venta: paso 1, subir el archivo. Es la UNICA entrada del
+ * flujo masivo (hubo tambien "Revisar archivo" y la carga con plantilla exacta;
+ * esta pantalla hace lo de las dos: un archivo en la plantilla se reconoce
+ * entero y pasa directo a revisar e importar).
  *
- * TAREA DE LA PANTALLA, EN UNA FRASE: subir el Excel o CSV que mando un cliente,
- * con su propio formato, para adaptarlo a la plantilla antes de cargarlo.
+ * TAREA DE LA PANTALLA, EN UNA FRASE: subir el Excel o CSV de ventas, en la
+ * plantilla o en el formato que sea, para importarlo como notas de venta.
  *
- * Recibe: $error, $adaptaciones (historial de esta cuenta), $navActivo.
+ * Recibe: $error, $adaptaciones (archivos subidos), $lotes (importaciones,
+ * incluidas las de la carga vieja), $navActivo.
  *
  * SUBIR NO IMPORTA NADA. Guarda el original y propone las equivalencias; lo
  * demas pasa en la pantalla de la adaptacion, y la importacion exige una
@@ -18,7 +22,7 @@
  * ESPERA (seccion 14): la misma de la carga -- nada bajo 300 ms, spinner dentro
  * del boton, y pasados 10 s que se esta haciendo con barra indeterminada.
  */
-$titulo = 'Adaptar archivo de cliente';
+$titulo = 'Importar notas de venta';
 require __DIR__ . '/partials/header.php';
 
 $e = static fn (string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
@@ -30,20 +34,15 @@ $fmtFechaHora = static function ($v): string {
 $hayError = ! empty($error);
 $maxBytes = CARGA_ADAPTACION_MAX_BYTES;
 
-$estados = [
-    'borrador'   => ['badge--advertencia', 'Sin importar', 'reloj'],
-    'importada'  => ['badge--ok', 'Importada', 'check'],
-    'descartada' => ['badge--neutro', 'Descartada', 'alerta'],
-];
 ?>
 
 <div class="dash-header">
     <div>
-        <h1>Adaptar archivo de cliente</h1>
+        <h1>Importar notas de venta</h1>
     </div>
 </div>
 <p class="dash-subtitulo">
-    Sube el Excel o CSV tal como te lo mando tu cliente. El sistema lo ordena, te pregunta lo que no sepa y lo importa cuando tu lo apruebas.
+    Sube el Excel o CSV con tus ventas, en la plantilla o tal como te lo mando tu cliente. El sistema lo ordena, te pregunta lo que no sepa y lo importa cuando tu lo apruebas.
 </p>
 
 <div class="config-ancho">
@@ -62,7 +61,7 @@ $estados = [
     <section class="tarjeta" aria-labelledby="titulo-archivo">
         <h2 id="titulo-archivo">Archivo del cliente</h2>
         <p class="tarjeta__intro">
-            Excel (.xlsx o .xls) o .csv, con las columnas en cualquier orden y con los nombres que use tu cliente.
+            Excel (.xlsx o .xls) o .csv, con las columnas en cualquier orden y con los nombres que tenga.
         </p>
 
         <form method="post" action="/ventas/carga-masiva/adaptar" enctype="multipart/form-data"
@@ -74,7 +73,7 @@ $estados = [
                 <div class="upload">
                     <div class="upload__area" data-zona-archivo>
                         <?= iconoSvg('carga-masiva', 32, 'upload__icono'); ?>
-                        <p class="upload__texto">Arrastra aqui el archivo de tu cliente, o eligelo desde tu equipo</p>
+                        <p class="upload__texto">Arrastra aqui el archivo con las ventas, o eligelo desde tu equipo</p>
                         <input class="visualmente-oculto" type="file" id="archivo" name="archivo"
                                accept=".xlsx,.xls,.csv" required
                                aria-describedby="ayuda-archivo error-archivo"<?= $hayError ? ' aria-invalid="true"' : ''; ?>
@@ -115,52 +114,71 @@ $estados = [
         </div>
         <div class="panel-info">
             <p class="panel-info__titulo">
-                <?= iconoSvg('flecha', 20, 'panel-info__icono'); ?>Si tu archivo ya viene en la plantilla
+                <?= iconoSvg('flecha', 20, 'panel-info__icono'); ?>¿Armas tu el archivo?
             </p>
-            <p>No hace falta adaptarlo: <a href="/ventas/carga-masiva/revisar">revisalo</a> o <a href="/ventas/carga-masiva">cargalo directo</a>.</p>
+            <p>Parte por la plantilla: con ella el sistema reconoce todas las columnas y no tiene nada que preguntarte.</p>
+            <p><a class="boton-secundario" href="/ventas/carga-masiva/plantilla">Descargar plantilla Excel</a></p>
         </div>
     </div>
 </div>
 
-<section class="tarjeta" aria-labelledby="titulo-historial">
-    <h2 id="titulo-historial">Archivos adaptados</h2>
-    <?php if ($adaptaciones === []): ?>
-        <p class="tarjeta__intro">Todavia no has adaptado ningun archivo.</p>
+<?php
+    /* EL HISTORIAL, EN EL ORDEN EN QUE SE NECESITA: lo que quedo a medias
+       arriba (es lo unico que pide accion), despues todas las importaciones
+       -- cada una es un lote, incluidas las de la carga vieja --, y lo
+       descartado plegado: no pide nada, pero el original sigue ahi. */
+    $sinTerminar = array_values(array_filter($adaptaciones, static fn (array $a): bool => $a['estado'] === 'borrador'));
+    $descartadas = array_values(array_filter($adaptaciones, static fn (array $a): bool => $a['estado'] === 'descartada'));
+    $fmtNum = static fn ($v): string => number_format((float) $v, 0, ',', '.');
+?>
+
+<?php if ($sinTerminar !== []): ?>
+    <section class="tarjeta" aria-labelledby="titulo-sin-terminar">
+        <h2 id="titulo-sin-terminar">Archivos sin terminar</h2>
+        <ul class="panel-info__lista">
+            <?php foreach ($sinTerminar as $a): ?>
+                <li>
+                    <a href="/ventas/carga-masiva/adaptar/<?= (int) $a['id']; ?>"><?= $e((string) $a['nombre_archivo']); ?></a>
+                    <span class="tabla-datos__secundario">Subido el <?= $e($fmtFechaHora($a['created_at'])); ?> por <?= $e((string) $a['subido_por']); ?>. Falta revisarlo e importarlo.</span>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    </section>
+<?php endif; ?>
+
+<section class="tarjeta" aria-labelledby="titulo-lotes">
+    <h2 id="titulo-lotes">Importaciones</h2>
+    <?php if ($lotes === []): ?>
+        <p class="tarjeta__intro">Todavia no has importado ningun archivo.</p>
     <?php else: ?>
         <div class="tabla-scroll">
             <table class="tabla-datos tabla-datos--cards">
-                <caption class="visualmente-oculto">Archivos subidos para adaptar, con su estado y quien autorizo la importacion.</caption>
+                <caption class="visualmente-oculto">Archivos importados, del mas nuevo al mas antiguo, con sus filas validas y con error.</caption>
                 <thead>
                     <tr>
+                        <th scope="col">Fecha</th>
                         <th scope="col">Archivo</th>
-                        <th scope="col">Subido</th>
-                        <th scope="col">Estado</th>
-                        <th scope="col">Autorizado</th>
-                        <th scope="col"><span class="visualmente-oculto">Acciones</span></th>
+                        <th scope="col" class="tabla-datos__num">Validas</th>
+                        <th scope="col" class="tabla-datos__num">Con error</th>
+                        <th scope="col" class="tabla-datos__acciones"><span class="visualmente-oculto">Acciones</span></th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($adaptaciones as $a): ?>
-                        <?php [$clase, $texto, $icono] = $estados[$a['estado']] ?? $estados['borrador']; ?>
+                    <?php foreach ($lotes as $l): ?>
                         <tr>
-                            <th scope="row" data-label="Archivo"><?= $e((string) $a['nombre_archivo']); ?></th>
-                            <td data-label="Subido">
-                                <?= $e($fmtFechaHora($a['created_at'])); ?>
-                                <span class="tabla-datos__secundario"><?= $e((string) $a['subido_por']); ?></span>
-                            </td>
-                            <td data-label="Estado" class="tabla-datos__estado">
-                                <span class="badge <?= $clase; ?>"><?= iconoSvg($icono, 16, 'badge__icono'); ?><?= $texto; ?></span>
-                            </td>
-                            <td data-label="Autorizado">
-                                <?php if ($a['autorizado_en'] !== null): ?>
-                                    <?= $e($fmtFechaHora($a['autorizado_en'])); ?>
-                                    <span class="tabla-datos__secundario"><?= $e((string) $a['autorizado_por_email']); ?></span>
+                            <td data-label="Fecha"><?= $e($fmtFechaHora($l['created_at'])); ?></td>
+                            <th scope="row" data-label="Archivo"><?= $e((string) $l['nombre_archivo']); ?></th>
+                            <td data-label="Validas" class="tabla-datos__num"><?= $fmtNum($l['filas_validas']); ?></td>
+                            <td data-label="Con error" class="tabla-datos__num">
+                                <?php if ((int) $l['filas_error'] > 0): ?>
+                                    <span class="badge badge--advertencia"><?= iconoSvg('alerta', 16, 'badge__icono'); ?><?= $fmtNum($l['filas_error']); ?></span>
                                 <?php else: ?>
-                                    -
+                                    0
                                 <?php endif; ?>
                             </td>
                             <td class="tabla-datos__acciones">
-                                <a href="/ventas/carga-masiva/adaptar/<?= (int) $a['id']; ?>"><?= $a['estado'] === 'borrador' ? 'Continuar' : 'Ver registro'; ?></a>
+                                <a href="/ventas/carga-masiva/<?= (int) $l['id']; ?>"
+                                   aria-label="Ver detalle de <?= $e((string) $l['nombre_archivo']); ?>">Ver detalle</a>
                             </td>
                         </tr>
                     <?php endforeach; ?>
@@ -169,6 +187,21 @@ $estados = [
         </div>
     <?php endif; ?>
 </section>
+
+<?php if ($descartadas !== []): ?>
+    <details class="tarjeta">
+        <summary>Archivos descartados (<?= count($descartadas); ?>)</summary>
+        <p class="nota">No se importaron. El archivo original sigue guardado.</p>
+        <ul class="panel-info__lista">
+            <?php foreach ($descartadas as $a): ?>
+                <li>
+                    <a href="/ventas/carga-masiva/adaptar/<?= (int) $a['id']; ?>"><?= $e((string) $a['nombre_archivo']); ?></a>
+                    <span class="tabla-datos__secundario">Subido el <?= $e($fmtFechaHora($a['created_at'])); ?> por <?= $e((string) $a['subido_por']); ?></span>
+                </li>
+            <?php endforeach; ?>
+        </ul>
+    </details>
+<?php endif; ?>
 
 </div>
 
@@ -187,7 +220,7 @@ $estados = [
 
     function regla() {
         var f = input.files && input.files[0];
-        if (!f) { return 'Elige el archivo de tu cliente: Excel (.xlsx o .xls) o .csv.'; }
+        if (!f) { return 'Elige el archivo con las ventas: Excel (.xlsx o .xls) o .csv.'; }
         var n = f.name.toLowerCase();
         if (!/\.(xlsx|xls|csv)$/.test(n)) { return 'Ese tipo de archivo no se puede adaptar. Usa Excel (.xlsx o .xls) o .csv.'; }
         if (f.size > Number(input.getAttribute('data-max-bytes'))) { return 'El archivo pesa mas de 16 MB. Dividelo en archivos mas chicos.'; }

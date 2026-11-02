@@ -23,11 +23,11 @@
  * anatomia es distinta a la de este stepper (circulo + conector + etiqueta al
  * lado). Comparten el criterio, no el dibujo.
  *
- * LO USAN SOLO carga-masiva-form.php, carga-masiva-detalle.php y
+ * LO USAN SOLO carga-masiva-detalle.php y
  * facturacion-masiva-form.php.
  */
 $pasosStepper = [
-    1 => 'Cargar archivo',
+    1 => 'Importar archivo',
     2 => 'Revisar carga',
     3 => 'Facturar notas',
 ];

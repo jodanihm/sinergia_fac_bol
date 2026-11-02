@@ -22,7 +22,7 @@
  * corregida lleva debajo su valor original: "autorizar correcciones" sin ver
  * cuales seria firmar a ciegas.
  */
-$titulo = 'Adaptar archivo de cliente';
+$titulo = 'Importar notas de venta';
 require __DIR__ . '/partials/header.php';
 
 $e      = static fn (string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
@@ -59,7 +59,7 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
 
 <div class="dash-header">
     <div>
-        <h1>Adaptar archivo de cliente</h1>
+        <h1>Importar notas de venta</h1>
     </div>
 </div>
 <p class="dash-subtitulo">
@@ -727,7 +727,7 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
     </form>
 <?php endif; ?>
 
-<p><a href="/ventas/carga-masiva/adaptar">Volver a los archivos adaptados</a></p>
+<p><a href="/ventas/carga-masiva/adaptar">Volver a importar notas de venta</a></p>
 
 </div>
 

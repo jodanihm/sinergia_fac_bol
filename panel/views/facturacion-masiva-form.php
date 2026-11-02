@@ -42,7 +42,7 @@
  */
 $titulo         = 'Facturacion masiva';
 $pasoActual     = 3;
-$enlacesStepper = [1 => '/ventas/carga-masiva'];
+$enlacesStepper = [1 => '/ventas/carga-masiva/adaptar'];
 require __DIR__ . '/partials/header.php';
 
 $e = static fn (string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
@@ -254,7 +254,7 @@ foreach ($resultado as $n) {
                 <h3>No tienes notas pendientes de facturar</h3>
                 <p>Cuando cargues notas de venta y queden validas, apareceran aqui para emitirlas.</p>
                 <p class="estado-vacio__acciones">
-                    <a class="boton-principal" href="/ventas/carga-masiva">Ir a carga masiva</a>
+                    <a class="boton-principal" href="/ventas/carga-masiva/adaptar">Importar notas de venta</a>
                 </p>
             <?php endif; ?>
         </div>
@@ -377,7 +377,7 @@ foreach ($resultado as $n) {
             </div>
 
             <div class="acciones-formulario">
-                <a class="boton-secundario" href="/ventas/carga-masiva">Volver a carga masiva</a>
+                <a class="boton-secundario" href="/ventas/carga-masiva/adaptar">Volver a importar notas de venta</a>
                 <button class="boton-principal" type="submit" id="btn-facturar">Facturar seleccionadas</button>
             </div>
 
