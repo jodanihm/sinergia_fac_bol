@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-02',
+        'version' => '1.89',
+        'titulo'  => 'Importar archivos de clientes que no vienen en la plantilla',
+        'tag'     => 'backend',
+        'items'   => [
+            'Nueva opcion Ventas > Facturacion masiva > Adaptar archivo de cliente: subes el Excel o CSV tal como lo manda tu cliente, con sus propias columnas y en cualquier orden, y el sistema propone a que columna de la plantilla corresponde cada una.',
+            'Reordena columnas, quita filas vacias y ordena formatos (RUT sin puntos, fechas, montos sin "$" ni punto de miles) sin cambiar ningun dato. Lo que admite dos lecturas, como una columna "Precio" que no dice si trae IVA o un valor "Efectivo" en la forma de pago, te lo pregunta en vez de adivinar.',
+            'Antes de importar ves una vista previa con cada correccion junto al valor original, las advertencias y las filas que quedarian con error, revisadas con las mismas reglas de la carga normal.',
+            'Solo se importa cuando marcas la autorizacion. Queda registrado quien autorizo, cuando y cada celda que se corrigio, y se conserva el archivo original y el corregido para descargarlos.',
+            'La proxima vez que el mismo cliente mande el mismo formato, se proponen las equivalencias que confirmaste esa vez. Volver a subir un archivo ya importado no duplica ninguna nota.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-02',
         'version' => '1.88',
         'titulo'  => 'Revisar el Excel de notas de venta antes de cargarlo',
         'tag'     => 'frontend',
