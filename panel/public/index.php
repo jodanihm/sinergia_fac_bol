@@ -9144,6 +9144,13 @@ function calcularAdaptacion(PDO $pdo, int $cuentaId, array $adaptacion): array
     $mapeo       = array_map('strval', (array) ($adaptacion['mapeo'] ?? []));
     $mapeo       = array_filter($mapeo, static fn (string $c, $i): bool => $c !== '' && isset($archivo['encabezados'][(int) $i]), ARRAY_FILTER_USE_BOTH);
     $mapeo       = array_combine(array_map('intval', array_keys($mapeo)), array_values($mapeo));
+    // UNA COLUMNA VACIA EN TODO EL ARCHIVO NO APORTA NINGUN DATO: se saca del
+    // mapeo. El resultado de aplicar es el mismo (vacio), y asi aparece la
+    // pregunta que si resuelve el faltante -- "usar el numero de fila", "que
+    // fecha tienen estas ventas" -- en vez de terminar con todas las filas en
+    // error por un dato que nunca vino.
+    $columnasVacias = AdaptadorPlantilla::columnasVacias($archivo['datos'], count($archivo['encabezados']));
+    $mapeo          = array_diff_key($mapeo, array_flip($columnasVacias));
     $constantes  = array_map('strval', (array) ($adaptacion['constantes'] ?? []));
     $equivalencias = (array) ($adaptacion['equivalencias'] ?? []);
     $idPorFila   = (bool) $adaptacion['identificador_por_fila'];
@@ -9179,6 +9186,7 @@ function calcularAdaptacion(PDO $pdo, int $cuentaId, array $adaptacion): array
         'archivo'      => $archivo,
         'propuesta'    => $propuesta,
         'mapeo'        => $mapeo,
+        'columnasVacias' => $columnasVacias,
         'constantes'   => $constantes,
         'equivalencias' => $equivalencias,
         'porTraducir'  => $porTraducir,
@@ -9313,8 +9321,9 @@ function handleAdaptarPost(): void
         $esExento      = (int) $recordada['es_exento'];
     } else {
         $propuesta = [];
+        $vacias    = AdaptadorPlantilla::columnasVacias($leido['datos'], count($leido['encabezados']));
         foreach (AdaptadorPlantilla::proponerEquivalencias($leido['encabezados']) as $i => $p) {
-            if ($p['destino'] !== null) {
+            if ($p['destino'] !== null && ! in_array($i, $vacias, true)) {
                 $propuesta[(string) $i] = $p['destino'];
             }
         }

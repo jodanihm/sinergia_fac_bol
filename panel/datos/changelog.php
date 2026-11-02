@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-02',
+        'version' => '1.92',
+        'titulo'  => 'Adaptar archivo: una columna vacia ya no bloquea la importacion',
+        'tag'     => 'backend',
+        'items'   => [
+            'Si el archivo trae una columna pero vacia en todas las filas (por ejemplo el N° de venta), ahora se trata como si no la trajera, y aparece la pregunta que lo resuelve ("usar el numero de fila"). Antes todas las filas terminaban con error y no habia forma de seguir.',
+            'Cuando hay filas con error, el aviso de arriba resume los motivos ("67 filas: falta el N° de venta") y dice donde se corrige cada uno, en vez de mandarte a revisarlas una por una.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-02',
         'version' => '1.91',
         'titulo'  => 'Adaptar archivo de cliente, mas simple: preguntas en palabras y una sola confirmacion',
         'tag'     => 'frontend',

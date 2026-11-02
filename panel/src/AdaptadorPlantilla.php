@@ -498,6 +498,32 @@ final class AdaptadorPlantilla
     }
 
     /**
+     * Las columnas que no traen nada en ninguna fila de datos.
+     *
+     * Una columna asi no es fuente de ningun dato: asignarla a "N° de venta"
+     * da exactamente lo mismo que no asignarla, pero esconde la pregunta que
+     * si resuelve el problema (usar el numero de fila). Pasa con la plantilla
+     * misma cuando el cliente deja una columna sin llenar.
+     *
+     * @param list<list<string|int|float>> $datos
+     *
+     * @return list<int>
+     */
+    public static function columnasVacias(array $datos, int $nColumnas): array
+    {
+        $conDatos = [];
+        foreach ($datos as $fila) {
+            foreach ($fila as $i => $v) {
+                if (! isset($conDatos[$i]) && (is_int($v) || is_float($v) || trim((string) $v) !== '')) {
+                    $conDatos[$i] = true;
+                }
+            }
+        }
+
+        return array_values(array_filter(range(0, max(0, $nColumnas - 1)), static fn (int $i): bool => $nColumnas > 0 && ! isset($conDatos[$i])));
+    }
+
+    /**
      * Un numero leido de una celda numerica, como texto sin perder nada:
      * 10000.0 -> "10000", 8403.3613445378 -> "8403.3613445378".
      */
