@@ -205,6 +205,7 @@ $fraseExentoOff = 'Las notas salen como factura afecta (33), igual que siempre. 
                 <li>Una fila con problemas no detiene la carga: se guarda con el motivo para que puedas corregirla.</li>
                 <li>El identificador de cada nota evita que la misma venta se cargue dos veces.</li>
                 <li>El precio va en una de dos columnas: precio_unitario (sin IVA) o precio_final (lo que paga el cliente). El IVA se calcula solo.</li>
+                <li>Si no estas seguro del archivo, <a href="/ventas/carga-masiva/revisar">revisalo primero</a>: te dice que corregir sin cargar nada.</li>
             </ul>
         </div>
 

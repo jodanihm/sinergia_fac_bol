@@ -663,6 +663,10 @@ const PERMISOS_RUTA = [
     'GET /ventas/carga-masiva'                   => ['ventas', 'ver'],
     'POST /ventas/carga-masiva'                  => ['ventas', 'gestionar'],
     'GET /ventas/carga-masiva/plantilla'         => ['ventas', 'ver'],
+    // Revisar NO escribe nada (ni lote ni notas ni clientes): por eso basta 'ver'
+    // aunque sea un POST, a diferencia de la carga, que pide 'gestionar'.
+    'GET /ventas/carga-masiva/revisar'           => ['ventas', 'ver'],
+    'POST /ventas/carga-masiva/revisar'          => ['ventas', 'ver'],
     'GET /ventas/facturacion-masiva'             => ['ventas', 'ver'],
     // LA QUE MAS FOLIOS QUEMA DE UNA VEZ: un sub-lote entero al SII.
     'POST /ventas/facturacion-masiva/confirmar-sublote' => ['ventas', 'emitir'],
@@ -1054,8 +1058,18 @@ function definicionMenu(): array
                 // hacer antes de estar habilitado para emitir -- que es justo
                 // cuando un cliente nuevo necesita cotizar.
                 ['clave' => 'ventas.cotizaciones', 'label' => 'Cotizaciones', 'destino' => '/ventas/cotizaciones', 'construido' => true, 'requiereProduccion' => false],
-                ['clave' => 'ventas.carga-masiva', 'label' => 'Carga masiva de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => true, 'requiereProduccion' => true],
-                ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturacion masiva', 'destino' => '/ventas/facturacion-masiva', 'construido' => true, 'requiereProduccion' => true],
+                // LAS TRES PANTALLAS DEL FLUJO MASIVO, JUNTAS Y EN EL ORDEN DE
+                // LA TAREA: revisar el Excel, cargarlo, facturar. Sueltas entre
+                // las demas opciones de Ventas no se leia que fueran pasos de un
+                // mismo camino.
+                [
+                    'label' => 'Facturacion masiva',
+                    'items' => [
+                        ['clave' => 'ventas.carga-masiva-revisar', 'label' => 'Revisar archivo', 'destino' => '/ventas/carga-masiva/revisar', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.carga-masiva', 'label' => 'Carga de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturar notas', 'destino' => '/ventas/facturacion-masiva', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                    ],
+                ],
                 ['clave' => 'ventas.panel-emision', 'label' => 'Panel de emision', 'destino' => '/ventas/panel-emision', 'construido' => true, 'requiereProduccion' => true],
                 // requiereProduccion=true por dos razones independientes: sin
                 // poder emitir la cola esta vacia por definicion, y su handler
@@ -8282,52 +8296,39 @@ function crearNotaVentaError(PDO $pdo, int $cuentaId, int $loteId, array $filaOr
     ]);
 }
 
-function handleCargaMasivaGet(): void
+/**
+ * LA REVISION DE UN ARCHIVO DE CARGA MASIVA, SIN ESCRIBIR NADA.
+ *
+ * Es todo lo que handleCargaMasivaPost() comprueba antes de abrir su
+ * transaccion, sacado aqui para que lo compartan los dos caminos: la carga, que
+ * despues guarda, y la revision (/ventas/carga-masiva/revisar), que solo
+ * informa. Una sola regla para los dos -- si la revision tuviera su copia, el
+ * dia que cambie una validacion diria "listo" de un archivo que la carga
+ * rechaza, que es justo lo que vino a evitar.
+ *
+ * Solo LEE de la base (identificadores ya cargados, clientes del maestro).
+ *
+ * LOS PROBLEMAS DE ARCHIVO SE JUNTAN TODOS en vez de cortar en el primero: a la
+ * revision le sirve ver la lista completa de una vez. La carga sigue mostrando
+ * solo el primero, como antes. Ninguno lleva el "No se cargo ninguna nota":
+ * eso es cierto en la carga y falso en la revision, asi que lo agrega quien
+ * corresponde.
+ *
+ * @return array{items:list<array<string,mixed>>, problemas:list<string>, grupos:list<array<string,mixed>>}
+ *
+ * @throws RuntimeException si el archivo no se puede leer o solo trae el
+ *                          encabezado: no hay nada que revisar
+ */
+function revisarArchivoCargaMasiva(PDO $pdo, int $cuentaId, string $rutaArchivo, bool $esExento): array
 {
-    $pdo      = Db::conexion();
-    $cuentaId = Auth::cuentaId();
-    exigirProduccionCompleto($pdo, $cuentaId); // guard (redirige si falta emisor/cert/CAF prod)
-
-    vista('carga-masiva-form', [
-        'error'     => null,
-        'lotes'     => listarLotesCarga($pdo, $cuentaId),
-        'navActivo' => 'ventas.carga-masiva',
-    ]);
-}
-
-function handleCargaMasivaPost(): void
-{
-    $pdo       = Db::conexion();
-    $cuentaId  = Auth::cuentaId();
-    $usuarioId = Auth::usuarioId();
-    exigirProduccionCompleto($pdo, $cuentaId);
-
-    $errorForm = static function (string $mensaje) use ($pdo, $cuentaId): never {
-        vista('carga-masiva-form', [
-            'error'     => $mensaje,
-            'lotes'     => listarLotesCarga($pdo, $cuentaId),
-            'navActivo' => 'ventas.carga-masiva',
-        ]);
-    };
-
-    $archivo = $_FILES['archivo'] ?? null;
-    if (
-        ! is_array($archivo)
-        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
-        || $archivo['error'] !== UPLOAD_ERR_OK
-        || ! is_uploaded_file($archivo['tmp_name'])
-    ) {
-        $errorForm('Elige el archivo .xlsx con las notas. Si no lo tienes, parte por la plantilla.');
-    }
-
     try {
-        $filas = leerFilasExcelCargaMasiva($archivo['tmp_name']);
+        $filas = leerFilasExcelCargaMasiva($rutaArchivo);
     } catch (Throwable $e) {
-        $errorForm($e->getMessage());
+        throw new RuntimeException($e->getMessage(), 0, $e);
     }
 
     if ($filas === []) {
-        $errorForm('El archivo solo trae el encabezado. Agrega una fila por nota y vuelve a cargarlo.');
+        throw new RuntimeException('El archivo solo trae el encabezado. Agrega una fila por nota y vuelve a cargarlo.');
     }
 
     $externosVistos = [];
@@ -8336,16 +8337,7 @@ function handleCargaMasivaPost(): void
         $items[] = validarFilaCargaMasiva($fila, $pdo, $cuentaId, $externosVistos);
     }
 
-    // EL TIPO DEL ARCHIVO, del check de la pantalla. Marcado = todo el archivo
-    // sale como factura exenta (34); sin marcar = como siempre (33).
-    //
-    // NO ES UNA COLUMNA DEL EXCEL a proposito: la plantilla YA tiene una columna
-    // 'exento' POR LINEA, y una columna de tipo POR FILA seria un segundo
-    // concepto solapado con el primero, capaz de contradecirlo (tipo 34 con
-    // exento=NO en la misma fila). Un check por archivo no puede contradecir
-    // nada: o el archivo entero es exento, o no lo es.
-    $esExento = ! empty($_POST['tipo_exento']);
-    $tipoDte  = $esExento ? 34 : 33;
+    $problemas = [];
 
     // --- LAS DOS VALIDACIONES DE ARCHIVO COMPLETO ------------------------------
     //
@@ -8380,14 +8372,13 @@ function handleCargaMasivaPost(): void
             }
         }
         if ($filasConAfecta !== []) {
-            $errorForm(sprintf(
+            $problemas[] = sprintf(
                 'Marcaste el archivo como de facturas exentas, pero %s tiene lineas afectas (columna "exento" '
-                . 'distinta de SI): fila%s %s. Una factura exenta no puede llevar ninguna linea afecta. '
-                . 'No se cargo ninguna nota.',
+                . 'distinta de SI): fila%s %s. Una factura exenta no puede llevar ninguna linea afecta.',
                 count($filasConAfecta) === 1 ? 'una fila' : count($filasConAfecta) . ' filas',
                 count($filasConAfecta) === 1 ? '' : 's',
                 implode(', ', array_slice($filasConAfecta, 0, 20)) . (count($filasConAfecta) > 20 ? ', ...' : '')
-            ));
+            );
         }
 
         // 2. NINGUNA fila puede traer boleta_ref_folio.
@@ -8410,14 +8401,14 @@ function handleCargaMasivaPost(): void
             }
         }
         if ($filasConBoleta !== []) {
-            $errorForm(sprintf(
+            $problemas[] = sprintf(
                 'Marcaste el archivo como de facturas exentas, pero %s trae folio de boleta a anular: fila%s %s. '
                 . 'Todavia no se puede anular una boleta con una factura exenta. Sube esas filas en un archivo '
-                . 'aparte, sin marcar. No se cargo ninguna nota.',
+                . 'aparte, sin marcar.',
                 count($filasConBoleta) === 1 ? 'una fila' : count($filasConBoleta) . ' filas',
                 count($filasConBoleta) === 1 ? '' : 's',
                 implode(', ', array_slice($filasConBoleta, 0, 20)) . (count($filasConBoleta) > 20 ? ', ...' : '')
-            ));
+            );
         }
     }
 
@@ -8470,58 +8461,127 @@ function handleCargaMasivaPost(): void
         return implode(', ', array_slice($filas, 0, 20)) . (count($filas) > 20 ? ', ...' : '');
     };
     if ($sinFormaPago !== []) {
-        $errorForm(sprintf(
+        $problemas[] = sprintf(
             'Falta la forma de pago en %d fila(s): %s. Es obligatoria en todas, y los valores aceptados son '
             . 'CONTADO, CREDITO o SIN COSTO. No se puede dejar vacia: un documento que no informa forma de pago '
-            . 'el SII lo toma como credito. No se cargo ninguna nota.',
+            . 'el SII lo toma como credito.',
             count($sinFormaPago),
             $listar($sinFormaPago)
-        ));
+        );
     }
     if ($formaPagoDesconocida !== []) {
-        $errorForm(sprintf(
+        $problemas[] = sprintf(
             'La forma de pago no se reconoce en %d fila(s): %s. Los unicos valores aceptados son CONTADO, '
-            . 'CREDITO o SIN COSTO. No se cargo ninguna nota.',
+            . 'CREDITO o SIN COSTO.',
             count($formaPagoDesconocida),
             $listar($formaPagoDesconocida)
-        ));
+        );
     }
     if ($conFechaInvalida !== []) {
-        $errorForm(sprintf(
-            'La fecha de vencimiento no es una fecha valida en %d fila(s): %s. Formatos aceptados: %s. '
-            . 'No se cargo ninguna nota.',
+        $problemas[] = sprintf(
+            'La fecha de vencimiento no es una fecha valida en %d fila(s): %s. Formatos aceptados: %s.',
             count($conFechaInvalida),
             $listar($conFechaInvalida),
             FechaExcel::FORMATOS
-        ));
+        );
     }
     if ($conCreditoSinFecha !== []) {
-        $errorForm(sprintf(
+        $problemas[] = sprintf(
             'Falta la fecha de vencimiento en %d fila(s) con forma de pago CREDITO: %s. Con credito es '
-            . 'obligatoria: una factura a credito sin vencimiento no sirve para cobrar. No se cargo ninguna nota.',
+            . 'obligatoria: una factura a credito sin vencimiento no sirve para cobrar.',
             count($conCreditoSinFecha),
             $listar($conCreditoSinFecha)
-        ));
+        );
     }
     if ($conFechaSinCredito !== []) {
-        $errorForm(sprintf(
+        $problemas[] = sprintf(
             'Hay fecha de vencimiento en %d fila(s) cuya forma de pago no es CREDITO: %s. El vencimiento solo '
-            . 'aplica a credito; con CONTADO o SIN COSTO la columna va vacia. No se cargo ninguna nota.',
+            . 'aplica a credito; con CONTADO o SIN COSTO la columna va vacia.',
             count($conFechaSinCredito),
             $listar($conFechaSinCredito)
-        ));
+        );
     }
-
-    $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
-    $totalErrores = count($items) - $totalValidas;
 
     // --- AGRUPAMIENTO POR CLIENTE ---------------------------------------------
     //
-    // Va AQUI, entre las dos pasadas que ya existian: la que valida fila por fila
-    // y la que escribe. validarFilaCargaMasiva() no se toca -- ahi es donde los
-    // errores pueden nombrar la fila --, y el guardado recibe grupos en vez de
-    // filas sueltas.
-    $grupos = agruparFilasPorCliente($items);
+    // Va AQUI, entre las dos pasadas: la que valida fila por fila y la que
+    // escribe. validarFilaCargaMasiva() no se toca -- ahi es donde los errores
+    // pueden nombrar la fila --, y el guardado recibe grupos en vez de filas
+    // sueltas. La revision lo usa para decir cuantas facturas saldrian.
+    return [
+        'items'     => $items,
+        'problemas' => $problemas,
+        'grupos'    => agruparFilasPorCliente($items),
+    ];
+}
+
+function handleCargaMasivaGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId); // guard (redirige si falta emisor/cert/CAF prod)
+
+    vista('carga-masiva-form', [
+        'error'     => null,
+        'lotes'     => listarLotesCarga($pdo, $cuentaId),
+        'navActivo' => 'ventas.carga-masiva',
+    ]);
+}
+
+function handleCargaMasivaPost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $usuarioId = Auth::usuarioId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $errorForm = static function (string $mensaje) use ($pdo, $cuentaId): never {
+        vista('carga-masiva-form', [
+            'error'     => $mensaje,
+            'lotes'     => listarLotesCarga($pdo, $cuentaId),
+            'navActivo' => 'ventas.carga-masiva',
+        ]);
+    };
+
+    $archivo = $_FILES['archivo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        $errorForm('Elige el archivo .xlsx con las notas. Si no lo tienes, parte por la plantilla.');
+    }
+
+    // EL TIPO DEL ARCHIVO, del check de la pantalla. Marcado = todo el archivo
+    // sale como factura exenta (34); sin marcar = como siempre (33).
+    //
+    // NO ES UNA COLUMNA DEL EXCEL a proposito: la plantilla YA tiene una columna
+    // 'exento' POR LINEA, y una columna de tipo POR FILA seria un segundo
+    // concepto solapado con el primero, capaz de contradecirlo (tipo 34 con
+    // exento=NO en la misma fila). Un check por archivo no puede contradecir
+    // nada: o el archivo entero es exento, o no lo es.
+    $esExento = ! empty($_POST['tipo_exento']);
+    $tipoDte  = $esExento ? 34 : 33;
+
+    try {
+        $revision = revisarArchivoCargaMasiva($pdo, $cuentaId, $archivo['tmp_name'], $esExento);
+    } catch (RuntimeException $e) {
+        $errorForm($e->getMessage());
+    }
+
+    // UN PROBLEMA DE ARCHIVO RECHAZA EL ARCHIVO ENTERO, y antes de abrir la
+    // transaccion: no llega a existir ni el lote ni una sola nota. Se muestra el
+    // primero, como siempre; la lista completa la da la revision.
+    if ($revision['problemas'] !== []) {
+        $errorForm($revision['problemas'][0] . ' No se cargo ninguna nota.');
+    }
+
+    $items  = $revision['items'];
+    $grupos = $revision['grupos'];
+
+    $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
+    $totalErrores = count($items) - $totalValidas;
     $totalDocumentos = count($grupos);
 
     $pdo->beginTransaction();
@@ -8624,6 +8684,106 @@ function handleCargaMasivaPost(): void
     }
 
     redirigirPrg("/ventas/carga-masiva/{$loteId}");
+}
+
+/**
+ * REVISAR UN ARCHIVO SIN CARGARLO: misma revision que la carga, cero escrituras.
+ *
+ * Para que el usuario sepa ANTES si su Excel pasa, sin dejar un lote a medias
+ * ni notas con error que despues hay que ignorar. Corre exactamente
+ * revisarArchivoCargaMasiva(), la misma funcion de la carga, y lo unico que
+ * hace con el resultado es mostrarlo. No hay transaccion porque no hay nada
+ * que escribir.
+ *
+ * El archivo NO se guarda: para cargarlo se vuelve a subir en la carga. Guardarlo
+ * aqui obligaria a decidir cuanto vive, de quien es y que pasa si el maestro de
+ * clientes cambia entre la revision y la carga -- y la carga lo revisa de nuevo
+ * de todas formas.
+ */
+function handleCargaMasivaRevisarGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    vista('carga-masiva-revisar', [
+        'error'     => null,
+        'revision'  => null,
+        'navActivo' => 'ventas.carga-masiva-revisar',
+    ]);
+}
+
+function handleCargaMasivaRevisarPost(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $pantalla = static function (?string $error, ?array $revision = null): never {
+        vista('carga-masiva-revisar', [
+            'error'     => $error,
+            'revision'  => $revision,
+            'navActivo' => 'ventas.carga-masiva-revisar',
+        ]);
+    };
+
+    $archivo = $_FILES['archivo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        $pantalla('Elige el archivo .xlsx con las notas. Si no lo tienes, parte por la plantilla.');
+    }
+
+    $esExento = ! empty($_POST['tipo_exento']);
+
+    try {
+        $r = revisarArchivoCargaMasiva($pdo, $cuentaId, $archivo['tmp_name'], $esExento);
+    } catch (RuntimeException $e) {
+        $pantalla($e->getMessage());
+    }
+
+    // LO QUE LA VISTA NECESITA, YA CONTADO. Los clientes nuevos son los que la
+    // carga CREARIA: RUT valido que no esta en el maestro, una vez por RUT y solo
+    // de filas validas (una fila con error no crea nada).
+    $filasError     = [];
+    $rutsNuevos     = [];
+    $montoEstimado  = 0;
+    foreach ($r['items'] as $i => $item) {
+        if ($item['status'] !== 'ok') {
+            $filasError[] = [
+                'fila'     => $i + 2, // +1 por el encabezado, +1 porque el usuario cuenta desde 1
+                'externo'  => (string) ($item['fila_original']['identificador_externo'] ?? ''),
+                'rut'      => (string) ($item['fila_original']['rut_receptor'] ?? ''),
+                'errores'  => $item['errores'],
+            ];
+            continue;
+        }
+        $res = $item['datos']['cliente_resolucion'];
+        if ($res['estado'] === 'no_encontrado') {
+            $rutsNuevos[$res['rut']] = true;
+        }
+        $montoEstimado += (int) $item['datos']['monto_estimado'];
+    }
+    $notasCredito = count(array_filter(
+        $r['grupos'],
+        static fn (array $g): bool => ! empty($g['datos']['boleta_ref_folio'])
+    ));
+
+    $pantalla(null, [
+        'nombreArchivo'  => (string) $archivo['name'],
+        'esExento'       => $esExento,
+        'totalFilas'     => count($r['items']),
+        'filasValidas'   => count($r['items']) - count($filasError),
+        'filasError'     => $filasError,
+        'problemas'      => $r['problemas'],
+        'facturas'       => count($r['grupos']),
+        'notasCredito'   => $notasCredito,
+        'clientesNuevos' => count($rutsNuevos),
+        'montoEstimado'  => $montoEstimado,
+    ]);
 }
 
 function handleCargaMasivaDetalleGet(int $loteId): void
@@ -12099,6 +12259,16 @@ if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva') {
 if ($metodo === 'POST' && $ruta === '/ventas/carga-masiva') {
     Auth::requerirSesion();
     handleCargaMasivaPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/revisar') {
+    Auth::requerirSesion();
+    handleCargaMasivaRevisarGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/ventas/carga-masiva/revisar') {
+    Auth::requerirSesion();
+    handleCargaMasivaRevisarPost();
 }
 
 if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/plantilla') {

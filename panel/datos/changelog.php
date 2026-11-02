@@ -32,6 +32,18 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-11-02',
+        'version' => '1.88',
+        'titulo'  => 'Revisar el Excel de notas de venta antes de cargarlo',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Nueva opcion Ventas > Facturacion masiva > Revisar archivo: subes el Excel y te dice si cumple los requisitos, sin cargar ninguna nota ni crear ningun cliente. Asi un archivo con errores no deja un lote a medias.',
+            'La revision usa exactamente las mismas reglas que la carga y te muestra todos los problemas del archivo de una vez, no solo el primero, mas cada fila que quedaria con error y por que.',
+            'Cuando el archivo pasa, ves cuantas facturas saldrian, cuantos clientes nuevos se crearian y el monto estimado. Despues lo subes en la carga como siempre.',
+            'Las tres pantallas del proceso masivo (revisar archivo, cargar notas de venta y facturar notas) quedaron juntas en un submenu, en el orden en que se usan.',
+        ],
+    ],
+    [
         'fecha'   => '2026-10-27',
         'version' => '1.87',
         'titulo'  => 'Contador de caracteres en clientes, productos, cotizaciones y datos de la empresa',
