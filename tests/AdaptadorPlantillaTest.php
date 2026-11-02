@@ -249,6 +249,14 @@ final class AdaptadorPlantillaTest extends TestCase
         self::assertSame(self::PLANTILLA, array_keys(AdaptadorPlantilla::ETIQUETAS));
     }
 
+    public function testColumnasVacias(): void
+    {
+        $datos = [['', 'A', 0], [' ', '', ''], ['', 'B', '']];
+        // Un 0 numerico es un dato; solo espacios no lo es.
+        self::assertSame([0], AdaptadorPlantilla::columnasVacias($datos, 3));
+        self::assertSame([0, 1, 2, 3], AdaptadorPlantilla::columnasVacias([['', '', '']], 4));
+    }
+
     public function testPendientes(): void
     {
         $todo = [0 => 'identificador_externo', 1 => 'rut_receptor', 2 => 'fecha_nota', 3 => 'producto_servicio', 4 => 'cantidad', 5 => 'precio_final'];

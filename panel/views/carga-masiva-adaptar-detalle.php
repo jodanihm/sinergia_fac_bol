@@ -254,7 +254,11 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
     };
 
     // Columnas que se preguntan en palabras: las que admiten mas de una lectura.
-    $columnasPregunta = array_keys(array_filter($propuesta, static fn (array $p): bool => in_array($p['nivel'], ['ambigua', 'dudosa'], true)));
+    $columnasVacias = $calculo['columnasVacias'];
+    $columnasPregunta = array_values(array_diff(
+        array_keys(array_filter($propuesta, static fn (array $p): bool => in_array($p['nivel'], ['ambigua', 'dudosa'], true))),
+        $columnasVacias
+    ));
 
     // Lo obligatorio que no tiene columna y solo se arregla eligiendo una en la
     // tabla (RUT, producto, cantidad, precio): si hay algo asi, la tabla se abre.
@@ -321,6 +325,16 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
             static fn (int $i): bool => ! isset($mapeo[$i]) && $ejemplo($i) !== ''
         );
         $filasError = array_filter($items, static fn (array $it): bool => $it['status'] !== 'ok');
+
+        // LOS MOTIVOS, AGRUPADOS: "16 filas: falta el N° de venta" se entiende;
+        // una tabla de 16 filas con el mismo error obliga a deducirlo.
+        $motivos = [];
+        foreach ($filasError as $it) {
+            foreach (array_unique(array_map(static fn ($m): string => $legible((string) $m), $it['errores'])) as $m) {
+                $motivos[$m] = ($motivos[$m] ?? 0) + 1;
+            }
+        }
+        arsort($motivos);
     }
 
     $pasos = [
@@ -484,7 +498,9 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                                 <th scope="row" data-label="Columna del archivo"><?= $e($nombreCol($i)); ?></th>
                                 <td data-label="Ejemplo"><?= $ejemplo($i) !== '' ? $e($ejemplo($i)) : '<span class="tabla-datos__secundario">(vacia)</span>'; ?></td>
                                 <td data-label="Se lee como">
-                                    <?php if (in_array($i, $columnasPregunta, true)): ?>
+                                    <?php if (in_array($i, $columnasVacias, true)): ?>
+                                        <span class="tabla-datos__secundario">Vacia en todo el archivo: no se usa</span>
+                                    <?php elseif (in_array($i, $columnasPregunta, true)): ?>
                                         <span class="tabla-datos__secundario">Se responde arriba</span>
                                     <?php else: ?>
                                         <label class="visualmente-oculto" for="mapeo-<?= $i; ?>">Como se lee <?= $e($nombreCol($i)); ?></label>
@@ -557,7 +573,19 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                     <?= iconoSvg('alerta', 20, 'alerta__icono'); ?>
                     <div class="alerta__cuerpo">
                         <p class="alerta__titulo">Ninguna fila se puede importar todavia</p>
-                        <p>Todas tienen algo que corregir: abajo dice que, fila por fila. Si dice que la venta ya se cargo, este archivo ya entro antes y no hace falta importarlo de nuevo.</p>
+                        <p>Esto es lo que hay que corregir:</p>
+                    <?php if ($motivos !== []): ?>
+                        <ul class="alerta__lista">
+                            <?php foreach (array_slice($motivos, 0, 4, true) as $m => $n): ?>
+                                <li><strong><?= $fmtNum($n); ?> fila<?= $n === 1 ? '' : 's'; ?>:</strong> <?= $e($m); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                        <p>
+                            Si falta algo que es igual para todas las ventas (fecha, forma de pago, N° de venta), indicalo en
+                            <a href="#cambiar">Cambiar como se lee el archivo</a>. Si falta un dato de cada venta o de un cliente nuevo
+                            (giro, direccion), corrigelo en el archivo y subelo de nuevo. Si dice que la venta ya se cargo, este archivo ya entro antes.
+                        </p>
                     </div>
                 </div>
             <?php else: ?>
@@ -571,7 +599,12 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                 </p>
                 <ul class="panel-info__lista">
                     <?php if ($conError > 0): ?>
-                        <li><strong><?= $fmtNum($conError); ?> fila<?= $conError === 1 ? '' : 's'; ?> con error</strong> quedan apartadas y no se facturan. <a href="#filas-error">Ver cuales</a>.</li>
+                        <li>
+                            <strong><?= $fmtNum($conError); ?> fila<?= $conError === 1 ? '' : 's'; ?> con error</strong> quedan apartadas y no se facturan. <a href="#filas-error">Ver cuales</a>.
+                            <?php foreach (array_slice($motivos, 0, 3, true) as $m => $n): ?>
+                                <span class="tabla-datos__secundario"><?= $fmtNum($n); ?>: <?= $e($m); ?></span>
+                            <?php endforeach; ?>
+                        </li>
                     <?php endif; ?>
                     <?php if ($aplicado['cambios'] !== []): ?>
                         <li>Se ordenaron <?= $fmtNum(count($aplicado['cambios'])); ?> datos (formato de RUT, fechas, montos) sin cambiar su contenido. <a href="#correcciones">Ver cuales</a>.</li>
@@ -680,7 +713,7 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
             </div>
         </details>
 
-        <details class="tarjeta">
+        <details class="tarjeta" id="cambiar"<?= $validas === 0 && $revision['problemas'] === [] ? ' open' : ''; ?>>
             <summary><strong>Cambiar como se lee el archivo</strong></summary>
             <?= $formulario; ?>
         </details>
