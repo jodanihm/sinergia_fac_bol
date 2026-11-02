@@ -333,8 +333,13 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                                     <?php endforeach; ?>
                                 </select>
                             <?php else: ?>
-                                <input type="text" name="constante[<?= $e($col); ?>]" id="constante-<?= $e($col); ?>"
-                                       value="<?= $e((string) ($constantes[$col] ?? '')); ?>" placeholder="DD/MM/AAAA" inputmode="numeric"
+                                <?php /* type="date" y no texto con inputmode="numeric": ese
+                                   inputmode activa la regla "solo numeros" de
+                                   validar-campos.js, que rechazaba las barras de la
+                                   fecha. El selector envia AAAA-MM-DD, la misma forma
+                                   en que se guarda. */ ?>
+                                <input type="date" name="constante[<?= $e($col); ?>]" id="constante-<?= $e($col); ?>"
+                                       value="<?= $e((string) ($constantes[$col] ?? '')); ?>"
                                        aria-describedby="ayuda-constante-<?= $e($col); ?>">
                                 <small class="form-ayuda" id="ayuda-constante-<?= $e($col); ?>">
                                     <?= $col === 'fecha_vencimiento' ? 'Solo si todas las ventas son a CREDITO con el mismo vencimiento.' : 'La misma fecha para todas las filas.'; ?>

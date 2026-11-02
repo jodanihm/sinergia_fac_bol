@@ -9415,9 +9415,13 @@ function handleAdaptarEquivalenciasPost(int $id): void
     }
 
     // Valores para todas las filas: solo las columnas que se pueden completar,
-    // y solo con un valor que la carga aceptaria. Lo demas se descarta sin
-    // ruido: el formulario solo ofrece esas opciones.
+    // y solo con un valor que la carga aceptaria.
+    //
+    // UN VALOR QUE NO SE PUEDE USAR SE DICE, NO SE DESCARTA CALLADO. Antes se
+    // descartaba "sin ruido" y el usuario solo veia "Falta fecha_nota" despues
+    // de haberla escrito, sin saber que su fecha no se habia entendido.
     $constantes = [];
+    $rechazados = [];
     foreach (AdaptadorPlantilla::COMPLETABLES as $columna) {
         $v = trim((string) ($_POST['constante'][$columna] ?? ''));
         if ($v === '') {
@@ -9430,6 +9434,8 @@ function handleAdaptarEquivalenciasPost(int $id): void
         };
         if ($valido) {
             $constantes[$columna] = in_array($columna, ['fecha_nota', 'fecha_vencimiento'], true) ? (string) AdaptadorPlantilla::fecha($v) : $v;
+        } else {
+            $rechazados[] = sprintf('"%s" no es un valor valido para %s', $v, $columna);
         }
     }
 
@@ -9463,6 +9469,9 @@ function handleAdaptarEquivalenciasPost(int $id): void
         $cuentaId,
     ]);
 
+    if ($rechazados !== []) {
+        flashSet('error', implode('; ', $rechazados) . '. Para las fechas usa el selector, o escribela como DD/MM/AAAA. Lo demas quedo guardado.');
+    }
     redirigirPrg("/ventas/carga-masiva/adaptar/{$id}#vista-previa");
 }
 
