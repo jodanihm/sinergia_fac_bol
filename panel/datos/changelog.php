@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-02',
+        'version' => '1.91',
+        'titulo'  => 'Adaptar archivo de cliente, mas simple: preguntas en palabras y una sola confirmacion',
+        'tag'     => 'frontend',
+        'items'   => [
+            'La pantalla ahora es un asistente de tres pasos (subir, responder lo que falta, revisar e importar) y muestra en cual estas.',
+            'Solo aparecen las preguntas necesarias, en palabras: "¿Que fecha tienen estas ventas?", "¿Que trae la columna Precio?", "¿A que corresponde Efectivo?". Las columnas que el sistema ya reconocio quedan plegadas, por si quieres revisarlas.',
+            'Antes de importar ves una sola frase con lo que va a pasar (cuantas notas, por cuanto, cuantos clientes nuevos) y el boton dice exactamente que hace. El detalle de los cambios y de las filas con error queda a un clic.',
+            'Las columnas y los errores se nombran en lenguaje normal ("RUT del cliente", "Giro del cliente") en vez de los nombres tecnicos de la plantilla.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-02',
         'version' => '1.90',
         'titulo'  => 'Adaptar archivo: la fecha para todas las filas se elige con calendario',
         'tag'     => 'frontend',

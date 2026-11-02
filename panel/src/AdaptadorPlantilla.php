@@ -121,6 +121,37 @@ final class AdaptadorPlantilla
     public const VALORES_FORMA_PAGO = ['CONTADO', 'CREDITO', 'SIN COSTO'];
     public const VALORES_EXENTO     = ['SI', 'NO'];
 
+    /**
+     * Como se le nombra cada columna de la plantilla A UN USUARIO. Los nombres
+     * de la plantilla (razon_social_receptor) son para el archivo; en pantalla
+     * y en los mensajes van estos.
+     */
+    public const ETIQUETAS = [
+        'identificador_externo' => 'N° de venta',
+        'rut_receptor'          => 'RUT del cliente',
+        'razon_social_receptor' => 'Razon social del cliente',
+        'giro_receptor'         => 'Giro del cliente',
+        'direccion_receptor'    => 'Direccion del cliente',
+        'comuna_receptor'       => 'Comuna del cliente',
+        'email_receptor'        => 'Correo del cliente',
+        'fecha_nota'            => 'Fecha de la venta',
+        'producto_servicio'     => 'Producto o servicio',
+        'cantidad'              => 'Cantidad',
+        'precio_unitario'       => 'Precio unitario sin IVA',
+        'exento'                => 'Exento de IVA (SI/NO)',
+        'forma_pago'            => 'Forma de pago',
+        'fecha_vencimiento'     => 'Fecha de vencimiento',
+        'folio_boleta_a_anular' => 'Folio de boleta a anular',
+        'fecha_boleta_a_anular' => 'Fecha de boleta a anular',
+        'precio_final'          => 'Precio unitario con IVA',
+    ];
+
+    /** La etiqueta de una columna, o su nombre si no tiene. */
+    public static function etiqueta(string $columna): string
+    {
+        return self::ETIQUETAS[$columna] ?? $columna;
+    }
+
     /** Cuantas filas de arriba se miran buscando el encabezado. */
     public const FILAS_BUSQUEDA_ENCABEZADO = 15;
 
@@ -322,7 +353,7 @@ final class AdaptadorPlantilla
         $usos = array_count_values(array_values($mapeo));
         foreach ($usos as $destino => $veces) {
             if ($veces > 1) {
-                $pendientes[] = sprintf('La columna "%s" de la plantilla esta asignada a %d columnas del archivo. Deja solo una.', $destino, $veces);
+                $pendientes[] = sprintf('Elegiste "%s" para %d columnas del archivo. Deja solo una.', self::etiqueta((string) $destino), $veces);
             }
         }
 
@@ -331,23 +362,24 @@ final class AdaptadorPlantilla
             $cubiertas[] = 'identificador_externo';
         }
         foreach (self::OBLIGATORIAS as $columna) {
-            if ($columna === 'identificador_externo' && ! in_array($columna, $cubiertas, true)) {
-                $pendientes[] = 'Falta "identificador_externo": asignale una columna del archivo, o marca la opcion de usar el numero de fila.';
-            } elseif (! in_array($columna, $cubiertas, true)) {
-                $pendientes[] = in_array($columna, self::COMPLETABLES, true)
-                    ? sprintf('Falta "%s": asignale una columna del archivo o escribe el valor para todas las filas.', $columna)
-                    : sprintf('Falta "%s": asignale una columna del archivo.', $columna);
+            if (in_array($columna, $cubiertas, true)) {
+                continue;
             }
+            $pendientes[] = match (true) {
+                $columna === 'identificador_externo'           => 'Falta el N° de venta: elige la columna que lo trae, o usa el numero de fila.',
+                in_array($columna, self::COMPLETABLES, true)   => sprintf('Falta %s: elige la columna que la trae, o indicala para todas las ventas.', mb_strtolower(self::etiqueta($columna))),
+                default                                        => sprintf('Falta %s: elige la columna del archivo que lo trae.', self::etiqueta($columna)),
+            };
         }
         if (! in_array('precio_unitario', $cubiertas, true) && ! in_array('precio_final', $cubiertas, true)) {
-            $pendientes[] = 'Falta el precio: asigna una columna a "precio_unitario" (sin IVA) o a "precio_final" (con IVA).';
+            $pendientes[] = 'Falta el precio: elige la columna del precio, sin IVA o con IVA.';
         }
 
         foreach ($constantes as $columna => $valor) {
             if (! in_array($columna, self::COMPLETABLES, true)) {
-                $pendientes[] = sprintf('"%s" no se puede completar con un valor fijo: tiene que venir del archivo.', $columna);
+                $pendientes[] = sprintf('%s no se puede indicar a mano: tiene que venir del archivo.', self::etiqueta($columna));
             } elseif (in_array($columna, array_values($mapeo), true) && trim((string) $valor) !== '') {
-                $pendientes[] = sprintf('"%s" viene de una columna del archivo y ademas tiene un valor fijo. Deja solo uno.', $columna);
+                $pendientes[] = sprintf('%s viene de una columna del archivo y ademas la indicaste a mano. Deja solo una.', self::etiqueta($columna));
             }
         }
 

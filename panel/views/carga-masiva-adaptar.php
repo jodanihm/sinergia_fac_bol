@@ -43,7 +43,7 @@ $estados = [
     </div>
 </div>
 <p class="dash-subtitulo">
-    Para los archivos que no vienen en la plantilla: se proponen las equivalencias de columnas, ves cada correccion y se importa solo cuando tu lo autorizas.
+    Sube el Excel o CSV tal como te lo mando tu cliente. El sistema lo ordena, te pregunta lo que no sepa y lo importa cuando tu lo apruebas.
 </p>
 
 <div class="config-ancho">
@@ -104,14 +104,14 @@ $estados = [
     <div>
         <div class="panel-info">
             <p class="panel-info__titulo">
-                <?= iconoSvg('info', 20, 'panel-info__icono'); ?>Que hace y que no hace
+                <?= iconoSvg('info', 20, 'panel-info__icono'); ?>Como funciona
             </p>
-            <ul class="panel-info__lista">
-                <li>Busca la fila de los encabezados aunque haya titulos arriba, y propone a que columna de la plantilla corresponde cada una.</li>
-                <li>Reordena columnas, quita filas vacias y normaliza formatos: RUT sin puntos, fechas a AAAA-MM-DD, montos sin "$" ni punto de miles.</li>
-                <li>No inventa datos ni cambia montos, RUT o productos. Lo que admite dos lecturas te lo pregunta.</li>
-                <li>Analizar no importa nada. Importa solo cuando lo autorizas, y queda registrado quien, cuando y que se corrigio.</li>
-            </ul>
+            <ol class="panel-info__lista">
+                <li><strong>Subes el archivo</strong>, con las columnas que tenga y en el orden que venga.</li>
+                <li><strong>Respondes lo que falte</strong>: por ejemplo, la fecha de las ventas o que significa una columna "Precio".</li>
+                <li><strong>Revisas y apruebas.</strong> Recien ahi se crean las notas de venta.</li>
+            </ol>
+            <p class="nota">Nunca se cambian montos, RUT ni productos: solo se ordena el formato. Subir el archivo no crea nada.</p>
         </div>
         <div class="panel-info">
             <p class="panel-info__titulo">

@@ -3700,3 +3700,15 @@ a.tabla-datos__secundario:hover { color: var(--color-marino); }
 @media (max-width: 720px) {
     .tabla-datos--cards.tabla-seleccion td.col-check { width: 100%; text-align: left; }
 }
+
+/* ADAPTAR ARCHIVO DE CLIENTE: cada pregunta es una tarjeta. El fieldset pierde
+   el borde y el relleno del navegador para verse igual que .tarjeta, y el
+   legend lleva un h2 sin margen extra. */
+fieldset.pregunta { min-width: 0; }
+fieldset.pregunta > legend { padding: 0; float: left; width: 100%; }
+fieldset.pregunta > legend + * { clear: both; }
+.pregunta h2 { margin: 0 0 var(--esp-2); font-size: var(--txt-md); }
+.pregunta .form-check { margin: var(--esp-2) 0; }
+.pregunta input[type="date"],
+.pregunta select { max-width: 20rem; }
+.resumen-importacion { font-size: var(--txt-md); line-height: 1.5; margin: 0 0 var(--esp-3); }

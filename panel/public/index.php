@@ -9167,9 +9167,9 @@ function calcularAdaptacion(PDO $pdo, int $cuentaId, array $adaptacion): array
         $sinElegir = array_filter($valores, static fn (string $v): bool => ($equivalencias[$columna][$v] ?? '') === '');
         if ($sinElegir !== []) {
             $pendientes[] = sprintf(
-                'Hay %d valor(es) de "%s" que la carga no reconoce: %s. Indica a cual equivale cada uno.',
+                'En %s hay %d valor(es) que no se reconocen: %s. Indica a cual corresponde cada uno.',
+                mb_strtolower(AdaptadorPlantilla::etiqueta($columna)),
                 count($sinElegir),
-                $columna,
                 implode(', ', array_map(static fn (string $v): string => '"' . $v . '"', array_slice($sinElegir, 0, 10)))
             );
         }
