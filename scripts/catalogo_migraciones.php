@@ -761,6 +761,18 @@ const MIGRACIONES = [
              'columnas' => ['credencial_publica', 'credencial_cifrada', 'ambiente']],
         ],
     ],
+    [
+        'id' => '056', 'archivo' => '056_carga_adaptacion.sql', 'nota' => 'CREATE TABLE (adaptar archivos de otros formatos)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'carga_adaptacion', 'tablas' => ['carga_adaptacion'], 'esperado' => 1],
+            // El UNIQUE aparte de la tabla: es la mitad de la garantia de que
+            // dos confirmaciones de la misma adaptacion no producen dos lotes.
+            ['tipo' => 'indice', 'desc' => 'uk_adaptacion_lote (unico)', 'tabla' => 'carga_adaptacion',
+             'indice' => 'uk_adaptacion_lote', 'esperado' => 1],
+            ['tipo' => 'columnas', 'desc' => 'la autorizacion completa', 'tabla' => 'carga_adaptacion',
+             'columnas' => ['autorizado_por', 'autorizado_en', 'autorizado_ip', 'huella_autorizada', 'cambios'], 'esperado' => 5],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

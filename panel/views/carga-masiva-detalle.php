@@ -102,6 +102,30 @@ foreach ($notas as $n) {
 
 <div class="config-ancho">
 
+<?php if (! empty($flash)): ?>
+    <div class="alerta <?= $flash['tipo'] === 'error' ? 'alerta--error' : 'alerta--exito'; ?>" role="<?= $flash['tipo'] === 'error' ? 'alert' : 'status'; ?>">
+        <?= iconoSvg($flash['tipo'] === 'error' ? 'alerta' : 'check', 20, 'alerta__icono'); ?>
+        <div class="alerta__cuerpo"><p><?= $e((string) $flash['mensaje']); ?></p></div>
+    </div>
+<?php endif; ?>
+
+<?php
+/* UN LOTE QUE SALIO DE UN ARCHIVO ADAPTADO lo dice, con el enlace al registro:
+   ahi estan el original, quien autorizo y cada correccion. */
+?>
+<?php if (! empty($adaptacion)): ?>
+    <div class="alerta alerta--info" role="status">
+        <?= iconoSvg('info', 20, 'alerta__icono'); ?>
+        <div class="alerta__cuerpo">
+            <p>
+                Este lote se importo adaptando el archivo <strong><?= $e((string) $adaptacion['nombre_archivo']); ?></strong>,
+                autorizado por <?= $e((string) $adaptacion['autorizado_por_email']); ?> el <?= $e($fmtFechaHora($adaptacion['autorizado_en'])); ?>.
+                <a href="/ventas/carga-masiva/adaptar/<?= (int) $adaptacion['id']; ?>">Ver el original y las correcciones</a>.
+            </p>
+        </div>
+    </div>
+<?php endif; ?>
+
 <section class="dash-grid" aria-label="Resultado de la carga">
     <article class="kpi">
         <h2 class="kpi__etiqueta">Filas cargadas</h2>

@@ -89,6 +89,7 @@ use Plantiflex\Integration\Facturacion\MySqlProductoRepository;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx as XlsxWriter;
 use PhpOffice\PhpSpreadsheet\Reader\Xlsx as XlsxReader;
+use PhpOffice\PhpSpreadsheet\Reader\Xls as XlsReader;
 use PhpOffice\PhpSpreadsheet\Reader\IReadFilter;
 use PhpOffice\PhpSpreadsheet\Cell\Coordinate;
 use Plantiflex\FacturacionCl\Enums\AmbientePasarela;
@@ -102,6 +103,7 @@ require __DIR__ . '/../src/Auth.php';
 require __DIR__ . '/../src/Rut.php';
 require __DIR__ . '/../src/Csrf.php';
 require __DIR__ . '/../src/FechaExcel.php';
+require __DIR__ . '/../src/AdaptadorPlantilla.php';
 require __DIR__ . '/../src/DiffAuditoria.php';
 require __DIR__ . '/../src/AislamientoTenant.php';
 require __DIR__ . '/../src/RutasDelRouter.php';
@@ -667,6 +669,9 @@ const PERMISOS_RUTA = [
     // aunque sea un POST, a diferencia de la carga, que pide 'gestionar'.
     'GET /ventas/carga-masiva/revisar'           => ['ventas', 'ver'],
     'POST /ventas/carga-masiva/revisar'          => ['ventas', 'ver'],
+    'GET /ventas/carga-masiva/adaptar'           => ['ventas', 'ver'],
+    // Subir al adaptador SI escribe (guarda el original): 'gestionar', como la carga.
+    'POST /ventas/carga-masiva/adaptar'          => ['ventas', 'gestionar'],
     'GET /ventas/facturacion-masiva'             => ['ventas', 'ver'],
     // LA QUE MAS FOLIOS QUEMA DE UNA VEZ: un sub-lote entero al SII.
     'POST /ventas/facturacion-masiva/confirmar-sublote' => ['ventas', 'emitir'],
@@ -808,6 +813,11 @@ const PERMISOS_RUTA_PATRON = [
     ['POST', '#^/ventas/cotizaciones/(\d+)/editar$#',    'ventas', 'gestionar'],
     ['GET',  '#^/ventas/cotizaciones/(\d+)$#',           'ventas', 'ver'],
     ['GET',  '#^/ventas/carga-masiva/(\d+)$#',           'ventas', 'ver'],
+    ['GET',  '#^/ventas/carga-masiva/adaptar/(\d+)$#',   'ventas', 'ver'],
+    ['GET',  '#^/ventas/carga-masiva/adaptar/(\d+)/(original|corregido)$#', 'ventas', 'ver'],
+    ['POST', '#^/ventas/carga-masiva/adaptar/(\d+)/(equivalencias|descartar)$#', 'ventas', 'gestionar'],
+    // Importar crea notas igual que la carga: 'gestionar'. No emite nada al SII.
+    ['POST', '#^/ventas/carga-masiva/adaptar/(\d+)/importar$#', 'ventas', 'gestionar'],
     ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)$#',        'ventas', 'ver'],
     ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)/pdf$#',    'ventas', 'ver'],
     ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)/xml$#',    'ventas', 'ver'],
@@ -1066,6 +1076,9 @@ function definicionMenu(): array
                     'label' => 'Facturacion masiva',
                     'items' => [
                         ['clave' => 'ventas.carga-masiva-revisar', 'label' => 'Revisar archivo', 'destino' => '/ventas/carga-masiva/revisar', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        // Para el archivo que NO viene en la plantilla: lo adapta,
+                        // lo muestra y lo importa solo con autorizacion.
+                        ['clave' => 'ventas.carga-masiva-adaptar', 'label' => 'Adaptar archivo de cliente', 'destino' => '/ventas/carga-masiva/adaptar', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                         ['clave' => 'ventas.carga-masiva', 'label' => 'Carga de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                         ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturar notas', 'destino' => '/ventas/facturacion-masiva', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
@@ -8141,6 +8154,23 @@ function listarNotasVentaDeLote(PDO $pdo, int $cuentaId, int $loteId): array
 }
 
 /**
+ * El numero de fila que el usuario ve en SU archivo para el item $i.
+ *
+ * Una fila de la plantilla exacta no trae 'fila_origen' y se cuenta como
+ * siempre: +1 por el encabezado y +1 porque el usuario cuenta desde 1. Una
+ * fila adaptada si lo trae, porque en el archivo del cliente el encabezado
+ * puede estar en la fila 4 y entre los datos puede haber filas vacias.
+ *
+ * @param array<string,mixed> $item lo que devolvio validarFilaCargaMasiva()
+ */
+function filaExcelDeItem(array $item, int $i): int
+{
+    $origen = $item['fila_original']['fila_origen'] ?? null;
+
+    return $origen !== null && $origen !== '' ? (int) $origen : $i + 2;
+}
+
+/**
  * Junta las filas VALIDAS que van a la misma factura.
  *
  * =========================================================================
@@ -8215,7 +8245,7 @@ function agruparFilasPorCliente(array $items): array
         }
 
         $grupos[$clave]['externos'][] = (string) $d['identificador_externo'];
-        $grupos[$clave]['filas'][]    = $i + 2;
+        $grupos[$clave]['filas'][]    = filaExcelDeItem($item, $i);
     }
 
     return array_values($grupos);
@@ -8331,6 +8361,25 @@ function revisarArchivoCargaMasiva(PDO $pdo, int $cuentaId, string $rutaArchivo,
         throw new RuntimeException('El archivo solo trae el encabezado. Agrega una fila por nota y vuelve a cargarlo.');
     }
 
+    return revisarFilasCargaMasiva($pdo, $cuentaId, $filas, $esExento);
+}
+
+/**
+ * La revision de revisarArchivoCargaMasiva(), sobre filas YA LEIDAS con la
+ * forma de la plantilla. La usa tambien el adaptador de archivos de otros
+ * formatos (/ventas/carga-masiva/adaptar): sus filas no salen de un Excel con
+ * la plantilla exacta sino de AdaptadorPlantilla::aplicar(), y pasan por
+ * exactamente las mismas reglas.
+ *
+ * Una fila puede traer 'fila_origen' (el numero de fila en el archivo del
+ * cliente); los mensajes lo usan en vez de contar desde la fila 2.
+ *
+ * @param list<array<string,string>> $filas
+ *
+ * @return array{items:list<array<string,mixed>>, problemas:list<string>, grupos:list<array<string,mixed>>}
+ */
+function revisarFilasCargaMasiva(PDO $pdo, int $cuentaId, array $filas, bool $esExento): array
+{
     $externosVistos = [];
     $items = [];
     foreach ($filas as $fila) {
@@ -8366,7 +8415,7 @@ function revisarArchivoCargaMasiva(PDO $pdo, int $cuentaId, string $rutaArchivo,
             }
             foreach ($item['datos']['detalle'] as $linea) {
                 if (empty($linea['exento'])) {
-                    $filasConAfecta[] = $i + 2; // +1 por el encabezado, +1 base 1
+                    $filasConAfecta[] = filaExcelDeItem($item, $i);
                     break;
                 }
             }
@@ -8397,7 +8446,7 @@ function revisarArchivoCargaMasiva(PDO $pdo, int $cuentaId, string $rutaArchivo,
         $filasConBoleta = [];
         foreach ($items as $i => $item) {
             if ($item['status'] === 'ok' && ! empty($item['datos']['boleta_ref_folio'])) {
-                $filasConBoleta[] = $i + 2;
+                $filasConBoleta[] = filaExcelDeItem($item, $i);
             }
         }
         if ($filasConBoleta !== []) {
@@ -8434,7 +8483,7 @@ function revisarArchivoCargaMasiva(PDO $pdo, int $cuentaId, string $rutaArchivo,
         if ($item['status'] !== 'ok') {
             continue;
         }
-        $filaExcel = $i + 2; // +1 por el encabezado, +1 porque el usuario cuenta desde 1
+        $filaExcel = filaExcelDeItem($item, $i);
         $d         = $item['datos'];
 
         if ($d['forma_pago'] === null) {
@@ -8528,6 +8577,115 @@ function handleCargaMasivaGet(): void
     ]);
 }
 
+/**
+ * ESCRIBE UN LOTE YA REVISADO: el lote, las notas con error, los clientes nuevos
+ * y las notas validas agrupadas. Sacado de handleCargaMasivaPost() para que la
+ * importacion de un archivo adaptado (/ventas/carga-masiva/adaptar) escriba
+ * exactamente igual que la carga normal.
+ *
+ * NO ABRE TRANSACCION: la abre quien llama, porque el adaptador necesita meter
+ * su propio registro de autorizacion en la MISMA transaccion -- un lote sin el
+ * registro de quien lo autorizo, o al reves, no puede llegar a existir.
+ *
+ * @param list<array<string,mixed>> $items  lo que devolvio validarFilaCargaMasiva()
+ * @param list<array<string,mixed>> $grupos lo que devolvio agruparFilasPorCliente()
+ */
+function guardarLoteCargaMasiva(PDO $pdo, int $cuentaId, int $usuarioId, string $nombreArchivo, int $tipoDte, array $items, array $grupos): int
+{
+    $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
+    $totalErrores = count($items) - $totalValidas;
+
+    $loteId = crearLoteCarga($pdo, $cuentaId, $usuarioId, $nombreArchivo, count($items), $totalValidas, $totalErrores, $tipoDte, count($grupos));
+
+    // RUT nuevo -> id de cliente ya creado EN ESTA MISMA carga (evita
+    // crear el mismo cliente 2 veces si aparece en varias filas).
+    $clienteIdPorRutNuevo = [];
+
+    // LAS FILAS CON ERROR, UNA POR UNA. No entran al agrupamiento: cada una
+    // conserva su fila_original para que el usuario sepa cual arreglar.
+    foreach ($items as $item) {
+        if ($item['status'] === 'error') {
+            crearNotaVentaError($pdo, $cuentaId, $loteId, $item['fila_original'], $item['errores']);
+        }
+    }
+
+    // Y LAS VALIDAS, YA AGRUPADAS. Un grupo = una factura.
+    foreach ($grupos as $grupo) {
+        $d   = $grupo['datos'];
+        $res = $d['cliente_resolucion'];
+
+        if ($res['estado'] === 'no_encontrado') {
+            $rutNorm = $res['rut'];
+            if (! isset($clienteIdPorRutNuevo[$rutNorm])) {
+                try {
+                    $clienteIdPorRutNuevo[$rutNorm] = clienteRepo()->crear($cuentaId, [
+                        'rut_cliente'  => $rutNorm,
+                        'razon_social' => $d['receptor_razon_social'],
+                        'giro'         => $d['receptor_giro'],
+                        'direccion'    => $d['receptor_direccion'],
+                        'comuna'       => $d['receptor_comuna'],
+                        'email'        => $d['receptor_email'],
+                    ]);
+                } catch (ClienteDuplicadoException) {
+                    // Carrera improbable (otra request creo el mismo RUT
+                    // entre la validacion y el guardado): se reusa el que
+                    // ya quedo creado, no se aborta la carga por esto.
+                    $existente = clienteRepo()->buscarPorRut($cuentaId, $rutNorm);
+                    $clienteIdPorRutNuevo[$rutNorm] = $existente['id'] ?? 0;
+                }
+            }
+        } elseif ($res['estado'] === 'encontrado') {
+            if ($res['cliente']['activo'] === false) {
+                clienteRepo()->activar($cuentaId, (int) $res['cliente']['id']);
+            }
+
+            // RELLENO DEL CORREO QUE FALTABA. Un cliente que nacio sin
+            // correo no tenia forma de conseguirlo: crear() lo escribe una
+            // sola vez y el ABM exige que alguien lo teclee a mano. Si el
+            // Excel trae uno y el maestro esta vacio, se aprovecha aqui.
+            //
+            // Va dentro de la transaccion del lote, igual que el alta de
+            // clientes nuevos de arriba: si la carga se cae, no queda un
+            // maestro tocado por un lote que nunca existio.
+            //
+            // Este if es solo un filtro barato para no ir a la base al
+            // pedo. La garantia de NO SOBRESCRITURA no esta aca sino en el
+            // WHERE de rellenarEmailSiVacio(): $res['cliente'] es una foto
+            // tomada en la pasada de validacion, y entre esa foto y este
+            // UPDATE cabe otra request. Solo el motor puede resolverlo sin
+            // ventana.
+            if (trim((string) ($res['cliente']['email'] ?? '')) === '' && $d['receptor_email'] !== null) {
+                clienteRepo()->rellenarEmailSiVacio(
+                    $cuentaId,
+                    (int) $res['cliente']['id'],
+                    (string) $d['receptor_email']
+                );
+            }
+        }
+
+        crearNotaVentaValida($pdo, $cuentaId, $loteId, [
+            'identificador_externo' => $d['identificador_externo'],
+            'receptor_rut'          => $res['rut'],
+            'receptor_razon_social' => $d['receptor_razon_social'],
+            'receptor_giro'         => $d['receptor_giro'],
+            'receptor_direccion'    => $d['receptor_direccion'],
+            'receptor_comuna'       => $d['receptor_comuna'],
+            'receptor_email'        => $d['receptor_email'],
+            'fecha_nota'            => $d['fecha_nota'],
+            'detalle'               => $d['detalle'],
+            'monto_estimado'        => $d['monto_estimado'],
+            'tipo_dte'              => $tipoDte,
+            'forma_pago'            => $d['forma_pago'],
+            'fecha_vencimiento'     => $d['fecha_vencimiento'],
+            'boleta_ref_tipo'       => $d['boleta_ref_tipo'],
+            'boleta_ref_folio'      => $d['boleta_ref_folio'],
+            'boleta_ref_fecha'      => $d['boleta_ref_fecha'],
+        ], $grupo['externos']);
+    }
+
+    return $loteId;
+}
+
 function handleCargaMasivaPost(): void
 {
     $pdo       = Db::conexion();
@@ -8580,100 +8738,9 @@ function handleCargaMasivaPost(): void
     $items  = $revision['items'];
     $grupos = $revision['grupos'];
 
-    $totalValidas = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
-    $totalErrores = count($items) - $totalValidas;
-    $totalDocumentos = count($grupos);
-
     $pdo->beginTransaction();
     try {
-        $loteId = crearLoteCarga($pdo, $cuentaId, $usuarioId, $archivo['name'], count($items), $totalValidas, $totalErrores, $tipoDte, $totalDocumentos);
-
-        // RUT nuevo -> id de cliente ya creado EN ESTA MISMA carga (evita
-        // crear el mismo cliente 2 veces si aparece en varias filas).
-        $clienteIdPorRutNuevo = [];
-
-        // LAS FILAS CON ERROR, UNA POR UNA. No entran al agrupamiento: cada una
-        // conserva su fila_original para que el usuario sepa cual arreglar.
-        foreach ($items as $item) {
-            if ($item['status'] === 'error') {
-                crearNotaVentaError($pdo, $cuentaId, $loteId, $item['fila_original'], $item['errores']);
-            }
-        }
-
-        // Y LAS VALIDAS, YA AGRUPADAS. Un grupo = una factura.
-        foreach ($grupos as $grupo) {
-            $d   = $grupo['datos'];
-            $res = $d['cliente_resolucion'];
-
-            if ($res['estado'] === 'no_encontrado') {
-                $rutNorm = $res['rut'];
-                if (! isset($clienteIdPorRutNuevo[$rutNorm])) {
-                    try {
-                        $clienteIdPorRutNuevo[$rutNorm] = clienteRepo()->crear($cuentaId, [
-                            'rut_cliente'  => $rutNorm,
-                            'razon_social' => $d['receptor_razon_social'],
-                            'giro'         => $d['receptor_giro'],
-                            'direccion'    => $d['receptor_direccion'],
-                            'comuna'       => $d['receptor_comuna'],
-                            'email'        => $d['receptor_email'],
-                        ]);
-                    } catch (ClienteDuplicadoException) {
-                        // Carrera improbable (otra request creo el mismo RUT
-                        // entre la validacion y el guardado): se reusa el que
-                        // ya quedo creado, no se aborta la carga por esto.
-                        $existente = clienteRepo()->buscarPorRut($cuentaId, $rutNorm);
-                        $clienteIdPorRutNuevo[$rutNorm] = $existente['id'] ?? 0;
-                    }
-                }
-            } elseif ($res['estado'] === 'encontrado') {
-                if ($res['cliente']['activo'] === false) {
-                    clienteRepo()->activar($cuentaId, (int) $res['cliente']['id']);
-                }
-
-                // RELLENO DEL CORREO QUE FALTABA. Un cliente que nacio sin
-                // correo no tenia forma de conseguirlo: crear() lo escribe una
-                // sola vez y el ABM exige que alguien lo teclee a mano. Si el
-                // Excel trae uno y el maestro esta vacio, se aprovecha aqui.
-                //
-                // Va dentro de la transaccion del lote, igual que el alta de
-                // clientes nuevos de arriba: si la carga se cae, no queda un
-                // maestro tocado por un lote que nunca existio.
-                //
-                // Este if es solo un filtro barato para no ir a la base al
-                // pedo. La garantia de NO SOBRESCRITURA no esta aca sino en el
-                // WHERE de rellenarEmailSiVacio(): $res['cliente'] es una foto
-                // tomada en la pasada de validacion, y entre esa foto y este
-                // UPDATE cabe otra request. Solo el motor puede resolverlo sin
-                // ventana.
-                if (trim((string) ($res['cliente']['email'] ?? '')) === '' && $d['receptor_email'] !== null) {
-                    clienteRepo()->rellenarEmailSiVacio(
-                        $cuentaId,
-                        (int) $res['cliente']['id'],
-                        (string) $d['receptor_email']
-                    );
-                }
-            }
-
-            crearNotaVentaValida($pdo, $cuentaId, $loteId, [
-                'identificador_externo' => $d['identificador_externo'],
-                'receptor_rut'          => $res['rut'],
-                'receptor_razon_social' => $d['receptor_razon_social'],
-                'receptor_giro'         => $d['receptor_giro'],
-                'receptor_direccion'    => $d['receptor_direccion'],
-                'receptor_comuna'       => $d['receptor_comuna'],
-                'receptor_email'        => $d['receptor_email'],
-                'fecha_nota'            => $d['fecha_nota'],
-                'detalle'               => $d['detalle'],
-                'monto_estimado'        => $d['monto_estimado'],
-                'tipo_dte'              => $tipoDte,
-                'forma_pago'            => $d['forma_pago'],
-                'fecha_vencimiento'     => $d['fecha_vencimiento'],
-                'boleta_ref_tipo'       => $d['boleta_ref_tipo'],
-                'boleta_ref_folio'      => $d['boleta_ref_folio'],
-                'boleta_ref_fecha'      => $d['boleta_ref_fecha'],
-            ], $grupo['externos']);
-        }
-
+        $loteId = guardarLoteCargaMasiva($pdo, $cuentaId, $usuarioId, $archivo['name'], $tipoDte, $items, $grupos);
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
@@ -8754,7 +8821,7 @@ function handleCargaMasivaRevisarPost(): void
     foreach ($r['items'] as $i => $item) {
         if ($item['status'] !== 'ok') {
             $filasError[] = [
-                'fila'     => $i + 2, // +1 por el encabezado, +1 porque el usuario cuenta desde 1
+                'fila'     => filaExcelDeItem($item, $i),
                 'externo'  => (string) ($item['fila_original']['identificador_externo'] ?? ''),
                 'rut'      => (string) ($item['fila_original']['rut_receptor'] ?? ''),
                 'errores'  => $item['errores'],
@@ -8786,6 +8853,820 @@ function handleCargaMasivaRevisarPost(): void
     ]);
 }
 
+// ===========================================================================
+//  ADAPTAR ARCHIVOS DE OTROS FORMATOS (/ventas/carga-masiva/adaptar)
+//
+//  El cliente manda lo que exporta su sistema; la carga exige la plantilla. El
+//  flujo, y en cada paso que garantiza:
+//
+//    1. SUBIR      se guarda el ORIGINAL tal cual (carga_adaptacion, migracion
+//                  056) y se propone que columna es cual. No se toca nada mas.
+//    2. AJUSTAR    el usuario confirma o corrige las equivalencias, completa lo
+//                  obligatorio que falte y traduce los valores que la carga no
+//                  reconoceria. Todo queda guardado como SUS elecciones.
+//    3. VISTA PREVIA  se aplica y se revisa con revisarFilasCargaMasiva(), la
+//                  misma de la carga normal. Se ve cada cambio y cada error.
+//    4. IMPORTAR   SOLO con la casilla de autorizacion marcada, y solo si lo que
+//                  se va a importar es EXACTAMENTE lo que se vio (huella). Lote,
+//                  notas y registro de autorizacion en UNA transaccion.
+//
+//  La logica de adaptar vive en AdaptadorPlantilla (pura, con tests). Aqui solo
+//  hay lectura de archivos, base de datos y pantallas.
+// ===========================================================================
+
+/** Tope del archivo para adaptar: el de MEDIUMBLOB, donde se conserva el original. */
+const CARGA_ADAPTACION_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Columnas que se leen por hoja. Un export comun trae 10-30; esto es solo un techo. */
+const CARGA_ADAPTACION_MAX_COLUMNAS = 60;
+
+/** Hojas que se miran buscando la de los datos. */
+const CARGA_ADAPTACION_MAX_HOJAS = 10;
+
+/** Filas de muestra en la vista previa. La revision completa corre sobre todas. */
+const CARGA_ADAPTACION_FILAS_MUESTRA = 15;
+
+/**
+ * Lee un archivo de cliente (.xlsx, .xls o .csv) y encuentra la hoja y la fila
+ * del encabezado.
+ *
+ * LAS CELDAS NUMERICAS SE ENTREGAN COMO NUMEROS (int/float) y las de texto como
+ * texto. La diferencia importa: un 1.234 que en el Excel es un numero es uno
+ * coma dos; un "1.234" escrito como texto en un archivo chileno es mil
+ * doscientos. AdaptadorPlantilla::aplicar() trata distinto a cada uno.
+ *
+ * EL CSV SE LEE A MANO, y no con el lector de PhpSpreadsheet: ese lector pasa
+ * cada valor por un "value binder" que convierte "10.000" en el numero 10, y el
+ * punto de miles se pierde antes de que nadie lo pueda mirar.
+ *
+ * @return array{hoja:string, indice_encabezado:int, encabezados:list<string>, datos:list<list<string|int|float>>, hojas:list<string>}
+ *
+ * @throws RuntimeException con un mensaje para el usuario
+ */
+function leerArchivoClienteCargaMasiva(string $ruta, string $extension): array
+{
+    $limiteFilas = NOTA_VENTA_MAX_FILAS + AdaptadorPlantilla::FILAS_BUSQUEDA_ENCABEZADO + 1;
+
+    $hojas = [];
+    if ($extension === 'csv') {
+        $hojas['CSV'] = leerCsvComoTexto($ruta, $limiteFilas);
+    } else {
+        if ($extension === 'xlsx' && bytesXmlDelXlsx($ruta) > NOTA_VENTA_MAX_BYTES_XML) {
+            throw new RuntimeException(
+                'El archivo es demasiado pesado para abrirlo. Casi siempre es formato aplicado a filas o columnas '
+                . 'ENTERAS: borra las filas y columnas sobrantes (a la derecha y por debajo de tus datos), guarda y '
+                . 'vuelve a intentar.'
+            );
+        }
+        $filtro = new class ($limiteFilas) implements IReadFilter {
+            public function __construct(private readonly int $limite)
+            {
+            }
+
+            public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
+            {
+                return $row <= $this->limite
+                    && Coordinate::columnIndexFromString($columnAddress) <= CARGA_ADAPTACION_MAX_COLUMNAS;
+            }
+        };
+        try {
+            $reader = $extension === 'xls' ? new XlsReader() : new XlsxReader();
+            $reader->setReadFilter($filtro);
+            $libro = $reader->load($ruta);
+        } catch (Throwable $e) {
+            throw new RuntimeException('No se pudo abrir el archivo. Revisa que sea un Excel (.xlsx o .xls) o un .csv valido.', 0, $e);
+        }
+
+        foreach (array_slice($libro->getAllSheets(), 0, CARGA_ADAPTACION_MAX_HOJAS) as $hoja) {
+            $ultimaFila    = min($hoja->getHighestDataRow(), $limiteFilas);
+            $ultimaColumna = min(Coordinate::columnIndexFromString($hoja->getHighestDataColumn()), CARGA_ADAPTACION_MAX_COLUMNAS);
+            $filas = [];
+            for ($f = 1; $f <= $ultimaFila; $f++) {
+                $fila = [];
+                for ($c = 1; $c <= $ultimaColumna; $c++) {
+                    $coord = Coordinate::stringFromColumnIndex($c) . $f;
+                    $fila[] = $hoja->cellExists($coord) ? valorCeldaCliente($hoja->getCell($coord)) : '';
+                }
+                $filas[] = $fila;
+            }
+            $hojas[$hoja->getTitle()] = $filas;
+        }
+    }
+
+    // LA HOJA DE LOS DATOS: la del encabezado mas reconocible.
+    $elegida = null;
+    foreach ($hojas as $nombre => $filas) {
+        $enc = AdaptadorPlantilla::detectarEncabezado($filas);
+        if ($enc !== null && ($elegida === null || $enc['puntaje'] > $elegida['puntaje'])) {
+            $elegida = ['hoja' => (string) $nombre, 'indice' => $enc['indice'], 'puntaje' => $enc['puntaje']];
+        }
+    }
+    if ($elegida === null) {
+        throw new RuntimeException(
+            'No encontre una fila de encabezados que se parezca a la de una venta (RUT, fecha, producto, cantidad, '
+            . 'precio...). Revisa que el archivo tenga una fila con los nombres de las columnas en las primeras '
+            . AdaptadorPlantilla::FILAS_BUSQUEDA_ENCABEZADO . ' filas.'
+        );
+    }
+
+    $filas       = $hojas[$elegida['hoja']];
+    $encabezados = array_map(
+        static fn ($v): string => trim(is_string($v) ? $v : (is_float($v) || is_int($v) ? AdaptadorPlantilla::numeroCanonico($v) : '')),
+        $filas[$elegida['indice']]
+    );
+    $datos = array_slice($filas, $elegida['indice'] + 1);
+
+    // Las filas vacias del final (formato aplicado sin datos) no son filas.
+    while ($datos !== [] && AdaptadorPlantilla::filaVacia(end($datos))) {
+        array_pop($datos);
+    }
+    if ($datos === []) {
+        throw new RuntimeException('El archivo trae el encabezado pero ninguna fila de datos debajo.');
+    }
+    if (count($datos) > NOTA_VENTA_MAX_FILAS) {
+        throw new RuntimeException('El archivo tiene mas de ' . NOTA_VENTA_MAX_FILAS . ' filas de datos. Dividelo en archivos mas chicos.');
+    }
+
+    return [
+        'hoja'              => $elegida['hoja'],
+        'indice_encabezado' => $elegida['indice'],
+        'encabezados'       => $encabezados,
+        'datos'             => array_values($datos),
+        'hojas'             => array_map('strval', array_keys($hojas)),
+    ];
+}
+
+/**
+ * El valor de una celda de Excel con su tipo real: fecha -> 'AAAA-MM-DD',
+ * numero -> int/float, todo lo demas -> texto.
+ */
+function valorCeldaCliente(\PhpOffice\PhpSpreadsheet\Cell\Cell $celda): string|int|float
+{
+    if (FechaExcel::esCeldaDeFecha($celda)) {
+        return FechaExcel::aIso($celda);
+    }
+    if ($celda->isFormula()) {
+        try {
+            $v = $celda->getCalculatedValue();
+        } catch (Throwable) {
+            $v = $celda->getOldCalculatedValue();
+        }
+    } else {
+        $v = $celda->getValue();
+    }
+
+    return match (true) {
+        $v === null              => '',
+        is_int($v), is_float($v) => $v,
+        is_bool($v)              => $v ? 'VERDADERO' : 'FALSO',
+        default                  => (string) $v,
+    };
+}
+
+/**
+ * Un CSV como filas de TEXTO, sin convertir nada. Separador ; , o tabulador
+ * (el que mas aparezca en la primera linea); codificacion detectada y pasada a
+ * UTF-8 (Excel en Windows guarda los CSV en Windows-1252).
+ *
+ * @return list<list<string>>
+ */
+function leerCsvComoTexto(string $ruta, int $limiteFilas): array
+{
+    $codificacion = \PhpOffice\PhpSpreadsheet\Reader\Csv::guessEncoding($ruta, 'Windows-1252');
+    $contenido    = (string) file_get_contents($ruta);
+    if (str_starts_with($contenido, "\xEF\xBB\xBF")) {
+        $contenido = substr($contenido, 3);
+    }
+    if (strtoupper($codificacion) !== 'UTF-8') {
+        $contenido = (string) mb_convert_encoding($contenido, 'UTF-8', $codificacion);
+    }
+
+    $primera = strtok($contenido, "\n") ?: '';
+    $conteos = [';' => substr_count($primera, ';'), ',' => substr_count($primera, ','), "\t" => substr_count($primera, "\t")];
+    arsort($conteos);
+    $separador = (string) array_key_first($conteos);
+
+    $flujo = fopen('php://temp', 'r+');
+    fwrite($flujo, $contenido);
+    rewind($flujo);
+    $filas = [];
+    while (count($filas) < $limiteFilas && ($fila = fgetcsv($flujo, null, $separador, '"', '')) !== false) {
+        $filas[] = array_slice(array_map(static fn ($v): string => (string) $v, $fila), 0, CARGA_ADAPTACION_MAX_COLUMNAS);
+    }
+    fclose($flujo);
+
+    return $filas;
+}
+
+/**
+ * La fila de una adaptacion, de ESTA cuenta. Null si no existe o es de otra:
+ * para el usuario las dos cosas son lo mismo, un 404.
+ *
+ * @return array<string,mixed>|null
+ */
+function obtenerAdaptacion(PDO $pdo, int $cuentaId, int $id, bool $conArchivo = false, bool $paraActualizar = false): ?array
+{
+    $columnas = 'a.id, a.cuenta_id, a.usuario_id, a.nombre_archivo, a.extension, a.sha256_original, a.hoja, '
+        . 'a.fila_encabezado, a.encabezados, a.firma_encabezados, a.mapeo, a.constantes, a.equivalencias, '
+        . 'a.identificador_por_fila, a.es_exento, a.estado, a.autorizado_por, a.autorizado_en, a.autorizado_ip, '
+        . 'a.huella_autorizada, a.cambios, a.lote_carga_id, a.created_at, a.updated_at, '
+        . 'u.email AS subido_por, ua.email AS autorizado_por_email, '
+        . 'LENGTH(a.archivo_original) AS bytes_original, LENGTH(a.archivo_corregido) AS bytes_corregido'
+        . ($conArchivo ? ', a.archivo_original' : '');
+    $stmt = $pdo->prepare(
+        "SELECT {$columnas} FROM carga_adaptacion a "
+        . 'JOIN usuario u ON u.id = a.usuario_id '
+        . 'LEFT JOIN usuario ua ON ua.id = a.autorizado_por '
+        . 'WHERE a.id = ? AND a.cuenta_id = ?'
+        . ($paraActualizar ? ' FOR UPDATE' : '')
+    );
+    $stmt->execute([$id, $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false) {
+        return null;
+    }
+    foreach (['encabezados', 'mapeo', 'constantes', 'equivalencias', 'cambios'] as $json) {
+        $fila[$json] = $fila[$json] !== null ? json_decode((string) $fila[$json], true) : null;
+    }
+
+    return $fila;
+}
+
+/** @return list<array<string,mixed>> */
+function listarAdaptaciones(PDO $pdo, int $cuentaId): array
+{
+    $stmt = $pdo->prepare(
+        'SELECT a.id, a.nombre_archivo, a.estado, a.created_at, a.autorizado_en, a.lote_carga_id, '
+        . 'u.email AS subido_por, ua.email AS autorizado_por_email '
+        . 'FROM carga_adaptacion a JOIN usuario u ON u.id = a.usuario_id '
+        . 'LEFT JOIN usuario ua ON ua.id = a.autorizado_por '
+        . 'WHERE a.cuenta_id = ? ORDER BY a.id DESC LIMIT 30'
+    );
+    $stmt->execute([$cuentaId]);
+
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+/**
+ * Vuelve a leer el original guardado. Se hace en cada vista previa y al
+ * importar, siempre desde el BLOB: lo que se adapta es lo que se conservo, no
+ * una copia intermedia que podria haber cambiado.
+ *
+ * @return array{hoja:string, indice_encabezado:int, encabezados:list<string>, datos:list<list<string|int|float>>, hojas:list<string>}
+ */
+function releerOriginalAdaptacion(array $adaptacion): array
+{
+    $tmp = tempnam(sys_get_temp_dir(), 'adapt');
+    try {
+        file_put_contents($tmp, $adaptacion['archivo_original']);
+        return leerArchivoClienteCargaMasiva($tmp, (string) $adaptacion['extension']);
+    } finally {
+        @unlink($tmp);
+    }
+}
+
+/**
+ * TODO LO QUE LA VISTA PREVIA Y LA IMPORTACION NECESITAN, CALCULADO IGUAL PARA
+ * LAS DOS. Es la garantia de que se importa lo que se vio: no hay un camino
+ * para mostrar y otro para guardar.
+ *
+ * Devuelve 'filas' y 'revision' en null mientras haya pendientes: sin
+ * equivalencias completas no hay nada que revisar.
+ *
+ * @return array<string,mixed>
+ */
+function calcularAdaptacion(PDO $pdo, int $cuentaId, array $adaptacion): array
+{
+    AdaptadorPlantilla::verificarCatalogo(NOTA_VENTA_ENCABEZADOS);
+
+    $archivo     = releerOriginalAdaptacion($adaptacion);
+    $propuesta   = AdaptadorPlantilla::proponerEquivalencias($archivo['encabezados']);
+    $mapeo       = array_map('strval', (array) ($adaptacion['mapeo'] ?? []));
+    $mapeo       = array_filter($mapeo, static fn (string $c, $i): bool => $c !== '' && isset($archivo['encabezados'][(int) $i]), ARRAY_FILTER_USE_BOTH);
+    $mapeo       = array_combine(array_map('intval', array_keys($mapeo)), array_values($mapeo));
+    $constantes  = array_map('strval', (array) ($adaptacion['constantes'] ?? []));
+    $equivalencias = (array) ($adaptacion['equivalencias'] ?? []);
+    $idPorFila   = (bool) $adaptacion['identificador_por_fila'];
+    $esExento    = (bool) $adaptacion['es_exento'];
+
+    // Valores de lista cerrada que la carga no reconoceria (y que el usuario
+    // puede traducir). Se calculan con las equivalencias YA elegidas fuera: lo
+    // que se muestra es lo que todavia queda sin traducir y lo ya traducido.
+    $porTraducir = [];
+    foreach ($mapeo as $indice => $columna) {
+        if ($columna === 'forma_pago' || $columna === 'exento') {
+            $valores = AdaptadorPlantilla::valoresSinReconocer($archivo['datos'], $indice, $columna);
+            if ($valores !== []) {
+                $porTraducir[$columna] = $valores;
+            }
+        }
+    }
+
+    $pendientes = AdaptadorPlantilla::pendientes($mapeo, $constantes, $idPorFila);
+    foreach ($porTraducir as $columna => $valores) {
+        $sinElegir = array_filter($valores, static fn (string $v): bool => ($equivalencias[$columna][$v] ?? '') === '');
+        if ($sinElegir !== []) {
+            $pendientes[] = sprintf(
+                'Hay %d valor(es) de "%s" que la carga no reconoce: %s. Indica a cual equivale cada uno.',
+                count($sinElegir),
+                $columna,
+                implode(', ', array_map(static fn (string $v): string => '"' . $v . '"', array_slice($sinElegir, 0, 10)))
+            );
+        }
+    }
+
+    $base = [
+        'archivo'      => $archivo,
+        'propuesta'    => $propuesta,
+        'mapeo'        => $mapeo,
+        'constantes'   => $constantes,
+        'equivalencias' => $equivalencias,
+        'porTraducir'  => $porTraducir,
+        'pendientes'   => $pendientes,
+        'filaPrimerDato' => $archivo['indice_encabezado'] + 2, // +1 base 1, +1 la fila de abajo del encabezado
+        'aplicado'     => null,
+        'revision'     => null,
+        'huella'       => null,
+    ];
+    if ($pendientes !== []) {
+        return $base;
+    }
+
+    $aplicado = AdaptadorPlantilla::aplicar(
+        $archivo['datos'],
+        $base['filaPrimerDato'],
+        NOTA_VENTA_ENCABEZADOS,
+        $mapeo,
+        $constantes,
+        $equivalencias,
+        $idPorFila ? substr((string) $adaptacion['sha256_original'], 0, 8) : null
+    );
+    if ($aplicado['filas'] === []) {
+        $base['pendientes'][] = 'Todas las filas de datos del archivo estan vacias.';
+        return $base;
+    }
+
+    $base['aplicado'] = $aplicado;
+    $base['revision'] = revisarFilasCargaMasiva($pdo, $cuentaId, $aplicado['filas'], $esExento);
+    // LA HUELLA DE LO QUE SE VE: las filas exactas mas el tipo. Al importar se
+    // recalcula y tiene que dar lo mismo.
+    $base['huella'] = hash('sha256', json_encode([$aplicado['filas'], $esExento], JSON_UNESCAPED_UNICODE));
+
+    return $base;
+}
+
+/** El .xlsx con la forma exacta de la plantilla, para guardarlo y descargarlo. */
+function xlsxPlantillaDesdeFilas(array $filas): string
+{
+    $libro = new Spreadsheet();
+    $hoja  = $libro->getActiveSheet();
+    $hoja->setTitle('Notas de venta');
+    $hoja->fromArray(NOTA_VENTA_ENCABEZADOS, null, 'A1');
+    $f = 2;
+    foreach ($filas as $fila) {
+        $c = 1;
+        foreach (NOTA_VENTA_ENCABEZADOS as $columna) {
+            // Todo como TEXTO explicito: es lo que la carga leeria, sin que
+            // Excel reinterprete un identificador "00123" como el numero 123.
+            $hoja->setCellValueExplicit([$c++, $f], (string) $fila[$columna], \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
+        }
+        $f++;
+    }
+    $hoja->getStyle('A1:Q1')->getFont()->setBold(true);
+    ob_start();
+    (new XlsxWriter($libro))->save('php://output');
+
+    return (string) ob_get_clean();
+}
+
+function handleAdaptarGet(): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    vista('carga-masiva-adaptar', [
+        'error'         => null,
+        'adaptaciones'  => listarAdaptaciones($pdo, $cuentaId),
+        'navActivo'     => 'ventas.carga-masiva-adaptar',
+    ]);
+}
+
+function handleAdaptarPost(): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $usuarioId = Auth::usuarioId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $error = static function (string $mensaje) use ($pdo, $cuentaId): never {
+        vista('carga-masiva-adaptar', [
+            'error'        => $mensaje,
+            'adaptaciones' => listarAdaptaciones($pdo, $cuentaId),
+            'navActivo'    => 'ventas.carga-masiva-adaptar',
+        ]);
+    };
+
+    $archivo = $_FILES['archivo'] ?? null;
+    if (
+        ! is_array($archivo)
+        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
+        || $archivo['error'] !== UPLOAD_ERR_OK
+        || ! is_uploaded_file($archivo['tmp_name'])
+    ) {
+        $error('Elige el archivo de tu cliente: Excel (.xlsx o .xls) o .csv.');
+    }
+    $extension = strtolower(pathinfo((string) $archivo['name'], PATHINFO_EXTENSION));
+    if (! in_array($extension, ['xlsx', 'xls', 'csv'], true)) {
+        $error('Ese tipo de archivo no se puede adaptar. Usa Excel (.xlsx o .xls) o .csv.');
+    }
+    $bytes = (int) filesize($archivo['tmp_name']);
+    if ($bytes > CARGA_ADAPTACION_MAX_BYTES) {
+        $error('El archivo pesa mas de 16 MB. Dividelo en archivos mas chicos.');
+    }
+
+    try {
+        $leido = leerArchivoClienteCargaMasiva($archivo['tmp_name'], $extension);
+    } catch (RuntimeException $e) {
+        $error($e->getMessage());
+    }
+
+    $contenido = (string) file_get_contents($archivo['tmp_name']);
+    $firma     = AdaptadorPlantilla::firma($leido['encabezados']);
+
+    // LA PROPUESTA: si este formato de archivo ya se importo antes en esta
+    // cuenta, las equivalencias que el usuario confirmo esa vez; si no, las que
+    // propone el adaptador. En los dos casos es una PROPUESTA: hay que volver a
+    // mirarla y autorizar.
+    $previa = $pdo->prepare(
+        "SELECT mapeo, constantes, equivalencias, identificador_por_fila, es_exento FROM carga_adaptacion "
+        . "WHERE cuenta_id = ? AND firma_encabezados = ? AND estado = 'importada' ORDER BY id DESC LIMIT 1"
+    );
+    $previa->execute([$cuentaId, $firma]);
+    $recordada = $previa->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    if ($recordada !== null) {
+        $mapeo         = (string) $recordada['mapeo'];
+        $constantes    = $recordada['constantes'];
+        $equivalencias = $recordada['equivalencias'];
+        $idPorFila     = (int) $recordada['identificador_por_fila'];
+        $esExento      = (int) $recordada['es_exento'];
+    } else {
+        $propuesta = [];
+        foreach (AdaptadorPlantilla::proponerEquivalencias($leido['encabezados']) as $i => $p) {
+            if ($p['destino'] !== null) {
+                $propuesta[(string) $i] = $p['destino'];
+            }
+        }
+        $mapeo         = json_encode((object) $propuesta);
+        $constantes    = null;
+        $equivalencias = null;
+        $idPorFila     = 0;
+        $esExento      = 0;
+    }
+
+    $stmt = $pdo->prepare(
+        'INSERT INTO carga_adaptacion (cuenta_id, usuario_id, nombre_archivo, extension, archivo_original, sha256_original, '
+        . 'hoja, fila_encabezado, encabezados, firma_encabezados, mapeo, constantes, equivalencias, identificador_por_fila, es_exento) '
+        . 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    );
+    $stmt->bindValue(1, $cuentaId, PDO::PARAM_INT);
+    $stmt->bindValue(2, $usuarioId, PDO::PARAM_INT);
+    $stmt->bindValue(3, mb_substr((string) $archivo['name'], 0, 255));
+    $stmt->bindValue(4, $extension);
+    $stmt->bindValue(5, $contenido, PDO::PARAM_LOB);
+    $stmt->bindValue(6, hash('sha256', $contenido));
+    $stmt->bindValue(7, mb_substr($leido['hoja'], 0, 255));
+    $stmt->bindValue(8, $leido['indice_encabezado'] + 1, PDO::PARAM_INT);
+    $stmt->bindValue(9, json_encode($leido['encabezados'], JSON_UNESCAPED_UNICODE));
+    $stmt->bindValue(10, $firma);
+    $stmt->bindValue(11, $mapeo);
+    $stmt->bindValue(12, $constantes);
+    $stmt->bindValue(13, $equivalencias);
+    $stmt->bindValue(14, $idPorFila, PDO::PARAM_INT);
+    $stmt->bindValue(15, $esExento, PDO::PARAM_INT);
+    $stmt->execute();
+    $id = (int) $pdo->lastInsertId();
+
+    if ($recordada !== null) {
+        flashSet('info', 'Este formato de archivo ya se importo antes: se propusieron las mismas equivalencias de esa vez. Revisalas igual antes de importar.');
+    }
+    redirigirPrg("/ventas/carga-masiva/adaptar/{$id}");
+}
+
+function handleAdaptarDetalleGet(int $id): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $adaptacion = obtenerAdaptacion($pdo, $cuentaId, $id, true);
+    if ($adaptacion === null) {
+        redirigir('/ventas/carga-masiva/adaptar');
+    }
+
+    // Una adaptacion ya importada o descartada no se recalcula: lo que importa
+    // de ella es lo que quedo registrado, no lo que daria hoy.
+    $calculo = null;
+    $errorLectura = null;
+    if ($adaptacion['estado'] === 'borrador') {
+        try {
+            $calculo = calcularAdaptacion($pdo, $cuentaId, $adaptacion);
+        } catch (RuntimeException $e) {
+            $errorLectura = $e->getMessage();
+        }
+    }
+    unset($adaptacion['archivo_original']);
+
+    vista('carga-masiva-adaptar-detalle', [
+        'adaptacion'   => $adaptacion,
+        'calculo'      => $calculo,
+        'errorLectura' => $errorLectura,
+        'flash'        => flashTomar(),
+        'navActivo'    => 'ventas.carga-masiva-adaptar',
+    ]);
+}
+
+/**
+ * Guarda las elecciones del usuario: equivalencias de columna, valores para
+ * todas las filas, traducciones de valores y las dos opciones. Solo en
+ * borrador. No valida contra la plantilla: eso lo hace calcularAdaptacion() al
+ * mostrar, y lo dice como pendiente en vez de rechazar el formulario.
+ */
+function handleAdaptarEquivalenciasPost(int $id): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $adaptacion = obtenerAdaptacion($pdo, $cuentaId, $id);
+    if ($adaptacion === null || $adaptacion['estado'] !== 'borrador') {
+        flashSet('error', 'Esta adaptacion ya no se puede modificar.');
+        redirigirPrg("/ventas/carga-masiva/adaptar/{$id}");
+    }
+
+    $nColumnas = count((array) $adaptacion['encabezados']);
+    $mapeo = [];
+    foreach ((array) ($_POST['mapeo'] ?? []) as $indice => $columna) {
+        $columna = (string) $columna;
+        if ($columna !== '' && ctype_digit((string) $indice) && (int) $indice < $nColumnas && in_array($columna, NOTA_VENTA_ENCABEZADOS, true)) {
+            $mapeo[(string) (int) $indice] = $columna;
+        }
+    }
+
+    // Valores para todas las filas: solo las columnas que se pueden completar,
+    // y solo con un valor que la carga aceptaria. Lo demas se descarta sin
+    // ruido: el formulario solo ofrece esas opciones.
+    $constantes = [];
+    foreach (AdaptadorPlantilla::COMPLETABLES as $columna) {
+        $v = trim((string) ($_POST['constante'][$columna] ?? ''));
+        if ($v === '') {
+            continue;
+        }
+        $valido = match ($columna) {
+            'forma_pago'                     => in_array($v, AdaptadorPlantilla::VALORES_FORMA_PAGO, true),
+            'exento'                         => in_array($v, AdaptadorPlantilla::VALORES_EXENTO, true),
+            'fecha_nota', 'fecha_vencimiento' => AdaptadorPlantilla::fecha($v) !== null,
+        };
+        if ($valido) {
+            $constantes[$columna] = in_array($columna, ['fecha_nota', 'fecha_vencimiento'], true) ? (string) AdaptadorPlantilla::fecha($v) : $v;
+        }
+    }
+
+    $equivalencias = [];
+    foreach (['forma_pago' => AdaptadorPlantilla::VALORES_FORMA_PAGO, 'exento' => AdaptadorPlantilla::VALORES_EXENTO] as $columna => $permitidos) {
+        // Los valores originales viajan como CLAVES de un arreglo paralelo
+        // (equiv_valor[i] / equiv_destino[i]), no como nombre de campo: un
+        // valor del archivo puede traer corchetes o puntos que PHP reinterpreta
+        // al armar $_POST.
+        $valores  = (array) ($_POST['equiv_valor'][$columna] ?? []);
+        $destinos = (array) ($_POST['equiv_destino'][$columna] ?? []);
+        foreach ($valores as $k => $valor) {
+            $destino = (string) ($destinos[$k] ?? '');
+            if (in_array($destino, $permitidos, true)) {
+                $equivalencias[$columna][(string) $valor] = $destino;
+            }
+        }
+    }
+
+    $stmt = $pdo->prepare(
+        "UPDATE carga_adaptacion SET mapeo = ?, constantes = ?, equivalencias = ?, identificador_por_fila = ?, es_exento = ? "
+        . "WHERE id = ? AND cuenta_id = ? AND estado = 'borrador'"
+    );
+    $stmt->execute([
+        json_encode((object) $mapeo),
+        json_encode((object) $constantes, JSON_UNESCAPED_UNICODE),
+        json_encode((object) $equivalencias, JSON_UNESCAPED_UNICODE),
+        empty($_POST['identificador_por_fila']) ? 0 : 1,
+        empty($_POST['tipo_exento']) ? 0 : 1,
+        $id,
+        $cuentaId,
+    ]);
+
+    redirigirPrg("/ventas/carga-masiva/adaptar/{$id}#vista-previa");
+}
+
+/**
+ * IMPORTAR: el unico paso que escribe notas. Exige, en este orden:
+ *   - la casilla de autorizacion marcada;
+ *   - la adaptacion en borrador, bloqueada (FOR UPDATE) para que dos clics no
+ *     produzcan dos lotes;
+ *   - ningun pendiente y ningun problema de archivo (las mismas reglas que
+ *     rechazarian el archivo en la carga normal);
+ *   - que lo que se va a importar sea EXACTAMENTE lo que se vio (huella).
+ * Despues de guardar, cuenta lo que quedo escrito contra lo que se leyo: si no
+ * cuadra, se deshace todo. Lote y registro de autorizacion van juntos o no van.
+ */
+function handleAdaptarImportarPost(int $id): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $usuarioId = Auth::usuarioId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $volver = static function (string $mensaje) use ($id): never {
+        flashSet('error', $mensaje);
+        redirigirPrg("/ventas/carga-masiva/adaptar/{$id}#autorizar");
+    };
+
+    if (($_POST['autorizo'] ?? '') !== '1') {
+        $volver('Para importar tienes que marcar la casilla que autoriza las correcciones. No se importo nada.');
+    }
+    $huellaVista = (string) ($_POST['huella'] ?? '');
+
+    $pdo->beginTransaction();
+    try {
+        $adaptacion = obtenerAdaptacion($pdo, $cuentaId, $id, true, true);
+        if ($adaptacion === null || $adaptacion['estado'] !== 'borrador') {
+            $pdo->rollBack();
+            $volver('Esta adaptacion ya fue importada o descartada. No se importo nada.');
+        }
+
+        $calculo = calcularAdaptacion($pdo, $cuentaId, $adaptacion);
+        if ($calculo['pendientes'] !== []) {
+            $pdo->rollBack();
+            $volver('Todavia hay cosas por resolver antes de importar. No se importo nada.');
+        }
+        if (! hash_equals((string) $calculo['huella'], $huellaVista)) {
+            $pdo->rollBack();
+            $volver('Lo que se iba a importar cambio desde que se mostro la vista previa. Revisala de nuevo y vuelve a autorizar. No se importo nada.');
+        }
+        $revision = $calculo['revision'];
+        if ($revision['problemas'] !== []) {
+            $pdo->rollBack();
+            $volver('La carga rechazaria este archivo: ' . $revision['problemas'][0] . ' No se importo nada.');
+        }
+
+        // UN LOTE SIN NINGUNA NOTA VALIDA NO SIRVE: tipicamente es el mismo
+        // archivo subido otra vez, con todas sus filas ya cargadas.
+        if (array_filter($revision['items'], static fn (array $it): bool => $it['status'] === 'ok') === []) {
+            $pdo->rollBack();
+            $volver('Ninguna fila del archivo se importaria: todas tienen error. No se importo nada.');
+        }
+
+        // NINGUNA FILA PERDIDA NI DUPLICADA, ANTES DE ESCRIBIR: cada fila de
+        // datos del archivo es o una fila vacia descartada o exactamente un
+        // item revisado.
+        $aplicado = $calculo['aplicado'];
+        $nDatos   = count($calculo['archivo']['datos']);
+        if (count($aplicado['filas']) + count($aplicado['vacias']) !== $nDatos || count($revision['items']) !== count($aplicado['filas'])) {
+            throw new LogicException(sprintf(
+                'conteo de filas no cuadra: %d datos, %d filas, %d vacias, %d items',
+                $nDatos, count($aplicado['filas']), count($aplicado['vacias']), count($revision['items'])
+            ));
+        }
+
+        $tipoDte = (bool) $adaptacion['es_exento'] ? 34 : 33;
+        $nombre  = mb_substr('Adaptado: ' . (string) $adaptacion['nombre_archivo'], 0, 255);
+        $loteId  = guardarLoteCargaMasiva($pdo, $cuentaId, $usuarioId, $nombre, $tipoDte, $revision['items'], $revision['grupos']);
+
+        // Y DESPUES DE ESCRIBIR: lo que quedo en la base contra lo revisado.
+        // Notas con error = items con error; notas validas = grupos; y cada
+        // fila valida dejo su identificador en nota_venta_origen.
+        $validas = count(array_filter($revision['items'], static fn (array $it): bool => $it['status'] === 'ok'));
+        $conteo  = $pdo->prepare(
+            "SELECT SUM(estado = 'error') AS errores, SUM(estado <> 'error') AS notas, "
+            . '(SELECT COUNT(*) FROM nota_venta_origen o JOIN nota_venta n2 ON n2.id = o.nota_venta_id WHERE n2.lote_carga_id = ?) AS origenes '
+            . 'FROM nota_venta WHERE lote_carga_id = ?'
+        );
+        $conteo->execute([$loteId, $loteId]);
+        $c = $conteo->fetch(PDO::FETCH_ASSOC);
+        if ((int) $c['errores'] !== count($revision['items']) - $validas
+            || (int) $c['notas'] !== count($revision['grupos'])
+            || (int) $c['origenes'] !== $validas) {
+            throw new LogicException(sprintf(
+                'lo escrito no cuadra con lo revisado: errores %d/%d, notas %d/%d, origenes %d/%d',
+                (int) $c['errores'], count($revision['items']) - $validas,
+                (int) $c['notas'], count($revision['grupos']),
+                (int) $c['origenes'], $validas
+            ));
+        }
+
+        $registro = [
+            'resumen' => [
+                'filas_datos'     => $nDatos,
+                'filas_vacias'    => $aplicado['vacias'],
+                'filas_importadas' => count($aplicado['filas']),
+                'filas_validas'   => $validas,
+                'filas_con_error' => count($revision['items']) - $validas,
+                'notas_creadas'   => count($revision['grupos']),
+                'celdas_cambiadas' => count($aplicado['cambios']),
+            ],
+            'elecciones' => [
+                'hoja'                   => $calculo['archivo']['hoja'],
+                'fila_encabezado'        => $calculo['archivo']['indice_encabezado'] + 1,
+                'mapeo'                  => array_map(
+                    static fn (int $i, string $col): array => ['columna_archivo' => $calculo['archivo']['encabezados'][$i] ?? '', 'indice' => $i, 'columna_plantilla' => $col],
+                    array_keys($calculo['mapeo']),
+                    array_values($calculo['mapeo'])
+                ),
+                'valores_indicados'      => $calculo['constantes'],
+                'equivalencias_de_valor' => $calculo['equivalencias'],
+                'identificador_por_fila' => (bool) $adaptacion['identificador_por_fila'],
+                'tipo_dte'               => $tipoDte,
+            ],
+            'cambios' => $aplicado['cambios'],
+        ];
+
+        $upd = $pdo->prepare(
+            "UPDATE carga_adaptacion SET estado = 'importada', autorizado_por = ?, autorizado_en = NOW(), autorizado_ip = ?, "
+            . 'huella_autorizada = ?, cambios = ?, archivo_corregido = ?, lote_carga_id = ? '
+            . "WHERE id = ? AND cuenta_id = ? AND estado = 'borrador'"
+        );
+        $upd->bindValue(1, $usuarioId, PDO::PARAM_INT);
+        $upd->bindValue(2, ActividadAdmin::ip($_SERVER));
+        $upd->bindValue(3, $calculo['huella']);
+        $upd->bindValue(4, json_encode($registro, JSON_UNESCAPED_UNICODE));
+        $upd->bindValue(5, xlsxPlantillaDesdeFilas($aplicado['filas']), PDO::PARAM_LOB);
+        $upd->bindValue(6, $loteId, PDO::PARAM_INT);
+        $upd->bindValue(7, $id, PDO::PARAM_INT);
+        $upd->bindValue(8, $cuentaId, PDO::PARAM_INT);
+        $upd->execute();
+        if ($upd->rowCount() !== 1) {
+            throw new LogicException('la adaptacion dejo de estar en borrador durante la importacion');
+        }
+
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log("panel adaptar: fallo al importar la adaptacion {$id} - " . $e->getMessage());
+        $volver('No se pudo importar. No quedo nada a medias: intenta nuevamente.');
+    }
+
+    flashSet('ok', 'Archivo adaptado e importado. Quedo registrado quien lo autorizo y que se corrigio.');
+    redirigirPrg("/ventas/carga-masiva/{$loteId}");
+}
+
+function handleAdaptarDescartarPost(int $id): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    // Descartar NO borra: el original se conserva igual. Solo deja de poder
+    // importarse.
+    $pdo->prepare("UPDATE carga_adaptacion SET estado = 'descartada' WHERE id = ? AND cuenta_id = ? AND estado = 'borrador'")
+        ->execute([$id, $cuentaId]);
+    redirigirPrg('/ventas/carga-masiva/adaptar');
+}
+
+/** Descarga el original o el corregido. Solo de esta cuenta. */
+function handleAdaptarDescargaGet(int $id, string $cual): void
+{
+    $pdo      = Db::conexion();
+    $cuentaId = Auth::cuentaId();
+    exigirProduccionCompleto($pdo, $cuentaId);
+
+    $columna = $cual === 'original' ? 'archivo_original' : 'archivo_corregido';
+    $stmt = $pdo->prepare("SELECT nombre_archivo, extension, {$columna} AS contenido FROM carga_adaptacion WHERE id = ? AND cuenta_id = ?");
+    $stmt->execute([$id, $cuentaId]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false || $fila['contenido'] === null) {
+        http_response_code(404);
+        echo 'No encontrado';
+        exit;
+    }
+
+    $base = pathinfo((string) $fila['nombre_archivo'], PATHINFO_FILENAME);
+    if ($cual === 'original') {
+        $tipos = ['xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'xls' => 'application/vnd.ms-excel', 'csv' => 'text/csv'];
+        $tipo  = $tipos[$fila['extension']] ?? 'application/octet-stream';
+        $nombre = $base . '.' . $fila['extension'];
+    } else {
+        $tipo   = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        $nombre = $base . '_plantilla.xlsx';
+    }
+    $nombre = (string) preg_replace('/[^\w.\-]+/u', '_', $nombre);
+
+    header('Content-Type: ' . $tipo);
+    header('Content-Disposition: attachment; filename="' . $nombre . '"');
+    header('Content-Length: ' . strlen((string) $fila['contenido']));
+    echo $fila['contenido'];
+    exit;
+}
+
 function handleCargaMasivaDetalleGet(int $loteId): void
 {
     $pdo      = Db::conexion();
@@ -8797,10 +9678,21 @@ function handleCargaMasivaDetalleGet(int $loteId): void
         redirigir('/ventas/carga-masiva');
     }
 
+    // SI EL LOTE SALIO DE UN ARCHIVO ADAPTADO, se dice y se enlaza al registro
+    // de quien lo autorizo y que se corrigio.
+    $stmt = $pdo->prepare(
+        'SELECT a.id, a.nombre_archivo, a.autorizado_en, u.email AS autorizado_por_email '
+        . 'FROM carga_adaptacion a LEFT JOIN usuario u ON u.id = a.autorizado_por '
+        . 'WHERE a.lote_carga_id = ? AND a.cuenta_id = ?'
+    );
+    $stmt->execute([$loteId, $cuentaId]);
+
     vista('carga-masiva-detalle', [
-        'lote'      => $lote,
-        'notas'     => listarNotasVentaDeLote($pdo, $cuentaId, $loteId),
-        'navActivo' => 'ventas.carga-masiva',
+        'lote'       => $lote,
+        'notas'      => listarNotasVentaDeLote($pdo, $cuentaId, $loteId),
+        'adaptacion' => $stmt->fetch(PDO::FETCH_ASSOC) ?: null,
+        'flash'      => flashTomar(),
+        'navActivo'  => 'ventas.carga-masiva',
     ]);
 }
 
@@ -12269,6 +13161,41 @@ if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/revisar') {
 if ($metodo === 'POST' && $ruta === '/ventas/carga-masiva/revisar') {
     Auth::requerirSesion();
     handleCargaMasivaRevisarPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/adaptar') {
+    Auth::requerirSesion();
+    handleAdaptarGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/ventas/carga-masiva/adaptar') {
+    Auth::requerirSesion();
+    handleAdaptarPost();
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)$#', $ruta, $mAdapt)) {
+    Auth::requerirSesion();
+    handleAdaptarDetalleGet((int) $mAdapt[1]);
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)/(original|corregido)$#', $ruta, $mAdapt)) {
+    Auth::requerirSesion();
+    handleAdaptarDescargaGet((int) $mAdapt[1], $mAdapt[2]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)/equivalencias$#', $ruta, $mAdapt)) {
+    Auth::requerirSesion();
+    handleAdaptarEquivalenciasPost((int) $mAdapt[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)/importar$#', $ruta, $mAdapt)) {
+    Auth::requerirSesion();
+    handleAdaptarImportarPost((int) $mAdapt[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/ventas/carga-masiva/adaptar/(\d+)/descartar$#', $ruta, $mAdapt)) {
+    Auth::requerirSesion();
+    handleAdaptarDescartarPost((int) $mAdapt[1]);
 }
 
 if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/plantilla') {
