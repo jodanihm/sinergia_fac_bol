@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-02',
+        'version' => '1.93',
+        'titulo'  => 'Facturacion masiva en dos pasos: importar y facturar',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El submenu Facturacion masiva queda con dos opciones: "Importar notas de venta" y "Facturar notas". Antes habia cuatro, y tres de ellas (revisar archivo, cargar con la plantilla y adaptar archivo de cliente) hacian casi lo mismo.',
+            'Importar notas de venta recibe cualquier archivo: si viene en la plantilla, reconoce todas las columnas y pasa directo a revisar e importar; si viene en otro formato, pregunta lo que falte. La plantilla se sigue descargando desde ahi.',
+            'En la misma pantalla esta el historial de importaciones (incluidas las hechas antes con la carga), los archivos que quedaron sin terminar y los descartados.',
+            'Las direcciones antiguas de "Revisar archivo" y "Carga de notas de venta" llevan a la nueva pantalla, asi que ningun enlace guardado queda roto.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-02',
         'version' => '1.92',
         'titulo'  => 'Adaptar archivo: una columna vacia ya no bloquea la importacion',
         'tag'     => 'backend',

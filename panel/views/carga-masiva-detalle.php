@@ -28,7 +28,7 @@
  */
 $titulo         = 'Resumen de carga';
 $pasoActual     = 2;
-$enlacesStepper = [1 => '/ventas/carga-masiva'];
+$enlacesStepper = [1 => '/ventas/carga-masiva/adaptar'];
 require __DIR__ . '/partials/header.php';
 
 $e = static fn (string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
@@ -118,7 +118,7 @@ foreach ($notas as $n) {
         <?= iconoSvg('info', 20, 'alerta__icono'); ?>
         <div class="alerta__cuerpo">
             <p>
-                Este lote se importo adaptando el archivo <strong><?= $e((string) $adaptacion['nombre_archivo']); ?></strong>,
+                Este lote se importo desde el archivo <strong><?= $e((string) $adaptacion['nombre_archivo']); ?></strong>,
                 autorizado por <?= $e((string) $adaptacion['autorizado_por_email']); ?> el <?= $e($fmtFechaHora($adaptacion['autorizado_en'])); ?>.
                 <a href="/ventas/carga-masiva/adaptar/<?= (int) $adaptacion['id']; ?>">Ver el original y las correcciones</a>.
             </p>
@@ -191,7 +191,7 @@ foreach ($notas as $n) {
             Las eliges y las emites en el paso 3.
         </p>
         <div class="acciones-formulario">
-            <a class="boton-secundario" href="/ventas/carga-masiva">Cargar otro archivo</a>
+            <a class="boton-secundario" href="/ventas/carga-masiva/adaptar">Importar otro archivo</a>
             <a class="boton-principal" href="/ventas/facturacion-masiva">Ir a facturacion masiva</a>
         </div>
     </section>
@@ -232,7 +232,7 @@ foreach ($notas as $n) {
             <p>El archivo se registro pero no quedo ninguna nota asociada. Revisa el archivo
             original y vuelve a cargarlo.</p>
             <p class="estado-vacio__acciones">
-                <a class="boton-secundario" href="/ventas/carga-masiva">Volver a carga masiva</a>
+                <a class="boton-secundario" href="/ventas/carga-masiva/adaptar">Volver a importar notas de venta</a>
             </p>
         </div>
     <?php else: ?>

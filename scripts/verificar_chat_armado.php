@@ -979,8 +979,9 @@ $hoja = (new XlsxReaderArnes())->load($tmp)->getActiveSheet();
 $filas = $hoja->toArray(null, true, false, false);
 unlink($tmp);
 
-// LA COMPARACION ES CONTRA LA CONSTANTE, no contra una lista escrita aqui: es
-// exactamente lo que hace leerFilasExcelCargaMasiva() con === estricto.
+// LA COMPARACION ES CONTRA LA CONSTANTE, no contra una lista escrita aqui: con
+// los encabezados identicos, la importacion reconoce todas las columnas sin
+// preguntar nada.
 $encabezados = array_map(static fn ($v): string => trim((string) $v), array_slice($filas[0] ?? [], 0, count(NOTA_VENTA_ENCABEZADOS)));
 if ($encabezados === NOTA_VENTA_ENCABEZADOS) {
     ok('los ' . count(NOTA_VENTA_ENCABEZADOS) . ' encabezados son IDENTICOS a NOTA_VENTA_ENCABEZADOS.');

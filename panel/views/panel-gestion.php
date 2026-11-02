@@ -95,7 +95,7 @@ $pintarDelta = static function (?array $d): string {
         el consumo de folios y tus principales clientes.</p>
         <p class="estado-vacio__acciones">
             <a class="boton-principal" href="/ventas/factura">Emitir una factura</a>
-            <a href="/ventas/carga-masiva">o cargar notas de venta masivamente</a>
+            <a href="/ventas/carga-masiva/adaptar">o importar notas de venta desde un Excel</a>
         </p>
     </section>
 
@@ -329,7 +329,7 @@ $pintarDelta = static function (?array $d): string {
     <h2 class="dash-titulo" id="titulo-accesos"><?= iconoSvg('accesos-rapidos', 18, 'dash-titulo__icono'); ?>Accesos rapidos</h2>
     <ul class="accesos__lista">
         <li><a href="/ventas/factura">Emitir factura</a></li>
-        <li><a href="/ventas/carga-masiva">Carga masiva</a></li>
+        <li><a href="/ventas/carga-masiva/adaptar">Importar notas de venta</a></li>
         <li><a href="/ventas/panel-emision">Panel de emision</a></li>
         <li><a href="/maestros/clientes">Clientes</a></li>
     </ul>

@@ -663,12 +663,9 @@ const PERMISOS_RUTA = [
     'GET /ventas/cotizaciones/nueva'             => ['ventas', 'ver'],
     'POST /ventas/cotizaciones/nueva'            => ['ventas', 'gestionar'],
     'GET /ventas/carga-masiva'                   => ['ventas', 'ver'],
-    'POST /ventas/carga-masiva'                  => ['ventas', 'gestionar'],
     'GET /ventas/carga-masiva/plantilla'         => ['ventas', 'ver'],
-    // Revisar NO escribe nada (ni lote ni notas ni clientes): por eso basta 'ver'
-    // aunque sea un POST, a diferencia de la carga, que pide 'gestionar'.
+    // Direccion vieja de "Revisar archivo": hoy solo redirige a la importacion.
     'GET /ventas/carga-masiva/revisar'           => ['ventas', 'ver'],
-    'POST /ventas/carga-masiva/revisar'          => ['ventas', 'ver'],
     'GET /ventas/carga-masiva/adaptar'           => ['ventas', 'ver'],
     // Subir al adaptador SI escribe (guarda el original): 'gestionar', como la carga.
     'POST /ventas/carga-masiva/adaptar'          => ['ventas', 'gestionar'],
@@ -1068,18 +1065,14 @@ function definicionMenu(): array
                 // hacer antes de estar habilitado para emitir -- que es justo
                 // cuando un cliente nuevo necesita cotizar.
                 ['clave' => 'ventas.cotizaciones', 'label' => 'Cotizaciones', 'destino' => '/ventas/cotizaciones', 'construido' => true, 'requiereProduccion' => false],
-                // LAS TRES PANTALLAS DEL FLUJO MASIVO, JUNTAS Y EN EL ORDEN DE
-                // LA TAREA: revisar el Excel, cargarlo, facturar. Sueltas entre
-                // las demas opciones de Ventas no se leia que fueran pasos de un
-                // mismo camino.
+                // EL FLUJO MASIVO EN DOS PASOS: importar (cualquier archivo, en la
+                // plantilla o no) y facturar. Hubo tambien "Revisar archivo" y
+                // "Carga de notas de venta" (plantilla exacta); la importacion
+                // hace lo de las dos, y tres opciones casi iguales confundian.
                 [
                     'label' => 'Facturacion masiva',
                     'items' => [
-                        ['clave' => 'ventas.carga-masiva-revisar', 'label' => 'Revisar archivo', 'destino' => '/ventas/carga-masiva/revisar', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
-                        // Para el archivo que NO viene en la plantilla: lo adapta,
-                        // lo muestra y lo importa solo con autorizacion.
-                        ['clave' => 'ventas.carga-masiva-adaptar', 'label' => 'Adaptar archivo de cliente', 'destino' => '/ventas/carga-masiva/adaptar', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
-                        ['clave' => 'ventas.carga-masiva', 'label' => 'Carga de notas de venta', 'destino' => '/ventas/carga-masiva', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
+                        ['clave' => 'ventas.carga-masiva', 'label' => 'Importar notas de venta', 'destino' => '/ventas/carga-masiva/adaptar', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                         ['clave' => 'ventas.facturacion-masiva', 'label' => 'Facturar notas', 'destino' => '/ventas/facturacion-masiva', 'construido' => true, 'requiereProduccion' => true, 'sub' => true],
                     ],
                 ],
@@ -3169,7 +3162,7 @@ function chatResolverCliente(int $cuentaId, array $datos): array
     //
     // Se piden los inactivos TAMBIEN. Esconderlos haria que el chat dijera "no
     // existe" de un cliente al que la carga masiva reactivaria sin preguntar
-    // (ver el alta de handleCargaMasivaPost): dos partes del sistema contestando
+    // (ver guardarLoteCargaMasiva()): dos partes del sistema contestando
     // distinto sobre la misma ficha.
     $candidatos = clienteRepo()->listar($cuentaId, $nombre, false, CHAT_ARMADO_CANDIDATOS, 0);
 
@@ -4219,9 +4212,9 @@ function chatArmadoConfirmar(PDO $pdo, int $cuentaId, array $estado): array
  * El .xlsx de la carga masiva a partir de las cotizaciones ya creadas.
  *
  * LAS 17 COLUMNAS DE NOTA_VENTA_ENCABEZADOS, EN SU ORDEN, y tomadas de la propia
- * constante: leerFilasExcelCargaMasiva() compara la fila 1 con === estricto
- * contra ella, asi que escribir la lista a mano aqui garantizaria el rechazo el
- * dia que alguien agregue una columna alla.
+ * constante: con los encabezados exactos, la importacion los reconoce todos sin
+ * preguntar nada, y escribir la lista a mano aqui la desfasaria el dia que
+ * alguien agregue una columna alla.
  *
  * SE LEE DE LA BASE, no del borrador que quedo en la sesion. Las cotizaciones ya
  * existen y son la version que el usuario confirmo; el borrador es un intermedio.
@@ -4260,7 +4253,7 @@ function chatArmadoExcel(int $cuentaId, array $ids): string
                 ! empty($l['exento']) ? 'SI' : 'NO',
                 // FORMA DE PAGO NUNCA VACIA: una celda en blanco no aparta la
                 // fila, RECHAZA EL ARCHIVO ENTERO (ver las cuatro validaciones de
-                // pago de handleCargaMasivaPost). El resumen ya le dijo al usuario
+                // pago de revisarFilasCargaMasiva). El resumen ya le dijo al usuario
                 // cual es, asi que aqui no se decide nada a sus espaldas.
                 CHAT_ARMADO_FORMA_PAGO_DEFECTO,
                 '',   // fecha_vencimiento: solo obligatoria con CREDITO
@@ -7353,40 +7346,9 @@ const NOTA_VENTA_ENCABEZADOS = [
     // escribe el precio que conoce: el sin IVA en precio_unitario o el que paga
     // el cliente aqui. Va ultima y no junto a precio_unitario para no correr
     // las letras de las columnas (las fechas tienen formato por letra en la
-    // plantilla) y para que el archivo de 16 columnas siga sirviendo: ver
-    // NOTA_VENTA_ENCABEZADOS_V2.
+    // plantilla). Un archivo sin esta columna se importa igual: la importacion
+    // no exige columnas que no sean obligatorias.
     'precio_final',
-];
-
-/**
- * Las 16 columnas de antes de precio_final. A diferencia de la V1, este archivo
- * SI se acepta: no le falta nada obligatorio, solo la columna opcional, que se
- * lee como vacia.
- */
-const NOTA_VENTA_ENCABEZADOS_V2 = [
-    'identificador_externo', 'rut_receptor', 'razon_social_receptor', 'giro_receptor',
-    'direccion_receptor', 'comuna_receptor', 'email_receptor', 'fecha_nota',
-    'producto_servicio', 'cantidad', 'precio_unitario', 'exento',
-    'forma_pago', 'fecha_vencimiento',
-    'folio_boleta_a_anular', 'fecha_boleta_a_anular',
-];
-
-/**
- * Los 14 encabezados ANTERIORES a la carga de forma de pago. Se conservan SOLO
- * para reconocer un archivo hecho con la plantilla vieja y decirlo con esas
- * palabras, en vez de soltar el mensaje generico de "los encabezados no
- * coinciden", que no le dice a nadie que lo que tiene que hacer es bajar la
- * plantilla otra vez.
- *
- * NO habilita un formato dual: el archivo viejo se RECHAZA igual. Aceptarlo
- * dejaria esas notas emitiendo sin FmaPago, o sea declarando credito en
- * silencio, que es exactamente lo que esta carga vino a evitar.
- */
-const NOTA_VENTA_ENCABEZADOS_V1 = [
-    'identificador_externo', 'rut_receptor', 'razon_social_receptor', 'giro_receptor',
-    'direccion_receptor', 'comuna_receptor', 'email_receptor', 'fecha_nota',
-    'producto_servicio', 'cantidad', 'precio_unitario', 'exento',
-    'folio_boleta_a_anular', 'fecha_boleta_a_anular',
 ];
 
 /**
@@ -7410,7 +7372,7 @@ const NOTA_VENTA_FORMAS_PAGO = [
 /** Limite de sanidad: sin fuente oficial de un tope menor (ver PASO 1 de M4,
  *  el XSD del SII permite hasta 2000 <DTE> por sobre); esto es solo para que
  *  un archivo enorme no reviente PHP por memoria, acotado ademas por un
- *  IReadFilter al leer (ver leerFilasExcelCargaMasiva()). */
+ *  IReadFilter al leer (ver leerArchivoClienteCargaMasiva()). */
 const NOTA_VENTA_MAX_FILAS = 5000;
 
 /** Tope de XML descomprimido (hojas + sharedStrings) de un .xlsx de carga
@@ -7489,9 +7451,8 @@ function handlePlantillaExcelGet(): void
     }
 
     // Los formatos aceptados quedan a la vista al pasar por el encabezado. Va
-    // como comentario y no como celda extra ni hoja aparte: cualquier contenido
-    // adicional en la fila 1 rompe la comparacion exacta de encabezados que
-    // hace leerFilasExcelCargaMasiva().
+    // como comentario y no como celda extra ni hoja aparte: contenido adicional
+    // en la fila 1 apareceria como una columna mas al importar.
     $ayuda = 'Formatos aceptados: ' . FechaExcel::FORMATOS
         . '. Lo mas seguro es escribir la fecha y dejar que Excel la reconozca'
         . ' (queda alineada a la derecha).';
@@ -7578,224 +7539,6 @@ function bytesXmlDelXlsx(string $rutaArchivo): int
     $zip->close();
 
     return $bytes;
-}
-
-/**
- * Lee un .xlsx de carga masiva desde su tmp_name (NUNCA se copia a disco
- * propio, se lee directo del archivo temporal que ya crea PHP para el
- * upload -- mismo criterio que file_get_contents($archivo['tmp_name']) en
- * CAF/certificado). El IReadFilter acota la memoria usada por PhpSpreadsheet
- * a un rectangulo de NOTA_VENTA_MAX_FILAS+2 filas por las columnas de la
- * plantilla, SIN IMPORTAR cuanto traiga el archivo real -- la validacion de
- * "demasiadas filas" ocurre ANTES de intentar leer todo el contenido de cada
- * fila.
- *
- * @return list<array<string,string>> filas no vacias, como array asociativo
- *                                     clave=>valor segun NOTA_VENTA_ENCABEZADOS
- *
- * @throws RuntimeException si el archivo no se puede leer, los encabezados no
- *                          coinciden con la plantilla, o excede el limite de filas
- */
-function leerFilasExcelCargaMasiva(string $rutaArchivo): array
-{
-    $limite = NOTA_VENTA_MAX_FILAS + 2; // +1 encabezado, +1 para poder detectar el excedente
-
-    // El ancho tambien se acota, y hace falta tanto como el alto.
-    //
-    // POR QUE: el filtro anterior solo miraba la FILA, asi que un archivo
-    // podia traer celdas hasta la columna que quisiera y todas se cargaban.
-    // No hace falta que tengan datos: basta con haber pintado las filas
-    // enteras (fondo, borde, ancho de columna) -- algo que se hace de un clic
-    // en Excel -- para que el .xlsx guarde miles de celdas VACIAS PERO CON
-    // ESTILO, y PhpSpreadsheet crea un objeto por cada una. Un archivo de
-    // 5.000 filas pintadas hasta la columna BH costaba 192 MB (justo el
-    // memory_limit del contenedor) y moria con "Allowed memory size
-    // exhausted" en Worksheet::createNewCell(); acotado a las columnas de la
-    // plantilla, el MISMO archivo cuesta 64 MB.
-    //
-    // Se deja pasar UNA columna de mas (la 17) a proposito: es la que permite
-    // seguir detectando un archivo con una columna extra CON NOMBRE y
-    // responder "los encabezados no coinciden" en vez de ignorarla en
-    // silencio.
-    $anchoMaximo = count(NOTA_VENTA_ENCABEZADOS) + 1;
-
-    $filtro = new class ($limite, $anchoMaximo) implements IReadFilter {
-        public function __construct(private readonly int $limite, private readonly int $ancho)
-        {
-        }
-
-        public function readCell(string $columnAddress, int $row, string $worksheetName = ''): bool
-        {
-            return $row <= $this->limite
-                && Coordinate::columnIndexFromString($columnAddress) <= $this->ancho;
-        }
-    };
-
-    // DOS PORTEROS ANTES DE ABRIR EL ARCHIVO, y ninguno de los dos sobra.
-    //
-    // El filtro de arriba acota lo que se CONVIERTE EN OBJETOS, pero no lo que
-    // se PARSEA: PhpSpreadsheet arma el arbol XML completo de la hoja con
-    // simplexml antes de mirar celda por celda, y esa memoria la reserva
-    // libxml POR FUERA del contador de PHP. memory_limit no la ve, asi que no
-    // hay fatal error que valga: el cgroup del contenedor mata al worker con
-    // SIGKILL y el usuario recibe un 502 de Cloudflare, sin ninguna pista de
-    // que hacer. Por eso los dos controles ocurren ANTES de load().
-    //
-    // 1) EL PESO, del indice del zip (dato de cabecera, no descomprime nada).
-    //    Es lo unico que acota el gasto de memoria, porque el gasto lo manda
-    //    la CANTIDAD DE CELDAS que el archivo trae escritas -- con datos o
-    //    solo con formato --, y eso es justo lo que pesa el XML.
-    $bytesXml = bytesXmlDelXlsx($rutaArchivo);
-    if ($bytesXml > NOTA_VENTA_MAX_BYTES_XML) {
-        throw new RuntimeException(
-            'El archivo es demasiado pesado para abrirlo. Casi siempre es formato aplicado a filas o '
-            . 'columnas ENTERAS: aunque las celdas se vean vacias, quedan guardadas en el archivo y hay '
-            . 'que cargarlas igual. Selecciona las filas y columnas sobrantes (a la derecha y por debajo '
-            . 'de tus datos), borralas, guarda y vuelve a intentar. Si el archivo de verdad es enorme, '
-            . 'divide la carga en archivos mas chicos.'
-        );
-    }
-
-    // 2) EL LARGO, con listWorksheetInfo(), que recorre la hoja con XMLReader
-    //    en vez de armar el arbol: cuesta ~35 MB y menos de medio segundo,
-    //    contra los ~220 MB que cuesta abrirla. Asi un archivo con demasiadas
-    //    filas se rechaza con SU mensaje sin haber gastado esa memoria. El
-    //    mismo control queda repetido despues de leer, como red: ahi es exacto
-    //    porque ya ignoro las filas vacias del final, que aqui todavia cuentan.
-    try {
-        $info = (new XlsxReader())->listWorksheetInfo($rutaArchivo);
-    } catch (Throwable $e) {
-        throw new RuntimeException('El archivo no es un .xlsx valido.', 0, $e);
-    }
-    $filasDelArchivo = (int) ($info[0]['totalRows'] ?? 0);
-    if ($filasDelArchivo - 1 > NOTA_VENTA_MAX_FILAS) {
-        throw new RuntimeException(
-            'El archivo tiene mas de ' . NOTA_VENTA_MAX_FILAS . ' filas de datos. Divide la carga en archivos mas chicos.'
-        );
-    }
-
-    try {
-        $reader = new XlsxReader();
-        $reader->setReadFilter($filtro);
-        $libro = $reader->load($rutaArchivo);
-    } catch (Throwable $e) {
-        throw new RuntimeException('El archivo no es un .xlsx valido.', 0, $e);
-    }
-
-    // Lectura celda por celda en vez de toArray(..., formatData: true).
-    //
-    // POR QUE: con formatData el valor de una celda de FECHA sale ya
-    // convertido a texto usando el formato de visualizacion del archivo, que
-    // depende del locale de quien lo creo. Una celda que en pantalla decia
-    // 2026-07-25 llegaba aca como "7/25/2025" y la validacion la rechazaba.
-    //
-    // Una celda de fecha de Excel guarda un NUMERO DE SERIE, no un texto: leer
-    // ese numero y convertirlo con Date::excelToDateTimeObject() da la fecha
-    // exacta, sin depender del formato ni del idioma. El resto de las celdas
-    // se sigue leyendo con getFormattedValue(), que es exactamente lo que
-    // hacia toArray() antes: este cambio NO altera como se leen los montos,
-    // las cantidades ni los textos.
-    $hoja = $libro->getActiveSheet();
-
-    // El rectangulo se acota a los datos REALES, igual que hacia toArray():
-    // getRowIterator() por si solo recorre todo el rango pedido aunque las
-    // filas no existan, y el iterador de celdas sin columna final se detiene
-    // en la ultima columna DE CADA FILA (dejaria filas de largo distinto y
-    // array_combine fallaria). El min() con $limite conserva la deteccion de
-    // "archivo demasiado grande": el IReadFilter ya no cargo mas alla de ahi.
-    $ultimaFila = min($hoja->getHighestDataRow(), $limite);
-
-    // El ANCHO lo manda la fila de encabezados, no la hoja.
-    //
-    // Antes lo mandaba getHighestDataColumn(), que mira la hoja ENTERA: una
-    // celda pintada o un resto de texto en cualquier fila perdida corria el
-    // borde derecho, y entonces TODAS las filas se leian con una columna de
-    // mas. Eso rompia el archivo completo -- los encabezados dejaban de
-    // coincidir con la plantilla y la carga se rechazaba entera -- por algo
-    // que el usuario no podia ni ver.
-    //
-    // La fila 1 es el ancho correcto: es la que se compara con la plantilla y
-    // la que le da nombre a cada valor.
-    $ultimaColumna = null;
-    for ($i = $anchoMaximo; $i >= 1; $i--) {
-        $coordenada = Coordinate::stringFromColumnIndex($i) . '1';
-        if ($hoja->cellExists($coordenada) && trim((string) $hoja->getCell($coordenada)->getFormattedValue()) !== '') {
-            $ultimaColumna = Coordinate::stringFromColumnIndex($i);
-            break;
-        }
-    }
-    if ($ultimaColumna === null) {
-        throw new RuntimeException('El archivo esta vacio.');
-    }
-
-    $filasCrudas = [];
-    foreach ($hoja->getRowIterator(1, $ultimaFila) as $fila) {
-        $celdas = $fila->getCellIterator('A', $ultimaColumna);
-        $celdas->setIterateOnlyExistingCells(false);
-        $valores = [];
-        foreach ($celdas as $celda) {
-            $valores[] = FechaExcel::esCeldaDeFecha($celda)
-                ? FechaExcel::aIso($celda)
-                : $celda->getFormattedValue();
-        }
-        $filasCrudas[] = $valores;
-    }
-    if ($filasCrudas === []) {
-        throw new RuntimeException('El archivo esta vacio.');
-    }
-
-    $encabezados = array_map(static fn ($v): string => trim((string) $v), array_shift($filasCrudas));
-    // La plantilla sin precio_final se acepta: se completa con la celda vacia.
-    // Una celda de mas al final (la 17 en blanco) se recorta antes de comparar.
-    $sinPrecioFinal = array_slice($encabezados, 0, count(NOTA_VENTA_ENCABEZADOS_V2)) === NOTA_VENTA_ENCABEZADOS_V2
-        && array_filter(array_slice($encabezados, count(NOTA_VENTA_ENCABEZADOS_V2)), static fn ($v): bool => $v !== '') === [];
-    if ($sinPrecioFinal) {
-        $encabezados = NOTA_VENTA_ENCABEZADOS;
-        foreach ($filasCrudas as &$filaV2) {
-            $filaV2 = array_slice(array_pad($filaV2, count(NOTA_VENTA_ENCABEZADOS_V2), ''), 0, count(NOTA_VENTA_ENCABEZADOS_V2));
-            $filaV2[] = '';
-        }
-        unset($filaV2);
-    }
-    if ($encabezados !== NOTA_VENTA_ENCABEZADOS) {
-        // La plantilla ANTERIOR se reconoce y se nombra. Un archivo hecho con
-        // ella no tiene nada malformado: simplemente le faltan las dos columnas
-        // de pago, y el usuario necesita saber ESO y no "los encabezados no
-        // coinciden", que no dice que hacer.
-        if ($encabezados === NOTA_VENTA_ENCABEZADOS_V1) {
-            throw new RuntimeException(
-                'Este archivo usa la plantilla anterior, sin las columnas "forma_pago" y "fecha_vencimiento". '
-                . 'Descarga la plantilla nueva y vuelve a cargar los datos: la forma de pago ahora es obligatoria '
-                . 'en cada fila, porque un documento que no la informa el SII lo toma como credito.'
-            );
-        }
-        throw new RuntimeException(
-            'Los encabezados del archivo no coinciden con la plantilla. Descarga la plantilla y no cambies el orden ni los nombres de columna.'
-        );
-    }
-
-    if (count($filasCrudas) > NOTA_VENTA_MAX_FILAS) {
-        throw new RuntimeException(
-            'El archivo tiene mas de ' . NOTA_VENTA_MAX_FILAS . ' filas de datos. Divide la carga en archivos mas chicos.'
-        );
-    }
-
-    $filas = [];
-    foreach ($filasCrudas as $filaCruda) {
-        $vacia = true;
-        foreach ($filaCruda as $v) {
-            if (trim((string) $v) !== '') {
-                $vacia = false;
-                break;
-            }
-        }
-        if ($vacia) {
-            continue; // fila 100% vacia (comun al final de un Excel exportado): se ignora, no es un error
-        }
-        $filas[] = array_combine(NOTA_VENTA_ENCABEZADOS, array_map(static fn ($v): string => trim((string) $v), $filaCruda));
-    }
-
-    return $filas;
 }
 
 /**
@@ -7893,7 +7636,7 @@ function validarFilaCargaMasiva(array $fila, PDO $pdo, int $cuentaId, array &$ex
     // erronea y deja que el archivo se cargue con esa fila apartada. Estas dos
     // columnas, en cambio, rechazan el ARCHIVO COMPLETO -- mismo criterio que
     // las dos validaciones de facturas exentas --, y esa decision necesita ver
-    // todas las filas juntas, asi que vive en handleCargaMasivaPost(). Si aqui
+    // todas las filas juntas, asi que vive en revisarFilasCargaMasiva(). Si aqui
     // se agregara a $errores, la fila quedaria apartada y el archivo entraria
     // igual, que es justo lo contrario de lo pedido.
     //
@@ -8327,49 +8070,11 @@ function crearNotaVentaError(PDO $pdo, int $cuentaId, int $loteId, array $filaOr
 }
 
 /**
- * LA REVISION DE UN ARCHIVO DE CARGA MASIVA, SIN ESCRIBIR NADA.
- *
- * Es todo lo que handleCargaMasivaPost() comprueba antes de abrir su
- * transaccion, sacado aqui para que lo compartan los dos caminos: la carga, que
- * despues guarda, y la revision (/ventas/carga-masiva/revisar), que solo
- * informa. Una sola regla para los dos -- si la revision tuviera su copia, el
- * dia que cambie una validacion diria "listo" de un archivo que la carga
- * rechaza, que es justo lo que vino a evitar.
- *
- * Solo LEE de la base (identificadores ya cargados, clientes del maestro).
- *
- * LOS PROBLEMAS DE ARCHIVO SE JUNTAN TODOS en vez de cortar en el primero: a la
- * revision le sirve ver la lista completa de una vez. La carga sigue mostrando
- * solo el primero, como antes. Ninguno lleva el "No se cargo ninguna nota":
- * eso es cierto en la carga y falso en la revision, asi que lo agrega quien
- * corresponde.
- *
- * @return array{items:list<array<string,mixed>>, problemas:list<string>, grupos:list<array<string,mixed>>}
- *
- * @throws RuntimeException si el archivo no se puede leer o solo trae el
- *                          encabezado: no hay nada que revisar
- */
-function revisarArchivoCargaMasiva(PDO $pdo, int $cuentaId, string $rutaArchivo, bool $esExento): array
-{
-    try {
-        $filas = leerFilasExcelCargaMasiva($rutaArchivo);
-    } catch (Throwable $e) {
-        throw new RuntimeException($e->getMessage(), 0, $e);
-    }
-
-    if ($filas === []) {
-        throw new RuntimeException('El archivo solo trae el encabezado. Agrega una fila por nota y vuelve a cargarlo.');
-    }
-
-    return revisarFilasCargaMasiva($pdo, $cuentaId, $filas, $esExento);
-}
-
-/**
- * La revision de revisarArchivoCargaMasiva(), sobre filas YA LEIDAS con la
- * forma de la plantilla. La usa tambien el adaptador de archivos de otros
- * formatos (/ventas/carga-masiva/adaptar): sus filas no salen de un Excel con
- * la plantilla exacta sino de AdaptadorPlantilla::aplicar(), y pasan por
- * exactamente las mismas reglas.
+ * LA REVISION DE UN ARCHIVO DE NOTAS DE VENTA, sin escribir nada, sobre filas
+ * YA LEIDAS con la forma de la plantilla (las arma AdaptadorPlantilla::aplicar()
+ * en /ventas/carga-masiva/adaptar). Valida fila por fila con
+ * validarFilaCargaMasiva() y despues las reglas de archivo completo (exentas,
+ * forma de pago, vencimiento), juntando TODOS los problemas.
  *
  * Una fila puede traer 'fila_origen' (el numero de fila en el archivo del
  * cliente); los mensajes lo usan en vez de contar desde la fila 2.
@@ -8564,24 +8269,11 @@ function revisarFilasCargaMasiva(PDO $pdo, int $cuentaId, array $filas, bool $es
     ];
 }
 
-function handleCargaMasivaGet(): void
-{
-    $pdo      = Db::conexion();
-    $cuentaId = Auth::cuentaId();
-    exigirProduccionCompleto($pdo, $cuentaId); // guard (redirige si falta emisor/cert/CAF prod)
-
-    vista('carga-masiva-form', [
-        'error'     => null,
-        'lotes'     => listarLotesCarga($pdo, $cuentaId),
-        'navActivo' => 'ventas.carga-masiva',
-    ]);
-}
-
 /**
  * ESCRIBE UN LOTE YA REVISADO: el lote, las notas con error, los clientes nuevos
- * y las notas validas agrupadas. Sacado de handleCargaMasivaPost() para que la
- * importacion de un archivo adaptado (/ventas/carga-masiva/adaptar) escriba
- * exactamente igual que la carga normal.
+ * y las notas validas agrupadas. Lo usa la importacion
+ * (/ventas/carga-masiva/adaptar); antes lo usaba tambien la carga con la
+ * plantilla exacta, que se retiro cuando la importacion paso a cubrir todo.
  *
  * NO ABRE TRANSACCION: la abre quien llama, porque el adaptador necesita meter
  * su propio registro de autorizacion en la MISMA transaccion -- un lote sin el
@@ -8684,173 +8376,6 @@ function guardarLoteCargaMasiva(PDO $pdo, int $cuentaId, int $usuarioId, string 
     }
 
     return $loteId;
-}
-
-function handleCargaMasivaPost(): void
-{
-    $pdo       = Db::conexion();
-    $cuentaId  = Auth::cuentaId();
-    $usuarioId = Auth::usuarioId();
-    exigirProduccionCompleto($pdo, $cuentaId);
-
-    $errorForm = static function (string $mensaje) use ($pdo, $cuentaId): never {
-        vista('carga-masiva-form', [
-            'error'     => $mensaje,
-            'lotes'     => listarLotesCarga($pdo, $cuentaId),
-            'navActivo' => 'ventas.carga-masiva',
-        ]);
-    };
-
-    $archivo = $_FILES['archivo'] ?? null;
-    if (
-        ! is_array($archivo)
-        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
-        || $archivo['error'] !== UPLOAD_ERR_OK
-        || ! is_uploaded_file($archivo['tmp_name'])
-    ) {
-        $errorForm('Elige el archivo .xlsx con las notas. Si no lo tienes, parte por la plantilla.');
-    }
-
-    // EL TIPO DEL ARCHIVO, del check de la pantalla. Marcado = todo el archivo
-    // sale como factura exenta (34); sin marcar = como siempre (33).
-    //
-    // NO ES UNA COLUMNA DEL EXCEL a proposito: la plantilla YA tiene una columna
-    // 'exento' POR LINEA, y una columna de tipo POR FILA seria un segundo
-    // concepto solapado con el primero, capaz de contradecirlo (tipo 34 con
-    // exento=NO en la misma fila). Un check por archivo no puede contradecir
-    // nada: o el archivo entero es exento, o no lo es.
-    $esExento = ! empty($_POST['tipo_exento']);
-    $tipoDte  = $esExento ? 34 : 33;
-
-    try {
-        $revision = revisarArchivoCargaMasiva($pdo, $cuentaId, $archivo['tmp_name'], $esExento);
-    } catch (RuntimeException $e) {
-        $errorForm($e->getMessage());
-    }
-
-    // UN PROBLEMA DE ARCHIVO RECHAZA EL ARCHIVO ENTERO, y antes de abrir la
-    // transaccion: no llega a existir ni el lote ni una sola nota. Se muestra el
-    // primero, como siempre; la lista completa la da la revision.
-    if ($revision['problemas'] !== []) {
-        $errorForm($revision['problemas'][0] . ' No se cargo ninguna nota.');
-    }
-
-    $items  = $revision['items'];
-    $grupos = $revision['grupos'];
-
-    $pdo->beginTransaction();
-    try {
-        $loteId = guardarLoteCargaMasiva($pdo, $cuentaId, $usuarioId, $archivo['name'], $tipoDte, $items, $grupos);
-        $pdo->commit();
-    } catch (Throwable $e) {
-        if ($pdo->inTransaction()) {
-            $pdo->rollBack();
-        }
-        error_log('panel carga masiva: fallo al guardar el lote - ' . $e->getMessage());
-        $errorForm('No se pudo guardar la carga. Intenta nuevamente.');
-    }
-
-    redirigirPrg("/ventas/carga-masiva/{$loteId}");
-}
-
-/**
- * REVISAR UN ARCHIVO SIN CARGARLO: misma revision que la carga, cero escrituras.
- *
- * Para que el usuario sepa ANTES si su Excel pasa, sin dejar un lote a medias
- * ni notas con error que despues hay que ignorar. Corre exactamente
- * revisarArchivoCargaMasiva(), la misma funcion de la carga, y lo unico que
- * hace con el resultado es mostrarlo. No hay transaccion porque no hay nada
- * que escribir.
- *
- * El archivo NO se guarda: para cargarlo se vuelve a subir en la carga. Guardarlo
- * aqui obligaria a decidir cuanto vive, de quien es y que pasa si el maestro de
- * clientes cambia entre la revision y la carga -- y la carga lo revisa de nuevo
- * de todas formas.
- */
-function handleCargaMasivaRevisarGet(): void
-{
-    $pdo      = Db::conexion();
-    $cuentaId = Auth::cuentaId();
-    exigirProduccionCompleto($pdo, $cuentaId);
-
-    vista('carga-masiva-revisar', [
-        'error'     => null,
-        'revision'  => null,
-        'navActivo' => 'ventas.carga-masiva-revisar',
-    ]);
-}
-
-function handleCargaMasivaRevisarPost(): void
-{
-    $pdo      = Db::conexion();
-    $cuentaId = Auth::cuentaId();
-    exigirProduccionCompleto($pdo, $cuentaId);
-
-    $pantalla = static function (?string $error, ?array $revision = null): never {
-        vista('carga-masiva-revisar', [
-            'error'     => $error,
-            'revision'  => $revision,
-            'navActivo' => 'ventas.carga-masiva-revisar',
-        ]);
-    };
-
-    $archivo = $_FILES['archivo'] ?? null;
-    if (
-        ! is_array($archivo)
-        || ! isset($archivo['error'], $archivo['tmp_name'], $archivo['name'])
-        || $archivo['error'] !== UPLOAD_ERR_OK
-        || ! is_uploaded_file($archivo['tmp_name'])
-    ) {
-        $pantalla('Elige el archivo .xlsx con las notas. Si no lo tienes, parte por la plantilla.');
-    }
-
-    $esExento = ! empty($_POST['tipo_exento']);
-
-    try {
-        $r = revisarArchivoCargaMasiva($pdo, $cuentaId, $archivo['tmp_name'], $esExento);
-    } catch (RuntimeException $e) {
-        $pantalla($e->getMessage());
-    }
-
-    // LO QUE LA VISTA NECESITA, YA CONTADO. Los clientes nuevos son los que la
-    // carga CREARIA: RUT valido que no esta en el maestro, una vez por RUT y solo
-    // de filas validas (una fila con error no crea nada).
-    $filasError     = [];
-    $rutsNuevos     = [];
-    $montoEstimado  = 0;
-    foreach ($r['items'] as $i => $item) {
-        if ($item['status'] !== 'ok') {
-            $filasError[] = [
-                'fila'     => filaExcelDeItem($item, $i),
-                'externo'  => (string) ($item['fila_original']['identificador_externo'] ?? ''),
-                'rut'      => (string) ($item['fila_original']['rut_receptor'] ?? ''),
-                'errores'  => $item['errores'],
-            ];
-            continue;
-        }
-        $res = $item['datos']['cliente_resolucion'];
-        if ($res['estado'] === 'no_encontrado') {
-            $rutsNuevos[$res['rut']] = true;
-        }
-        $montoEstimado += (int) $item['datos']['monto_estimado'];
-    }
-    $notasCredito = count(array_filter(
-        $r['grupos'],
-        static fn (array $g): bool => ! empty($g['datos']['boleta_ref_folio'])
-    ));
-
-    $pantalla(null, [
-        'nombreArchivo'  => (string) $archivo['name'],
-        'esExento'       => $esExento,
-        'totalFilas'     => count($r['items']),
-        'filasValidas'   => count($r['items']) - count($filasError),
-        'filasError'     => $filasError,
-        'problemas'      => $r['problemas'],
-        'facturas'       => count($r['grupos']),
-        'notasCredito'   => $notasCredito,
-        'clientesNuevos' => count($rutsNuevos),
-        'montoEstimado'  => $montoEstimado,
-    ]);
 }
 
 // ===========================================================================
@@ -9256,7 +8781,8 @@ function handleAdaptarGet(): void
     vista('carga-masiva-adaptar', [
         'error'         => null,
         'adaptaciones'  => listarAdaptaciones($pdo, $cuentaId),
-        'navActivo'     => 'ventas.carga-masiva-adaptar',
+        'lotes'         => listarLotesCarga($pdo, $cuentaId),
+        'navActivo'     => 'ventas.carga-masiva',
     ]);
 }
 
@@ -9271,7 +8797,8 @@ function handleAdaptarPost(): void
         vista('carga-masiva-adaptar', [
             'error'        => $mensaje,
             'adaptaciones' => listarAdaptaciones($pdo, $cuentaId),
-            'navActivo'    => 'ventas.carga-masiva-adaptar',
+            'lotes'        => listarLotesCarga($pdo, $cuentaId),
+            'navActivo'    => 'ventas.carga-masiva',
         ]);
     };
 
@@ -9392,7 +8919,7 @@ function handleAdaptarDetalleGet(int $id): void
         'calculo'      => $calculo,
         'errorLectura' => $errorLectura,
         'flash'        => flashTomar(),
-        'navActivo'    => 'ventas.carga-masiva-adaptar',
+        'navActivo'    => 'ventas.carga-masiva',
     ]);
 }
 
@@ -13161,24 +12688,17 @@ if ($metodo === 'POST' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/estado
 }
 
 // --- Ventas > Carga masiva de notas de venta (M4) ---
+// LAS DOS DIRECCIONES VIEJAS (la carga con plantilla exacta y "Revisar
+// archivo") llevan a la importacion, que hace lo de las dos: un enlace guardado
+// o un marcador no termina en un 404.
 if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva') {
     Auth::requerirSesion();
-    handleCargaMasivaGet();
-}
-
-if ($metodo === 'POST' && $ruta === '/ventas/carga-masiva') {
-    Auth::requerirSesion();
-    handleCargaMasivaPost();
+    redirigir('/ventas/carga-masiva/adaptar');
 }
 
 if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/revisar') {
     Auth::requerirSesion();
-    handleCargaMasivaRevisarGet();
-}
-
-if ($metodo === 'POST' && $ruta === '/ventas/carga-masiva/revisar') {
-    Auth::requerirSesion();
-    handleCargaMasivaRevisarPost();
+    redirigir('/ventas/carga-masiva/adaptar');
 }
 
 if ($metodo === 'GET' && $ruta === '/ventas/carga-masiva/adaptar') {
