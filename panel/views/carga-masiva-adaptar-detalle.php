@@ -9,15 +9,14 @@
  * Recibe: $adaptacion (fila de carga_adaptacion, sin los BLOB), $calculo (lo de
  * calcularAdaptacion(), solo en borrador), $errorLectura, $flash, $navActivo.
  *
- * TRES SECCIONES EN EL ORDEN DE LA TAREA, y cada una depende de la anterior:
- *   1. Equivalencias  -- un solo formulario: columnas, valores para todas las
- *                        filas, traduccion de valores y opciones.
- *   2. Vista previa   -- solo cuando no queda nada pendiente. Muestra el
- *                        veredicto de la MISMA revision de la carga, los
- *                        cambios por tipo, una muestra de filas y los errores.
- *   3. Autorizar      -- solo si la carga aceptaria el archivo. La casilla es
- *                        obligatoria y el formulario lleva la huella de lo que
- *                        se ve: si algo cambia, el servidor no importa.
+ * UN ASISTENTE DE DOS PASOS, no tres secciones apiladas (asi fue la primera
+ * version, y para un usuario no era claro que hacer ni en que orden):
+ *   - Responder lo que falta: solo las preguntas necesarias, en palabras.
+ *   - Revisar e importar: una frase con lo que va a pasar, la casilla de
+ *     autorizacion y el boton. El formulario lleva la huella de lo que se ve:
+ *     si algo cambia, el servidor no importa.
+ * Las columnas se nombran con AdaptadorPlantilla::ETIQUETAS, nunca con el
+ * nombre tecnico de la plantilla.
  *
  * LO QUE CAMBIO SE MUESTRA JUNTO A LO QUE HABIA. En la muestra, cada celda
  * corregida lleva debajo su valor original: "autorizar correcciones" sin ver
@@ -142,14 +141,14 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
             <h2 id="titulo-elecciones">Equivalencias usadas</h2>
             <ul class="panel-info__lista">
                 <?php foreach ((array) ($elecciones['mapeo'] ?? []) as $m): ?>
-                    <li>"<?= $e((string) $m['columna_archivo']); ?>" &rarr; <code><?= $e((string) $m['columna_plantilla']); ?></code></li>
+                    <li>"<?= $e((string) $m['columna_archivo']); ?>" &rarr; <?= $e(AdaptadorPlantilla::etiqueta((string) $m['columna_plantilla'])); ?></li>
                 <?php endforeach; ?>
                 <?php foreach ((array) ($elecciones['valores_indicados'] ?? []) as $col => $valor): ?>
-                    <li><code><?= $e((string) $col); ?></code> = "<?= $e((string) $valor); ?>" en todas las filas (indicado al autorizar)</li>
+                    <li><?= $e(AdaptadorPlantilla::etiqueta((string) $col)); ?> = "<?= $e((string) $valor); ?>" en todas las filas (indicado a mano)</li>
                 <?php endforeach; ?>
                 <?php foreach ((array) ($elecciones['equivalencias_de_valor'] ?? []) as $col => $pares): ?>
                     <?php foreach ((array) $pares as $de => $a): ?>
-                        <li><code><?= $e((string) $col); ?></code>: "<?= $e((string) $de); ?>" &rarr; <?= $e((string) $a); ?></li>
+                        <li><?= $e(AdaptadorPlantilla::etiqueta((string) $col)); ?>: "<?= $e((string) $de); ?>" &rarr; <?= $e((string) $a); ?></li>
                     <?php endforeach; ?>
                 <?php endforeach; ?>
                 <?php if (! empty($elecciones['identificador_por_fila'])): ?>
@@ -179,7 +178,7 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                             <?php foreach (array_slice($cambios, 0, 2000) as $c): ?>
                                 <tr>
                                     <th scope="row" data-label="Fila"><?= (int) $c['fila']; ?></th>
-                                    <td data-label="Columna"><code><?= $e((string) $c['columna']); ?></code></td>
+                                    <td data-label="Columna"><?= $e(AdaptadorPlantilla::etiqueta((string) $c['columna'])); ?></td>
                                     <td data-label="Antes"><?= $c['antes'] === '' ? '<span class="tabla-datos__secundario">(vacio)</span>' : $e((string) $c['antes']); ?></td>
                                     <td data-label="Despues"><?= $e((string) $c['despues']); ?></td>
                                     <td data-label="Por que"><?= $e($tiposCambio[$c['tipo']] ?? (string) $c['tipo']); ?></td>
@@ -215,14 +214,32 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
 
 <?php else: ?>
     <?php
-    /* =============================== BORRADOR =============================== */
-    $archivo     = $calculo['archivo'];
-    $propuesta   = $calculo['propuesta'];
-    $mapeo       = $calculo['mapeo'];
-    $constantes  = $calculo['constantes'];
+    /* =============================== BORRADOR ===============================
+       DOS PASOS, NO TRES SECCIONES APILADAS. El usuario ve UNO a la vez:
+         - "Responder lo que falta": solo las preguntas que hacen falta, en
+           palabras ("¿Que fecha tienen estas ventas?"). Lo ya reconocido queda
+           plegado, para quien quiera revisarlo.
+         - "Revisar e importar": una frase con lo que va a pasar, la casilla y
+           el boton. El detalle (muestra, correcciones, errores) va plegado.
+       El formulario de respuestas es UNO SOLO en los dos pasos (cada columna
+       del archivo tiene exactamente un campo, sea pregunta o fila de la tabla):
+       en el paso 2 queda plegado bajo "Cambiar como se lee el archivo". */
+    $archivo       = $calculo['archivo'];
+    $propuesta     = $calculo['propuesta'];
+    $mapeo         = $calculo['mapeo'];
+    $constantes    = $calculo['constantes'];
     $equivalencias = $calculo['equivalencias'];
-    $mapeadas    = array_values($mapeo);
+    $mapeadas      = array_values($mapeo);
+    $listo         = $calculo['pendientes'] === [];
+    $et    = static fn (string $c): string => AdaptadorPlantilla::etiqueta($c);
+    // Los errores de fila vienen de validarFilaCargaMasiva(), compartida con la
+    // carga normal, y nombran las columnas de la plantilla. Aqui se leen con
+    // las etiquetas: el usuario de esta pantalla nunca vio esos nombres.
+    $porLargo = AdaptadorPlantilla::ETIQUETAS;
+    uksort($porLargo, static fn (string $a, string $b): int => strlen($b) <=> strlen($a));
+    $legible = static fn (string $msg): string => strtr($msg, $porLargo);
     $letra = static fn (int $i): string => \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($i + 1);
+    $nombreCol = static fn (int $i): string => $archivo['encabezados'][$i] !== '' ? $archivo['encabezados'][$i] : 'Columna ' . $letra($i);
 
     // Un ejemplo por columna: el primer valor no vacio, para reconocerla.
     $ejemplo = static function (int $i) use ($archivo): string {
@@ -235,187 +252,114 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
         }
         return '';
     };
+
+    // Columnas que se preguntan en palabras: las que admiten mas de una lectura.
+    $columnasPregunta = array_keys(array_filter($propuesta, static fn (array $p): bool => in_array($p['nivel'], ['ambigua', 'dudosa'], true)));
+
+    // Lo obligatorio que no tiene columna y solo se arregla eligiendo una en la
+    // tabla (RUT, producto, cantidad, precio): si hay algo asi, la tabla se abre.
+    // No cuenta lo que ya ofrece una pregunta de arriba ("Total" puede ser el
+    // precio): mandar a la tabla algo que se responde con un clic confunde.
+    $ofrecidas = [];
+    foreach ($columnasPregunta as $i) {
+        $ofrecidas = array_merge($ofrecidas, $propuesta[$i]['candidatos']);
+    }
+    $faltaEnTabla = [];
+    foreach (['rut_receptor', 'producto_servicio', 'cantidad'] as $c) {
+        if (! in_array($c, $mapeadas, true) && ! in_array($c, $ofrecidas, true)) {
+            $faltaEnTabla[] = $et($c);
+        }
+    }
+    $precios = ['precio_unitario', 'precio_final'];
+    if (array_intersect($precios, $mapeadas) === [] && array_intersect($precios, $ofrecidas) === []) {
+        $faltaEnTabla[] = 'el precio';
+    }
+    $hayRepetidas = count($mapeadas) !== count(array_unique($mapeadas));
+
+    $formaPagoIndicada = $constantes['forma_pago'] ?? '';
+    $preguntarVencimiento = ! in_array('fecha_vencimiento', $mapeadas, true) && $formaPagoIndicada === 'CREDITO';
+
+    $reconocidas = count(array_filter($propuesta, static fn (array $p): bool => in_array($p['nivel'], ['exacta', 'sinonimo'], true)));
+
+    $opcionesPlantilla = static function (string $actual) use ($e, $et): string {
+        $html = '<option value="">No usar esta columna</option>';
+        foreach (NOTA_VENTA_ENCABEZADOS as $col) {
+            $html .= '<option value="' . $e($col) . '"' . ($actual === $col ? ' selected' : '') . '>' . $e($et($col)) . '</option>';
+        }
+        return $html;
+    };
+
+    // Numeros del paso 2, calculados una vez.
+    if ($listo) {
+        $aplicado  = $calculo['aplicado'];
+        $revision  = $calculo['revision'];
+        $items     = $revision['items'];
+        $validas   = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
+        $conError  = count($items) - $validas;
+        $notas     = count($revision['grupos']);
+        $rutsNuevos = [];
+        $monto     = 0;
+        foreach ($items as $it) {
+            if ($it['status'] === 'ok') {
+                $monto += (int) $it['datos']['monto_estimado'];
+                if ($it['datos']['cliente_resolucion']['estado'] === 'no_encontrado') {
+                    $rutsNuevos[$it['datos']['cliente_resolucion']['rut']] = true;
+                }
+            }
+        }
+        $porTipo = array_count_values(array_column($aplicado['cambios'], 'tipo'));
+        $columnasMuestra = array_values(array_filter(
+            NOTA_VENTA_ENCABEZADOS,
+            static fn (string $c): bool => in_array($c, $mapeadas, true) || ($constantes[$c] ?? '') !== '' || $c === 'identificador_externo'
+        ));
+        $cambioDe = [];
+        foreach ($aplicado['cambios'] as $c) {
+            $cambioDe[$c['fila']][$c['columna']] = $c;
+        }
+        $columnasSinUso = array_filter(
+            array_keys($archivo['encabezados']),
+            static fn (int $i): bool => ! isset($mapeo[$i]) && $ejemplo($i) !== ''
+        );
+        $filasError = array_filter($items, static fn (array $it): bool => $it['status'] !== 'ok');
+    }
+
+    $pasos = [
+        1 => ['Subir archivo', 'completado'],
+        2 => ['Responder lo que falta', $listo ? 'completado' : 'activo'],
+        3 => ['Revisar e importar', $listo ? 'activo' : 'pendiente'],
+    ];
     ?>
 
-    <?php if ($archivo['indice_encabezado'] > 0 || count($archivo['hojas']) > 1): ?>
-        <div class="alerta alerta--info" role="status">
-            <?= iconoSvg('info', 20, 'alerta__icono'); ?>
-            <div class="alerta__cuerpo">
-                <p>
-                    Los datos se leen de la hoja <strong><?= $e($archivo['hoja']); ?></strong>, con los encabezados en la fila <?= $archivo['indice_encabezado'] + 1; ?>.
-                    <?php if (count($archivo['hojas']) > 1): ?>
-                        Las otras hojas (<?= $e(implode(', ', array_diff($archivo['hojas'], [$archivo['hoja']]))); ?>) no se usan.
-                    <?php endif; ?>
-                    <?php if ($archivo['indice_encabezado'] > 0): ?>
-                        Lo que hay arriba de los encabezados no se importa.
-                    <?php endif; ?>
-                </p>
-            </div>
-        </div>
-    <?php endif; ?>
+    <nav class="stepper" aria-label="Pasos para adaptar el archivo">
+        <p class="stepper__resumen">
+            <strong><?= $listo ? 'Paso 3 de 3: revisa e importa.' : 'Paso 2 de 3: responde lo que falta.'; ?></strong>
+        </p>
+        <ol class="stepper__lista">
+            <?php foreach ($pasos as $n => [$etiqueta, $estadoPaso]): ?>
+                <li class="stepper__paso stepper__paso--<?= $estadoPaso; ?>">
+                    <span class="stepper__contenido"<?= $estadoPaso === 'activo' ? ' aria-current="step"' : ''; ?>>
+                        <span class="stepper__marca" aria-hidden="true"><?= $estadoPaso === 'completado' ? iconoSvg('check', 16, '') : $n; ?></span>
+                        <span class="stepper__texto">
+                            <span class="stepper__etiqueta"><?= $n; ?>. <?= $e($etiqueta); ?></span>
+                            <span class="stepper__estado"><?= ['completado' => 'Listo', 'activo' => 'Estas aqui', 'pendiente' => 'Pendiente'][$estadoPaso]; ?></span>
+                        </span>
+                    </span>
+                </li>
+            <?php endforeach; ?>
+        </ol>
+    </nav>
 
+    <?php ob_start(); /* ======== EL FORMULARIO DE RESPUESTAS (se ubica abajo segun el paso) ======== */ ?>
     <form method="post" action="/ventas/carga-masiva/adaptar/<?= $id; ?>/equivalencias" class="form-compacto" data-espera>
         <?= csrfInput(); ?>
 
-        <section class="tarjeta" aria-labelledby="titulo-equivalencias">
-            <h2 id="titulo-equivalencias">1. Equivalencias de columnas</h2>
-            <p class="tarjeta__intro">
-                A que columna de la plantilla corresponde cada columna del archivo. Las marcadas "Revisar" o "Elegir"
-                no se eligieron solas: admiten mas de una lectura y decides tu.
-            </p>
-            <div class="tabla-scroll">
-                <table class="tabla-datos tabla-datos--cards">
-                    <caption class="visualmente-oculto">Columnas del archivo y su equivalencia en la plantilla.</caption>
-                    <thead>
-                        <tr>
-                            <th scope="col">Columna del archivo</th>
-                            <th scope="col">Ejemplo</th>
-                            <th scope="col">Columna de la plantilla</th>
-                            <th scope="col">Propuesta</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($archivo['encabezados'] as $i => $encabezado): ?>
-                            <?php
-                                $p = $propuesta[$i];
-                                [$claseNivel, $textoNivel] = $niveles[$p['nivel']];
-                                $actual = $mapeo[$i] ?? '';
-                                $nombre = $encabezado !== '' ? $encabezado : '(sin nombre)';
-                            ?>
-                            <tr>
-                                <th scope="row" data-label="Columna del archivo">
-                                    <?= $e($nombre); ?>
-                                    <span class="tabla-datos__secundario">Columna <?= $letra($i); ?></span>
-                                </th>
-                                <td data-label="Ejemplo"><?= $e($ejemplo($i)) ?: '<span class="tabla-datos__secundario">(vacia)</span>'; ?></td>
-                                <td data-label="Columna de la plantilla">
-                                    <label class="visualmente-oculto" for="mapeo-<?= $i; ?>">Equivalencia de <?= $e($nombre); ?></label>
-                                    <select name="mapeo[<?= $i; ?>]" id="mapeo-<?= $i; ?>">
-                                        <option value="">No usar</option>
-                                        <?php foreach (NOTA_VENTA_ENCABEZADOS as $col): ?>
-                                            <option value="<?= $e($col); ?>"<?= $actual === $col ? ' selected' : ''; ?>><?= $e($col); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </td>
-                                <td data-label="Propuesta" class="tabla-datos__estado">
-                                    <span class="badge <?= $claseNivel; ?>"><?= $textoNivel; ?></span>
-                                    <?php if ($p['nivel'] === 'ambigua' || $p['nivel'] === 'dudosa'): ?>
-                                        <span class="tabla-datos__secundario">
-                                            Podria ser: <?= $e(implode(' o ', $p['candidatos'])); ?>.
-                                            <?= $p['condicion'] !== null ? $e($p['condicion']) : ''; ?>
-                                        </span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <?php $completables = array_values(array_diff(AdaptadorPlantilla::COMPLETABLES, $mapeadas)); ?>
-        <?php if ($completables !== [] || ! in_array('identificador_externo', $mapeadas, true)): ?>
-            <section class="tarjeta" aria-labelledby="titulo-faltantes">
-                <h2 id="titulo-faltantes">Datos que el archivo no trae</h2>
-                <p class="tarjeta__intro">
-                    Solo condiciones del documento, que valen igual para todas las filas. Montos, RUT y productos
-                    tienen que venir del archivo.
-                </p>
-                <div class="config-columnas config-columnas--2">
-                    <?php foreach ($completables as $col): ?>
-                        <div class="form-campo">
-                            <label for="constante-<?= $e($col); ?>"><?= $e($col); ?><?= in_array($col, AdaptadorPlantilla::OBLIGATORIAS, true) ? ' (obligatorio)' : ' (opcional)'; ?></label>
-                            <?php if ($col === 'forma_pago' || $col === 'exento'): ?>
-                                <select name="constante[<?= $e($col); ?>]" id="constante-<?= $e($col); ?>">
-                                    <option value="">Sin indicar</option>
-                                    <?php foreach ($col === 'forma_pago' ? AdaptadorPlantilla::VALORES_FORMA_PAGO : AdaptadorPlantilla::VALORES_EXENTO as $v): ?>
-                                        <option value="<?= $e($v); ?>"<?= ($constantes[$col] ?? '') === $v ? ' selected' : ''; ?>><?= $e($v); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            <?php else: ?>
-                                <?php /* type="date" y no texto con inputmode="numeric": ese
-                                   inputmode activa la regla "solo numeros" de
-                                   validar-campos.js, que rechazaba las barras de la
-                                   fecha. El selector envia AAAA-MM-DD, la misma forma
-                                   en que se guarda. */ ?>
-                                <input type="date" name="constante[<?= $e($col); ?>]" id="constante-<?= $e($col); ?>"
-                                       value="<?= $e((string) ($constantes[$col] ?? '')); ?>"
-                                       aria-describedby="ayuda-constante-<?= $e($col); ?>">
-                                <small class="form-ayuda" id="ayuda-constante-<?= $e($col); ?>">
-                                    <?= $col === 'fecha_vencimiento' ? 'Solo si todas las ventas son a CREDITO con el mismo vencimiento.' : 'La misma fecha para todas las filas.'; ?>
-                                </small>
-                            <?php endif; ?>
-                        </div>
-                    <?php endforeach; ?>
-                </div>
-                <?php if (! in_array('identificador_externo', $mapeadas, true)): ?>
-                    <div class="form-campo">
-                        <label class="form-check" for="identificador-por-fila">
-                            <input type="checkbox" name="identificador_por_fila" id="identificador-por-fila" value="1"<?= (bool) $adaptacion['identificador_por_fila'] ? ' checked' : ''; ?>
-                                   aria-describedby="ayuda-identificador">
-                            El archivo no trae un identificador por venta: usar el numero de fila
-                        </label>
-                        <small class="form-ayuda" id="ayuda-identificador">
-                            Cada nota queda como "<?= $e(substr((string) $adaptacion['sha256_original'], 0, 8)); ?>-F&lt;numero de fila&gt;". Evita cargar dos veces
-                            ESTE MISMO archivo, pero no reconoce la misma venta en otro archivo. Si tu cliente tiene un numero de pedido o de venta, es mejor usar esa columna.
-                        </small>
-                    </div>
-                <?php endif; ?>
-            </section>
-        <?php endif; ?>
-
-        <?php if ($calculo['porTraducir'] !== []): ?>
-            <section class="tarjeta" aria-labelledby="titulo-valores">
-                <h2 id="titulo-valores">Valores que la carga no reconoce</h2>
-                <p class="tarjeta__intro">
-                    Estas columnas solo aceptan ciertos valores. Indica a cual equivale cada uno de los que trae el archivo;
-                    si alguno no corresponde a ninguno, corrige el archivo.
-                </p>
-                <?php foreach ($calculo['porTraducir'] as $col => $valores): ?>
-                    <h3><code><?= $e($col); ?></code></h3>
-                    <div class="config-columnas config-columnas--3">
-                        <?php foreach ($valores as $k => $valor): ?>
-                            <div class="form-campo">
-                                <label for="equiv-<?= $e($col); ?>-<?= $k; ?>">"<?= $e($valor); ?>" equivale a</label>
-                                <input type="hidden" name="equiv_valor[<?= $e($col); ?>][<?= $k; ?>]" value="<?= $e($valor); ?>">
-                                <select name="equiv_destino[<?= $e($col); ?>][<?= $k; ?>]" id="equiv-<?= $e($col); ?>-<?= $k; ?>">
-                                    <option value="">Sin elegir</option>
-                                    <?php foreach ($col === 'forma_pago' ? AdaptadorPlantilla::VALORES_FORMA_PAGO : AdaptadorPlantilla::VALORES_EXENTO as $v): ?>
-                                        <option value="<?= $e($v); ?>"<?= ($equivalencias[$col][$valor] ?? '') === $v ? ' selected' : ''; ?>><?= $e($v); ?></option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                <?php endforeach; ?>
-            </section>
-        <?php endif; ?>
-
-        <section class="tarjeta" aria-labelledby="titulo-tipo">
-            <h2 id="titulo-tipo">Tipo de documento</h2>
-            <div class="carga-masiva__tipo">
-                <label class="interruptor" for="tipo_exento">
-                    <input type="checkbox" role="switch" name="tipo_exento" id="tipo_exento" value="1"<?= (bool) $adaptacion['es_exento'] ? ' checked' : ''; ?>>
-                    <span class="interruptor__texto">
-                        <span class="interruptor__titulo">Archivo de facturas exentas</span>
-                        <span class="interruptor__detalle">Marcado, todas las notas salen como factura exenta (34) y todas sus lineas tienen que ser exentas. Sin marcar, factura afecta (33).</span>
-                    </span>
-                </label>
-            </div>
-            <div class="acciones-formulario">
-                <button class="boton-principal" type="submit">Guardar y ver vista previa</button>
-            </div>
-        </section>
-    </form>
-
-    <section class="tarjeta" aria-labelledby="titulo-vista-previa" id="vista-previa" tabindex="-1">
-        <h2 id="titulo-vista-previa">2. Vista previa</h2>
-
-        <?php if ($calculo['pendientes'] !== []): ?>
+        <?php if (! $listo): ?>
             <div class="alerta alerta--advertencia" role="status">
-                <?= iconoSvg('alerta', 20, 'alerta__icono'); ?>
+                <?= iconoSvg('info', 20, 'alerta__icono'); ?>
                 <div class="alerta__cuerpo">
-                    <p class="alerta__titulo">Falta resolver antes de ver la vista previa</p>
+                    <p class="alerta__titulo">
+                        Reconocimos <?= $reconocidas; ?> de <?= count($propuesta); ?> columnas. Para continuar falta:
+                    </p>
                     <ul class="alerta__lista">
                         <?php foreach ($calculo['pendientes'] as $p): ?>
                             <li><?= $e($p); ?></li>
@@ -423,128 +367,296 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                     </ul>
                 </div>
             </div>
-        <?php else: ?>
+        <?php endif; ?>
+
+        <?php foreach ($columnasPregunta as $i): ?>
             <?php
-                $aplicado = $calculo['aplicado'];
-                $revision = $calculo['revision'];
-                $items    = $revision['items'];
-                $validas  = count(array_filter($items, static fn (array $it): bool => $it['status'] === 'ok'));
-                $conError = count($items) - $validas;
-                $porTipo  = array_count_values(array_column($aplicado['cambios'], 'tipo'));
-                $notasCredito = count(array_filter($revision['grupos'], static fn (array $g): bool => ! empty($g['datos']['boleta_ref_folio'])));
-                $columnasMuestra = array_values(array_filter(
-                    NOTA_VENTA_ENCABEZADOS,
-                    static fn (string $c): bool => in_array($c, $mapeadas, true) || isset($constantes[$c]) && $constantes[$c] !== '' || $c === 'identificador_externo'
-                ));
-                // Cambios indexados por fila y columna, para marcarlos en la muestra.
-                $cambioDe = [];
-                foreach ($aplicado['cambios'] as $c) {
-                    $cambioDe[$c['fila']][$c['columna']] = $c;
+                $p = $propuesta[$i];
+                $actual = $mapeo[$i] ?? '';
+                $opciones = $p['candidatos'];
+                if ($actual !== '' && ! in_array($actual, $opciones, true)) {
+                    $opciones[] = $actual;
                 }
-                $columnasSinUso = array_filter(
-                    array_keys($archivo['encabezados']),
-                    static fn (int $i): bool => ! isset($mapeo[$i]) && $ejemplo($i) !== ''
-                );
             ?>
+            <fieldset class="tarjeta pregunta">
+                <legend><h2>¿Que trae la columna "<?= $e($nombreCol($i)); ?>"?</h2></legend>
+                <p class="tarjeta__intro">
+                    <?php if ($ejemplo($i) !== ''): ?>Por ejemplo: <strong><?= $e($ejemplo($i)); ?></strong>. <?php endif; ?>
+                    <?= $p['condicion'] !== null ? $e($p['condicion']) : 'El nombre no alcanza para saberlo con seguridad.'; ?>
+                </p>
+                <?php foreach ($opciones as $col): ?>
+                    <label class="form-check">
+                        <input type="radio" name="mapeo[<?= $i; ?>]" value="<?= $e($col); ?>"<?= $actual === $col ? ' checked' : ''; ?>>
+                        <?= $e($et($col)); ?>
+                    </label>
+                <?php endforeach; ?>
+                <label class="form-check">
+                    <input type="radio" name="mapeo[<?= $i; ?>]" value=""<?= $actual === '' ? ' checked' : ''; ?>>
+                    Ninguna: no usar esta columna
+                </label>
+            </fieldset>
+        <?php endforeach; ?>
+
+        <?php if (! in_array('fecha_nota', $mapeadas, true)): ?>
+            <section class="tarjeta pregunta">
+                <h2><label for="constante-fecha_nota">¿Que fecha tienen estas ventas?</label></h2>
+                <p class="tarjeta__intro">El archivo no trae la fecha de cada venta. La que indiques se usa para todas.</p>
+                <input type="date" name="constante[fecha_nota]" id="constante-fecha_nota" value="<?= $e((string) ($constantes['fecha_nota'] ?? '')); ?>">
+            </section>
+        <?php endif; ?>
+
+        <?php if (! in_array('forma_pago', $mapeadas, true)): ?>
+            <section class="tarjeta pregunta">
+                <h2><label for="constante-forma_pago">¿Como se pagaron estas ventas?</label></h2>
+                <p class="tarjeta__intro">El archivo no trae la forma de pago. La que indiques se usa para todas.</p>
+                <select name="constante[forma_pago]" id="constante-forma_pago">
+                    <option value="">Elige una opcion</option>
+                    <?php foreach (['CONTADO' => 'Contado', 'CREDITO' => 'Credito', 'SIN COSTO' => 'Sin costo'] as $v => $texto): ?>
+                        <option value="<?= $e($v); ?>"<?= $formaPagoIndicada === $v ? ' selected' : ''; ?>><?= $texto; ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </section>
+        <?php endif; ?>
+
+        <?php if ($preguntarVencimiento): ?>
+            <section class="tarjeta pregunta">
+                <h2><label for="constante-fecha_vencimiento">¿Cuando vencen estas ventas a credito?</label></h2>
+                <p class="tarjeta__intro">Una venta a credito necesita fecha de vencimiento. La que indiques se usa para todas.</p>
+                <input type="date" name="constante[fecha_vencimiento]" id="constante-fecha_vencimiento" value="<?= $e((string) ($constantes['fecha_vencimiento'] ?? '')); ?>">
+            </section>
+        <?php endif; ?>
+
+        <?php if (! in_array('identificador_externo', $mapeadas, true)): ?>
+            <section class="tarjeta pregunta">
+                <h2>El archivo no trae un N° de venta</h2>
+                <p class="tarjeta__intro">
+                    Ese numero es el que impide cargar dos veces la misma venta. Si el archivo trae un numero de pedido
+                    u orden, eligelo en la lista de columnas de abajo. Si no trae ninguno:
+                </p>
+                <label class="form-check" for="identificador-por-fila">
+                    <input type="checkbox" name="identificador_por_fila" id="identificador-por-fila" value="1"<?= (bool) $adaptacion['identificador_por_fila'] ? ' checked' : ''; ?>>
+                    Usar el numero de fila del archivo
+                </label>
+                <small class="form-ayuda">Protege contra subir dos veces este mismo archivo, pero no reconoce la misma venta si llega en otro archivo.</small>
+            </section>
+        <?php endif; ?>
+
+        <?php foreach ($calculo['porTraducir'] as $col => $valores): ?>
+            <section class="tarjeta pregunta">
+                <h2><?= $e($et($col)); ?>: ¿a que corresponde cada valor?</h2>
+                <p class="tarjeta__intro">El archivo usa palabras que el sistema no conoce. Indica a cual corresponde cada una.</p>
+                <div class="config-columnas config-columnas--3">
+                    <?php foreach ($valores as $k => $valor): ?>
+                        <div class="form-campo">
+                            <label for="equiv-<?= $e($col); ?>-<?= $k; ?>">"<?= $e($valor); ?>" es</label>
+                            <input type="hidden" name="equiv_valor[<?= $e($col); ?>][<?= $k; ?>]" value="<?= $e($valor); ?>">
+                            <select name="equiv_destino[<?= $e($col); ?>][<?= $k; ?>]" id="equiv-<?= $e($col); ?>-<?= $k; ?>">
+                                <option value="">Elige una opcion</option>
+                                <?php foreach ($col === 'forma_pago' ? ['CONTADO' => 'Contado', 'CREDITO' => 'Credito', 'SIN COSTO' => 'Sin costo'] : ['SI' => 'Si, exento', 'NO' => 'No, afecto'] as $v => $texto): ?>
+                                    <option value="<?= $e($v); ?>"<?= ($equivalencias[$col][$valor] ?? '') === $v ? ' selected' : ''; ?>><?= $texto; ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </section>
+        <?php endforeach; ?>
+
+        <details class="tarjeta"<?= ($faltaEnTabla !== [] || $hayRepetidas) && ! $listo ? ' open' : ''; ?>>
+            <summary>
+                <strong>Columnas del archivo</strong>
+                (<?= count($archivo['encabezados']); ?>, se leen de la hoja "<?= $e($archivo['hoja']); ?>", encabezados en la fila <?= $archivo['indice_encabezado'] + 1; ?>)
+            </summary>
+            <?php if ($faltaEnTabla !== [] && ! $listo): ?>
+                <p class="tarjeta__intro"><strong>Elige aqui que columna trae <?= $e(implode(', ', $faltaEnTabla)); ?>.</strong></p>
+            <?php else: ?>
+                <p class="tarjeta__intro">Asi se va a leer cada columna. Cambialo solo si algo no corresponde.</p>
+            <?php endif; ?>
+            <div class="tabla-scroll">
+                <table class="tabla-datos tabla-datos--cards">
+                    <caption class="visualmente-oculto">Columnas del archivo y como se leen.</caption>
+                    <thead>
+                        <tr><th scope="col">Columna del archivo</th><th scope="col">Ejemplo</th><th scope="col">Se lee como</th></tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($archivo['encabezados'] as $i => $encabezado): ?>
+                            <tr>
+                                <th scope="row" data-label="Columna del archivo"><?= $e($nombreCol($i)); ?></th>
+                                <td data-label="Ejemplo"><?= $ejemplo($i) !== '' ? $e($ejemplo($i)) : '<span class="tabla-datos__secundario">(vacia)</span>'; ?></td>
+                                <td data-label="Se lee como">
+                                    <?php if (in_array($i, $columnasPregunta, true)): ?>
+                                        <span class="tabla-datos__secundario">Se responde arriba</span>
+                                    <?php else: ?>
+                                        <label class="visualmente-oculto" for="mapeo-<?= $i; ?>">Como se lee <?= $e($nombreCol($i)); ?></label>
+                                        <select name="mapeo[<?= $i; ?>]" id="mapeo-<?= $i; ?>"><?= $opcionesPlantilla($mapeo[$i] ?? ''); ?></select>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </details>
+
+        <details class="tarjeta">
+            <summary><strong>Mas opciones</strong> (facturas exentas, vencimiento)</summary>
+            <div class="carga-masiva__tipo">
+                <label class="interruptor" for="tipo_exento">
+                    <input type="checkbox" role="switch" name="tipo_exento" id="tipo_exento" value="1"<?= (bool) $adaptacion['es_exento'] ? ' checked' : ''; ?>>
+                    <span class="interruptor__texto">
+                        <span class="interruptor__titulo">Son facturas exentas</span>
+                        <span class="interruptor__detalle">Todas las notas salen como factura exenta (34). Sin marcar, factura normal con IVA (33).</span>
+                    </span>
+                </label>
+            </div>
+            <?php if (! in_array('fecha_vencimiento', $mapeadas, true) && ! $preguntarVencimiento): ?>
+                <div class="form-campo">
+                    <label for="constante-fecha_vencimiento">Fecha de vencimiento para todas las ventas (solo si son a credito)</label>
+                    <input type="date" name="constante[fecha_vencimiento]" id="constante-fecha_vencimiento" value="<?= $e((string) ($constantes['fecha_vencimiento'] ?? '')); ?>">
+                </div>
+            <?php endif; ?>
+            <?php if (! in_array('exento', $mapeadas, true)): ?>
+                <div class="form-campo">
+                    <label for="constante-exento">Exento de IVA para todas las lineas</label>
+                    <select name="constante[exento]" id="constante-exento">
+                        <option value="">Segun el archivo (no indicar)</option>
+                        <option value="SI"<?= ($constantes['exento'] ?? '') === 'SI' ? ' selected' : ''; ?>>Si, todas exentas</option>
+                        <option value="NO"<?= ($constantes['exento'] ?? '') === 'NO' ? ' selected' : ''; ?>>No, todas afectas</option>
+                    </select>
+                </div>
+            <?php endif; ?>
+        </details>
+
+        <div class="acciones-formulario">
+            <button class="boton-principal" type="submit"><?= $listo ? 'Guardar cambios' : 'Continuar'; ?></button>
+        </div>
+    </form>
+    <?php $formulario = (string) ob_get_clean(); ?>
+
+    <?php if (! $listo): ?>
+        <?= $formulario; ?>
+    <?php else: ?>
+        <section class="tarjeta" aria-labelledby="titulo-resultado" id="vista-previa" tabindex="-1">
+            <h2 id="titulo-resultado">Revisa e importa</h2>
 
             <?php if ($revision['problemas'] !== []): ?>
                 <div class="alerta alerta--error" role="alert">
                     <?= iconoSvg('alerta', 20, 'alerta__icono'); ?>
                     <div class="alerta__cuerpo">
-                        <p class="alerta__titulo">La carga rechazaria este archivo completo</p>
-                        <p>Corrigelo en el archivo, o ajusta las equivalencias o los valores de arriba.</p>
+                        <p class="alerta__titulo">Este archivo todavia no se puede importar</p>
                         <ul class="alerta__lista">
                             <?php foreach ($revision['problemas'] as $p): ?>
                                 <li><?= $e($p); ?></li>
                             <?php endforeach; ?>
                         </ul>
+                        <p>Corrigelo en el archivo y subelo de nuevo, o cambia como se lee mas abajo.</p>
                     </div>
                 </div>
-            <?php elseif ($conError > 0): ?>
+            <?php elseif ($validas === 0): ?>
                 <div class="alerta alerta--advertencia" role="status">
                     <?= iconoSvg('alerta', 20, 'alerta__icono'); ?>
                     <div class="alerta__cuerpo">
-                        <p class="alerta__titulo">Se puede importar, pero <?= $conError === 1 ? '1 fila quedaria' : $fmtNum($conError) . ' filas quedarian'; ?> con error</p>
-                        <p>Las filas con error se guardan apartadas y no pasan a facturacion. El detalle esta abajo.</p>
+                        <p class="alerta__titulo">Ninguna fila se puede importar todavia</p>
+                        <p>Todas tienen algo que corregir: abajo dice que, fila por fila. Si dice que la venta ya se cargo, este archivo ya entro antes y no hace falta importarlo de nuevo.</p>
                     </div>
                 </div>
             <?php else: ?>
-                <div class="alerta alerta--exito" role="status">
-                    <?= iconoSvg('check', 20, 'alerta__icono'); ?>
-                    <div class="alerta__cuerpo">
-                        <p class="alerta__titulo">Todas las filas cumplen los requisitos</p>
+                <p class="resumen-importacion">
+                    <?= $notas === 1 ? 'Se va a crear' : 'Se van a crear'; ?> <strong><?= $fmtNum($notas); ?> nota<?= $notas === 1 ? '' : 's'; ?> de venta</strong>
+                    a partir de <?= $fmtNum($validas); ?> fila<?= $validas === 1 ? '' : 's'; ?> del archivo,
+                    por un total estimado de <strong>$<?= $fmtNum($monto); ?></strong> con IVA.
+                    <?php if ($rutsNuevos !== []): ?>
+                        <?= count($rutsNuevos) === 1 ? 'Se agrega 1 cliente nuevo' : 'Se agregan ' . count($rutsNuevos) . ' clientes nuevos'; ?> a tus clientes.
+                    <?php endif; ?>
+                </p>
+                <ul class="panel-info__lista">
+                    <?php if ($conError > 0): ?>
+                        <li><strong><?= $fmtNum($conError); ?> fila<?= $conError === 1 ? '' : 's'; ?> con error</strong> quedan apartadas y no se facturan. <a href="#filas-error">Ver cuales</a>.</li>
+                    <?php endif; ?>
+                    <?php if ($aplicado['cambios'] !== []): ?>
+                        <li>Se ordenaron <?= $fmtNum(count($aplicado['cambios'])); ?> datos (formato de RUT, fechas, montos) sin cambiar su contenido. <a href="#correcciones">Ver cuales</a>.</li>
+                    <?php endif; ?>
+                    <?php if ($aplicado['vacias'] !== []): ?>
+                        <li>Se saltan <?= $fmtNum(count($aplicado['vacias'])); ?> fila<?= count($aplicado['vacias']) === 1 ? '' : 's'; ?> vacia<?= count($aplicado['vacias']) === 1 ? '' : 's'; ?>.</li>
+                    <?php endif; ?>
+                    <?php foreach ($columnasSinUso as $i): ?>
+                        <li>La columna "<?= $e($nombreCol($i)); ?>" no se importa.</li>
+                    <?php endforeach; ?>
+                    <?php if ($aplicado['sin_interpretar'] !== []): ?>
+                        <li><?= $fmtNum(count($aplicado['sin_interpretar'])); ?> valor(es) se dejaron como venian porque se pueden leer de dos formas. <a href="#correcciones">Ver cuales</a>.</li>
+                    <?php endif; ?>
+                </ul>
+
+                <form method="post" action="/ventas/carga-masiva/adaptar/<?= $id; ?>/importar" class="form-compacto" id="autorizar" data-espera>
+                    <?= csrfInput(); ?>
+                    <input type="hidden" name="huella" value="<?= $e((string) $calculo['huella']); ?>">
+                    <div class="form-campo">
+                        <label class="form-check" for="autorizo">
+                            <input type="checkbox" name="autorizo" id="autorizo" value="1" required>
+                            Revise lo anterior y autorizo importar estas notas de venta
+                        </label>
+                        <small class="form-ayuda">Queda registrado con tu usuario y la hora. El archivo original se guarda.</small>
                     </div>
-                </div>
+                    <div class="acciones-formulario">
+                        <button class="boton-principal" type="submit">Importar <?= $fmtNum($notas); ?> nota<?= $notas === 1 ? '' : 's'; ?> de venta</button>
+                    </div>
+                </form>
             <?php endif; ?>
+        </section>
 
-            <section class="dash-grid" aria-label="Resumen de la vista previa">
-                <article class="kpi">
-                    <h3 class="kpi__etiqueta">Filas con datos</h3>
-                    <p class="kpi__valor"><?= $fmtNum(count($aplicado['filas'])); ?></p>
-                    <p class="kpi__formula">
-                        <?= $aplicado['vacias'] === [] ? 'Sin filas vacias' : $fmtNum(count($aplicado['vacias'])) . ' vacia(s) quitada(s)'; ?>
-                    </p>
-                </article>
-                <article class="kpi">
-                    <h3 class="kpi__etiqueta">Validas</h3>
-                    <p class="kpi__valor"><?= $fmtNum($validas); ?></p>
-                    <p class="kpi__formula">
-                        <?= $fmtNum(count($revision['grupos'])); ?> nota(s) de venta<?= $notasCredito > 0 ? ', ' . $fmtNum($notasCredito) . ' anulan boleta' : ''; ?>
-                    </p>
-                </article>
-                <article class="kpi<?= $conError > 0 ? ' kpi--rojo' : ''; ?>">
-                    <h3 class="kpi__etiqueta">Con error</h3>
-                    <p class="kpi__valor"><?= $fmtNum($conError); ?></p>
-                    <p class="kpi__formula">Quedarian apartadas</p>
-                </article>
-                <article class="kpi">
-                    <h3 class="kpi__etiqueta">Celdas corregidas</h3>
-                    <p class="kpi__valor"><?= $fmtNum(count($aplicado['cambios'])); ?></p>
-                    <p class="kpi__formula">Solo forma, ver abajo</p>
-                </article>
-            </section>
-
-            <?php if ($porTipo !== [] || $aplicado['sin_interpretar'] !== [] || $columnasSinUso !== []): ?>
-                <div class="config-columnas config-columnas--2">
-                    <?php if ($porTipo !== []): ?>
-                        <div class="panel-info">
-                            <p class="panel-info__titulo"><?= iconoSvg('check', 20, 'panel-info__icono'); ?>Correcciones propuestas</p>
-                            <ul class="panel-info__lista">
-                                <?php foreach ($porTipo as $tipo => $n): ?>
-                                    <li><?= $e($tiposCambio[$tipo] ?? $tipo); ?>: <?= $fmtNum($n); ?></li>
-                                <?php endforeach; ?>
-                            </ul>
-                        </div>
-                    <?php endif; ?>
-                    <?php if ($aplicado['sin_interpretar'] !== [] || $columnasSinUso !== []): ?>
-                        <div class="panel-info">
-                            <p class="panel-info__titulo"><?= iconoSvg('alerta', 20, 'panel-info__icono'); ?>Advertencias</p>
-                            <ul class="panel-info__lista">
-                                <?php foreach (array_slice($aplicado['sin_interpretar'], 0, 10) as $s): ?>
-                                    <li>Fila <?= (int) $s['fila']; ?>, <code><?= $e($s['columna']); ?></code>: "<?= $e($s['valor']); ?>" se deja como esta porque <?= $e($s['motivo']); ?>.</li>
-                                <?php endforeach; ?>
-                                <?php if (count($aplicado['sin_interpretar']) > 10): ?>
-                                    <li>Y <?= $fmtNum(count($aplicado['sin_interpretar']) - 10); ?> valor(es) mas en la misma situacion.</li>
-                                <?php endif; ?>
-                                <?php foreach ($columnasSinUso as $i): ?>
-                                    <li>La columna "<?= $e($archivo['encabezados'][$i] !== '' ? $archivo['encabezados'][$i] : $letra($i)); ?>" trae datos y no se importa.</li>
-                                <?php endforeach; ?>
-                            </ul>
-                        </div>
-                    <?php endif; ?>
+        <?php if ($filasError !== []): ?>
+            <details class="tarjeta" id="filas-error" open>
+                <summary><strong>Filas con error (<?= $fmtNum(count($filasError)); ?>)</strong></summary>
+                <p class="nota">El numero de fila es el de tu archivo.</p>
+                <div class="tabla-scroll">
+                    <table class="tabla-datos tabla-datos--cards">
+                        <caption class="visualmente-oculto">Filas que no se pueden importar y por que.</caption>
+                        <thead><tr><th scope="col">Fila</th><th scope="col">N° de venta</th><th scope="col">Que corregir</th></tr></thead>
+                        <tbody>
+                            <?php foreach (array_slice($filasError, 0, 200, true) as $i => $it): ?>
+                                <tr>
+                                    <th scope="row" data-label="Fila"><?= filaExcelDeItem($it, $i); ?></th>
+                                    <td data-label="N° de venta"><?= $e((string) ($it['fila_original']['identificador_externo'] ?? '')) ?: '-'; ?></td>
+                                    <td data-label="Que corregir">
+                                        <ul class="alerta__lista">
+                                            <?php foreach ($it['errores'] as $msg): ?>
+                                                <li><?= $e($legible((string) $msg)); ?></li>
+                                            <?php endforeach; ?>
+                                        </ul>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
                 </div>
-            <?php endif; ?>
+            </details>
+        <?php endif; ?>
 
-            <h3>Muestra: primeras <?= min(CARGA_ADAPTACION_FILAS_MUESTRA, count($aplicado['filas'])); ?> filas tal como se importarian</h3>
-            <p class="nota">Debajo de cada valor corregido va el que traia el archivo.</p>
+        <details class="tarjeta" id="correcciones">
+            <summary><strong>Ver como quedan los datos</strong> (primeras <?= min(CARGA_ADAPTACION_FILAS_MUESTRA, count($aplicado['filas'])); ?> filas)</summary>
+            <?php if ($porTipo !== []): ?>
+                <ul class="panel-info__lista">
+                    <?php foreach ($porTipo as $tipo => $n): ?>
+                        <li><?= $e($tiposCambio[$tipo] ?? $tipo); ?>: <?= $fmtNum($n); ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+            <?php if ($aplicado['sin_interpretar'] !== []): ?>
+                <ul class="panel-info__lista">
+                    <?php foreach (array_slice($aplicado['sin_interpretar'], 0, 10) as $s): ?>
+                        <li>Fila <?= (int) $s['fila']; ?>, <?= $e($et($s['columna'])); ?>: "<?= $e($s['valor']); ?>" se deja como esta porque <?= $e($s['motivo']); ?>.</li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+            <p class="nota">Debajo de cada dato ordenado va como venia en tu archivo.</p>
             <div class="tabla-scroll">
                 <table class="tabla-datos">
-                    <caption class="visualmente-oculto">Muestra de filas adaptadas a la plantilla, con el valor original de cada celda corregida.</caption>
+                    <caption class="visualmente-oculto">Muestra de filas tal como se importarian, con el valor original de cada dato ordenado.</caption>
                     <thead>
                         <tr>
                             <th scope="col">Fila</th>
                             <?php foreach ($columnasMuestra as $col): ?>
-                                <th scope="col"><code><?= $e($col); ?></code></th>
+                                <th scope="col"><?= $e($et($col)); ?></th>
                             <?php endforeach; ?>
                         </tr>
                     </thead>
@@ -557,7 +669,7 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                                     <td>
                                         <?= $f[$col] === '' ? '<span class="tabla-datos__secundario">-</span>' : $e($f[$col]); ?>
                                         <?php if (isset($cambioDe[$nf][$col])): ?>
-                                            <span class="tabla-datos__secundario">antes: <?= $cambioDe[$nf][$col]['antes'] === '' ? '(vacio)' : $e($cambioDe[$nf][$col]['antes']); ?></span>
+                                            <span class="tabla-datos__secundario">venia: <?= $cambioDe[$nf][$col]['antes'] === '' ? '(vacio)' : $e($cambioDe[$nf][$col]['antes']); ?></span>
                                         <?php endif; ?>
                                     </td>
                                 <?php endforeach; ?>
@@ -566,70 +678,20 @@ $flashClase = ['error' => 'alerta--error', 'ok' => 'alerta--exito', 'exito' => '
                     </tbody>
                 </table>
             </div>
+        </details>
 
-            <?php $filasError = array_filter($items, static fn (array $it): bool => $it['status'] !== 'ok'); ?>
-            <?php if ($filasError !== []): ?>
-                <h3>Filas con error</h3>
-                <p class="nota">El numero de fila es el del archivo original.</p>
-                <div class="tabla-scroll">
-                    <table class="tabla-datos tabla-datos--cards">
-                        <caption class="visualmente-oculto">Filas que no cumplen los requisitos y por que.</caption>
-                        <thead><tr><th scope="col">Fila</th><th scope="col">Identificador</th><th scope="col">Que corregir</th></tr></thead>
-                        <tbody>
-                            <?php foreach (array_slice($filasError, 0, 200, true) as $i => $it): ?>
-                                <tr>
-                                    <th scope="row" data-label="Fila"><?= filaExcelDeItem($it, $i); ?></th>
-                                    <td data-label="Identificador"><?= $e((string) ($it['fila_original']['identificador_externo'] ?? '')) ?: '-'; ?></td>
-                                    <td data-label="Que corregir">
-                                        <ul class="alerta__lista">
-                                            <?php foreach ($it['errores'] as $msg): ?>
-                                                <li><?= $e((string) $msg); ?></li>
-                                            <?php endforeach; ?>
-                                        </ul>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-                <?php if (count($filasError) > 200): ?>
-                    <p class="nota">Se muestran las primeras 200.</p>
-                <?php endif; ?>
-            <?php endif; ?>
-        <?php endif; ?>
-    </section>
+        <details class="tarjeta">
+            <summary><strong>Cambiar como se lee el archivo</strong></summary>
+            <?= $formulario; ?>
+        </details>
+    <?php endif; ?>
 
-    <section class="tarjeta" aria-labelledby="titulo-autorizar" id="autorizar">
-        <h2 id="titulo-autorizar">3. Autorizar e importar</h2>
-        <?php if ($calculo['pendientes'] === [] && $calculo['revision']['problemas'] === [] && $validas === 0): ?>
-            <p class="tarjeta__intro">Ninguna fila se importaria: todas tienen error. Si es un archivo que ya cargaste, no hace falta importarlo de nuevo.</p>
-        <?php elseif ($calculo['pendientes'] === [] && $calculo['revision']['problemas'] === []): ?>
-            <form method="post" action="/ventas/carga-masiva/adaptar/<?= $id; ?>/importar" class="form-compacto" data-espera>
-                <?= csrfInput(); ?>
-                <input type="hidden" name="huella" value="<?= $e((string) $calculo['huella']); ?>">
-                <div class="form-campo">
-                    <label class="form-check" for="autorizo">
-                        <input type="checkbox" name="autorizo" id="autorizo" value="1" required>
-                        Autorizo aplicar las correcciones de la vista previa e importar
-                        <?= $fmtNum(count($revision['grupos'])); ?> nota(s) de venta<?= $conError > 0 ? ' (y ' . $fmtNum($conError) . ' fila(s) con error, apartadas)' : ''; ?>.
-                    </label>
-                    <small class="form-ayuda">Queda registrado con tu usuario, la fecha y la hora. El archivo original se conserva.</small>
-                </div>
-                <div class="acciones-formulario">
-                    <button class="boton-principal" type="submit">Importar</button>
-                </div>
-            </form>
-        <?php else: ?>
-            <p class="tarjeta__intro">Se habilita cuando no queda nada por resolver y la carga aceptaria el archivo.</p>
-        <?php endif; ?>
-        <form method="post" action="/ventas/carga-masiva/adaptar/<?= $id; ?>/descartar" class="form-compacto">
-            <?= csrfInput(); ?>
-            <div class="acciones-formulario">
-                <button class="boton-secundario" type="submit">Descartar sin importar</button>
-            </div>
-        </form>
-    </section>
-
+    <form method="post" action="/ventas/carga-masiva/adaptar/<?= $id; ?>/descartar" class="form-compacto">
+        <?= csrfInput(); ?>
+        <div class="acciones-formulario">
+            <button class="boton-secundario" type="submit">Descartar este archivo</button>
+        </div>
+    </form>
 <?php endif; ?>
 
 <p><a href="/ventas/carga-masiva/adaptar">Volver a los archivos adaptados</a></p>

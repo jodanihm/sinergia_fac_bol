@@ -244,6 +244,11 @@ final class AdaptadorPlantillaTest extends TestCase
         self::assertSame(2, $r['sin_interpretar'][0]['fila']);
     }
 
+    public function testTodaColumnaDeLaPlantillaTieneEtiqueta(): void
+    {
+        self::assertSame(self::PLANTILLA, array_keys(AdaptadorPlantilla::ETIQUETAS));
+    }
+
     public function testPendientes(): void
     {
         $todo = [0 => 'identificador_externo', 1 => 'rut_receptor', 2 => 'fecha_nota', 3 => 'producto_servicio', 4 => 'cantidad', 5 => 'precio_final'];
@@ -251,7 +256,7 @@ final class AdaptadorPlantillaTest extends TestCase
 
         $p = AdaptadorPlantilla::pendientes($todo, [], false);
         self::assertCount(1, $p);
-        self::assertStringContainsString('forma_pago', $p[0]);
+        self::assertStringContainsString('forma de pago', $p[0]);
 
         // Sin precio, y con el identificador cubierto por la opcion de fila.
         $sinPrecio = $todo;
