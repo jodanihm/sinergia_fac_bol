@@ -106,6 +106,7 @@ const ICONOS = [
     'enviar' => '<line x1="22" y1="2" x2="11" y2="13"/>'
         . '<polygon points="22 2 15 22 11 13 2 9 22 2"/>',
     'check' => '<polyline points="20 6 9 17 4 12"/>',
+    'buscar' => '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
     'flecha' => '<line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/>',
     'reloj' => '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
 

@@ -57,6 +57,12 @@
  *   - Ids nuevos en las celdas del detalle (det-{i}-{campo}) para poder
  *     enlazar y enfocar el error del motor; tambien en nuevaFilaHTML().
  *
+ * ARRANQUE (noviembre 2026, seccion 14): al abrir la pantalla con GET, el
+ * contenido espera tras un skeleton hasta que el formulario quedo armado. Menos
+ * de 300 ms no muestra nada y, si se vio, dura al menos 400 ms. Sin JavaScript
+ * no pasa nada de esto. Con POST (el 422 que vuelve) no aplica: el foco tiene
+ * que ir directo al campo con error, y un control oculto no lo puede recibir.
+ *
  * CONVERSION DE COTIZACION (segunda entrega): $form puede traer cotizacion_id,
  * cotizacion_numero y, en cada detalle, cotizacion_linea_id y pendiente. Cuando
  * NO vienen -- toda emision normal -- esta vista produce el mismo HTML que antes.
@@ -220,8 +226,34 @@ $docConArticulo = 'la ' . strtolower($tituloDoc);
 // required son lo que hace que "no elegir" sea un estado representable.
 $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     . '<span class="visualmente-oculto">(obligatorio)</span>';
+$conArranque = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET';
 ?>
-
+<?php if ($conArranque): ?>
+<script>
+(function () {
+    var raiz = document.documentElement, main = document.getElementById('contenido');
+    var inicio = performance.now(), terminado = false;
+    raiz.classList.add('pantalla-arrancando');
+    if (main) { main.setAttribute('aria-busy', 'true'); }
+    function fin() {
+        if (terminado) { return; }
+        terminado = true;
+        raiz.classList.remove('pantalla-arrancando');
+        if (main) { main.removeAttribute('aria-busy'); }
+    }
+    // El skeleton aparece a los 300 ms (por CSS) y, si se vio, dura 400 ms mas.
+    function listo() {
+        var pasado = performance.now() - inicio;
+        if (pasado < 300) { fin(); } else { setTimeout(fin, Math.max(0, 700 - pasado)); }
+    }
+    document.addEventListener('DOMContentLoaded', listo);
+    // Pase lo que pase, el formulario no se queda escondido.
+    setTimeout(fin, 8000);
+})();
+</script>
+<?php $arranqueTitulo = $tituloDoc; require __DIR__ . '/partials/_skeleton-emision.php'; ?>
+<?php endif; ?>
+<div class="arranque-contenido">
 <div class="dash-header">
     <div>
         <h1><?= htmlspecialchars($tituloDoc); ?></h1>
@@ -663,25 +695,40 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 <?php /* MODAL DE BUSQUEDA DE CLIENTES (js/selector-clientes.js). Fuera de
          #form-emision a proposito: Enter en su buscador no puede enviar el
          documento, y sus campos no viajan en el POST. */ ?>
-<dialog class="dialogo-selector" id="selector-cliente" data-campo-rut="receptor-rut"<?= $esBoleta ? '' : ' data-avisar-faltantes'; ?> aria-labelledby="selector-cliente-titulo">
+<dialog class="dialogo-selector" id="selector-cliente" tabindex="-1" data-campo-rut="receptor-rut"<?= $esBoleta ? '' : ' data-avisar-faltantes'; ?> aria-labelledby="selector-cliente-titulo" aria-describedby="selector-cliente-sub">
     <div class="dialogo-selector__cabecera">
-        <h2 class="dialogo-confirmar__titulo" id="selector-cliente-titulo">Buscar en mis clientes</h2>
+        <div>
+            <h2 class="dialogo-confirmar__titulo" id="selector-cliente-titulo">Buscar en mis clientes</h2>
+            <p class="dialogo-selector__sub" id="selector-cliente-sub">Pincha uno y sus datos pasan al receptor.</p>
+        </div>
         <button type="button" class="boton-texto dialogo-selector__cerrar" data-selector-cerrar aria-label="Cerrar"><?= iconoSvg('cerrar', 20, ''); ?></button>
     </div>
-    <div class="form-campo dialogo-selector__busqueda">
-        <label for="selector-cliente-q">Buscar</label>
-        <input type="text" id="selector-cliente-q" data-selector-q autocomplete="off" spellcheck="false" enterkeyhint="search" maxlength="100" placeholder="Ejemplo: ferreteria temuco" aria-describedby="selector-cliente-ayuda">
-        <small class="form-ayuda" id="selector-cliente-ayuda">Por RUT, razon social, nombre de fantasia, giro, direccion, comuna o correo. Puedes combinar palabras.</small>
+    <div class="selector-busqueda">
+        <label for="selector-cliente-q">RUT, nombre, giro, direccion, comuna o correo</label>
+        <div class="selector-busqueda__control">
+            <?= iconoSvg('buscar', 18, 'selector-busqueda__icono'); ?>
+            <input type="text" id="selector-cliente-q" data-selector-q autocomplete="off" spellcheck="false" enterkeyhint="search" maxlength="100" placeholder="Ejemplo: ferreteria temuco">
+            <button type="button" class="selector-busqueda__limpiar" data-selector-limpiar aria-label="Limpiar busqueda" hidden><?= iconoSvg('cerrar', 16, ''); ?></button>
+        </div>
     </div>
     <p class="dialogo-selector__estado" data-selector-estado role="status" aria-live="polite"></p>
     <div class="dialogo-selector__zona" data-selector-zona>
         <ul class="selector-clientes" data-selector-lista aria-label="Clientes encontrados"></ul>
         <div class="dialogo-selector__aviso" data-selector-aviso hidden>
+            <span data-selector-aviso-icono></span>
+            <p class="estado-vacio__titulo" data-selector-aviso-titulo></p>
             <p data-selector-aviso-texto></p>
             <button type="button" class="boton-secundario" data-selector-aviso-accion hidden></button>
         </div>
         <p class="dialogo-selector__mas"><button type="button" class="boton-secundario" data-selector-ver-mas hidden>Ver mas clientes</button></p>
     </div>
+    <?php /* Iconos que el JS copia a las filas y a los avisos. */ ?>
+    <template data-selector-iconos>
+        <span data-icono="alerta"><?= iconoSvg('alerta', 16, ''); ?></span>
+        <span data-icono="check"><?= iconoSvg('check', 16, ''); ?></span>
+        <span data-icono="aviso-alerta"><?= iconoSvg('alerta', 32, ''); ?></span>
+        <span data-icono="aviso-clientes"><?= iconoSvg('clientes', 32, ''); ?></span>
+    </template>
 </dialog>
 <?php $jsSelectorVersion = @filemtime(__DIR__ . '/../public/js/selector-clientes.js'); ?>
 <script src="/js/selector-clientes.js<?= $jsSelectorVersion ? '?v=' . $jsSelectorVersion : ''; ?>" defer></script>
@@ -1327,4 +1374,5 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 </script>
 <?php endif; ?>
 
+</div>
 <?php require __DIR__ . '/partials/footer.php'; ?>
