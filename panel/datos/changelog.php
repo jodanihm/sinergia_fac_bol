@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '1.96',
+        'titulo'  => 'Al cambiar el RUT se borran los datos del cliente anterior',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En facturas, boletas, notas de credito y cotizaciones: si despues de traer un cliente escribes otro RUT o buscas otro nombre, se vacian la razon social, el giro, la direccion, la comuna y el correo que habia traido el anterior. Antes quedaban puestos y se podia emitir a un cliente nuevo con los datos de otro.',
+            'Lo que corregiste a mano en esos campos no se borra.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '1.95',
         'titulo'  => 'Buscador de clientes por RUT, razon social o nombre de fantasia',
         'tag'     => 'frontend',

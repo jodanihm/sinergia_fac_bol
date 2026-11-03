@@ -23,6 +23,14 @@
  * vista ya hace con un RUT escrito a mano (avisos, marcar "ya esta en tus
  * clientes") corra igual.
  *
+ * LOS DATOS DE UN CLIENTE SE VAN CON SU RUT. Si despues de traer un cliente se
+ * escribe otro RUT u otro nombre, los campos que se rellenaron con el se
+ * vacian, para no emitir a un cliente nuevo con la direccion del anterior. Solo
+ * se vacian los que siguen con el valor que trajo el cliente: lo que la persona
+ * corrigio a mano se respeta. Las vistas que rellenan por su cuenta (al
+ * teclear un RUT completo) avisan con window.buscadorClientes.cargado(), y se
+ * enteran del vaciado con el evento 'cliente-descartado' sobre el campo RUT.
+ *
  * Teclado: flechas para moverse, Enter elige, Escape cierra. Patron combobox
  * de ARIA (role, aria-expanded, aria-activedescendant). Seccion 14 del design
  * system: el "Buscando..." solo aparece si la respuesta tarda mas de 300 ms.
@@ -39,6 +47,40 @@
         var p = String(rut).split('-');
         if (p.length !== 2) { return rut; }
         return p[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + p[1];
+    }
+
+    function rutLimpio(v) { return String(v).replace(/[^0-9kK]/g, '').toUpperCase(); }
+
+    /*
+     * Registra que los campos {id: valor} se rellenaron con el cliente del RUT
+     * que el campo tiene AHORA. Con el mismo RUT se SUMA a lo ya registrado
+     * (al elegir de la lista rellena el buscador y despues la vista); con otro
+     * RUT lo reemplaza.
+     */
+    function cargado(input, valores) {
+        var rut = rutLimpio(input.value);
+        var reg = input._clienteCargado;
+        if (!reg || reg.rut !== rut) { reg = input._clienteCargado = { rut: rut, valores: {} }; }
+        Object.keys(valores || {}).forEach(function (id) { reg.valores[id] = valores[id]; });
+    }
+
+    /*
+     * Si el RUT ya no es el del cliente cargado, vacia lo que ese cliente
+     * relleno y que nadie toco despues. Devuelve true si descarto algo.
+     */
+    function descartarSiCambio(input) {
+        var reg = input._clienteCargado;
+        if (!reg || rutLimpio(input.value) === reg.rut) { return false; }
+        input._clienteCargado = null;
+        Object.keys(reg.valores).forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el && el.value === reg.valores[id]) {
+                el.value = '';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+        input.dispatchEvent(new CustomEvent('cliente-descartado'));
+        return true;
     }
 
     function iniciar(input) {
@@ -148,13 +190,16 @@
             var c = resultados[i];
             if (!c) { return; }
             input.value = normalizado ? c.rut : formatearRut(c.rut);
+            var valores = {};
             Object.keys(campos).forEach(function (dato) {
                 var el = document.getElementById(campos[dato]);
                 if (el && c[dato] !== undefined) {
                     el.value = c[dato];
+                    valores[campos[dato]] = el.value;
                     if (window.validarCampos && el.value !== '') { window.validarCampos.revisar(el); }
                 }
             });
+            cargado(input, valores);
             cerrar();
             input.dispatchEvent(new Event('change', { bubbles: true }));
             input.dispatchEvent(new Event('blur'));
@@ -181,6 +226,7 @@
         }
 
         input.addEventListener('input', function () {
+            descartarSiCambio(input);
             clearTimeout(temporizador);
             temporizador = setTimeout(buscar, PAUSA_MS);
         });
@@ -224,5 +270,5 @@
     } else {
         iniciarTodos();
     }
-    window.buscadorClientes = { iniciar: iniciarTodos };
+    window.buscadorClientes = { iniciar: iniciarTodos, cargado: cargado };
 })();

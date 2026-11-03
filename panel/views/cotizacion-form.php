@@ -373,7 +373,7 @@ if (isset($errores['lineas'])) {
        escribe: recien al salir, y desde ahi se revalida al corregir. */
     var rut = document.getElementById('receptor_rut');
     var aviso = document.getElementById('rut-aviso');
-    var AVISO_INICIAL = 'Elige uno de tus clientes o escribe un RUT nuevo.';
+    var AVISO_INICIAL = 'Escribe el RUT, la razon social o el nombre de fantasia y elige de la lista, o escribe un RUT nuevo.';
 
     function rutLimpio(v) { return v.replace(/[^0-9kK]/g, '').toUpperCase(); }
     function rutValido(v) {
@@ -481,13 +481,17 @@ if (isset($errores['lineas'])) {
                 rut.closest('[data-autoguardar]').setAttribute('data-ya-guardado', vRut.replace(/[^0-9kK]/g, '').toUpperCase());
                 // Solo se rellena lo que este VACIO: nunca se pisa lo que el
                 // usuario ya escribio.
+                var puestos = {};
                 [['receptor_razon_social', c.razon_social], ['receptor_giro', c.giro],
                  ['receptor_direccion', c.direccion], ['receptor_comuna', c.comuna],
                  ['receptor_email', c.email]].forEach(function (par) {
                     var el = document.getElementById(par[0]);
-                    if (el && el.value === '' && par[1]) { el.value = par[1]; }
+                    if (el && el.value === '' && par[1]) { el.value = par[1]; puestos[par[0]] = el.value; }
                     if (el && el.value !== '' && window.validarCampos) { window.validarCampos.revisar(el); }
                 });
+                // Si despues se cambia el RUT, el buscador vacia lo que se
+                // relleno aqui (js/buscador-clientes.js).
+                if (window.buscadorClientes) { window.buscadorClientes.cargado(rut, puestos); }
                 if (tocados.receptor_razon_social) { pintar('receptor_razon_social', reglas.receptor_razon_social()); }
                 aviso.textContent = c.activo === false
                     ? 'Cliente encontrado, pero esta inactivo en tus clientes.'
@@ -499,6 +503,13 @@ if (isset($errores['lineas'])) {
     }
     rut.addEventListener('blur', buscarCliente);
     rut.addEventListener('change', buscarCliente);
+    // Se cambio el RUT de un cliente ya cargado: sus datos se vaciaron.
+    rut.addEventListener('cliente-descartado', function () {
+        aviso.textContent = AVISO_INICIAL;
+        ['receptor_razon_social', 'receptor_email'].forEach(function (campo) {
+            if (document.getElementById(campo).value === '') { tocados[campo] = false; pintar(campo, ''); }
+        });
+    });
 
     // Al elegir un producto del datalist se rellenan precio, unidad y exento
     // SOLO si estan vacios: nunca se pisa lo que el usuario ya escribio.

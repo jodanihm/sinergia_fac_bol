@@ -913,15 +913,19 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 // NO EXISTEN en el DOM. Sin el chequeo, el primer getElementById
                 // que devuelve null lanza y aborta el resto del autocompletado --
                 // el usuario veria el aviso a medias y la razon social sin llenar.
+                var puestos = {};
                 var poner = function (id, valor) {
                     var el = document.getElementById(id);
-                    if (el) { el.value = valor || ''; }
+                    if (el) { el.value = valor || ''; puestos[id] = el.value; }
                 };
                 poner('receptor-razonSocial', c.razon_social);
                 poner('receptor-giro', c.giro);
                 poner('receptor-direccion', c.direccion);
                 poner('receptor-comuna', c.comuna);
                 poner('receptor-email', c.email);
+                // Si despues se cambia el RUT, el buscador vacia estos campos
+                // (js/buscador-clientes.js): no quedan datos de otro cliente.
+                if (window.buscadorClientes) { window.buscadorClientes.cargado(rut, puestos); }
                 rutYaEnClientes = rut.value.trim();
                 window.emisionUx && window.emisionUx.revisarReceptor(true);
                 aviso.textContent = c.activo === false
@@ -929,6 +933,20 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     : 'Cliente encontrado: datos completados.';
             })
             .catch(function () { aviso.textContent = ''; });
+    });
+    // Se cambio el RUT de un cliente ya cargado: sus datos se vaciaron.
+    rut.addEventListener('cliente-descartado', function () {
+        rutYaEnClientes = '';
+        aviso.textContent = '';
+        // Los campos vaciados vuelven a "sin tocar": no se marcan como error
+        // mientras se escribe el RUT nuevo.
+        ['receptor-razonSocial', 'receptor-giro', 'receptor-direccion', 'receptor-comuna', 'receptor-email'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el && el.value === '') {
+                el.removeAttribute('data-tocado');
+                window.emisionUx && window.emisionUx.pintar(id, '');
+            }
+        });
     });
 
     // GUARDADO AUTOMATICO SIN EMITIR: al salir del correo, que es el ultimo
