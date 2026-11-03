@@ -401,7 +401,11 @@ if (isset($errores['lineas'])) {
         receptor_rut: function () {
             var v = rut.value.trim();
             if (v === '') { return 'Escribe el RUT del cliente, por ejemplo 77.724.622-4.'; }
-            return rutValido(v) ? '' : 'El digito verificador no calza con el RUT. Revisalo, por ejemplo 77.724.622-4.';
+            if (rutValido(v)) { return ''; }
+            // Con un nombre escrito para buscar, pide elegir de la lista (js/validar-campos.js).
+            return window.validarCampos && window.validarCampos.msgRut
+                ? window.validarCampos.msgRut(rut, v)
+                : 'El digito verificador no calza con el RUT. Revisalo, por ejemplo 77.724.622-4.';
         },
         receptor_razon_social: function () {
             return document.getElementById('receptor_razon_social').value.trim() === ''

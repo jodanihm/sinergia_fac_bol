@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '1.98',
+        'titulo'  => 'Mensaje mas claro cuando se busca un nombre y no se elige',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En facturas, cotizaciones y ordenes de compra, si escribes un nombre en el campo RUT y sales sin elegir de la lista, ahora dice "Elige un cliente (o proveedor) de la lista o escribe un RUT valido". Antes decia "RUT invalido" o que el digito verificador no calzaba, aunque no se hubiera escrito un RUT.',
+            'Si lo escrito si parece un RUT y el digito verificador esta mal, se sigue avisando eso.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '1.97',
         'titulo'  => 'Buscador de proveedores en las ordenes de compra',
         'tag'     => 'frontend',

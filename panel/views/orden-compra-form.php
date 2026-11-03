@@ -260,7 +260,10 @@ foreach ($productos as $p) {
         fetch('/compras/proveedor-por-rut?rut=' + encodeURIComponent(vRut))
             .then(function (r) { return r.json(); })
             .then(function (data) {
-                if (data.estado === 'rut_invalido') { aviso.textContent = 'RUT invalido.'; return; }
+                // El porque ya lo dice el error del campo (js/validar-campos.js:
+                // "elige de la lista" o "el digito verificador no calza"). Aqui
+                // se repetiria.
+                if (data.estado === 'rut_invalido') { aviso.textContent = ''; return; }
                 if (data.estado === 'no_encontrado') {
                     // NO ES UN ERROR: se compra a proveedores ocasionales.
                     aviso.textContent = 'Proveedor nuevo: completa sus datos; se guarda en tus proveedores al salir del correo.';
