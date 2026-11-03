@@ -184,9 +184,14 @@ final class MySqlClienteRepository
      * guion. Mismo orden que buscarParaSelector(): primero lo que EMPIEZA con lo
      * escrito, despues el resto.
      *
-     * @return array{clientes: list<array<string,mixed>>, total: int}
+     * $estado acota a los que se pueden facturar ('listos') o a los que les falta
+     * un dato ('incompletos'); cualquier otro valor no filtra. 'total' cuenta lo
+     * filtrado; 'todos' e 'incompletos' cuentan lo que calza con el texto, para
+     * poder mostrar el numero de cada filtro sin tener que elegirlo.
+     *
+     * @return array{clientes: list<array<string,mixed>>, total: int, todos: int, incompletos: int}
      */
-    public function explorar(int $cuentaId, string $texto, int $limit = 20, int $offset = 0): array
+    public function explorar(int $cuentaId, string $texto, int $limit = 20, int $offset = 0, string $estado = ''): array
     {
         $texto  = trim($texto);
         $where  = 'cuenta_id = :cuenta_id AND activo = 1';
@@ -210,9 +215,22 @@ final class MySqlClienteRepository
             $where .= ' AND (' . implode(' OR ', $o) . ')';
         }
 
-        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM cliente WHERE ' . $where);
+        $stmt = $this->pdo->prepare(
+            'SELECT COUNT(*) AS todos, COALESCE(SUM(' . self::SQL_INCOMPLETO . '), 0) AS incompletos FROM cliente WHERE ' . $where
+        );
         $stmt->execute($params);
-        $total = (int) $stmt->fetchColumn();
+        $conteo      = $stmt->fetch(PDO::FETCH_ASSOC);
+        $todos       = (int) $conteo['todos'];
+        $incompletos = (int) $conteo['incompletos'];
+
+        $total = $todos;
+        if ($estado === 'incompletos') {
+            $where .= ' AND ' . self::SQL_INCOMPLETO;
+            $total  = $incompletos;
+        } elseif ($estado === 'listos') {
+            $where .= ' AND NOT ' . self::SQL_INCOMPLETO;
+            $total  = $todos - $incompletos;
+        }
 
         $orden = '';
         if ($texto !== '') {
@@ -235,8 +253,10 @@ final class MySqlClienteRepository
         $stmt->execute($params);
 
         return [
-            'clientes' => array_map(fn (array $r): array => $this->mapear($r), $stmt->fetchAll(PDO::FETCH_ASSOC)),
-            'total'    => $total,
+            'clientes'    => array_map(fn (array $r): array => $this->mapear($r), $stmt->fetchAll(PDO::FETCH_ASSOC)),
+            'total'       => $total,
+            'todos'       => $todos,
+            'incompletos' => $incompletos,
         ];
     }
 

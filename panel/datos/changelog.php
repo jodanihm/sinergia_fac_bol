@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '2.02',
+        'titulo'  => 'Nueva ventana de clientes y carga visible en la factura',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Las pantallas de emision siempre abren mostrando la forma del formulario durante un segundo, con el menu en su lugar, para que se note que la pantalla esta preparandose.',
+            '"Buscar en mis clientes" ahora es mas amplia y muestra a cada cliente en columnas: nombre, RUT, giro y ubicacion. Se compara de un vistazo sin leer fila por fila.',
+            'Si tienes clientes con datos faltantes, puedes filtrar entre los listos para facturar y los que hay que completar, con cuantos hay en cada grupo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '2.01',
         'titulo'  => 'La factura abre mostrando su forma, y una ventana de clientes mas clara',
         'tag'     => 'frontend',

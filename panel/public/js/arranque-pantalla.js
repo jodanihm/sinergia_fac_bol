@@ -1,12 +1,11 @@
 /*
  * SKELETON AL PINCHAR UN ENLACE AL FORMULARIO DE EMISION.
  *
- * Casi toda la espera de abrir una pantalla ocurre ANTES de que llegue su HTML,
- * con la pantalla anterior todavia a la vista: ahi la pagina nueva no puede
- * mostrar nada. Por eso el aviso lo da la pantalla de origen. Si a los 300 ms no
- * ha llegado la respuesta, cambia su contenido por el skeleton de la que se
- * abre, con el menu real al lado (seccion 14 del design system). La navegacion
- * es la normal del navegador: aqui no se intercepta nada.
+ * Mientras llega el HTML de la pagina nueva sigue a la vista la pantalla anterior.
+ * Por eso el skeleton lo pone la pantalla de origen, EN EL MISMO CLIC y con el menu
+ * real al lado, y la vista lo continua al llegar hasta completar 1 segundo (ver
+ * views/emision-form.php: es una excepcion pedida a la seccion 14). La navegacion es
+ * la normal del navegador: aqui no se intercepta nada.
  *
  * El contenido solo se esconde, y vuelve si se regresa con "Atras" o si la
  * navegacion no prospera (se detuvo la carga, se cayo la red).
@@ -14,15 +13,18 @@
 (function () {
     'use strict';
 
-    var RUTAS = ['/ventas/factura', '/ventas/factura-exenta', '/ventas/boleta', '/ventas/nota-credito', '/ventas/nota-debito'];
-    var UMBRAL_MS = 300;
+    var VARIANTES = {
+        '/ventas/factura': 'factura',
+        '/ventas/factura-exenta': 'factura',
+        '/ventas/boleta': 'boleta',
+        '/ventas/nota-credito': 'nota',
+        '/ventas/nota-debito': 'nota'
+    };
     var DEVOLVER_MS = 15000;
-    var umbral = null;
     var devolver = null;
     var puesto = null;
 
     function restaurar() {
-        clearTimeout(umbral);
         clearTimeout(devolver);
         var main = document.getElementById('contenido');
         if (main) {
@@ -32,12 +34,13 @@
         if (puesto) { puesto.remove(); puesto = null; }
     }
 
-    function mostrar(titulo) {
+    function mostrar(titulo, variante) {
         var plantilla = document.getElementById('skeleton-emision');
         var main = document.getElementById('contenido');
         if (!plantilla || !main) { return; }
         puesto = plantilla.content.firstElementChild.cloneNode(true);
-        puesto.classList.add('arranque--visible');
+        puesto.classList.remove('arranque--factura');
+        puesto.classList.add('arranque--visible', 'arranque--' + variante);
         puesto.querySelector('[data-arranque-titulo]').textContent = titulo;
         main.insertBefore(puesto, main.firstChild);
         main.classList.add('main--saliendo');
@@ -51,10 +54,9 @@
         var a = e.target.closest ? e.target.closest('a[href]') : null;
         if (!a || (a.target && a.target !== '_self') || a.hasAttribute('download')) { return; }
         var destino = new URL(a.href, location.href);
-        if (destino.origin !== location.origin || RUTAS.indexOf(destino.pathname) === -1) { return; }
-        var titulo = a.textContent.trim();
+        if (destino.origin !== location.origin || !VARIANTES[destino.pathname]) { return; }
         restaurar();
-        umbral = setTimeout(function () { mostrar(titulo); }, UMBRAL_MS);
+        mostrar(a.textContent.trim(), VARIANTES[destino.pathname]);
     });
 
     // Volver con "Atras" puede restaurar la pagina tal como quedo (bfcache).

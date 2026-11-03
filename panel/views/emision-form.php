@@ -57,11 +57,15 @@
  *   - Ids nuevos en las celdas del detalle (det-{i}-{campo}) para poder
  *     enlazar y enfocar el error del motor; tambien en nuevaFilaHTML().
  *
- * ARRANQUE (noviembre 2026, seccion 14): al abrir la pantalla con GET, el
- * contenido espera tras un skeleton hasta que el formulario quedo armado. Menos
- * de 300 ms no muestra nada y, si se vio, dura al menos 400 ms. Sin JavaScript
- * no pasa nada de esto. Con POST (el 422 que vuelve) no aplica: el foco tiene
- * que ir directo al campo con error, y un control oculto no lo puede recibir.
+ * ARRANQUE (noviembre 2026): al abrir la pantalla con GET, el skeleton se ve
+ * SIEMPRE y durante AL MENOS 1 SEGUNDO, aunque todo haya cargado antes.
+ *
+ * ES UNA EXCEPCION PEDIDA A PROPOSITO A LA SECCION 14 del design system, que dice
+ * no mostrar nada bajo 300 ms y 400 ms de permanencia. El dueno del producto pidio
+ * el 03-11-2026 que tenga presencia. No "corregirla" hacia la 14 sin preguntarle.
+ *
+ * Sin JavaScript no pasa nada de esto. Con POST (el 422 que vuelve) no aplica: el
+ * foco tiene que ir directo al campo con error, y un control oculto no lo recibe.
  *
  * CONVERSION DE COTIZACION (segunda entrega): $form puede traer cotizacion_id,
  * cotizacion_numero y, en cada detalle, cotizacion_linea_id y pendiente. Cuando
@@ -229,29 +233,39 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 $conArranque = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET';
 ?>
 <?php if ($conArranque): ?>
+<?php
+$arranqueTitulo   = $tituloDoc;
+$arranqueVariante = $esBoleta ? 'boleta' : ($esNota ? 'nota' : 'factura');
+require __DIR__ . '/partials/_skeleton-emision.php';
+?>
+<?php /* Despues del skeleton y no antes: el segundo se cuenta desde que el skeleton
+         existe en la pagina. Antes, un fotograma temprano adelantaba el conteo hasta 100 ms. */ ?>
 <script>
 (function () {
     var raiz = document.documentElement, main = document.getElementById('contenido');
-    var inicio = performance.now(), terminado = false;
+    var inicio = null, terminado = false;
+    // El segundo se cuenta desde que el skeleton se pinta, no desde que se lee este
+    // script: entre las dos cosas se iban unos 70 ms de presencia.
+    requestAnimationFrame(function () { requestAnimationFrame(function () { inicio = performance.now(); }); });
     raiz.classList.add('pantalla-arrancando');
     if (main) { main.setAttribute('aria-busy', 'true'); }
     function fin() {
         if (terminado) { return; }
         terminado = true;
         raiz.classList.remove('pantalla-arrancando');
+        raiz.classList.add('pantalla-revelada');
         if (main) { main.removeAttribute('aria-busy'); }
     }
-    // El skeleton aparece a los 300 ms (por CSS) y, si se vio, dura 400 ms mas.
+    // Minimo 1 segundo en pantalla, aunque el formulario quede armado antes.
     function listo() {
-        var pasado = performance.now() - inicio;
-        if (pasado < 300) { fin(); } else { setTimeout(fin, Math.max(0, 700 - pasado)); }
+        if (inicio === null) { requestAnimationFrame(listo); return; }
+        setTimeout(fin, Math.max(0, 1000 - (performance.now() - inicio)));
     }
     document.addEventListener('DOMContentLoaded', listo);
     // Pase lo que pase, el formulario no se queda escondido.
     setTimeout(fin, 8000);
 })();
 </script>
-<?php $arranqueTitulo = $tituloDoc; require __DIR__ . '/partials/_skeleton-emision.php'; ?>
 <?php endif; ?>
 <div class="arranque-contenido">
 <div class="dash-header">
@@ -697,22 +711,34 @@ $conArranque = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET';
          documento, y sus campos no viajan en el POST. */ ?>
 <dialog class="dialogo-selector" id="selector-cliente" tabindex="-1" data-campo-rut="receptor-rut"<?= $esBoleta ? '' : ' data-avisar-faltantes'; ?> aria-labelledby="selector-cliente-titulo" aria-describedby="selector-cliente-sub">
     <div class="dialogo-selector__cabecera">
-        <div>
+        <span class="dialogo-selector__emblema"><?= iconoSvg('clientes', 22, ''); ?></span>
+        <div class="dialogo-selector__encabezado">
             <h2 class="dialogo-confirmar__titulo" id="selector-cliente-titulo">Buscar en mis clientes</h2>
-            <p class="dialogo-selector__sub" id="selector-cliente-sub">Pincha uno y sus datos pasan al receptor.</p>
+            <p class="dialogo-selector__sub" id="selector-cliente-sub">Por RUT, nombre, giro, direccion, comuna o correo. Pincha uno y sus datos pasan al receptor.</p>
         </div>
         <button type="button" class="boton-texto dialogo-selector__cerrar" data-selector-cerrar aria-label="Cerrar"><?= iconoSvg('cerrar', 20, ''); ?></button>
     </div>
     <div class="selector-busqueda">
-        <label for="selector-cliente-q">RUT, nombre, giro, direccion, comuna o correo</label>
+        <label for="selector-cliente-q" class="visualmente-oculto">Buscar por RUT, nombre, giro, direccion, comuna o correo</label>
         <div class="selector-busqueda__control">
-            <?= iconoSvg('buscar', 18, 'selector-busqueda__icono'); ?>
-            <input type="text" id="selector-cliente-q" data-selector-q autocomplete="off" spellcheck="false" enterkeyhint="search" maxlength="100" placeholder="Ejemplo: ferreteria temuco">
+            <?= iconoSvg('buscar', 20, 'selector-busqueda__icono'); ?>
+            <input type="text" id="selector-cliente-q" data-selector-q autocomplete="off" spellcheck="false" enterkeyhint="search" maxlength="100" placeholder="Escribe para buscar">
             <button type="button" class="selector-busqueda__limpiar" data-selector-limpiar aria-label="Limpiar busqueda" hidden><?= iconoSvg('cerrar', 16, ''); ?></button>
         </div>
     </div>
-    <p class="dialogo-selector__estado" data-selector-estado role="status" aria-live="polite"></p>
+    <div class="selector-barra">
+        <p class="dialogo-selector__estado" data-selector-estado role="status" aria-live="polite"></p>
+        <?php /* Solo aparecen si algun cliente tiene datos faltantes: sin eso, filtrar no sirve de nada. */ ?>
+        <div class="selector-filtros" data-selector-filtros role="group" aria-label="Filtrar clientes" hidden>
+            <button type="button" class="chip" data-selector-filtro="" aria-pressed="true">Todos <span data-cuenta></span></button>
+            <button type="button" class="chip" data-selector-filtro="listos" aria-pressed="false">Listos para facturar <span data-cuenta></span></button>
+            <button type="button" class="chip" data-selector-filtro="incompletos" aria-pressed="false">Con datos faltantes <span data-cuenta></span></button>
+        </div>
+    </div>
     <div class="dialogo-selector__zona" data-selector-zona>
+        <div class="selector-columnas" aria-hidden="true">
+            <span>Cliente</span><span>RUT</span><span>Giro</span><span>Ubicacion</span><span></span>
+        </div>
         <ul class="selector-clientes" data-selector-lista aria-label="Clientes encontrados"></ul>
         <div class="dialogo-selector__aviso" data-selector-aviso hidden>
             <span data-selector-aviso-icono></span>
@@ -722,10 +748,15 @@ $conArranque = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET';
         </div>
         <p class="dialogo-selector__mas"><button type="button" class="boton-secundario" data-selector-ver-mas hidden>Ver mas clientes</button></p>
     </div>
+    <div class="dialogo-selector__pie">
+        <p class="selector-teclas" aria-hidden="true"><kbd>&uarr;</kbd><kbd>&darr;</kbd> moverse <kbd>Enter</kbd> elegir <kbd>Esc</kbd> cerrar</p>
+        <button type="button" class="boton-secundario" data-selector-cerrar>Cancelar</button>
+    </div>
     <?php /* Iconos que el JS copia a las filas y a los avisos. */ ?>
     <template data-selector-iconos>
-        <span data-icono="alerta"><?= iconoSvg('alerta', 16, ''); ?></span>
-        <span data-icono="check"><?= iconoSvg('check', 16, ''); ?></span>
+        <span data-icono="alerta"><?= iconoSvg('alerta', 14, ''); ?></span>
+        <span data-icono="check"><?= iconoSvg('check', 14, ''); ?></span>
+        <span data-icono="flecha"><?= iconoSvg('flecha', 18, ''); ?></span>
         <span data-icono="aviso-alerta"><?= iconoSvg('alerta', 32, ''); ?></span>
         <span data-icono="aviso-clientes"><?= iconoSvg('clientes', 32, ''); ?></span>
     </template>
