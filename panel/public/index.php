@@ -10999,7 +10999,8 @@ function handleClientesExplorarGet(): never
     $q        = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 100);
     $pagina   = max(1, min(100000, (int) ($_GET['pagina'] ?? 1)));
     $porPagina = 20;
-    $r = clienteRepo()->explorar(Auth::cuentaId(), $q, $porPagina, ($pagina - 1) * $porPagina);
+    $estado = (string) ($_GET['estado'] ?? '');
+    $r = clienteRepo()->explorar(Auth::cuentaId(), $q, $porPagina, ($pagina - 1) * $porPagina, $estado);
     $clientes = array_map(static fn (array $c): array => [
         'rut'             => (string) $c['rut_cliente'],
         'razon_social'    => (string) $c['razon_social'],
@@ -11013,6 +11014,8 @@ function handleClientesExplorarGet(): never
     echo json_encode([
         'clientes' => $clientes,
         'total'    => $r['total'],
+        'todos'       => $r['todos'],
+        'incompletos' => $r['incompletos'],
         'pagina'   => $pagina,
         'hay_mas'  => $pagina * $porPagina < $r['total'],
     ], JSON_UNESCAPED_UNICODE);

@@ -48,6 +48,7 @@
         var avisoTitulo = dlg.querySelector('[data-selector-aviso-titulo]');
         var avisoTexto = dlg.querySelector('[data-selector-aviso-texto]');
         var limpiar = dlg.querySelector('[data-selector-limpiar]');
+        var filtros = dlg.querySelector('[data-selector-filtros]');
         var iconos = dlg.querySelector('[data-selector-iconos]').content;
         var avisoAccion = dlg.querySelector('[data-selector-aviso-accion]');
         var verMas = dlg.querySelector('[data-selector-ver-mas]');
@@ -60,6 +61,7 @@
         var pedido = 0;
         var pausa = null;
         var accionAviso = null;
+        var filtro = '';
 
         boton.hidden = false;
 
@@ -123,33 +125,63 @@
 
         function rutSinFormato(v) { return String(v).replace(/[^0-9kK]/g, '').toUpperCase(); }
 
+        // "Ferreteria El Roble" -> "FE". Solo letras: sin "S.A." ni numeros.
+        function iniciales(nombre) {
+            var p = String(nombre).split(/\s+/).filter(function (w) { return /^[\p{L}]/u.test(w); });
+            return ((p[0] || '?').charAt(0) + (p[1] ? p[1].charAt(0) : '')).toUpperCase();
+        }
+
+        function celda(clase) {
+            var s = document.createElement('span');
+            s.className = 'selector-clientes__' + clase;
+            return s;
+        }
+
         function fila(c, i, palabras) {
             var li = document.createElement('li');
             var b = document.createElement('button');
             b.type = 'button';
             b.className = 'selector-clientes__fila';
             b.setAttribute('data-indice', String(i));
-            var cabeza = document.createElement('span');
-            cabeza.className = 'selector-clientes__cabeza';
-            cabeza.appendChild(linea('nombre', c.razon_social, palabras));
-            cabeza.appendChild(linea('rut', formatearRut(c.rut), palabras));
-            b.appendChild(cabeza);
-            if (c.nombre_fantasia) { b.appendChild(linea('fantasia', c.nombre_fantasia, palabras)); }
-            if (c.giro) { b.appendChild(linea('datos', c.giro, palabras)); }
-            var lugar = [c.direccion, c.comuna].filter(Boolean).join(', ');
-            var contacto = [lugar, c.email].filter(Boolean).join(' · ');
-            if (contacto) { b.appendChild(linea('datos', contacto, palabras)); }
+
+            var avatar = celda('avatar');
+            avatar.setAttribute('aria-hidden', 'true');
+            avatar.textContent = iniciales(c.razon_social);
+            b.appendChild(avatar);
+
+            var cliente = celda('cliente');
+            cliente.appendChild(linea('nombre', c.razon_social, palabras));
+            if (c.nombre_fantasia) { cliente.appendChild(linea('secundario', c.nombre_fantasia, palabras)); }
+            if (c.email) { cliente.appendChild(linea('secundario', c.email, palabras)); }
             if (avisarFaltantes && c.faltan && c.faltan.length) {
-                var falta = linea('falta', 'Le falta para facturar: ' + c.faltan.join(', '));
+                var falta = linea('marca-estado selector-clientes__marca-estado--falta', 'Falta ' + c.faltan.join(', '));
                 falta.insertBefore(icono('alerta'), falta.firstChild);
-                b.appendChild(falta);
+                cliente.appendChild(falta);
             }
             if (campoRut.value.trim() !== '' && rutSinFormato(campoRut.value) === rutSinFormato(c.rut)) {
                 b.setAttribute('aria-current', 'true');
-                var actual = linea('actual', 'Es el receptor actual');
+                var actual = linea('marca-estado selector-clientes__marca-estado--actual', 'Receptor actual');
                 actual.insertBefore(icono('check'), actual.firstChild);
-                b.appendChild(actual);
+                cliente.appendChild(actual);
             }
+            b.appendChild(cliente);
+
+            b.appendChild(linea('rut', formatearRut(c.rut), palabras));
+
+            var giro = linea('giro', c.giro || '', palabras);
+            if (c.giro) { giro.title = c.giro; }
+            b.appendChild(giro);
+
+            var lugar = celda('lugar');
+            if (c.comuna) { lugar.appendChild(linea('comuna', c.comuna, palabras)); }
+            if (c.direccion) { lugar.appendChild(linea('secundario', c.direccion, palabras)); }
+            b.appendChild(lugar);
+
+            var ir = celda('ir');
+            ir.setAttribute('aria-hidden', 'true');
+            ir.appendChild(icono('flecha'));
+            b.appendChild(ir);
+
             li.appendChild(b);
             return li;
         }
@@ -160,9 +192,11 @@
                 var li = document.createElement('li');
                 li.className = 'selector-clientes__fila selector-clientes__fila--skeleton';
                 li.setAttribute('aria-hidden', 'true');
-                li.innerHTML = '<span class="selector-clientes__cabeza"><span class="skeleton skeleton--nombre"></span>'
-                    + '<span class="skeleton skeleton--rut"></span></span><span class="skeleton skeleton--datos"></span>'
-                    + '<span class="skeleton skeleton--datos skeleton--corto"></span>';
+                li.innerHTML = '<span class="skeleton selector-clientes__avatar"></span>'
+                    + '<span class="selector-clientes__cliente"><span class="skeleton skeleton--nombre"></span><span class="skeleton skeleton--datos"></span></span>'
+                    + '<span class="skeleton skeleton--rut"></span>'
+                    + '<span class="skeleton skeleton--datos selector-clientes__giro"></span>'
+                    + '<span class="selector-clientes__lugar"><span class="skeleton skeleton--corto"></span><span class="skeleton skeleton--datos"></span></span>';
                 lista.appendChild(li);
             }
         }
@@ -179,14 +213,24 @@
         }
 
         function resumen(texto) {
-            var hay = texto !== '';
             if (total === 0) { return ''; }
             var cuantos = total === 1
-                ? (hay ? '1 cliente coincide' : '1 cliente')
-                : total.toLocaleString('es-CL') + (hay ? ' clientes coinciden' : ' clientes');
+                ? (texto !== '' ? '1 cliente coincide' : '1 cliente')
+                : total.toLocaleString('es-CL') + (texto !== '' ? ' clientes coinciden' : ' clientes');
             return clientes.length < total
-                ? cuantos + '. Se ven los primeros ' + clientes.length.toLocaleString('es-CL') + '.'
-                : cuantos + '.';
+                ? cuantos + ', se ven ' + clientes.length.toLocaleString('es-CL')
+                : cuantos;
+        }
+
+        function pintarFiltros(data) {
+            // En boleta no falta nada, y sin faltantes los tres filtros son el mismo.
+            filtros.hidden = !avisarFaltantes || (data.incompletos === 0 && filtro === '');
+            var cuentas = { '': data.todos, listos: data.todos - data.incompletos, incompletos: data.incompletos };
+            Array.prototype.forEach.call(filtros.querySelectorAll('[data-selector-filtro]'), function (b) {
+                var f = b.getAttribute('data-selector-filtro');
+                b.setAttribute('aria-pressed', f === filtro ? 'true' : 'false');
+                b.querySelector('[data-cuenta]').textContent = '(' + cuentas[f].toLocaleString('es-CL') + ')';
+            });
         }
 
         function pintarResultado(texto, desde) {
@@ -197,7 +241,12 @@
             aviso.hidden = true;
             estado.textContent = resumen(texto);
             if (total === 0) {
-                if (texto !== '') {
+                if (texto === '' && filtro !== '') {
+                    mostrarAviso('clientes', 'Ningun cliente en este filtro', 'Prueba viendo todos tus clientes.', function () {
+                        filtro = '';
+                        cargar(1);
+                    }, 'Ver todos');
+                } else if (texto !== '') {
                     mostrarAviso('clientes', 'Ningun cliente coincide con "' + texto + '"', 'Prueba con menos palabras o solo parte del RUT.', function () {
                         limpiarBusqueda();
                     }, 'Limpiar busqueda');
@@ -240,6 +289,7 @@
                 } else {
                     aviso.hidden = true;
                     verMas.hidden = true;
+                    estado.textContent = '';
                     pintarSkeleton();
                     inicioSkeleton = Date.now();
                 }
@@ -264,7 +314,8 @@
                 if (falta > 0) { setTimeout(fn, falta); } else { fn(); }
             }
 
-            var url = URL_BUSQUEDA + '?q=' + encodeURIComponent(texto) + '&pagina=' + numero;
+            var url = URL_BUSQUEDA + '?q=' + encodeURIComponent(texto) + '&pagina=' + numero
+                + (filtro ? '&estado=' + encodeURIComponent(filtro) : '');
             fetch(url, { headers: { Accept: 'application/json' }, signal: ctrl ? ctrl.signal : undefined })
                 .then(function (r) {
                     if (!r.ok) { throw r; }
@@ -278,6 +329,7 @@
                         clientes = agregando ? clientes.concat(data.clientes) : data.clientes;
                         pagina = numero;
                         total = data.total;
+                        pintarFiltros(data);
                         pintarResultado(texto, desde);
                         if (focoEnVerMas) {
                             var nueva = lista.querySelector('[data-indice="' + desde + '"]');
@@ -302,6 +354,8 @@
         boton.addEventListener('click', function () {
             q.value = '';
             limpiar.hidden = true;
+            filtro = '';
+            filtros.hidden = true;
             clientes = [];
             total = 0;
             lista.innerHTML = '';
@@ -345,6 +399,7 @@
 
         function limpiarBusqueda() {
             q.value = '';
+            filtro = '';
             limpiar.hidden = true;
             cargar(1);
             q.focus();
@@ -377,6 +432,17 @@
             if (e.key === 'ArrowUp' && i === 0) { q.focus(); return; }
             var destino = filas[i + (e.key === 'ArrowDown' ? 1 : -1)];
             if (destino) { destino.focus(); }
+        });
+
+        filtros.addEventListener('click', function (e) {
+            var b = e.target.closest('[data-selector-filtro]');
+            if (!b) { return; }
+            filtro = b.getAttribute('data-selector-filtro');
+            // Se marca en el acto: la respuesta puede tardar.
+            Array.prototype.forEach.call(filtros.querySelectorAll('[data-selector-filtro]'), function (o) {
+                o.setAttribute('aria-pressed', o === b ? 'true' : 'false');
+            });
+            cargar(1);
         });
 
         avisoAccion.addEventListener('click', function () { if (accionAviso) { accionAviso(); } });
