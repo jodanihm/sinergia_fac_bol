@@ -62,6 +62,22 @@
         var r = 11 - (suma % 11);
         return dv === (r === 11 ? '0' : (r === 10 ? 'K' : String(r)));
     }
+    // EL MENSAJE DEPENDE DE LO ESCRITO. En un campo con buscador
+    // (js/buscador-clientes.js) se escribe un nombre para buscar; si se sale
+    // sin elegir, "el digito verificador no calza" no tiene sentido: no se
+    // escribio un RUT. Ahi se pide elegir de la lista. Con algo que si parece
+    // un RUT (7 digitos o mas, sin otras letras que la K) se mantiene el
+    // aviso del digito verificador.
+    function msgRut(c, v) {
+        if (c && c.hasAttribute('data-buscar-cliente')) {
+            var pareceRut = !/[a-jl-z]/i.test(v) && v.replace(/\D/g, '').length >= 7;
+            if (!pareceRut) {
+                var quien = c.getAttribute('data-buscar-fuente') === 'proveedores' ? 'proveedor' : 'cliente';
+                return 'Elige un ' + quien + ' de la lista o escribe un RUT valido, por ejemplo 77.724.622-4.';
+            }
+        }
+        return MSG_RUT;
+    }
     function rutFormateado(v) {
         var l = rutLimpio(v);
         return l.slice(0, -1).replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + l.slice(-1);
@@ -122,7 +138,7 @@
         if (tipo === 'password') { return null; }
         if (tipo === 'email') { return msgCorreo(v); }
         if (/(^|[_\-\[])rut([_\-\]]|$)/i.test(c.name || '') || /(^|[_\-])rut([_\-]|$)/i.test(c.id)) {
-            return rutValido(v) ? '' : MSG_RUT;
+            return rutValido(v) ? '' : msgRut(c, v);
         }
         var modo = c.getAttribute('inputmode');
         if (modo === 'numeric' && !/^\d+$/.test(v)) { return 'Escribe solo numeros, sin puntos ni espacios.'; }
@@ -335,5 +351,5 @@
         inicial();
     }
 
-    window.validarCampos = { msgCorreo: msgCorreo, rutValido: rutValido, revisar: revisar };
+    window.validarCampos = { msgCorreo: msgCorreo, msgRut: msgRut, rutValido: rutValido, revisar: revisar };
 })();

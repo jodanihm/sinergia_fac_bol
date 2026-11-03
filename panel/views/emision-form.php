@@ -893,7 +893,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         var ord = window.emisionUx ? window.emisionUx.ordenarRut(v) : null;
         if (ord !== null) {
             rut.value = ord.texto;
-            window.emisionUx.pintar('receptor-rut', ord.valido ? '' : window.emisionUx.MSG_RUT);
+            window.emisionUx.pintar('receptor-rut', ord.valido ? '' : window.emisionUx.msgRut());
             if (!ord.valido) { aviso.textContent = ''; return; }
         }
         fetch('/ventas/cliente-por-rut?rut=' + encodeURIComponent(rut.value.trim()))
@@ -901,7 +901,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             .then(function (data) {
                 if (data.estado === 'rut_invalido') {
                     aviso.textContent = '';
-                    if (window.emisionUx) { window.emisionUx.pintar('receptor-rut', window.emisionUx.MSG_RUT); }
+                    if (window.emisionUx) { window.emisionUx.pintar('receptor-rut', window.emisionUx.msgRut()); }
                     return;
                 }
                 if (data.estado === 'no_encontrado') {
@@ -1022,6 +1022,12 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     var ES_BOLETA = <?= $esBoleta ? 'true' : 'false'; ?>;
     var iconoError = <?= json_encode(iconoSvg('alerta', 16, '')); ?>;
     var MSG_RUT = 'El digito verificador no calza con el RUT. Revisalo, por ejemplo 77.724.622-4.';
+    // Con un nombre escrito para buscar, pide elegir de la lista en vez de
+    // hablar del digito verificador (misma regla que js/validar-campos.js).
+    function msgRutReceptor() {
+        var el = document.getElementById('receptor-rut');
+        return window.validarCampos && window.validarCampos.msgRut ? window.validarCampos.msgRut(el, el.value.trim()) : MSG_RUT;
+    }
 
     form.noValidate = true;
 
@@ -1093,7 +1099,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         var v = c.value.trim();
         if (v === '') { return FALTA_RECEPTOR[id] || null; }
         if (id === 'receptor-email') { return msgCorreo(v); }
-        if (id === 'receptor-rut') { return ordenarRut(v).valido ? '' : MSG_RUT; }
+        if (id === 'receptor-rut') { return ordenarRut(v).valido ? '' : msgRutReceptor(); }
         return '';
     }
     function revisarCampoReceptor(id) {
@@ -1134,7 +1140,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         c.addEventListener('input', function () { if (c.hasAttribute('data-tocado')) { revisarCampoReceptor(id); } });
     });
 
-    window.emisionUx = { ordenarRut: ordenarRut, pintar: pintar, MSG_RUT: MSG_RUT, revisarReceptor: revisarReceptor, receptorListo: receptorListo };
+    window.emisionUx = { ordenarRut: ordenarRut, pintar: pintar, MSG_RUT: MSG_RUT, msgRut: msgRutReceptor, revisarReceptor: revisarReceptor, receptorListo: receptorListo };
 
     function visible(el) { return !el.disabled && !el.closest('[hidden]'); }
     function revisar() {
