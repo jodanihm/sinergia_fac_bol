@@ -4072,47 +4072,7 @@ button.selector-clientes__fila:focus-visible .selector-clientes__ir { color: var
 .skeleton--rut { width: 100%; }
 .skeleton--datos { width: 85%; height: 0.85em; }
 .skeleton--corto { width: 50%; }
-.skeleton--boton { flex: none; width: 13rem; height: 2.4rem; }
-.skeleton--subtitulo { width: min(32rem, 90%); height: 0.9em; }
-.skeleton--etiqueta { width: 35%; height: 0.8em; margin: var(--esp-3) 0 var(--esp-1); }
-.skeleton--control { height: 2.2rem; }
-.skeleton--ayuda { height: 0.75em; margin-top: 5px; }
-.skeleton--check { width: 45%; height: 1.2em; }
-.skeleton--monto { width: 5rem; margin-left: auto; }
-.skeleton--contador { width: 2.5rem; height: 0.5em; margin: 2px 0 0 auto; }
 
-/* --- Arranque de pantalla (partials/_skeleton-emision.php) --------------------
-   Lo controla el JavaScript: sin el, ni se ve el skeleton ni se esconde nada.
-   .arranque-contenido no crea caja, para que el formulario no cambie en nada una
-   vez armado. Visible desde el primer momento y al menos 1 segundo: excepcion
-   pedida a la seccion 14, ver views/emision-form.php. */
-.arranque { display: none; }
-.arranque-contenido { display: contents; }
-.arranque--visible,
-.pantalla-arrancando .arranque { display: block; }
-.pantalla-arrancando .arranque-contenido {
-    display: block;
-    height: 0;
-    overflow: hidden;
-    visibility: hidden;
-}
-.pantalla-revelada .arranque-contenido > *:not(dialog) { animation: arranque-revela 200ms ease-out; }
-@keyframes arranque-revela { from { opacity: 0; } }
-.main--saliendo > *:not(.arranque--visible) { display: none; }
-/* Cada tipo de documento tiene bloques distintos: lo mismo que bifurca la vista. */
-.arranque--solo-nota,
-.arranque--solo-boleta { display: none; }
-.arranque--nota .arranque--solo-nota,
-.arranque--boleta .arranque--solo-boleta { display: block; }
-.arranque--solo-nota { min-height: 30rem; box-sizing: border-box; }
-.arranque .ficha { min-height: 8.5rem; align-content: start; }
-.arranque--nota .arranque--sin-nota,
-.arranque--boleta .arranque--sin-boleta,
-.arranque--boleta .arranque--solo-factura,
-.arranque--nota .arranque--solo-factura { display: none; }
-@media (prefers-reduced-motion: reduce) {
-    .pantalla-revelada .arranque-contenido > *:not(dialog) { animation: none; }
-}
 @keyframes skeleton-brillo { to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) {
     .skeleton::after { animation: none; opacity: 0; }

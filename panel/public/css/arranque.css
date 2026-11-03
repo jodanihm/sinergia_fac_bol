@@ -1,0 +1,118 @@
+/*
+ * SKELETON DE ARRANQUE DE TODAS LAS PANTALLAS (partials/_arranque.php).
+ *
+ * NO HAY UN SKELETON DIBUJADO POR PANTALLA. Mientras <html> tenga la clase
+ * .pantalla-arrancando, el contenido real de <main> se PINTA como skeleton: los
+ * textos son barras, los controles bloques, y titulos y encabezados de tabla
+ * siguen legibles (design system, seccion 14). Por eso mide exactamente lo mismo
+ * que la pantalla, no hay salto al terminar y una pantalla nueva lo tiene sola.
+ *
+ * Solo cambia pintura, NUNCA tamano: nada de display, padding, margin ni
+ * font-size aqui. Si una regla cambia el layout, la pantalla salta al terminar.
+ *
+ * Va en archivo propio porque el panel (style.css) y el panel de control
+ * (admin.css) tienen hojas distintas. Los var() llevan respaldo por eso.
+ */
+@media screen {
+    html.pantalla-arrancando main {
+        --arranque-hueso: var(--color-borde-tenue, #e2e2e6);
+        --arranque-brillo: rgba(255, 255, 255, 0.65);
+        pointer-events: none;
+        cursor: progress;
+    }
+
+    /* El panel de control es oscuro: un hueso claro ahi encandila. */
+    html.pantalla-arrancando main.content {
+        --arranque-hueso: rgba(255, 255, 255, 0.1);
+        --arranque-brillo: rgba(255, 255, 255, 0.1);
+    }
+
+    /* Todo el texto se apaga, menos titulos y encabezados de tabla. Tampoco se toca
+       lo que CONTIENE un titulo: el color se hereda, y un titulo sin color propio
+       (el de una tarjeta) se apagaria con su contenedor. */
+    html.pantalla-arrancando main *:not(dialog, dialog *, h1, h2, h3, h4, th, :is(h1, h2, h3, h4, th) *, :has(h1, h2, h3, h4, th)) {
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
+        text-shadow: none !important;
+        text-decoration-color: transparent !important;
+        caret-color: transparent !important;
+    }
+    /* -webkit-text-fill-color SE HEREDA, a diferencia de color cuando el elemento
+       tiene el suyo: sin esto, el contenedor apagado apaga tambien a sus titulos. */
+    html.pantalla-arrancando main :is(h1, h2, h3, h4, th, dialog),
+    html.pantalla-arrancando main :is(h1, h2, h3, h4, th, dialog) * {
+        -webkit-text-fill-color: currentcolor !important;
+    }
+    html.pantalla-arrancando main *:not(dialog *)::placeholder { color: transparent !important; }
+    html.pantalla-arrancando main *:not(dialog, dialog *, :is(h1, h2, h3, h4, th) *)::marker { color: transparent !important; }
+    html.pantalla-arrancando main *:not(dialog, dialog *, h1, h2, h3, h4, th, :is(h1, h2, h3, h4, th) *)::before,
+    html.pantalla-arrancando main *:not(dialog, dialog *, h1, h2, h3, h4, th, :is(h1, h2, h3, h4, th) *)::after {
+        color: transparent !important;
+        -webkit-text-fill-color: transparent !important;
+    }
+
+    /* Barras: bloques de texto sin otros bloques adentro, y hojas con texto. */
+    html.pantalla-arrancando main :is(p, small, dt, dd, li, label, legend, caption, figcaption, address, blockquote):not(:empty, dialog *, :is(h1, h2, h3, h4, th) *, :has(:is(div, p, ul, ol, dl, table, form, input, select, textarea, button, section, details, img, svg, h1, h2, h3, h4, pre))),
+    html.pantalla-arrancando main :is(span, a, strong, b, em, i, code, time, td, div, abbr, pre, summary, output, kbd, mark):not(:empty, :has(*), dialog *, :is(h1, h2, h3, h4, th) *) {
+        /* Una barra POR LINEA (1lh), no un rectangulo del alto del bloque. La capa de
+           encima es el brillo, que recorre el ancho. */
+        background-image:
+            linear-gradient(90deg, transparent, var(--arranque-brillo), transparent),
+            linear-gradient(to bottom, transparent 18%, var(--arranque-hueso) 18%, var(--arranque-hueso) 82%, transparent 82%) !important;
+        background-size: 50% 100%, 100% 1lh !important;
+        background-repeat: no-repeat, repeat-y !important;
+        background-position: -100% 0, 0 0;
+        background-clip: content-box !important;
+        animation: arranque-barra 1600ms ease-in-out infinite;
+    }
+
+    /* Controles, botones y etiquetas: el bloque entero, con el mismo borde. */
+    html.pantalla-arrancando main :is(input:not([type="checkbox"], [type="radio"]), select, textarea, button, [class*="boton"], .btn, .badge, .chip, .tag):not(dialog *, :is(h1, h2, h3, h4, th) *) {
+        background-color: var(--arranque-hueso) !important;
+        background-image: linear-gradient(90deg, transparent, var(--arranque-brillo), transparent) !important;
+        background-size: 50% 100% !important;
+        background-repeat: no-repeat !important;
+        background-position: -100% 0;
+        background-clip: border-box !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
+        outline-color: transparent !important;
+        animation: arranque-bloque 1600ms ease-in-out infinite;
+    }
+    html.pantalla-arrancando main :is(input[type="checkbox"], input[type="radio"]):not(dialog *) { opacity: 0.25; }
+
+    /* Imagenes e iconos: conservan su caja, sin dibujo. */
+    html.pantalla-arrancando main img:not(dialog *) {
+        object-position: -99999px 0;
+        background-color: var(--arranque-hueso);
+        border-radius: 4px;
+    }
+    html.pantalla-arrancando main svg:not(dialog *, :is(h1, h2, h3, h4, th) *) {
+        background-color: var(--arranque-hueso);
+        border-radius: 4px;
+    }
+    html.pantalla-arrancando main svg:not(dialog *, :is(h1, h2, h3, h4, th) *) * {
+        fill: transparent !important;
+        stroke: transparent !important;
+    }
+    html.pantalla-arrancando main canvas:not(dialog *) { visibility: hidden; }
+
+    /* Al terminar, el contenido entra con una transicion corta. */
+    html.pantalla-revelada main { animation: arranque-revela 200ms ease-out; }
+}
+
+@keyframes arranque-barra {
+    from { background-position: -100% 0, 0 0; }
+    to { background-position: 200% 0, 0 0; }
+}
+@keyframes arranque-bloque {
+    from { background-position: -100% 0; }
+    to { background-position: 200% 0; }
+}
+@keyframes arranque-revela { from { opacity: 0.4; } }
+
+/* Con movimiento reducido se apaga el brillo, no el skeleton. */
+@media (prefers-reduced-motion: reduce) {
+    html.pantalla-arrancando main * { animation: none !important; }
+    html.pantalla-revelada main { animation: none; }
+}
