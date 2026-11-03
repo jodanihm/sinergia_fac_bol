@@ -49,7 +49,7 @@ $cssHref    = '/css/landing.css' . ($cssVersion ? '?v=' . $cssVersion : '');
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SinergIA -- Facturacion electronica ante el SII para PyMEs</title>
 <meta name="description" content="Emite facturas, boletas y notas de credito y debito directo al SII. Control de folios y CAF, envio automatico a tus clientes, informes y facturacion masiva desde Excel.">
-<link rel="icon" href="/img/logo.png">
+<link rel="icon" type="image/png" href="/img/icono.png<?= ($iconoVersion = @filemtime(__DIR__ . '/../public/img/icono.png')) ? '?v=' . $iconoVersion : ''; ?>">
 <link rel="stylesheet" href="<?= htmlspecialchars($cssHref); ?>">
 </head>
 <body>

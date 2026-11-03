@@ -33,6 +33,15 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '2.03',
+        'titulo'  => 'Icono de Sinergia en las pestanas del navegador',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El panel, el panel de control, la pagina de inicio y la de planes muestran el icono de Sinergia en la pestana del navegador. Asi se reconoce entre las demas pestanas abiertas.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '2.02',
         'titulo'  => 'Nueva ventana de clientes y carga visible en la factura',
         'tag'     => 'frontend',

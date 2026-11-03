@@ -30,6 +30,7 @@ $adminCssHref    = '/css/admin.css' . ($adminCssVersion ? '?v=' . $adminCssVersi
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Panel de control</title>
+<link rel="icon" type="image/png" href="/img/icono.png<?= ($iconoVersion = @filemtime(__DIR__ . '/../public/img/icono.png')) ? '?v=' . $iconoVersion : ''; ?>">
 <link rel="stylesheet" href="<?= htmlspecialchars($adminCssHref); ?>">
 <?php /* Esta URL no debe aparecer en buscadores: no es una pagina del producto. */ ?>
 <meta name="robots" content="noindex, nofollow">
