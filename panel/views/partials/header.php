@@ -46,6 +46,7 @@ $cssHref    = '/css/style.css' . ($cssVersion ? '?v=' . $cssVersion : '');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= htmlspecialchars($titulo ?? 'Panel'); ?></title>
+<link rel="icon" type="image/png" href="/img/icono.png<?= ($iconoVersion = @filemtime(__DIR__ . '/../../public/img/icono.png')) ? '?v=' . $iconoVersion : ''; ?>">
 <link rel="stylesheet" href="<?= htmlspecialchars($cssHref); ?>">
 <?php
 // Validacion compartida de formularios (ver el encabezado del archivo). Misma

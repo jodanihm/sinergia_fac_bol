@@ -41,6 +41,7 @@ $adminEmail = (string) ($adminStmtEmail->fetchColumn() ?: '');
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title><?= htmlspecialchars($titulo ?? 'Panel de control'); ?></title>
+<link rel="icon" type="image/png" href="/img/icono.png<?= ($iconoVersion = @filemtime(__DIR__ . '/../../../public/img/icono.png')) ? '?v=' . $iconoVersion : ''; ?>">
 <link rel="stylesheet" href="<?= htmlspecialchars($adminCssHref); ?>">
 <?php
 // Validacion compartida de formularios (ver el encabezado del archivo). Misma
