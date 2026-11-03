@@ -3713,24 +3713,16 @@ fieldset.pregunta > legend + * { clear: both; }
 .pregunta select { max-width: 20rem; }
 .resumen-importacion { font-size: var(--txt-md); line-height: 1.5; margin: 0 0 var(--esp-3); }
 
-/* --- Buscador de clientes (js/buscador-clientes.js) -------------------------
-   La lista flota bajo el campo de RUT sin empujar el formulario. */
-.buscador-clientes {
-    position: relative;
-}
-.buscador-clientes > input {
-    width: 100%;
-}
+/* --- Buscador de clientes, proveedores y productos (js/buscador-clientes.js) --
+   La lista cuelga del <body> y el JS la ubica (fixed) bajo el campo: asi no la
+   recorta una tabla con scroll horizontal ni empuja el formulario. */
 .buscador-clientes__lista {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    z-index: 50;
-    min-width: 16rem;
+    position: fixed;
+    z-index: 1000;
+    max-width: calc(100vw - 2rem);
     max-height: 18rem;
     overflow-y: auto;
-    margin: var(--esp-1) 0 0;
+    margin: 0;
     padding: var(--esp-1) 0;
     list-style: none;
     background: var(--color-superficie);
@@ -3761,4 +3753,126 @@ fieldset.pregunta > legend + * { clear: both; }
     padding: var(--esp-2) var(--esp-3);
     font-size: var(--txt-sm);
     color: var(--color-texto-tenue);
+}
+
+/* --- Modal "Buscar en mis clientes" (js/selector-clientes.js) ----------------
+   Alto fijo: mientras se escribe el modal no salta aunque cambie la cantidad de
+   resultados, y lo unico que se desplaza es la lista. */
+.tarjeta__cabecera {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--esp-2) var(--esp-3);
+    margin-bottom: var(--esp-3);
+}
+.tarjeta__cabecera h2 { margin: 0; }
+.tarjeta__cabecera .boton-secundario {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--esp-2);
+}
+.tarjeta__cabecera .boton-secundario[hidden] { display: none; }
+.dialogo-selector {
+    box-sizing: border-box;
+    width: min(44rem, calc(100vw - 2rem));
+    height: min(40rem, calc(100dvh - 2rem));
+    padding: var(--esp-5);
+    border: 1px solid var(--color-borde-suave);
+    border-radius: var(--radio-md);
+    box-shadow: var(--sombra-lg);
+    color: var(--color-texto);
+}
+.dialogo-selector[open] { display: flex; flex-direction: column; }
+.dialogo-selector::backdrop { background: rgba(0, 44, 72, 0.35); }
+.dialogo-selector__cabecera {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--esp-3);
+}
+.dialogo-selector__cabecera .dialogo-confirmar__titulo { margin: 0; }
+.dialogo-selector__cerrar {
+    display: inline-flex;
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+.dialogo-selector__busqueda label { margin-top: var(--esp-2); }
+.dialogo-selector__busqueda input { width: 100%; max-width: none; box-sizing: border-box; }
+.dialogo-selector__estado {
+    min-height: 1.3em;
+    margin: var(--esp-2) 0;
+    font-size: var(--txt-sm);
+    color: var(--color-texto-tenue);
+}
+.dialogo-selector__zona {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    border-top: 1px solid var(--color-borde-suave);
+}
+.dialogo-selector__aviso { padding: var(--esp-5) var(--esp-3); text-align: center; }
+.dialogo-selector__aviso p { margin: 0 0 var(--esp-3); }
+.dialogo-selector__mas { margin: var(--esp-3) 0; text-align: center; }
+.selector-clientes { margin: 0; padding: 0; list-style: none; }
+.selector-clientes__fila {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 2px;
+    box-sizing: border-box;
+    width: 100%;
+    padding: var(--esp-3);
+    border: 0;
+    border-bottom: 1px solid var(--color-borde-suave);
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+button.selector-clientes__fila:hover,
+button.selector-clientes__fila:focus-visible { background: var(--color-primario-suave); }
+button.selector-clientes__fila:focus-visible { outline: 2px solid var(--color-primario); outline-offset: -2px; }
+.selector-clientes__cabeza {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0 var(--esp-3);
+}
+.selector-clientes__nombre { font-weight: 600; }
+.selector-clientes__rut { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.selector-clientes__fantasia,
+.selector-clientes__datos { font-size: var(--txt-sm); color: var(--color-texto-tenue); }
+.selector-clientes__falta { font-size: var(--txt-sm); font-weight: 600; color: var(--color-error); }
+
+/* Skeleton: las filas de arriba, sin datos. Con movimiento reducido se apaga el
+   brillo, no el skeleton (seccion 14 del design system). */
+.selector-clientes__fila--skeleton { justify-content: center; min-height: 5.25rem; cursor: default; gap: var(--esp-2); }
+.skeleton {
+    position: relative;
+    display: block;
+    height: 1em;
+    overflow: hidden;
+    border-radius: var(--radio-sm);
+    background: var(--color-superficie-tenue);
+}
+.skeleton::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.06), transparent);
+    animation: skeleton-brillo 1600ms ease-in-out infinite;
+}
+.skeleton--nombre { width: 45%; }
+.skeleton--rut { width: 6rem; }
+.skeleton--datos { width: 70%; height: 0.85em; }
+@keyframes skeleton-brillo { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+    .skeleton::after { animation: none; opacity: 0; }
 }

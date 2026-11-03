@@ -36,6 +36,21 @@
     'use strict';
 
     var CERCA = 0.85;
+    var punteroAbajo = false;
+    var pendientes = [];
+    document.addEventListener('pointerdown', function () { punteroAbajo = true; }, true);
+    function soltar() {
+        if (!punteroAbajo) { return; }
+        punteroAbajo = false;
+        // Despues del 'click', que se dispara justo tras el pointerup.
+        setTimeout(function () {
+            var lista = pendientes;
+            pendientes = [];
+            lista.forEach(refrescar);
+        }, 0);
+    }
+    document.addEventListener('pointerup', soltar, true);
+    document.addEventListener('pointercancel', soltar, true);
     var descriptor = {
         INPUT: Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value'),
         TEXTAREA: Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
@@ -57,7 +72,17 @@
         c.nodo.classList.toggle('form-contador--cerca', !excede && largo >= max * CERCA);
         c.nodo.classList.toggle('form-contador--excede', excede);
         if (c.discreto) {
-            c.nodo.hidden = !excede && largo < max * CERCA && document.activeElement !== campo;
+            var ocultar = !excede && largo < max * CERCA && document.activeElement !== campo;
+            // NO SE ESCONDE CON EL BOTON DEL MOUSE APRETADO. El campo pierde el
+            // foco en el mousedown sobre otra cosa ("Agregar linea"); si el
+            // contador desaparece ahi, la fila se encoge, el boton sube y el
+            // mouseup cae fuera de el: el clic se pierde y la linea no se
+            // agrega. Se esconde despues de soltar, cuando el clic ya ocurrio.
+            if (ocultar && punteroAbajo) {
+                pendientes.push(campo);
+            } else {
+                c.nodo.hidden = ocultar;
+            }
         }
         var aviso = excede
             ? 'El SII acepta ' + max + ' caracteres. Saldra asi: "' + recortar(campo.value, max) + '"'

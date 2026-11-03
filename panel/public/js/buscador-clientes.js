@@ -1,5 +1,5 @@
 /*
- * BUSCADOR DE CLIENTES, COMPARTIDO.
+ * BUSCADOR DE CLIENTES, PROVEEDORES Y PRODUCTOS, COMPARTIDO.
  *
  * Convierte un campo de RUT en un buscador: mientras se escribe, propone los
  * clientes ya guardados cuyo RUT, razon social o nombre de fantasia contienen
@@ -17,6 +17,12 @@
  *   - data-buscar-fuente="proveedores" (opcional): busca proveedores en vez de
  *     clientes (/compras/proveedores/buscar, orden de compra). Mismo
  *     comportamiento; cambia la ruta y los textos.
+ *   - data-buscar-fuente="productos": el nombre de una linea de detalle busca
+ *     en el maestro de productos por nombre o codigo, y al elegir queda el
+ *     NOMBRE del producto. Precio, unidad y exento los rellena la vista con
+ *     su propio 'change', como hacia con el <datalist> que esto reemplaza.
+ *     Las lineas que se agregan despues funcionan solas: el buscador se
+ *     arma al tomar el foco, no al cargar la pagina.
  *   - data-cliente-campos="razon_social:id-del-campo,giro:otro-id,..." (opcional):
  *     que campo de la pantalla recibe cada dato del cliente elegido. Al ELEGIR
  *     se pisan: elegir un cliente de la lista es pedir exactamente sus datos.
@@ -49,14 +55,40 @@
         clientes: {
             url: '/ventas/clientes/buscar',
             etiqueta: 'Clientes encontrados',
-            ninguno: 'Ningun cliente coincide. Si es nuevo, escribe su RUT y completa sus datos.'
+            ninguno: 'Ningun cliente coincide. Si es nuevo, escribe su RUT y completa sus datos.',
+            titulo: function (r) { return r.razon_social; },
+            detalle: detalleEmpresa,
+            valor: function (r, normalizado) { return normalizado ? r.rut : formatearRut(r.rut); }
         },
         proveedores: {
             url: '/compras/proveedores/buscar',
             etiqueta: 'Proveedores encontrados',
-            ninguno: 'Ningun proveedor coincide. Si es nuevo, escribe su RUT y completa sus datos.'
+            ninguno: 'Ningun proveedor coincide. Si es nuevo, escribe su RUT y completa sus datos.',
+            titulo: function (r) { return r.razon_social; },
+            detalle: detalleEmpresa,
+            valor: function (r, normalizado) { return normalizado ? r.rut : formatearRut(r.rut); }
+        },
+        productos: {
+            url: '/maestros/productos/buscar',
+            etiqueta: 'Productos encontrados',
+            ninguno: 'Ningun producto coincide. Puedes escribir el producto o servicio igual.',
+            titulo: function (r) { return r.nombre; },
+            detalle: function (r) {
+                var partes = [];
+                if (r.codigo) { partes.push('Cod. ' + r.codigo); }
+                if (r.precio !== null && r.precio !== '') {
+                    partes.push('$' + Math.round(parseFloat(r.precio)).toLocaleString('es-CL') + ' sin IVA');
+                }
+                if (r.exento) { partes.push('exento'); }
+                return partes.join(' · ');
+            },
+            valor: function (r) { return r.nombre; }
         }
     };
+
+    function detalleEmpresa(r) {
+        return (r.nombre_fantasia ? r.nombre_fantasia + ' · ' : '') + formatearRut(r.rut);
+    }
 
     function formatearRut(rut) {
         var p = String(rut).split('-');
@@ -111,20 +143,18 @@
             if (kv.length === 2 && kv[0].trim() && kv[1].trim()) { campos[kv[0].trim()] = kv[1].trim(); }
         });
 
-        // El contenedor posiciona la lista bajo el campo sin mover el resto
-        // del formulario.
-        var envoltorio = document.createElement('div');
-        envoltorio.className = 'buscador-clientes';
-        input.parentNode.insertBefore(envoltorio, input);
-        envoltorio.appendChild(input);
-
+        // LA LISTA CUELGA DEL <body> Y SE UBICA CON position: fixed bajo el
+        // campo. Dentro de una tabla con scroll horizontal (las lineas de
+        // detalle) una lista absoluta quedaria recortada por el contenedor. Y
+        // el campo no se envuelve en nada: moverlo en el DOM le quitaria el
+        // foco, y en las lineas el buscador se arma justo al tomarlo.
         var lista = document.createElement('ul');
         lista.className = 'buscador-clientes__lista';
         lista.id = 'buscador-clientes-' + contador;
         lista.setAttribute('role', 'listbox');
         lista.setAttribute('aria-label', fuente.etiqueta);
         lista.hidden = true;
-        envoltorio.appendChild(lista);
+        document.body.appendChild(lista);
 
         input.setAttribute('role', 'combobox');
         input.setAttribute('aria-autocomplete', 'list');
@@ -138,6 +168,24 @@
         var activo = -1;
         var temporizador = null;
         var pedido = 0;
+
+        function ubicar() {
+            var r = input.getBoundingClientRect();
+            lista.style.left = r.left + 'px';
+            lista.style.top = (r.bottom + 4) + 'px';
+            lista.style.width = Math.max(r.width, 256) + 'px';
+        }
+
+        function abrir() {
+            ubicar();
+            lista.hidden = false;
+            input.setAttribute('aria-expanded', 'true');
+        }
+
+        // Con la lista abierta, sigue al campo si la pagina o la tabla se
+        // desplazan.
+        window.addEventListener('scroll', function () { if (!lista.hidden) { ubicar(); } }, true);
+        window.addEventListener('resize', function () { if (!lista.hidden) { ubicar(); } });
 
         function cerrar() {
             lista.hidden = true;
@@ -156,8 +204,7 @@
             li.setAttribute('aria-disabled', 'true');
             li.textContent = texto;
             lista.appendChild(li);
-            lista.hidden = false;
-            input.setAttribute('aria-expanded', 'true');
+            abrir();
         }
 
         function marcar(i) {
@@ -190,22 +237,26 @@
                 li.setAttribute('data-indice', String(i));
                 var nombre = document.createElement('span');
                 nombre.className = 'buscador-clientes__nombre';
-                nombre.textContent = c.razon_social;
-                var detalle = document.createElement('span');
-                detalle.className = 'buscador-clientes__detalle';
-                detalle.textContent = (c.nombre_fantasia ? c.nombre_fantasia + ' · ' : '') + formatearRut(c.rut);
+                nombre.textContent = fuente.titulo(c);
                 li.appendChild(nombre);
-                li.appendChild(detalle);
+                var textoDetalle = fuente.detalle(c);
+                if (textoDetalle) {
+                    var detalle = document.createElement('span');
+                    detalle.className = 'buscador-clientes__detalle';
+                    detalle.textContent = textoDetalle;
+                    li.appendChild(detalle);
+                }
                 lista.appendChild(li);
             });
-            lista.hidden = false;
-            input.setAttribute('aria-expanded', 'true');
+            abrir();
         }
 
         function elegir(i) {
-            var c = resultados[i];
-            if (!c) { return; }
-            input.value = normalizado ? c.rut : formatearRut(c.rut);
+            if (resultados[i]) { aplicar(resultados[i]); }
+        }
+
+        function aplicar(c) {
+            input.value = fuente.valor(c, normalizado);
             var valores = {};
             Object.keys(campos).forEach(function (dato) {
                 var el = document.getElementById(campos[dato]);
@@ -215,11 +266,12 @@
                     if (window.validarCampos && el.value !== '') { window.validarCampos.revisar(el); }
                 }
             });
-            cargado(input, valores);
+            if (Object.keys(valores).length) { cargado(input, valores); }
             cerrar();
             input.dispatchEvent(new Event('change', { bubbles: true }));
             input.dispatchEvent(new Event('blur'));
         }
+        input._aplicarResultado = aplicar;
 
         function buscar() {
             var q = input.value.trim();
@@ -281,10 +333,26 @@
         (raiz || document).querySelectorAll('input[data-buscar-cliente]').forEach(iniciar);
     }
 
+    // Los campos que aparecen despues (una linea de detalle nueva) se arman al
+    // tomar el foco, antes de que se escriba la primera letra.
+    document.addEventListener('focusin', function (e) {
+        var t = e.target;
+        if (t && t.matches && t.matches('input[data-buscar-cliente]')) { iniciar(t); }
+    });
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function () { iniciarTodos(); });
     } else {
         iniciarTodos();
     }
-    window.buscadorClientes = { iniciar: iniciarTodos, cargado: cargado };
+    // elegir(): lo mismo que pinchar un resultado de la lista, para quien busca
+    // por otro camino (el modal de js/selector-clientes.js).
+    window.buscadorClientes = {
+        iniciar: iniciarTodos,
+        cargado: cargado,
+        elegir: function (input, resultado) {
+            iniciar(input);
+            input._aplicarResultado(resultado);
+        }
+    };
 })();

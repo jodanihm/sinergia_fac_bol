@@ -32,7 +32,7 @@
  *     idem_key, que es lo que impide una doble emision con folio real.
  *   - id/clase que usa el JS: #form-emision, #tabla-detalle, #agregar-linea,
  *     .quitar-linea, .det-nombre, .det-precio, .det-precio-final, .det-origen,
- *     .det-unidad, .det-exento, #productos-list, #resumen-totales,
+ *     .det-unidad, .det-exento, #resumen-totales,
  *     #receptor-* y #rut-aviso.
  *   - La fila del detalle esta duplicada: aqui en PHP y en nuevaFilaHTML() del
  *     JS. Las dos deben producir el mismo DOM.
@@ -284,7 +284,11 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
     <div class="config-columnas config-columnas--2">
             <section class="tarjeta" aria-labelledby="titulo-receptor">
-                <h2 id="titulo-receptor">Datos del receptor</h2>
+                <div class="tarjeta__cabecera">
+                    <h2 id="titulo-receptor">Datos del receptor</h2>
+                    <?php /* Oculto hasta que js/selector-clientes.js lo active: sin JavaScript no abriria nada. */ ?>
+                    <button type="button" class="boton-secundario" data-abrir-selector-cliente aria-haspopup="dialog" hidden><?= iconoSvg('clientes', 16, ''); ?> Buscar en mis clientes</button>
+                </div>
                 <div class="form-grid">
                     <div class="<?= $cc('receptor-rut'); ?>">
                         <label for="receptor-rut">RUT <?= $esBoleta ? '(opcional)' : $req; ?></label>
@@ -603,7 +607,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <tbody>
                     <?php foreach ($detalles as $i => $d): ?>
                         <tr>
-                            <td class="col-producto" data-label="Producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" list="productos-list" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" id="det-<?= $i; ?>-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $inv("det-{$i}-nombre"); ?>><?= $campoError("det-{$i}-nombre"); ?><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
+                            <td class="col-producto" data-label="Producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" id="det-<?= $i; ?>-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $inv("det-{$i}-nombre"); ?>><?= $campoError("det-{$i}-nombre"); ?><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
                             <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" id="det-<?= $i; ?>-cantidad" aria-label="Cantidad"<?= $inv("det-{$i}-cantidad"); ?>><?= $campoError("det-{$i}-cantidad"); ?></td>
                             <?php
                             $celdaNeto  = '<td class="col-precio" data-label="Precio sin IVA ($)"><input type="hidden" name="detalles[' . $i . '][origen]" value="' . htmlspecialchars((string) ($d['origen'] ?? '')) . '" class="det-origen"><input type="text" inputmode="decimal" name="detalles[' . $i . '][precioUnitario]" value="' . htmlspecialchars((string) ($d['precioUnitario'] ?? '')) . '" class="det-precio" id="det-' . $i . '-precioUnitario" aria-label="Precio unitario sin IVA, en pesos"' . $inv("det-{$i}-precioUnitario") . '>' . $campoError("det-{$i}-precioUnitario") . '</td>';
@@ -618,11 +622,6 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 </tbody>
             </table>
         </div>
-        <datalist id="productos-list">
-            <?php foreach ($productos as $p): ?>
-                <option value="<?= htmlspecialchars((string) $p['nombre']); ?>"></option>
-            <?php endforeach; ?>
-        </datalist>
         <p><button type="button" id="agregar-linea" class="boton-secundario">Agregar linea</button></p>
         <?php /* Misma formula que DteXmlBuilder::totales(): ver calcularTotales(). */ ?>
         <h3 id="titulo-resumen">Resumen</h3>
@@ -660,6 +659,32 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
         <button type="submit" value="si" class="boton-principal">Si, emitir <?= htmlspecialchars($docConArticulo); ?></button>
     </form>
 </dialog>
+
+<?php /* MODAL DE BUSQUEDA DE CLIENTES (js/selector-clientes.js). Fuera de
+         #form-emision a proposito: Enter en su buscador no puede enviar el
+         documento, y sus campos no viajan en el POST. */ ?>
+<dialog class="dialogo-selector" id="selector-cliente" data-campo-rut="receptor-rut"<?= $esBoleta ? '' : ' data-avisar-faltantes'; ?> aria-labelledby="selector-cliente-titulo">
+    <div class="dialogo-selector__cabecera">
+        <h2 class="dialogo-confirmar__titulo" id="selector-cliente-titulo">Buscar en mis clientes</h2>
+        <button type="button" class="boton-texto dialogo-selector__cerrar" data-selector-cerrar aria-label="Cerrar"><?= iconoSvg('cerrar', 20, ''); ?></button>
+    </div>
+    <div class="form-campo dialogo-selector__busqueda">
+        <label for="selector-cliente-q">Buscar</label>
+        <input type="text" id="selector-cliente-q" data-selector-q autocomplete="off" spellcheck="false" enterkeyhint="search" maxlength="100" placeholder="Ejemplo: ferreteria temuco" aria-describedby="selector-cliente-ayuda">
+        <small class="form-ayuda" id="selector-cliente-ayuda">Por RUT, razon social, nombre de fantasia, giro, direccion, comuna o correo. Puedes combinar palabras.</small>
+    </div>
+    <p class="dialogo-selector__estado" data-selector-estado role="status" aria-live="polite"></p>
+    <div class="dialogo-selector__zona" data-selector-zona>
+        <ul class="selector-clientes" data-selector-lista aria-label="Clientes encontrados"></ul>
+        <div class="dialogo-selector__aviso" data-selector-aviso hidden>
+            <p data-selector-aviso-texto></p>
+            <button type="button" class="boton-secundario" data-selector-aviso-accion hidden></button>
+        </div>
+        <p class="dialogo-selector__mas"><button type="button" class="boton-secundario" data-selector-ver-mas hidden>Ver mas clientes</button></p>
+    </div>
+</dialog>
+<?php $jsSelectorVersion = @filemtime(__DIR__ . '/../public/js/selector-clientes.js'); ?>
+<script src="/js/selector-clientes.js<?= $jsSelectorVersion ? '?v=' . $jsSelectorVersion : ''; ?>" defer></script>
 
 <script>
 (function () {
@@ -796,7 +821,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     function nuevaFilaHTML(n) {
         // Sin .campo-error en las celdas: una linea recien agregada no puede
         // traer el error de un 422 anterior (el PHP solo lo pinta en la que fallo).
-        return '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="detalles[' + n + '][nombre]" class="det-nombre" id="det-' + n + '-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"></td>' +
+        return '<td class="col-producto" data-label="Producto"><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="detalles[' + n + '][nombre]" class="det-nombre" id="det-' + n + '-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"></td>' +
             '<td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="detalles[' + n + '][cantidad]" id="det-' + n + '-cantidad" aria-label="Cantidad"></td>' +
             (ES_BOLETA ? celdaFinal(n) + celdaNeto(n) : celdaNeto(n) + celdaFinal(n)) +
             '<td class="col-unidad" data-label="Unidad"><input type="text" name="detalles[' + n + '][unidad]" class="det-unidad" id="det-' + n + '-unidad" data-max-sii="4" data-contador="discreto" aria-label="Unidad"></td>' +

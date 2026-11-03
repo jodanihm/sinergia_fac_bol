@@ -170,6 +170,76 @@ final class MySqlClienteRepository
         return array_map(fn (array $r): array => $this->mapear($r), $stmt->fetchAll(PDO::FETCH_ASSOC));
     }
 
+    /**
+     * La busqueda del modal "Buscar en mis clientes": clientes ACTIVOS, paginados.
+     *
+     * A diferencia de buscarParaSelector() (la lista que se abre bajo el campo):
+     *   - Sin texto trae la cartera completa, para poder mirarla y elegir.
+     *   - Busca tambien en giro, direccion, comuna y correo.
+     *   - CADA PALABRA se busca por separado y todas tienen que aparecer, en
+     *     cualquier campo y en cualquier orden: "ferreteria temuco" encuentra
+     *     a la ferreteria cuya comuna es Temuco.
+     *
+     * La palabra que trae digitos tambien se compara contra el RUT sin puntos ni
+     * guion. Mismo orden que buscarParaSelector(): primero lo que EMPIEZA con lo
+     * escrito, despues el resto.
+     *
+     * @return array{clientes: list<array<string,mixed>>, total: int}
+     */
+    public function explorar(int $cuentaId, string $texto, int $limit = 20, int $offset = 0): array
+    {
+        $texto  = trim($texto);
+        $where  = 'cuenta_id = :cuenta_id AND activo = 1';
+        $params = [':cuenta_id' => $cuentaId];
+        $rutSql = "REPLACE(rut_cliente, '-', '')";
+
+        // Tope de palabras: cada una suma siete LIKE a la consulta.
+        $palabras = array_slice(preg_split('/\s+/u', $texto, -1, PREG_SPLIT_NO_EMPTY) ?: [], 0, 6);
+        foreach ($palabras as $i => $palabra) {
+            $like = '%' . $this->escaparLike($palabra) . '%';
+            $o    = [];
+            foreach (['razon_social', 'nombre_fantasia', 'giro', 'direccion', 'comuna', 'email'] as $n => $columna) {
+                $o[] = "{$columna} LIKE :p{$i}c{$n}";
+                $params[":p{$i}c{$n}"] = $like;
+            }
+            $rut = strtoupper((string) preg_replace('/[^0-9kK]/', '', $palabra));
+            if (preg_match('/[0-9]/', $rut) === 1) {
+                $o[] = "{$rutSql} LIKE :p{$i}r";
+                $params[":p{$i}r"] = '%' . $rut . '%';
+            }
+            $where .= ' AND (' . implode(' OR ', $o) . ')';
+        }
+
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM cliente WHERE ' . $where);
+        $stmt->execute($params);
+        $total = (int) $stmt->fetchColumn();
+
+        $orden = '';
+        if ($texto !== '') {
+            $inicio = $this->escaparLike($texto) . '%';
+            $params[':ini_rs'] = $inicio;
+            $params[':ini_nf'] = $inicio;
+            $empieza = 'razon_social LIKE :ini_rs OR nombre_fantasia LIKE :ini_nf';
+            $rutTexto = strtoupper((string) preg_replace('/[^0-9kK]/', '', $texto));
+            if (preg_match('/[0-9]/', $rutTexto) === 1) {
+                $params[':ini_rut'] = $rutTexto . '%';
+                $empieza .= " OR {$rutSql} LIKE :ini_rut";
+            }
+            $orden = "CASE WHEN {$empieza} THEN 0 ELSE 1 END, ";
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNAS . ' FROM cliente WHERE ' . $where
+            . " ORDER BY {$orden}razon_social ASC, id ASC"
+            . ' LIMIT ' . max(1, min(50, $limit)) . ' OFFSET ' . max(0, $offset)
+        );
+        $stmt->execute($params);
+
+        return [
+            'clientes' => array_map(fn (array $r): array => $this->mapear($r), $stmt->fetchAll(PDO::FETCH_ASSOC)),
+            'total'    => $total,
+        ];
+    }
+
     /** Un % o un _ escrito por la persona se busca literal, no como comodin. */
     private function escaparLike(string $s): string
     {

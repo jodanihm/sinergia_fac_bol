@@ -685,12 +685,14 @@ const PERMISOS_RUTA = [
     'POST /maestros/clientes/nuevo'              => ['maestros', 'gestionar'],
     'GET /maestros/productos'                    => ['maestros', 'ver'],
     'GET /maestros/productos/nuevo'              => ['maestros', 'ver'],
+    'GET /maestros/productos/buscar'             => ['maestros', 'ver'],
     'POST /maestros/productos/nuevo'             => ['maestros', 'gestionar'],
     // POR LO QUE LEE, NO POR DONDE SE USA. Lo consume el JS del formulario de
     // emision, pero devuelve una ficha del maestro de clientes: con
     // 'ventas:ver' se estarian leyendo maestros sin permiso de maestros.
     'GET /ventas/cliente-por-rut'                => ['maestros', 'ver'],
     'GET /ventas/clientes/buscar'                => ['maestros', 'ver'],
+    'GET /ventas/clientes/explorar'              => ['maestros', 'ver'],
     // Mismo criterio: lo dispara el formulario de emision, pero da de alta una
     // ficha del maestro de clientes. No emite nada.
     'POST /ventas/guardar-cliente'               => ['maestros', 'gestionar'],
@@ -10985,6 +10987,65 @@ function handleClientesBuscarGet(): never
     exit;
 }
 
+/**
+ * GET /ventas/clientes/explorar?q=...&pagina=N  -> JSON. El modal "Buscar en mis
+ * clientes" del formulario de emision (js/selector-clientes.js): 20 clientes
+ * activos por pagina. Sin texto trae la cartera completa. 'faltan' dice que dato
+ * obligatorio para facturar le falta a cada uno, para avisarlo antes de elegirlo.
+ */
+function handleClientesExplorarGet(): never
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $q        = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 100);
+    $pagina   = max(1, min(100000, (int) ($_GET['pagina'] ?? 1)));
+    $porPagina = 20;
+    $r = clienteRepo()->explorar(Auth::cuentaId(), $q, $porPagina, ($pagina - 1) * $porPagina);
+    $clientes = array_map(static fn (array $c): array => [
+        'rut'             => (string) $c['rut_cliente'],
+        'razon_social'    => (string) $c['razon_social'],
+        'nombre_fantasia' => (string) ($c['nombre_fantasia'] ?? ''),
+        'giro'            => (string) ($c['giro'] ?? ''),
+        'direccion'       => (string) ($c['direccion'] ?? ''),
+        'comuna'          => (string) ($c['comuna'] ?? ''),
+        'email'           => (string) ($c['email'] ?? ''),
+        'faltan'          => clienteCamposFaltantes($c),
+    ], $r['clientes']);
+    echo json_encode([
+        'clientes' => $clientes,
+        'total'    => $r['total'],
+        'pagina'   => $pagina,
+        'hay_mas'  => $pagina * $porPagina < $r['total'],
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
+ * GET /maestros/productos/buscar?q=...  -> JSON. El buscador del nombre en las
+ * lineas de detalle (factura, cotizacion, orden de compra): hasta 10 productos
+ * activos cuyo nombre o codigo contienen lo escrito, con 'resultados' como los
+ * de proveedores. Trae precio, unidad y exento solo para mostrarlos en la
+ * lista: al elegir, cada vista rellena la linea con su propio mapa de
+ * productos, como antes.
+ */
+function handleProductosBuscarGet(): never
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $q = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 100);
+    if (mb_strlen($q) < 2) {
+        echo json_encode(['resultados' => []]);
+        exit;
+    }
+    $resultados = array_map(static fn (array $p): array => [
+        'nombre' => (string) $p['nombre'],
+        'codigo' => (string) ($p['codigo'] ?? ''),
+        'precio' => $p['precio_unitario'],
+        'unidad' => (string) ($p['unidad'] ?? ''),
+        'exento' => (bool) $p['exento'],
+    ], productoRepo()->listar(Auth::cuentaId(), $q, true, 10, 0));
+    echo json_encode(['resultados' => $resultados], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /** Endpoint JSON: resuelve el cliente por RUT para el autocompletado del form. */
 function handleClientePorRutGet(): void
 {
@@ -12562,6 +12623,11 @@ if ($metodo === 'GET' && $ruta === '/maestros/productos') {
     handleProductosListar();
 }
 
+if ($metodo === 'GET' && $ruta === '/maestros/productos/buscar') {
+    Auth::requerirSesion();
+    handleProductosBuscarGet();
+}
+
 if ($metodo === 'GET' && $ruta === '/maestros/productos/nuevo') {
     Auth::requerirSesion();
     handleProductoNuevoGet();
@@ -12601,6 +12667,11 @@ if ($metodo === 'GET' && $ruta === '/ventas/cliente-por-rut') {
 if ($metodo === 'GET' && $ruta === '/ventas/clientes/buscar') {
     Auth::requerirSesion();
     handleClientesBuscarGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/clientes/explorar') {
+    Auth::requerirSesion();
+    handleClientesExplorarGet();
 }
 
 if ($metodo === 'POST' && $ruta === '/compras/guardar-proveedor') {
