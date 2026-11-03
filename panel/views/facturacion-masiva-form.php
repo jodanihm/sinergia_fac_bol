@@ -234,7 +234,7 @@ foreach ($resultado as $n) {
     <form class="filtros" method="get" action="/ventas/facturacion-masiva" role="search">
         <label class="filtros__campo" for="filtro-rut">RUT del receptor</label>
         <input class="filtros__input" type="text" id="filtro-rut" name="rut" inputmode="text" autocomplete="off"
-               value="<?= $e($rutFiltro); ?>" placeholder="77724622-4">
+               value="<?= $e($rutFiltro); ?>" placeholder="RUT o nombre del cliente" data-buscar-cliente="normalizado">
         <button class="boton-secundario" type="submit">Filtrar notas</button>
         <?php if ($rutFiltro !== ''): ?>
             <a class="boton-texto" href="/ventas/facturacion-masiva">Quitar filtro</a>

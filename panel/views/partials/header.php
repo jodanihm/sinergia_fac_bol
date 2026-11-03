@@ -65,6 +65,12 @@ $jsPrecioVersion = @filemtime(__DIR__ . '/../../public/js/precio-iva.js');
 $jsContadorVersion = @filemtime(__DIR__ . '/../../public/js/contador-caracteres.js');
 ?>
 <script src="/js/contador-caracteres.js<?= $jsContadorVersion ? '?v=' . $jsContadorVersion : ''; ?>" defer></script>
+<?php
+// Buscador de clientes por RUT, razon social o nombre de fantasia. Solo actua
+// donde hay un input[data-buscar-cliente]; en el resto no hace nada.
+$jsBuscadorVersion = @filemtime(__DIR__ . '/../../public/js/buscador-clientes.js');
+?>
+<script src="/js/buscador-clientes.js<?= $jsBuscadorVersion ? '?v=' . $jsBuscadorVersion : ''; ?>" defer></script>
 </head>
 <body class="<?= htmlspecialchars($bodyClaseExtra); ?>">
 <?php if ($panelAutenticado): ?>

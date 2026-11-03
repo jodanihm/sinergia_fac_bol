@@ -29,7 +29,7 @@ use RuntimeException;
 final class MySqlClienteRepository
 {
     /** Columnas devueltas al anfitrion (nunca se expone nada mas). */
-    private const COLUMNAS = 'id, rut_cliente, razon_social, giro, direccion, comuna, '
+    private const COLUMNAS = 'id, rut_cliente, razon_social, nombre_fantasia, giro, direccion, comuna, '
         . 'email, telefono, pago_link, activo, created_at, updated_at';
 
     public function __construct(private readonly PDO $pdo)
@@ -71,7 +71,7 @@ final class MySqlClienteRepository
             $where .= ' AND activo = 1';
         }
         if ($busqueda !== null && trim($busqueda) !== '') {
-            $where .= ' AND (rut_cliente LIKE :q OR razon_social LIKE :q)';
+            $where .= ' AND (rut_cliente LIKE :q OR razon_social LIKE :q OR nombre_fantasia LIKE :q)';
             $params[':q'] = '%' . trim($busqueda) . '%';
         }
         if ($soloIncompletos) {
@@ -129,6 +129,53 @@ final class MySqlClienteRepository
     /**
      * @return array<string,mixed>|null null si no existe o no pertenece a la cuenta.
      */
+    /**
+     * El buscador de los formularios: clientes ACTIVOS cuyo RUT, razon social o
+     * nombre de fantasia contienen lo escrito.
+     *
+     * EL RUT SE COMPARA SIN PUNTOS NI GUION, de los dos lados: en la base esta
+     * normalizado (77724622-4) y la persona escribe "77.724" o "777246224".
+     * Por eso el texto para el RUT viene aparte, ya limpio por quien llama; si
+     * no trae digitos, no se busca por RUT.
+     *
+     * ORDEN: primero los que EMPIEZAN con lo escrito (lo que uno busca casi
+     * siempre), despues el resto, y dentro de cada grupo por razon social.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function buscarParaSelector(int $cuentaId, string $texto, string $rutDigitos, int $limit = 10): array
+    {
+        $texto = trim($texto);
+        if ($texto === '') {
+            return [];
+        }
+        $rutSql = "REPLACE(rut_cliente, '-', '')";
+        $condiciones = ['razon_social LIKE :q', 'nombre_fantasia LIKE :q'];
+        $params = [':cuenta_id' => $cuentaId, ':q' => '%' . $this->escaparLike($texto) . '%', ':ini' => $this->escaparLike($texto) . '%'];
+        $empieza = 'razon_social LIKE :ini OR nombre_fantasia LIKE :ini';
+        if ($rutDigitos !== '') {
+            $condiciones[] = "{$rutSql} LIKE :rq";
+            $params[':rq']   = '%' . $rutDigitos . '%';
+            $params[':rini'] = $rutDigitos . '%';
+            $empieza .= " OR {$rutSql} LIKE :rini";
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNAS . ' FROM cliente '
+            . 'WHERE cuenta_id = :cuenta_id AND activo = 1 AND (' . implode(' OR ', $condiciones) . ') '
+            . "ORDER BY CASE WHEN {$empieza} THEN 0 ELSE 1 END, razon_social ASC "
+            . 'LIMIT ' . max(1, min(50, $limit))
+        );
+        $stmt->execute($params);
+
+        return array_map(fn (array $r): array => $this->mapear($r), $stmt->fetchAll(PDO::FETCH_ASSOC));
+    }
+
+    /** Un % o un _ escrito por la persona se busca literal, no como comodin. */
+    private function escaparLike(string $s): string
+    {
+        return addcslashes($s, '\\%_');
+    }
+
     public function buscarPorId(int $cuentaId, int $id): ?array
     {
         $stmt = $this->pdo->prepare(
@@ -198,8 +245,8 @@ final class MySqlClienteRepository
     public function crear(int $cuentaId, array $datos): int
     {
         $stmt = $this->pdo->prepare(
-            'INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, giro, direccion, comuna, email, telefono, pago_link) '
-            . 'VALUES (:cuenta_id, :rut, :razon, :giro, :dir, :comuna, :email, :tel, :pago_link)'
+            'INSERT INTO cliente (cuenta_id, rut_cliente, razon_social, nombre_fantasia, giro, direccion, comuna, email, telefono, pago_link) '
+            . 'VALUES (:cuenta_id, :rut, :razon, :fantasia, :giro, :dir, :comuna, :email, :tel, :pago_link)'
         );
         try {
             $stmt->execute($this->paramsEscritura($cuentaId, $datos));
@@ -261,7 +308,7 @@ final class MySqlClienteRepository
             return false;
         }
         $stmt = $this->pdo->prepare(
-            'UPDATE cliente SET rut_cliente = :rut, razon_social = :razon, giro = :giro, '
+            'UPDATE cliente SET rut_cliente = :rut, razon_social = :razon, nombre_fantasia = :fantasia, giro = :giro, '
             . 'direccion = :dir, comuna = :comuna, email = :email, telefono = :tel, '
             . 'pago_link = :pago_link '
             . 'WHERE id = :id AND cuenta_id = :cuenta_id'
@@ -314,6 +361,7 @@ final class MySqlClienteRepository
             ':cuenta_id' => $cuentaId,
             ':rut'       => (string) ($datos['rut_cliente'] ?? ''),
             ':razon'     => (string) ($datos['razon_social'] ?? ''),
+            ':fantasia'  => $this->nullSiVacio($datos['nombre_fantasia'] ?? null),
             ':giro'      => $this->nullSiVacio($datos['giro'] ?? null),
             ':dir'       => $this->nullSiVacio($datos['direccion'] ?? null),
             ':comuna'    => $this->nullSiVacio($datos['comuna'] ?? null),
@@ -363,6 +411,7 @@ final class MySqlClienteRepository
             'id'           => (int) $row['id'],
             'rut_cliente'  => (string) $row['rut_cliente'],
             'razon_social' => (string) $row['razon_social'],
+            'nombre_fantasia' => $row['nombre_fantasia'] !== null ? (string) $row['nombre_fantasia'] : null,
             'giro'         => $row['giro'] !== null ? (string) $row['giro'] : null,
             'direccion'    => $row['direccion'] !== null ? (string) $row['direccion'] : null,
             'comuna'       => $row['comuna'] !== null ? (string) $row['comuna'] : null,

@@ -690,6 +690,7 @@ const PERMISOS_RUTA = [
     // emision, pero devuelve una ficha del maestro de clientes: con
     // 'ventas:ver' se estarian leyendo maestros sin permiso de maestros.
     'GET /ventas/cliente-por-rut'                => ['maestros', 'ver'],
+    'GET /ventas/clientes/buscar'                => ['maestros', 'ver'],
     // Mismo criterio: lo dispara el formulario de emision, pero da de alta una
     // ficha del maestro de clientes. No emite nada.
     'POST /ventas/guardar-cliente'               => ['maestros', 'gestionar'],
@@ -1237,6 +1238,7 @@ function validarCliente(array $post): array
 {
     $rut    = Rut::normalizar((string) ($post['rut_cliente'] ?? ''));
     $razon  = trim((string) ($post['razon_social'] ?? ''));
+    $fantasia = trim((string) ($post['nombre_fantasia'] ?? ''));
     $giro   = trim((string) ($post['giro'] ?? ''));
     $dir    = trim((string) ($post['direccion'] ?? ''));
     $comuna = trim((string) ($post['comuna'] ?? ''));
@@ -1257,6 +1259,7 @@ function validarCliente(array $post): array
     $datos = [
         'rut_cliente'  => $rut,
         'razon_social' => $razon,
+        'nombre_fantasia' => $fantasia,
         'giro'         => $giro,
         'direccion'    => $dir,
         'comuna'       => $comuna,
@@ -4870,12 +4873,6 @@ function renderCotizacionForm(string $modo, string $accion, array $cotizacion, a
         // camino: productoRepo()->listar(). No se duplica la consulta ni el
         // criterio de "solo activos".
         'productos'   => productoRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
-        // CLIENTES PARA EL DATALIST, con el mismo tope y el mismo "solo activos"
-        // que los productos. El formulario de emision no los trae -- alli el
-        // cliente se resuelve por fetch DESPUES de teclear el RUT completo --, y
-        // eso era justamente el problema: con 82 clientes cargados habia que
-        // saberse el RUT de memoria. Aqui se proponen ADEMAS del fetch.
-        'clientes'    => clienteRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
         'navActivo'   => 'ventas.cotizaciones',
     ]);
 }
@@ -10917,6 +10914,41 @@ function handleAuditoriaTenantGet(): void
     ]);
 }
 
+/**
+ * GET /ventas/clientes/buscar?q=...  -> JSON. El buscador de clientes de los
+ * formularios (js/buscador-clientes.js): hasta 10 clientes activos cuyo RUT,
+ * razon social o nombre de fantasia contienen lo escrito.
+ *
+ * Devuelve los datos que rellenan el receptor, para no tener que pedir el
+ * cliente de nuevo por RUT al elegirlo. Menos de 2 caracteres no busca: con
+ * una letra calza media cartera y la lista no ayuda a elegir.
+ */
+function handleClientesBuscarGet(): never
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $q = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 100);
+    if (mb_strlen($q) < 2) {
+        echo json_encode(['clientes' => []]);
+        exit;
+    }
+    // Solo los digitos (y la K del DV) cuentan para el RUT: "77.724" -> "77724".
+    $rutDigitos = strtoupper((string) preg_replace('/[^0-9kK]/', '', $q));
+    if (! preg_match('/[0-9]/', $rutDigitos)) {
+        $rutDigitos = '';
+    }
+    $clientes = array_map(static fn (array $c): array => [
+        'rut'             => (string) $c['rut_cliente'],
+        'razon_social'    => (string) $c['razon_social'],
+        'nombre_fantasia' => (string) ($c['nombre_fantasia'] ?? ''),
+        'giro'            => (string) ($c['giro'] ?? ''),
+        'direccion'       => (string) ($c['direccion'] ?? ''),
+        'comuna'          => (string) ($c['comuna'] ?? ''),
+        'email'           => (string) ($c['email'] ?? ''),
+    ], clienteRepo()->buscarParaSelector(Auth::cuentaId(), $q, $rutDigitos));
+    echo json_encode(['clientes' => $clientes], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /** Endpoint JSON: resuelve el cliente por RUT para el autocompletado del form. */
 function handleClientePorRutGet(): void
 {
@@ -12523,6 +12555,11 @@ if ($metodo === 'POST' && preg_match('#^/maestros/productos/(\d+)/desactivar$#',
 if ($metodo === 'GET' && $ruta === '/ventas/cliente-por-rut') {
     Auth::requerirSesion();
     handleClientePorRutGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/ventas/clientes/buscar') {
+    Auth::requerirSesion();
+    handleClientesBuscarGet();
 }
 
 if ($metodo === 'POST' && $ruta === '/compras/guardar-proveedor') {

@@ -28,7 +28,7 @@
  *   - name de cada control, con la sintaxis de arrays lineas[i][campo].
  *   - id/clase que usa el JS: #form-cotizacion, #tabla-lineas, #agregar-linea,
  *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list,
- *     #clientes-list, #receptor_rut y #rut-aviso.
+ *     #receptor_rut (con data-buscar-cliente, ver js/buscador-clientes.js) y #rut-aviso.
  *   - data-precio="neto|final|cantidad|descuento|exento" y data-precios en la
  *     tabla: los usa js/precio-iva.js para el precio final y el resumen. El
  *     precio final no tiene name: se guarda solo el sin IVA.
@@ -179,12 +179,13 @@ if (isset($errores['lineas'])) {
             <div class="form-grid">
                 <div class="<?= $claseCampo('receptor_rut'); ?>">
                     <label for="receptor_rut">RUT</label>
-                    <input type="text" list="clientes-list" name="receptor_rut" id="receptor_rut" data-guardar="rut" value="<?= $v('receptor_rut'); ?>"
-                           placeholder="77.724.622-4" inputmode="text" autocomplete="off" spellcheck="false"
+                    <input type="text" name="receptor_rut" id="receptor_rut" data-guardar="rut" value="<?= $v('receptor_rut'); ?>"
+                           placeholder="RUT o nombre del cliente" inputmode="text" autocomplete="off" spellcheck="false"
+                           data-buscar-cliente data-cliente-campos="razon_social:receptor_razon_social,giro:receptor_giro,direccion:receptor_direccion,comuna:receptor_comuna,email:receptor_email"
                            <?= $aria('receptor_rut', 'rut-aviso'); ?>>
                     <?= $campoError('receptor_rut'); ?>
                     <?php // #rut-aviso es una region viva: el JS escribe aqui si el cliente existe o es nuevo. ?>
-                    <small class="form-ayuda" id="rut-aviso" aria-live="polite"<?= isset($errores['receptor_rut']) ? ' hidden' : ''; ?>>Elige uno de tus clientes o escribe un RUT nuevo.</small>
+                    <small class="form-ayuda" id="rut-aviso" aria-live="polite"<?= isset($errores['receptor_rut']) ? ' hidden' : ''; ?>>Escribe el RUT, la razon social o el nombre de fantasia y elige de la lista, o escribe un RUT nuevo.</small>
                 </div>
                 <div class="<?= $claseCampo('receptor_razon_social'); ?>">
                     <label for="receptor_razon_social">Razon social</label>
@@ -220,21 +221,6 @@ if (isset($errores['lineas'])) {
                     <small class="form-ayuda" data-autoguardar-aviso aria-live="polite">Lo agrega a tus clientes sin guardar la cotizacion. Tambien se guarda solo al salir de la comuna, si el RUT y la razon social estan bien.</small>
                 </div>
             </div>
-            <?php
-            /* EL DATALIST PROPONE, NO OBLIGA. Un RUT que no este en el maestro se
-               escribe a mano y se guarda igual: cotizacion.cliente_id queda NULL y
-               los datos van sueltos en las columnas receptor_*. Ese es el caso
-               normal de una cotizacion a un prospecto, no un error.
-
-               POR QUE ADEMAS DEL fetch DE emision-form Y NO EN VEZ DE EL: ese fetch
-               autocompleta DESPUES de teclear el RUT completo. El datalist resuelve
-               elegir; el fetch resuelve rellenar. Las dos. */
-            ?>
-            <datalist id="clientes-list">
-                <?php foreach ($clientes as $c): ?>
-                    <option value="<?= $e((string) $c['rut_cliente']); ?>"><?= $e((string) $c['razon_social']); ?></option>
-                <?php endforeach; ?>
-            </datalist>
         </section>
 
         <section class="tarjeta" aria-labelledby="titulo-fechas">
@@ -473,8 +459,8 @@ if (isset($errores['lineas'])) {
     // AUTOCOMPLETADO DEL CLIENTE POR RUT. Reusa el endpoint que ya existe para
     // el formulario de emision (/ventas/cliente-por-rut): no se agrega ninguna
     // via nueva ni se duplica la consulta al maestro. Se dispara en 'change'
-    // ademas de en 'blur' porque elegir del datalist con el raton no siempre
-    // produce blur. Solo se pregunta si el RUT es valido: con un DV malo el
+    // ademas de en 'blur' porque asi lo avisa js/buscador-clientes.js al elegir
+    // un cliente de su lista. Solo se pregunta si el RUT es valido: con un DV malo el
     // error ya lo dice el campo, y la respuesta seria la misma.
     function buscarCliente() {
         var vRut = rut.value.trim();

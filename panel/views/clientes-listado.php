@@ -7,12 +7,12 @@
  * handleClientesListar(), 25 por pagina.
  *
  * Cada cliente trae los campos de MySqlClienteRepository::mapear():
- *   id, rut_cliente, razon_social, giro, direccion, comuna, email, telefono,
+ *   id, rut_cliente, razon_social, nombre_fantasia, giro, direccion, comuna, email, telefono,
  *   activo, created_at, updated_at.
  * giro, direccion, comuna, email y telefono pueden ser null.
  *
  * FILTROS REALES: tres parametros GET, q, inactivos e incompletos (mas pagina).
- * La busqueda es LIKE sobre rut_cliente Y razon_social -- no busca por email ni
+ * La busqueda es LIKE sobre rut_cliente, razon_social y nombre_fantasia -- no busca por email ni
  * por comuna, y el placeholder no promete mas que eso. El orden lo fija el
  * repositorio: razon_social ASC.
  *
@@ -110,7 +110,7 @@ if (! $soloIncompletos && $totalIncompletos > 0): ?>
 <form method="get" action="/maestros/clientes" class="filtros">
     <label class="filtros__campo">Buscar
         <input type="text" name="q" class="filtros__input" value="<?= htmlspecialchars($q); ?>"
-               placeholder="RUT o razon social">
+               placeholder="RUT, razon social o nombre de fantasia">
     </label>
     <label class="filtros__campo form-check">
         <input type="checkbox" name="inactivos" value="1" <?= $incluirInactivos ? 'checked' : ''; ?>>
@@ -165,6 +165,9 @@ if (! $soloIncompletos && $totalIncompletos > 0): ?>
                     <tr<?= $c['activo'] ? '' : ' class="tabla-datos__fila--inactiva"'; ?>>
                         <td>
                             <?= htmlspecialchars($c['razon_social']); ?>
+                            <?php if (($c['nombre_fantasia'] ?? '') !== ''): ?>
+                                <span class="tabla-datos__secundario"><?= htmlspecialchars((string) $c['nombre_fantasia']); ?></span>
+                            <?php endif; ?>
                             <?php if ($faltan !== []): ?>
                                 <?php /* El title nombra los campos: la columna direccion no esta
                                         en la tabla, asi que sin esto un cliente al que solo le
