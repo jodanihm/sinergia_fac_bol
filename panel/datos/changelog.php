@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '1.97',
+        'titulo'  => 'Buscador de proveedores en las ordenes de compra',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En la orden de compra, el campo RUT del proveedor busca mientras escribes: por parte del RUT, la razon social, el nombre de fantasia o el nombre del contacto. Al elegir uno se completan sus datos, incluidas las condiciones de pago.',
+            'Si despues escribes otro RUT, se vacian los datos del proveedor anterior, igual que con los clientes.',
+            'Los proveedores tienen un campo nuevo, "Nombre de fantasia", opcional, que no se imprime en la orden. El listado de proveedores tambien busca por el.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '1.96',
         'titulo'  => 'Al cambiar el RUT se borran los datos del cliente anterior',
         'tag'     => 'frontend',

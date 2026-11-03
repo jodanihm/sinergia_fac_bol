@@ -56,6 +56,11 @@ $err = static fn (string $c): string => isset($errores[$c]) ? ' style="border-co
                 <input type="text" name="razon_social" id="razon_social" data-obligatorio="Escribe la razon social del proveedor." value="<?= $v('razon_social'); ?>"<?= $err('razon_social'); ?>>
             </div>
             <div class="form-campo form-campo--ancho">
+                <label for="nombre_fantasia">Nombre de fantasia (opcional)</label>
+                <input type="text" name="nombre_fantasia" id="nombre_fantasia" maxlength="255" value="<?= $v('nombre_fantasia'); ?>" aria-describedby="ayuda-fantasia">
+                <small class="form-ayuda" id="ayuda-fantasia">Como lo conoces. Sirve para encontrarlo en la orden de compra; no se imprime en ella.</small>
+            </div>
+            <div class="form-campo form-campo--ancho">
                 <label for="giro">Giro</label>
                 <input type="text" name="giro" id="giro" value="<?= $v('giro'); ?>">
             </div>

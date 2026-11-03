@@ -361,7 +361,7 @@ if ($tokenForm !== null) {
 
 foreach ([
     'class="form-compacto"' => 'la clase de la que cuelga el estilo de los inputs de la tabla',
-    'id="clientes-list"'    => 'el datalist de clientes',
+    'data-buscar-cliente'   => 'el buscador de clientes (js/buscador-clientes.js)',
     'id="productos-list"'   => 'el datalist de productos',
     'col-descuento'         => 'la columna de descuento',
 ] as $marca => $porque) {
@@ -372,19 +372,9 @@ foreach ([
     }
 }
 
-// Los clientes del maestro tienen que estar PROPUESTOS de verdad.
-$opciones = preg_match_all('/<datalist id="clientes-list">(.*?)<\/datalist>/s', $html, $mDl)
-    ? substr_count($mDl[1][0], '<option') : 0;
-$enBase = (int) $pdo->query('SELECT COUNT(*) FROM cliente WHERE activo = 1')->fetchColumn();
-printf("  clientes activos en la base: %d, opciones en el datalist: %d\n", $enBase, $opciones);
-if ($opciones > 0) {
-    ok('el datalist propone clientes del maestro.');
-} elseif ($enBase === 0) {
-    aviso('no hay clientes activos en esta base: el datalist vacio es correcto aqui, '
-        . 'pero este caso no prueba nada. Corre esto contra una base con clientes.');
-} else {
-    mal("hay {$enBase} clientes activos y el datalist salio vacio.");
-}
+// Los clientes ya no van en un datalist: los propone el buscador, que pide
+// /ventas/clientes/buscar mientras se escribe. Eso se prueba con su endpoint,
+// no con el HTML del formulario.
 
 // ===========================================================================
 // VERIFICACION E - GUARDAR DE VERDAD, POR HTTP

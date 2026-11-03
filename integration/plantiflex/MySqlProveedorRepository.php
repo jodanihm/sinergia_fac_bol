@@ -30,7 +30,7 @@ use RuntimeException;
  */
 final class MySqlProveedorRepository
 {
-    private const COLUMNAS = 'id, rut_proveedor, razon_social, giro, direccion, comuna, '
+    private const COLUMNAS = 'id, rut_proveedor, razon_social, nombre_fantasia, giro, direccion, comuna, '
         . 'email, telefono, contacto, condiciones_pago, activo, created_at, updated_at';
 
     public function __construct(private readonly PDO $pdo)
@@ -48,7 +48,8 @@ final class MySqlProveedorRepository
         }
         if ($busqueda !== null && trim($busqueda) !== '') {
             $like = '%' . trim($busqueda) . '%';
-            $where .= ' AND (razon_social LIKE ? OR rut_proveedor LIKE ? OR contacto LIKE ?)';
+            $where .= ' AND (razon_social LIKE ? OR rut_proveedor LIKE ? OR contacto LIKE ? OR nombre_fantasia LIKE ?)';
+            $params[] = $like;
             $params[] = $like;
             $params[] = $like;
             $params[] = $like;
@@ -84,6 +85,43 @@ final class MySqlProveedorRepository
         return (int) $stmt->fetchColumn();
     }
 
+    /**
+     * El buscador de la orden de compra: proveedores ACTIVOS cuyo RUT, razon
+     * social, nombre de fantasia o contacto contienen lo escrito. Mismo
+     * criterio que MySqlClienteRepository::buscarParaSelector(): el RUT se
+     * compara sin puntos ni guion (llega ya limpio en $rutDigitos, vacio si lo
+     * escrito no trae digitos) y primero van los que EMPIEZAN con lo escrito.
+     *
+     * @return list<array<string,mixed>>
+     */
+    public function buscarParaSelector(int $cuentaId, string $texto, string $rutDigitos, int $limit = 10): array
+    {
+        $texto = trim($texto);
+        if ($texto === '') {
+            return [];
+        }
+        $esc    = addcslashes($texto, '\\%_');
+        $rutSql = "REPLACE(rut_proveedor, '-', '')";
+        $params = [':cuenta' => $cuentaId, ':q' => '%' . $esc . '%', ':ini' => $esc . '%'];
+        $condiciones = ['razon_social LIKE :q', 'nombre_fantasia LIKE :q', 'contacto LIKE :q'];
+        $empieza = 'razon_social LIKE :ini OR nombre_fantasia LIKE :ini';
+        if ($rutDigitos !== '') {
+            $condiciones[]   = "{$rutSql} LIKE :rq";
+            $params[':rq']   = '%' . $rutDigitos . '%';
+            $params[':rini'] = $rutDigitos . '%';
+            $empieza .= " OR {$rutSql} LIKE :rini";
+        }
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNAS . ' FROM proveedor '
+            . 'WHERE cuenta_id = :cuenta AND activo = 1 AND (' . implode(' OR ', $condiciones) . ') '
+            . "ORDER BY CASE WHEN {$empieza} THEN 0 ELSE 1 END, razon_social ASC "
+            . 'LIMIT ' . max(1, min(50, $limit))
+        );
+        $stmt->execute($params);
+
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
     /** @return array<string,mixed>|null */
     public function buscarPorId(int $cuentaId, int $id): ?array
     {
@@ -113,9 +151,9 @@ final class MySqlProveedorRepository
     public function crear(int $cuentaId, array $datos): int
     {
         $stmt = $this->pdo->prepare(
-            'INSERT INTO proveedor (cuenta_id, rut_proveedor, razon_social, giro, direccion, comuna, '
+            'INSERT INTO proveedor (cuenta_id, rut_proveedor, razon_social, nombre_fantasia, giro, direccion, comuna, '
             . ' email, telefono, contacto, condiciones_pago) '
-            . 'VALUES (:cuenta, :rut, :razon, :giro, :dir, :comuna, :email, :tel, :contacto, :cond)'
+            . 'VALUES (:cuenta, :rut, :razon, :fantasia, :giro, :dir, :comuna, :email, :tel, :contacto, :cond)'
         );
         try {
             $stmt->execute($this->params($cuentaId, $datos));
@@ -130,7 +168,7 @@ final class MySqlProveedorRepository
     public function actualizar(int $cuentaId, int $id, array $datos): bool
     {
         $stmt = $this->pdo->prepare(
-            'UPDATE proveedor SET rut_proveedor = :rut, razon_social = :razon, giro = :giro, '
+            'UPDATE proveedor SET rut_proveedor = :rut, razon_social = :razon, nombre_fantasia = :fantasia, giro = :giro, '
             . ' direccion = :dir, comuna = :comuna, email = :email, telefono = :tel, '
             . ' contacto = :contacto, condiciones_pago = :cond '
             . 'WHERE cuenta_id = :cuenta AND id = :id'
@@ -204,6 +242,7 @@ final class MySqlProveedorRepository
             'cuenta'   => $cuentaId,
             'rut'      => $datos['rut_proveedor'],
             'razon'    => $datos['razon_social'],
+            'fantasia' => $this->oNull($datos['nombre_fantasia'] ?? null),
             'giro'     => $this->oNull($datos['giro'] ?? null),
             'dir'      => $this->oNull($datos['direccion'] ?? null),
             'comuna'   => $this->oNull($datos['comuna'] ?? null),

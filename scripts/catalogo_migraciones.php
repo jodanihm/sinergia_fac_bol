@@ -779,6 +779,12 @@ const MIGRACIONES = [
             ['tipo' => 'columnas', 'desc' => 'cliente.nombre_fantasia', 'tabla' => 'cliente', 'columnas' => ['nombre_fantasia'], 'esperado' => 1],
         ],
     ],
+    [
+        'id' => '058', 'archivo' => '058_proveedor_nombre_fantasia.sql', 'nota' => 'ALTER TABLE (nombre de fantasia del proveedor, para el buscador)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'proveedor.nombre_fantasia', 'tabla' => 'proveedor', 'columnas' => ['nombre_fantasia'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

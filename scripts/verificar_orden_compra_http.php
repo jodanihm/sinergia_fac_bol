@@ -278,7 +278,7 @@ foreach ($formularios as $ruta => $que) {
     }
     // Y lo que hace usable la pantalla de la orden.
     if ($ruta === '/compras/ordenes/nueva') {
-        foreach (['id="proveedores-list"' => 'el datalist de proveedores',
+        foreach (['data-buscar-fuente="proveedores"' => 'el buscador de proveedores (js/buscador-clientes.js)',
                   'id="productos-list"'   => 'el datalist de productos',
                   'name="fecha_entrega"'  => 'la fecha de entrega',
                   'name="lugar_entrega"'  => 'el lugar de entrega'] as $marca => $q) {
