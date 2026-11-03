@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '2.01',
+        'titulo'  => 'La factura abre mostrando su forma, y una ventana de clientes mas clara',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Si una pantalla de emision tarda en abrir, ahora se ve de inmediato la forma del formulario mientras llega, con el menu en su lugar, en vez de quedarse mirando la pantalla anterior o una en blanco. Si abre rapido, no aparece nada que estorbe.',
+            'En "Buscar en mis clientes", lo que escribiste queda resaltado en cada resultado, para ver por que aparecio ese cliente.',
+            'La ventana marca cual es el receptor actual, se puede limpiar la busqueda con un toque y en el telefono ocupa toda la pantalla, sin que el teclado tape la lista al abrirla.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '2.00',
         'titulo'  => 'Buscar en mis clientes desde la factura',
         'tag'     => 'frontend',

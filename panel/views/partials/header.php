@@ -71,11 +71,18 @@ $jsContadorVersion = @filemtime(__DIR__ . '/../../public/js/contador-caracteres.
 $jsBuscadorVersion = @filemtime(__DIR__ . '/../../public/js/buscador-clientes.js');
 ?>
 <script src="/js/buscador-clientes.js<?= $jsBuscadorVersion ? '?v=' . $jsBuscadorVersion : ''; ?>" defer></script>
+<?php
+// Skeleton al pinchar un enlace al formulario de emision (ver el <template> de
+// abajo). Solo actua con esos enlaces; en el resto no hace nada.
+$jsArranqueVersion = @filemtime(__DIR__ . '/../../public/js/arranque-pantalla.js');
+?>
+<script src="/js/arranque-pantalla.js<?= $jsArranqueVersion ? '?v=' . $jsArranqueVersion : ''; ?>" defer></script>
 </head>
 <body class="<?= htmlspecialchars($bodyClaseExtra); ?>">
 <?php if ($panelAutenticado): ?>
 <a class="skip-link" href="#contenido">Saltar al contenido</a>
 <?php require __DIR__ . '/_nav.php'; ?>
+<template id="skeleton-emision"><?php $arranqueTitulo = ''; require __DIR__ . '/_skeleton-emision.php'; ?></template>
 <?php endif; ?>
 <main id="contenido" aria-label="Contenido principal">
 <?php

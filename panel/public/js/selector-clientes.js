@@ -44,7 +44,11 @@
         var zona = dlg.querySelector('[data-selector-zona]');
         var lista = dlg.querySelector('[data-selector-lista]');
         var aviso = dlg.querySelector('[data-selector-aviso]');
+        var avisoIcono = dlg.querySelector('[data-selector-aviso-icono]');
+        var avisoTitulo = dlg.querySelector('[data-selector-aviso-titulo]');
         var avisoTexto = dlg.querySelector('[data-selector-aviso-texto]');
+        var limpiar = dlg.querySelector('[data-selector-limpiar]');
+        var iconos = dlg.querySelector('[data-selector-iconos]').content;
         var avisoAccion = dlg.querySelector('[data-selector-aviso-accion]');
         var verMas = dlg.querySelector('[data-selector-ver-mas]');
 
@@ -65,14 +69,61 @@
             return p[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + p[1];
         }
 
-        function linea(clase, texto) {
+        function icono(nombre) {
+            return iconos.querySelector('[data-icono="' + nombre + '"] svg').cloneNode(true);
+        }
+
+        // Sin tildes ni mayusculas, caracter por caracter: lo mismo que hace la
+        // base al comparar, para que "ferreteria" marque "Ferretería".
+        function plegar(texto) {
+            var mapa = [], plano = '';
+            Array.prototype.forEach.call(String(texto), function (ch, i) {
+                var p = ch.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+                for (var n = 0; n < p.length; n++) { mapa.push(i); }
+                plano += p;
+            });
+            return { plano: plano, mapa: mapa };
+        }
+
+        // Tramos [desde, hasta) del texto donde aparece alguna palabra buscada.
+        function tramos(texto, palabras) {
+            var f = plegar(texto), res = [];
+            palabras.forEach(function (w) {
+                var desde = 0, i;
+                while (w && (i = f.plano.indexOf(w, desde)) !== -1) {
+                    res.push([f.mapa[i], f.mapa[i + w.length - 1] + 1]);
+                    desde = i + w.length;
+                }
+            });
+            res.sort(function (a, b) { return a[0] - b[0]; });
+            return res;
+        }
+
+        // Con nodos de texto, nunca innerHTML: son datos que escribio alguien.
+        function resaltado(padre, texto, palabras) {
+            var cursor = 0;
+            tramos(texto, palabras).forEach(function (t) {
+                if (t[0] < cursor) { return; }
+                padre.appendChild(document.createTextNode(String(texto).slice(cursor, t[0])));
+                var m = document.createElement('mark');
+                m.className = 'selector-clientes__marca';
+                m.textContent = String(texto).slice(t[0], t[1]);
+                padre.appendChild(m);
+                cursor = t[1];
+            });
+            padre.appendChild(document.createTextNode(String(texto).slice(cursor)));
+        }
+
+        function linea(clase, texto, palabras) {
             var s = document.createElement('span');
             s.className = 'selector-clientes__' + clase;
-            s.textContent = texto;
+            resaltado(s, texto, palabras || []);
             return s;
         }
 
-        function fila(c, i) {
+        function rutSinFormato(v) { return String(v).replace(/[^0-9kK]/g, '').toUpperCase(); }
+
+        function fila(c, i, palabras) {
             var li = document.createElement('li');
             var b = document.createElement('button');
             b.type = 'button';
@@ -80,15 +131,24 @@
             b.setAttribute('data-indice', String(i));
             var cabeza = document.createElement('span');
             cabeza.className = 'selector-clientes__cabeza';
-            cabeza.appendChild(linea('nombre', c.razon_social));
-            cabeza.appendChild(linea('rut', formatearRut(c.rut)));
+            cabeza.appendChild(linea('nombre', c.razon_social, palabras));
+            cabeza.appendChild(linea('rut', formatearRut(c.rut), palabras));
             b.appendChild(cabeza);
-            if (c.nombre_fantasia) { b.appendChild(linea('fantasia', c.nombre_fantasia)); }
+            if (c.nombre_fantasia) { b.appendChild(linea('fantasia', c.nombre_fantasia, palabras)); }
+            if (c.giro) { b.appendChild(linea('datos', c.giro, palabras)); }
             var lugar = [c.direccion, c.comuna].filter(Boolean).join(', ');
-            var datos = [c.giro, lugar, c.email].filter(Boolean).join(' · ');
-            if (datos) { b.appendChild(linea('datos', datos)); }
+            var contacto = [lugar, c.email].filter(Boolean).join(' · ');
+            if (contacto) { b.appendChild(linea('datos', contacto, palabras)); }
             if (avisarFaltantes && c.faltan && c.faltan.length) {
-                b.appendChild(linea('falta', 'Le falta para facturar: ' + c.faltan.join(', ')));
+                var falta = linea('falta', 'Le falta para facturar: ' + c.faltan.join(', '));
+                falta.insertBefore(icono('alerta'), falta.firstChild);
+                b.appendChild(falta);
+            }
+            if (campoRut.value.trim() !== '' && rutSinFormato(campoRut.value) === rutSinFormato(c.rut)) {
+                b.setAttribute('aria-current', 'true');
+                var actual = linea('actual', 'Es el receptor actual');
+                actual.insertBefore(icono('check'), actual.firstChild);
+                b.appendChild(actual);
             }
             li.appendChild(b);
             return li;
@@ -101,12 +161,16 @@
                 li.className = 'selector-clientes__fila selector-clientes__fila--skeleton';
                 li.setAttribute('aria-hidden', 'true');
                 li.innerHTML = '<span class="selector-clientes__cabeza"><span class="skeleton skeleton--nombre"></span>'
-                    + '<span class="skeleton skeleton--rut"></span></span><span class="skeleton skeleton--datos"></span>';
+                    + '<span class="skeleton skeleton--rut"></span></span><span class="skeleton skeleton--datos"></span>'
+                    + '<span class="skeleton skeleton--datos skeleton--corto"></span>';
                 lista.appendChild(li);
             }
         }
 
-        function mostrarAviso(texto, accion, etiqueta) {
+        function mostrarAviso(icon, titulo, texto, accion, etiqueta) {
+            avisoIcono.innerHTML = '';
+            avisoIcono.appendChild(icono('aviso-' + icon));
+            avisoTitulo.textContent = titulo;
             avisoTexto.textContent = texto;
             accionAviso = accion || null;
             avisoAccion.hidden = !accion;
@@ -127,19 +191,18 @@
 
         function pintarResultado(texto, desde) {
             if (desde === 0) { lista.innerHTML = ''; zona.scrollTop = 0; }
-            for (var i = desde; i < clientes.length; i++) { lista.appendChild(fila(clientes[i], i)); }
+            var palabras = plegar(texto).plano.split(/\s+/).filter(Boolean);
+            for (var i = desde; i < clientes.length; i++) { lista.appendChild(fila(clientes[i], i, palabras)); }
             verMas.hidden = clientes.length >= total;
             aviso.hidden = true;
             estado.textContent = resumen(texto);
             if (total === 0) {
                 if (texto !== '') {
-                    mostrarAviso('Ningun cliente coincide con "' + texto + '". Prueba con menos palabras o solo parte del RUT.', function () {
-                        q.value = '';
-                        cargar(1);
-                        q.focus();
+                    mostrarAviso('clientes', 'Ningun cliente coincide con "' + texto + '"', 'Prueba con menos palabras o solo parte del RUT.', function () {
+                        limpiarBusqueda();
                     }, 'Limpiar busqueda');
                 } else {
-                    mostrarAviso('Todavia no tienes clientes guardados. Escribe los datos del receptor en el formulario: se guarda solo al salir del correo.');
+                    mostrarAviso('clientes', 'Todavia no tienes clientes guardados', 'Escribe los datos del receptor en el formulario: se guarda solo al salir del correo.');
                 }
             }
         }
@@ -149,9 +212,9 @@
             verMas.hidden = true;
             estado.textContent = '';
             if (r && r.status === 403) {
-                mostrarAviso('Tu usuario no tiene permiso para ver los clientes. Pidelo a quien administra la cuenta, o escribe los datos del receptor a mano.');
+                mostrarAviso('alerta', 'Tu usuario no puede ver los clientes', 'Pide el permiso a quien administra la cuenta, o escribe los datos del receptor a mano.');
             } else {
-                mostrarAviso('No se pudieron cargar los clientes. Revisa tu conexion y vuelve a intentarlo.', reintentar, 'Reintentar');
+                mostrarAviso('alerta', 'No se pudieron cargar los clientes', 'Revisa tu conexion y vuelve a intentarlo.', reintentar, 'Reintentar');
             }
         }
 
@@ -238,6 +301,7 @@
 
         boton.addEventListener('click', function () {
             q.value = '';
+            limpiar.hidden = true;
             clientes = [];
             total = 0;
             lista.innerHTML = '';
@@ -245,7 +309,9 @@
             aviso.hidden = true;
             verMas.hidden = true;
             dlg.showModal();
-            q.focus();
+            // En un telefono, el teclado taparia la lista que se viene a mirar:
+            // se abre al tocar el buscador, no solo.
+            if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) { dlg.focus(); } else { q.focus(); }
             cargar(1);
         });
 
@@ -256,7 +322,14 @@
         });
 
         dlg.addEventListener('click', function (e) {
-            if (e.target === dlg || e.target.closest('[data-selector-cerrar]')) { dlg.close(); return; }
+            if (e.target.closest('[data-selector-cerrar]')) { dlg.close(); return; }
+            // El fondo oscuro tambien es el <dialog>: solo cierra el clic FUERA de
+            // su caja, no el que cae en su margen interior.
+            if (e.target === dlg) {
+                var caja = dlg.getBoundingClientRect();
+                if (e.clientX < caja.left || e.clientX > caja.right || e.clientY < caja.top || e.clientY > caja.bottom) { dlg.close(); }
+                return;
+            }
             var opcion = e.target.closest('[data-indice]');
             if (opcion) { elegirCliente(clientes[parseInt(opcion.getAttribute('data-indice'), 10)]); }
         });
@@ -270,7 +343,16 @@
             if (window.emisionUx) { window.emisionUx.revisarReceptor(false); }
         }
 
+        function limpiarBusqueda() {
+            q.value = '';
+            limpiar.hidden = true;
+            cargar(1);
+            q.focus();
+        }
+        limpiar.addEventListener('click', limpiarBusqueda);
+
         q.addEventListener('input', function () {
+            limpiar.hidden = q.value === '';
             clearTimeout(pausa);
             pausa = setTimeout(function () { cargar(1); }, PAUSA_MS);
         });
