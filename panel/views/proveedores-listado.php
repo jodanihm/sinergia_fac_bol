@@ -32,7 +32,7 @@ require __DIR__ . '/partials/header.php';
     <div class="form-campo">
         <label for="q">Buscar</label>
         <input type="search" name="q" id="q" value="<?= htmlspecialchars((string) $q); ?>"
-               placeholder="RUT, razon social o contacto">
+               placeholder="RUT, razon social, nombre de fantasia o contacto">
     </div>
     <div class="form-campo form-campo--check">
         <label><input type="checkbox" name="inactivos" value="1"<?= $incluirInactivos ? ' checked' : ''; ?>> Incluir inactivos</label>
@@ -60,7 +60,12 @@ require __DIR__ . '/partials/header.php';
                 <?php foreach ($proveedores as $p): ?>
                     <tr<?= empty($p['activo']) ? ' class="tabla-datos__fila--inactiva"' : ''; ?>>
                         <td><?= htmlspecialchars((string) $p['rut_proveedor']); ?></td>
-                        <td><?= htmlspecialchars((string) $p['razon_social']); ?></td>
+                        <td>
+                            <?= htmlspecialchars((string) $p['razon_social']); ?>
+                            <?php if (($p['nombre_fantasia'] ?? '') !== ''): ?>
+                                <span class="tabla-datos__secundario"><?= htmlspecialchars((string) $p['nombre_fantasia']); ?></span>
+                            <?php endif; ?>
+                        </td>
                         <td><?= htmlspecialchars((string) ($p['contacto'] ?? '')) ?: '&mdash;'; ?></td>
                         <td><?= htmlspecialchars((string) ($p['email'] ?? '')) ?: '&mdash;'; ?></td>
                         <td><?= htmlspecialchars((string) ($p['condiciones_pago'] ?? '')) ?: '&mdash;'; ?></td>

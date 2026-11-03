@@ -14,6 +14,9 @@
  *   - data-buscar-cliente en el input del RUT. Con valor "normalizado" el RUT
  *     elegido queda sin puntos (77724622-4), como lo guarda la base: es lo que
  *     necesitan los filtros de los listados, que comparan el texto tal cual.
+ *   - data-buscar-fuente="proveedores" (opcional): busca proveedores en vez de
+ *     clientes (/compras/proveedores/buscar, orden de compra). Mismo
+ *     comportamiento; cambia la ruta y los textos.
  *   - data-cliente-campos="razon_social:id-del-campo,giro:otro-id,..." (opcional):
  *     que campo de la pantalla recibe cada dato del cliente elegido. Al ELEGIR
  *     se pisan: elegir un cliente de la lista es pedir exactamente sus datos.
@@ -42,6 +45,18 @@
     var PAUSA_MS = 250;
     var AVISO_ESPERA_MS = 300;
     var contador = 0;
+    var FUENTES = {
+        clientes: {
+            url: '/ventas/clientes/buscar',
+            etiqueta: 'Clientes encontrados',
+            ninguno: 'Ningun cliente coincide. Si es nuevo, escribe su RUT y completa sus datos.'
+        },
+        proveedores: {
+            url: '/compras/proveedores/buscar',
+            etiqueta: 'Proveedores encontrados',
+            ninguno: 'Ningun proveedor coincide. Si es nuevo, escribe su RUT y completa sus datos.'
+        }
+    };
 
     function formatearRut(rut) {
         var p = String(rut).split('-');
@@ -89,6 +104,7 @@
         contador++;
 
         var normalizado = input.getAttribute('data-buscar-cliente') === 'normalizado';
+        var fuente = FUENTES[input.getAttribute('data-buscar-fuente')] || FUENTES.clientes;
         var campos = {};
         (input.getAttribute('data-cliente-campos') || '').split(',').forEach(function (par) {
             var kv = par.split(':');
@@ -106,7 +122,7 @@
         lista.className = 'buscador-clientes__lista';
         lista.id = 'buscador-clientes-' + contador;
         lista.setAttribute('role', 'listbox');
-        lista.setAttribute('aria-label', 'Clientes encontrados');
+        lista.setAttribute('aria-label', fuente.etiqueta);
         lista.hidden = true;
         envoltorio.appendChild(lista);
 
@@ -161,7 +177,7 @@
             resultados = clientes;
             activo = -1;
             if (clientes.length === 0) {
-                aviso('Ningun cliente coincide. Si es nuevo, escribe su RUT y completa sus datos.');
+                aviso(fuente.ninguno);
                 return;
             }
             lista.innerHTML = '';
@@ -210,7 +226,7 @@
             if (q.length < MINIMO) { cerrar(); return; }
             var mio = ++pedido;
             var espera = setTimeout(function () { if (mio === pedido) { aviso('Buscando...'); } }, AVISO_ESPERA_MS);
-            fetch('/ventas/clientes/buscar?q=' + encodeURIComponent(q), { headers: { 'Accept': 'application/json' } })
+            fetch(fuente.url + '?q=' + encodeURIComponent(q), { headers: { 'Accept': 'application/json' } })
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (data) {
                     clearTimeout(espera);
@@ -220,7 +236,7 @@
                     // Sin respuesta valida (sesion vencida, sin permiso para ver
                     // clientes) no se dice "ningun cliente coincide": seria falso.
                     if (data === null) { cerrar(); return; }
-                    pintar(data.clientes || []);
+                    pintar(data.resultados || data.clientes || []);
                 })
                 .catch(function () { clearTimeout(espera); if (mio === pedido) { cerrar(); } });
         }

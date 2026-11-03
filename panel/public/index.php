@@ -700,6 +700,7 @@ const PERMISOS_RUTA = [
     'GET /compras/proveedores/nuevo'             => ['compras', 'ver'],
     'POST /compras/proveedores/nuevo'            => ['compras', 'gestionar'],
     'GET /compras/proveedor-por-rut'             => ['compras', 'ver'],
+    'GET /compras/proveedores/buscar'            => ['compras', 'ver'],
     // Lo dispara la orden de compra, pero da de alta una ficha del maestro de
     // proveedores: el mismo permiso que el alta normal.
     'POST /compras/guardar-proveedor'            => ['compras', 'gestionar'],
@@ -1866,6 +1867,7 @@ function validarProveedor(array $post): array
     return [[
         'rut_proveedor'    => $rut,
         'razon_social'     => $razon,
+        'nombre_fantasia'  => trim((string) ($post['nombre_fantasia'] ?? '')),
         'giro'             => trim((string) ($post['giro'] ?? '')),
         'direccion'        => trim((string) ($post['direccion'] ?? '')),
         'comuna'           => trim((string) ($post['comuna'] ?? '')),
@@ -2038,6 +2040,40 @@ function handleProveedorPorRutGet(): never
     exit;
 }
 
+/**
+ * GET /compras/proveedores/buscar?q=...  -> JSON. El buscador del proveedor en
+ * la orden de compra: mismo contrato que /ventas/clientes/buscar (hasta 10,
+ * solo activos, minimo 2 caracteres), con lista en 'resultados'. Ademas de
+ * RUT, razon social y nombre de fantasia, busca por contacto: con un proveedor
+ * se suele tratar con una persona, y es el nombre que uno recuerda.
+ */
+function handleProveedoresBuscarGet(): never
+{
+    header('Content-Type: application/json; charset=utf-8');
+    $q = mb_substr(trim((string) ($_GET['q'] ?? '')), 0, 100);
+    if (mb_strlen($q) < 2) {
+        echo json_encode(['resultados' => []]);
+        exit;
+    }
+    $rutDigitos = strtoupper((string) preg_replace('/[^0-9kK]/', '', $q));
+    if (! preg_match('/[0-9]/', $rutDigitos)) {
+        $rutDigitos = '';
+    }
+    $resultados = array_map(static fn (array $p): array => [
+        'rut'              => (string) $p['rut_proveedor'],
+        'razon_social'     => (string) $p['razon_social'],
+        'nombre_fantasia'  => (string) ($p['nombre_fantasia'] ?? ''),
+        'giro'             => (string) ($p['giro'] ?? ''),
+        'direccion'        => (string) ($p['direccion'] ?? ''),
+        'comuna'           => (string) ($p['comuna'] ?? ''),
+        'email'            => (string) ($p['email'] ?? ''),
+        'contacto'         => (string) ($p['contacto'] ?? ''),
+        'condiciones_pago' => (string) ($p['condiciones_pago'] ?? ''),
+    ], proveedorRepo()->buscarParaSelector(Auth::cuentaId(), $q, $rutDigitos));
+    echo json_encode(['resultados' => $resultados], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 // ---------------------------------------------------------------------------
 //  Ordenes de compra
 // ---------------------------------------------------------------------------
@@ -2176,9 +2212,9 @@ function renderOrdenCompraForm(string $modo, string $accion, array $orden, array
         'lineas'      => $lineas,
         'errores'     => $errores,
         // Mismo camino que el formulario de cotizacion: una consulta al maestro,
-        // el mismo tope y el mismo "solo activos".
+        // el mismo tope y el mismo "solo activos". El proveedor se busca con
+        // js/buscador-clientes.js (/compras/proveedores/buscar).
         'productos'   => productoRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
-        'proveedores' => proveedorRepo()->listar(Auth::cuentaId(), null, true, 1000, 0),
         'navActivo'   => 'compras.ordenes',
     ]);
 }
@@ -12375,6 +12411,11 @@ if ($metodo === 'POST' && $ruta === '/compras/proveedores/nuevo') {
 if ($metodo === 'GET' && $ruta === '/compras/proveedor-por-rut') {
     Auth::requerirSesion();
     handleProveedorPorRutGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/compras/proveedores/buscar') {
+    Auth::requerirSesion();
+    handleProveedoresBuscarGet();
 }
 if ($metodo === 'GET' && preg_match('#^/compras/proveedores/(\d+)/editar$#', $ruta, $mProv)) {
     Auth::requerirSesion();

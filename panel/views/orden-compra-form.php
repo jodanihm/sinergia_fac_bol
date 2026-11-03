@@ -3,7 +3,7 @@
  * Alta y edicion de una orden de compra.
  *
  * Recibe: $modo ('nueva'|'editar'), $accion, $orden, $lineas, $errores,
- * $productos, $proveedores, $navActivo.
+ * $productos, $navActivo.
  *
  * CONTRATO CON EL BACKEND Y EL JS -- no tocar sin revisar validarOrdenCompra():
  *   - csrfInput() dentro del <form>. SIN ESA LINEA LA PANTALLA NO SE PUEDE USAR:
@@ -12,7 +12,7 @@
  *   - name de cada control, con la sintaxis lineas[i][campo].
  *   - id/clase que usa el JS: #form-orden, #tabla-lineas, #agregar-linea,
  *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list,
- *     #proveedores-list, #proveedor_rut y #rut-aviso.
+ *     #proveedor_rut (con data-buscar-cliente, ver js/buscador-clientes.js) y #rut-aviso.
  *   - data-precio="neto|final|cantidad|descuento|exento" y data-precios en la
  *     tabla: los usa js/precio-iva.js para el precio final y el resumen, con la
  *     formula de MySqlOrdenCompraRepository::totales(). El precio final no
@@ -66,10 +66,12 @@ foreach ($productos as $p) {
         <div class="form-grid">
             <div class="form-campo">
                 <label for="proveedor_rut">RUT</label>
-                <input type="text" list="proveedores-list" name="proveedor_rut" id="proveedor_rut" data-guardar="rut" data-obligatorio="Escribe el RUT del proveedor, por ejemplo 76.543.210-3."
-                       value="<?= $v('proveedor_rut'); ?>" placeholder="76543210-9"
+                <input type="text" name="proveedor_rut" id="proveedor_rut" data-guardar="rut" data-obligatorio="Escribe el RUT del proveedor, por ejemplo 76.543.210-3."
+                       value="<?= $v('proveedor_rut'); ?>" placeholder="RUT o nombre del proveedor" autocomplete="off" spellcheck="false"
+                       data-buscar-cliente data-buscar-fuente="proveedores"
+                       data-cliente-campos="razon_social:proveedor_razon_social,giro:proveedor_giro,direccion:proveedor_direccion,comuna:proveedor_comuna,contacto:proveedor_contacto,email:proveedor_email,condiciones_pago:condiciones_pago"
                        aria-describedby="rut-aviso"<?= $err('proveedor_rut'); ?>>
-                <small class="form-ayuda" id="rut-aviso" aria-live="polite">Elige uno de tus proveedores o escribe un RUT nuevo.</small>
+                <small class="form-ayuda" id="rut-aviso" aria-live="polite">Escribe el RUT, la razon social, el nombre de fantasia o el contacto y elige de la lista, o escribe un RUT nuevo.</small>
             </div>
             <div class="form-campo form-campo--ancho">
                 <label for="proveedor_razon_social">Razon social</label>
@@ -105,22 +107,6 @@ foreach ($productos as $p) {
                 <small class="form-ayuda" data-autoguardar-aviso aria-live="polite">Lo agrega a tus proveedores sin guardar la orden. Tambien se guarda solo al salir del correo, si el RUT y la razon social estan bien.</small>
             </div>
         </div>
-        <?php
-        /* EL DATALIST PROPONE, NO OBLIGA. Un RUT que no este en el maestro se
-           escribe a mano y se guarda igual: proveedor_id queda NULL y los datos
-           van sueltos en las columnas congeladas de la orden. Comprar una vez a
-           alguien que no es proveedor habitual es un caso normal.
-
-           POR QUE ADEMAS DEL fetch Y NO EN VEZ DE EL: el fetch autocompleta
-           DESPUES de teclear el RUT completo, asi que sin el datalist habria que
-           saberselo de memoria. Es la misma queja que se resolvio en cotizacion
-           con los clientes. */
-        ?>
-        <datalist id="proveedores-list">
-            <?php foreach ($proveedores as $p): ?>
-                <option value="<?= htmlspecialchars((string) $p['rut_proveedor']); ?>"><?= htmlspecialchars((string) $p['razon_social']); ?></option>
-            <?php endforeach; ?>
-        </datalist>
     </section>
 
     <section class="tarjeta" aria-labelledby="titulo-entrega">
@@ -263,13 +249,14 @@ foreach ($productos as $p) {
 
     // AUTOCOMPLETADO DEL PROVEEDOR POR RUT. Reusa el endpoint propio
     // /compras/proveedor-por-rut, con la misma forma que /ventas/cliente-por-rut.
-    // Se dispara en 'change' ademas de en 'blur' porque elegir del datalist con
-    // el raton no siempre produce blur.
+    // Se dispara en 'change' ademas de en 'blur' porque asi lo avisa
+    // js/buscador-clientes.js al elegir un proveedor de su lista.
     var rut = document.getElementById('proveedor_rut');
     var aviso = document.getElementById('rut-aviso');
+    var AVISO_INICIAL = aviso.textContent;
     function buscarProveedor() {
         var vRut = rut.value.trim();
-        if (vRut === '') { aviso.textContent = 'Elige uno de tus proveedores o escribe un RUT nuevo.'; return; }
+        if (vRut === '') { aviso.textContent = AVISO_INICIAL; return; }
         fetch('/compras/proveedor-por-rut?rut=' + encodeURIComponent(vRut))
             .then(function (r) { return r.json(); })
             .then(function (data) {
@@ -282,14 +269,18 @@ foreach ($productos as $p) {
                 var p = data.proveedor || {};
                 // Ya esta en el maestro: el guardado automatico no lo repite.
                 rut.closest('[data-autoguardar]').setAttribute('data-ya-guardado', vRut.replace(/[^0-9kK]/g, '').toUpperCase());
+                var puestos = {};
                 [['proveedor_razon_social', p.razon_social], ['proveedor_giro', p.giro],
                  ['proveedor_direccion', p.direccion], ['proveedor_comuna', p.comuna],
                  ['proveedor_email', p.email], ['proveedor_contacto', p.contacto],
                  ['condiciones_pago', p.condiciones_pago]].forEach(function (par) {
                     var el = document.getElementById(par[0]);
-                    if (el && el.value === '' && par[1]) { el.value = par[1]; }
+                    if (el && el.value === '' && par[1]) { el.value = par[1]; puestos[par[0]] = el.value; }
                     if (el && el.value !== '' && window.validarCampos) { window.validarCampos.revisar(el); }
                 });
+                // Si despues se cambia el RUT, el buscador vacia lo que se
+                // relleno aqui (js/buscador-clientes.js).
+                if (window.buscadorClientes) { window.buscadorClientes.cargado(rut, puestos); }
                 aviso.textContent = p.activo === false || p.activo === 0
                     ? 'Proveedor encontrado (INACTIVO en tus maestros).'
                     : 'Proveedor encontrado: datos autocompletados.';
@@ -298,6 +289,8 @@ foreach ($productos as $p) {
     }
     rut.addEventListener('blur', buscarProveedor);
     rut.addEventListener('change', buscarProveedor);
+    // Se cambio el RUT de un proveedor ya cargado: sus datos se vaciaron.
+    rut.addEventListener('cliente-descartado', function () { aviso.textContent = AVISO_INICIAL; });
 })();
 </script>
 
