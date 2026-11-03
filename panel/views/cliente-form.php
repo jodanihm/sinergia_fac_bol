@@ -89,6 +89,12 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                         <?php endif; ?>
                     </div>
 
+                    <div class="form-campo">
+                        <label for="nombre_fantasia">Nombre de fantasia (opcional)</label>
+                        <input type="text" name="nombre_fantasia" id="nombre_fantasia" maxlength="255" value="<?= $val('nombre_fantasia'); ?>" placeholder="Ferreteria Don Pepe" aria-describedby="ayuda-fantasia">
+                        <small class="form-ayuda" id="ayuda-fantasia">Como lo conoces. Sirve para encontrarlo al facturar; no sale en el documento.</small>
+                    </div>
+
                     <div class="<?= $claseCampo('giro', 'form-campo--ancho'); ?>">
                         <label for="giro">Giro</label>
                         <input type="text" name="giro" id="giro" data-max-sii="40" value="<?= $val('giro'); ?>">

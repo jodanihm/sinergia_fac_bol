@@ -289,8 +289,11 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                     <div class="<?= $cc('receptor-rut'); ?>">
                         <label for="receptor-rut">RUT <?= $esBoleta ? '(opcional)' : $req; ?></label>
                         <?php // inputmode text: el RUT puede terminar en K. Se ordena al salir (12.345.678-9) y se valida el digito; el servidor lo normaliza igual. ?>
-                        <input type="text" name="receptor[rut]" id="receptor-rut" value="<?= $vr('rut'); ?>" placeholder="12.345.678-9" inputmode="text" autocomplete="off" spellcheck="false" aria-describedby="rut-aviso error-receptor-rut<?= $esBoleta ? ' ayuda-rut-boleta' : ''; ?>"<?= $inv('receptor-rut'); ?>>
+                        <input type="text" name="receptor[rut]" id="receptor-rut" value="<?= $vr('rut'); ?>" placeholder="RUT o nombre del cliente" inputmode="text" autocomplete="off" spellcheck="false"
+                               data-buscar-cliente data-cliente-campos="razon_social:receptor-razonSocial,giro:receptor-giro,direccion:receptor-direccion,comuna:receptor-comuna,email:receptor-email"
+                               aria-describedby="ayuda-buscar-cliente rut-aviso error-receptor-rut<?= $esBoleta ? ' ayuda-rut-boleta' : ''; ?>"<?= $inv('receptor-rut'); ?>>
                         <?= $campoError('receptor-rut'); ?>
+                        <small class="form-ayuda" id="ayuda-buscar-cliente">Escribe el RUT, la razon social o el nombre de fantasia y elige de la lista. Si es nuevo, escribe su RUT.</small>
                         <small class="form-ayuda" id="rut-aviso" aria-live="polite"></small>
                         <?php if ($esBoleta): ?>
                             <small class="form-ayuda" id="ayuda-rut-boleta">Si lo dejas vacio, la boleta sale a Consumidor Final (66666666-6), lo normal en una venta de mostrador.</small>

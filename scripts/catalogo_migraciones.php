@@ -773,6 +773,12 @@ const MIGRACIONES = [
              'columnas' => ['autorizado_por', 'autorizado_en', 'autorizado_ip', 'huella_autorizada', 'cambios'], 'esperado' => 5],
         ],
     ],
+    [
+        'id' => '057', 'archivo' => '057_cliente_nombre_fantasia.sql', 'nota' => 'ALTER TABLE (nombre de fantasia del cliente, para el buscador)',
+        'huellas' => [
+            ['tipo' => 'columnas', 'desc' => 'cliente.nombre_fantasia', 'tabla' => 'cliente', 'columnas' => ['nombre_fantasia'], 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

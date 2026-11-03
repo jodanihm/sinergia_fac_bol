@@ -32,6 +32,18 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-11-03',
+        'version' => '1.95',
+        'titulo'  => 'Buscador de clientes por RUT, razon social o nombre de fantasia',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En facturas, boletas, notas de credito y cotizaciones, el campo RUT ahora busca mientras escribes: basta con parte del RUT, de la razon social o del nombre de fantasia. Al elegir un cliente de la lista se completan sus datos (razon social, giro, direccion, comuna y correo).',
+            'Los clientes tienen un campo nuevo, "Nombre de fantasia", para encontrarlos por el nombre con que se les conoce. Es opcional y no sale en el documento.',
+            'Los filtros por RUT de Documentos emitidos y de Facturar notas tambien buscan por nombre.',
+            'El buscador del listado de clientes busca tambien por nombre de fantasia.',
+        ],
+    ],
+    [
         'fecha'   => '2026-11-02',
         'version' => '1.94',
         'titulo'  => 'Importar notas de venta avisa el tipo de factura y los folios antes de importar',

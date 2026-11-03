@@ -3712,3 +3712,53 @@ fieldset.pregunta > legend + * { clear: both; }
 .pregunta input[type="date"],
 .pregunta select { max-width: 20rem; }
 .resumen-importacion { font-size: var(--txt-md); line-height: 1.5; margin: 0 0 var(--esp-3); }
+
+/* --- Buscador de clientes (js/buscador-clientes.js) -------------------------
+   La lista flota bajo el campo de RUT sin empujar el formulario. */
+.buscador-clientes {
+    position: relative;
+}
+.buscador-clientes > input {
+    width: 100%;
+}
+.buscador-clientes__lista {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    min-width: 16rem;
+    max-height: 18rem;
+    overflow-y: auto;
+    margin: var(--esp-1) 0 0;
+    padding: var(--esp-1) 0;
+    list-style: none;
+    background: var(--color-superficie);
+    border: 1px solid var(--color-borde);
+    border-radius: var(--radio-md);
+    box-shadow: var(--sombra-md);
+}
+.buscador-clientes__opcion {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--esp-2) var(--esp-3);
+    cursor: pointer;
+}
+.buscador-clientes__opcion:hover,
+.buscador-clientes__opcion[aria-selected="true"] {
+    background: var(--color-primario-suave);
+}
+.buscador-clientes__nombre {
+    font-weight: 600;
+    color: var(--color-texto);
+}
+.buscador-clientes__detalle {
+    font-size: var(--txt-sm);
+    color: var(--color-texto-tenue);
+}
+.buscador-clientes__aviso {
+    padding: var(--esp-2) var(--esp-3);
+    font-size: var(--txt-sm);
+    color: var(--color-texto-tenue);
+}

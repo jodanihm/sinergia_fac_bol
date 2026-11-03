@@ -178,7 +178,7 @@ if (isset($filtros['estado'])) {
     </label>
     <label class="filtros__campo">RUT receptor
         <input type="text" name="receptorRut" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['receptorRut'] ?? '')); ?>"
-               placeholder="77724622-4" spellcheck="false">
+               placeholder="RUT o nombre del cliente" spellcheck="false" data-buscar-cliente="normalizado">
     </label>
     <label class="filtros__campo">Estado
         <input type="text" name="estado" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['estado'] ?? '')); ?>"
