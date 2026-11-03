@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '2.04',
+        'titulo'  => 'Todas las pantallas abren con efecto de carga',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Cada pantalla del panel y del panel de control abre durante un segundo mostrando su forma, con el menu y los titulos en su lugar, y despues aparecen los datos.',
+            'Al elegir una opcion del menu el efecto parte en el mismo clic, para que se note de inmediato que la pantalla esta cambiando.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '2.03',
         'titulo'  => 'Icono de Sinergia en las pestanas del navegador',
         'tag'     => 'frontend',

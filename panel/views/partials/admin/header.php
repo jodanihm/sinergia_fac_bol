@@ -49,6 +49,7 @@ $adminEmail = (string) ($adminStmtEmail->fetchColumn() ?: '');
 $jsValidarVersion = @filemtime(__DIR__ . '/../../../public/js/validar-campos.js');
 ?>
 <script src="/js/validar-campos.js<?= $jsValidarVersion ? '?v=' . $jsValidarVersion : ''; ?>" defer></script>
+<?php require __DIR__ . '/../_arranque.php'; ?>
 </head>
 <body>
 <a class="skip-link" href="#contenido">Saltar al contenido</a>

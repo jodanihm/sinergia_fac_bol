@@ -57,16 +57,6 @@
  *   - Ids nuevos en las celdas del detalle (det-{i}-{campo}) para poder
  *     enlazar y enfocar el error del motor; tambien en nuevaFilaHTML().
  *
- * ARRANQUE (noviembre 2026): al abrir la pantalla con GET, el skeleton se ve
- * SIEMPRE y durante AL MENOS 1 SEGUNDO, aunque todo haya cargado antes.
- *
- * ES UNA EXCEPCION PEDIDA A PROPOSITO A LA SECCION 14 del design system, que dice
- * no mostrar nada bajo 300 ms y 400 ms de permanencia. El dueno del producto pidio
- * el 03-11-2026 que tenga presencia. No "corregirla" hacia la 14 sin preguntarle.
- *
- * Sin JavaScript no pasa nada de esto. Con POST (el 422 que vuelve) no aplica: el
- * foco tiene que ir directo al campo con error, y un control oculto no lo recibe.
- *
  * CONVERSION DE COTIZACION (segunda entrega): $form puede traer cotizacion_id,
  * cotizacion_numero y, en cada detalle, cotizacion_linea_id y pendiente. Cuando
  * NO vienen -- toda emision normal -- esta vista produce el mismo HTML que antes.
@@ -230,44 +220,8 @@ $docConArticulo = 'la ' . strtolower($tituloDoc);
 // required son lo que hace que "no elegir" sea un estado representable.
 $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     . '<span class="visualmente-oculto">(obligatorio)</span>';
-$conArranque = ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET';
 ?>
-<?php if ($conArranque): ?>
-<?php
-$arranqueTitulo   = $tituloDoc;
-$arranqueVariante = $esBoleta ? 'boleta' : ($esNota ? 'nota' : 'factura');
-require __DIR__ . '/partials/_skeleton-emision.php';
-?>
-<?php /* Despues del skeleton y no antes: el segundo se cuenta desde que el skeleton
-         existe en la pagina. Antes, un fotograma temprano adelantaba el conteo hasta 100 ms. */ ?>
-<script>
-(function () {
-    var raiz = document.documentElement, main = document.getElementById('contenido');
-    var inicio = null, terminado = false;
-    // El segundo se cuenta desde que el skeleton se pinta, no desde que se lee este
-    // script: entre las dos cosas se iban unos 70 ms de presencia.
-    requestAnimationFrame(function () { requestAnimationFrame(function () { inicio = performance.now(); }); });
-    raiz.classList.add('pantalla-arrancando');
-    if (main) { main.setAttribute('aria-busy', 'true'); }
-    function fin() {
-        if (terminado) { return; }
-        terminado = true;
-        raiz.classList.remove('pantalla-arrancando');
-        raiz.classList.add('pantalla-revelada');
-        if (main) { main.removeAttribute('aria-busy'); }
-    }
-    // Minimo 1 segundo en pantalla, aunque el formulario quede armado antes.
-    function listo() {
-        if (inicio === null) { requestAnimationFrame(listo); return; }
-        setTimeout(fin, Math.max(0, 1000 - (performance.now() - inicio)));
-    }
-    document.addEventListener('DOMContentLoaded', listo);
-    // Pase lo que pase, el formulario no se queda escondido.
-    setTimeout(fin, 8000);
-})();
-</script>
-<?php endif; ?>
-<div class="arranque-contenido">
+
 <div class="dash-header">
     <div>
         <h1><?= htmlspecialchars($tituloDoc); ?></h1>
@@ -1405,5 +1359,4 @@ require __DIR__ . '/partials/_skeleton-emision.php';
 </script>
 <?php endif; ?>
 
-</div>
 <?php require __DIR__ . '/partials/footer.php'; ?>
