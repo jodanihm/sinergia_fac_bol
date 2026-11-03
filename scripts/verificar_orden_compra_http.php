@@ -279,7 +279,7 @@ foreach ($formularios as $ruta => $que) {
     // Y lo que hace usable la pantalla de la orden.
     if ($ruta === '/compras/ordenes/nueva') {
         foreach (['data-buscar-fuente="proveedores"' => 'el buscador de proveedores (js/buscador-clientes.js)',
-                  'id="productos-list"'   => 'el datalist de productos',
+                  'data-buscar-fuente="productos"' => 'el buscador de productos (js/buscador-clientes.js)',
                   'name="fecha_entrega"'  => 'la fecha de entrega',
                   'name="lugar_entrega"'  => 'el lugar de entrega'] as $marca => $q) {
             if (str_contains($r['body'], $marca)) {

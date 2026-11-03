@@ -27,7 +27,7 @@
  *     inputs de la tabla de lineas (".form-compacto .tabla-editable input").
  *   - name de cada control, con la sintaxis de arrays lineas[i][campo].
  *   - id/clase que usa el JS: #form-cotizacion, #tabla-lineas, #agregar-linea,
- *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list,
+ *     .quitar-linea, .lin-nombre (buscador de productos), .lin-precio, .lin-unidad,
  *     #receptor_rut (con data-buscar-cliente, ver js/buscador-clientes.js) y #rut-aviso.
  *   - data-precio="neto|final|cantidad|descuento|exento" y data-precios en la
  *     tabla: los usa js/precio-iva.js para el precio final y el resumen. El
@@ -84,8 +84,9 @@ $ariaLinea = static function (string $clave) use ($errores): string {
 $filas = ($lineas !== []) ? $lineas : [0 => []];
 $proximoIndice = max(array_map('intval', array_keys($filas))) + 1;
 
-// Mapa nombre -> [precio, unidad, exento] para autocompletar al elegir del
-// datalist. Mismo mecanismo que el formulario de emision.
+// Mapa nombre -> [precio, unidad, exento] para autocompletar al elegir un
+// producto del buscador (js/buscador-clientes.js). Mismo mecanismo que el
+// formulario de emision.
 $mapaProductos = [];
 foreach ($productos as $p) {
     $mapaProductos[(string) $p['nombre']] = [
@@ -272,7 +273,7 @@ if (isset($errores['lineas'])) {
                     <?php foreach ($filas as $i => $l): ?>
                         <?php $i = (int) $i; ?>
                         <tr>
-                            <td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[<?= $i; ?>][nombre]" id="lin-<?= $i; ?>-nombre" value="<?= $e((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $ariaLinea("lineas[{$i}].nombre"); ?>></td>
+                            <td class="col-producto" data-label="Producto"><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="lineas[<?= $i; ?>][nombre]" id="lin-<?= $i; ?>-nombre" value="<?= $e((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $ariaLinea("lineas[{$i}].nombre"); ?>></td>
                             <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][cantidad]" id="lin-<?= $i; ?>-cantidad" value="<?= $e((string) ($l['cantidad'] ?? '')); ?>" aria-label="Cantidad" data-precio="cantidad"<?= $ariaLinea("lineas[{$i}].cantidad"); ?>></td>
                             <td class="col-precio" data-label="Precio sin IVA"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][precio_unitario]" id="lin-<?= $i; ?>-precio_unitario" value="<?= $e((string) ($l['precio_unitario'] ?? '')); ?>" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"<?= $ariaLinea("lineas[{$i}].precio_unitario"); ?>></td>
                             <td class="col-precio" data-label="Precio final"><input type="text" inputmode="decimal" id="lin-<?= $i; ?>-precio_final" aria-label="Precio final unitario que paga el cliente, con IVA" data-precio="final"></td>
@@ -290,11 +291,6 @@ if (isset($errores['lineas'])) {
             <?= iconoSvg('alerta', 16, ''); ?>
             <span><?= $e(implode(' ', $erroresLineas)); ?></span>
         </div>
-        <datalist id="productos-list">
-            <?php foreach ($productos as $p): ?>
-                <option value="<?= $e((string) $p['nombre']); ?>"></option>
-            <?php endforeach; ?>
-        </datalist>
         <?php /* Lo llena js/precio-iva.js mientras se escribe, con la formula de cotizacion-detalle.php. */ ?>
         <h3 id="titulo-resumen-cotizacion">Resumen</h3>
         <dl class="ficha ficha--montos" id="resumen-cotizacion" aria-labelledby="titulo-resumen-cotizacion"></dl>
@@ -341,7 +337,7 @@ if (isset($errores['lineas'])) {
     // MISMA FILA QUE LA DE PHP. Si cambia una, cambia la otra.
     function nuevaFilaHTML(i) {
         return '<tr>'
-            + '<td class="col-producto" data-label="Producto"><input type="text" list="productos-list" name="lineas[' + i + '][nombre]" id="lin-' + i + '-nombre" class="lin-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"></td>'
+            + '<td class="col-producto" data-label="Producto"><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="lineas[' + i + '][nombre]" id="lin-' + i + '-nombre" class="lin-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"></td>'
             + '<td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="lineas[' + i + '][cantidad]" id="lin-' + i + '-cantidad" aria-label="Cantidad" data-precio="cantidad"></td>'
             + '<td class="col-precio" data-label="Precio sin IVA"><input type="text" inputmode="decimal" name="lineas[' + i + '][precio_unitario]" id="lin-' + i + '-precio_unitario" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"></td>'
             + '<td class="col-precio" data-label="Precio final"><input type="text" inputmode="decimal" id="lin-' + i + '-precio_final" aria-label="Precio final unitario que paga el cliente, con IVA" data-precio="final"></td>'
@@ -515,7 +511,7 @@ if (isset($errores['lineas'])) {
         });
     });
 
-    // Al elegir un producto del datalist se rellenan precio, unidad y exento
+    // Al elegir un producto del buscador se rellenan precio, unidad y exento
     // SOLO si estan vacios: nunca se pisa lo que el usuario ya escribio.
     tbody.addEventListener('change', function (e) {
         if (!e.target.classList.contains('lin-nombre')) { return; }

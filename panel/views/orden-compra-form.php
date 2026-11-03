@@ -11,7 +11,7 @@
  *   - class="form-compacto": de ella cuelga el estilo de los inputs de la tabla.
  *   - name de cada control, con la sintaxis lineas[i][campo].
  *   - id/clase que usa el JS: #form-orden, #tabla-lineas, #agregar-linea,
- *     .quitar-linea, .lin-nombre, .lin-precio, .lin-unidad, #productos-list,
+ *     .quitar-linea, .lin-nombre (buscador de productos), .lin-precio, .lin-unidad,
  *     #proveedor_rut (con data-buscar-cliente, ver js/buscador-clientes.js) y #rut-aviso.
  *   - data-precio="neto|final|cantidad|descuento|exento" y data-precios en la
  *     tabla: los usa js/precio-iva.js para el precio final y el resumen, con la
@@ -28,7 +28,8 @@ $err = static fn (string $c): string => isset($errores[$c]) ? ' style="border-co
 
 $filas = ($lineas !== []) ? array_values($lineas) : [[]];
 
-// Mapa nombre -> precio/unidad/exento, para autocompletar al elegir del datalist.
+// Mapa nombre -> precio/unidad/exento, para autocompletar al elegir un producto
+// del buscador (js/buscador-clientes.js, data-buscar-fuente="productos").
 $mapaProductos = [];
 foreach ($productos as $p) {
     $mapaProductos[(string) $p['nombre']] = [
@@ -152,7 +153,7 @@ foreach ($productos as $p) {
                 <tbody>
                     <?php foreach ($filas as $i => $l): ?>
                         <tr>
-                            <td class="col-producto"><input type="text" list="productos-list" name="lineas[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" aria-label="Producto o servicio"<?= $err("lineas[{$i}].nombre"); ?>></td>
+                            <td class="col-producto"><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="lineas[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($l['nombre'] ?? '')); ?>" class="lin-nombre" aria-label="Producto o servicio"<?= $err("lineas[{$i}].nombre"); ?>></td>
                             <td class="col-cantidad"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($l['cantidad'] ?? '')); ?>" aria-label="Cantidad" data-precio="cantidad"<?= $err("lineas[{$i}].cantidad"); ?>></td>
                             <td class="col-precio"><input type="text" inputmode="decimal" name="lineas[<?= $i; ?>][precio_unitario]" value="<?= htmlspecialchars((string) ($l['precio_unitario'] ?? '')); ?>" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"<?= $err("lineas[{$i}].precio_unitario"); ?>></td>
                             <td class="col-precio"><input type="text" inputmode="decimal" aria-label="Precio final unitario, con IVA" data-precio="final"></td>
@@ -165,11 +166,6 @@ foreach ($productos as $p) {
                 </tbody>
             </table>
         </div>
-        <datalist id="productos-list">
-            <?php foreach ($productos as $p): ?>
-                <option value="<?= htmlspecialchars((string) $p['nombre']); ?>"></option>
-            <?php endforeach; ?>
-        </datalist>
         <p><button type="button" id="agregar-linea" class="boton-secundario">+ Agregar linea</button></p>
         <?php /* Lo llena js/precio-iva.js mientras se escribe. */ ?>
         <h3 id="titulo-resumen-orden">Resumen</h3>
@@ -204,7 +200,7 @@ foreach ($productos as $p) {
     // MISMA FILA QUE LA DE PHP. Si cambia una, cambia la otra.
     function nuevaFilaHTML(i) {
         return '<tr>'
-            + '<td class="col-producto"><input type="text" list="productos-list" name="lineas[' + i + '][nombre]" class="lin-nombre" aria-label="Producto o servicio"></td>'
+            + '<td class="col-producto"><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="lineas[' + i + '][nombre]" class="lin-nombre" aria-label="Producto o servicio"></td>'
             + '<td class="col-cantidad"><input type="text" inputmode="decimal" name="lineas[' + i + '][cantidad]" aria-label="Cantidad" data-precio="cantidad"></td>'
             + '<td class="col-precio"><input type="text" inputmode="decimal" name="lineas[' + i + '][precio_unitario]" class="lin-precio" aria-label="Precio unitario sin IVA" data-precio="neto"></td>'
             + '<td class="col-precio"><input type="text" inputmode="decimal" aria-label="Precio final unitario, con IVA" data-precio="final"></td>'
@@ -227,7 +223,7 @@ foreach ($productos as $p) {
         if (tbody.rows.length > 1) { e.target.closest('tr').remove(); }
     });
 
-    // Producto elegido del datalist: rellena precio, unidad y exento SOLO si
+    // Producto elegido del buscador: rellena precio, unidad y exento SOLO si
     // estan vacios. Nunca se pisa lo que el usuario ya escribio.
     tbody.addEventListener('change', function (e) {
         if (!e.target.classList.contains('lin-nombre')) { return; }

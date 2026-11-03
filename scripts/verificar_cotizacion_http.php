@@ -362,7 +362,7 @@ if ($tokenForm !== null) {
 foreach ([
     'class="form-compacto"' => 'la clase de la que cuelga el estilo de los inputs de la tabla',
     'data-buscar-cliente'   => 'el buscador de clientes (js/buscador-clientes.js)',
-    'id="productos-list"'   => 'el datalist de productos',
+    'data-buscar-fuente="productos"' => 'el buscador de productos (js/buscador-clientes.js)',
     'col-descuento'         => 'la columna de descuento',
 ] as $marca => $porque) {
     if (str_contains($html, $marca)) {
@@ -695,7 +695,7 @@ echo "      y que cambie el estado de la cotizacion.\n";
 echo "    - El aspecto de la pantalla. Comprueba que las clases esten, no que se\n";
 echo "      vea bien: eso lo mira Daniel con sus ojos.\n";
 echo "    - El JavaScript. curl no ejecuta el fetch de /ventas/cliente-por-rut ni\n";
-echo "      el autocompletado de productos; se comprueba que el datalist y el\n";
+echo "      el autocompletado de productos; se comprueba que el buscador y el\n";
 echo "      endpoint existan, no que el navegador los use.\n";
 echo "    - PHPUnit: vendor/bin/phpunit --testdox\n";
 

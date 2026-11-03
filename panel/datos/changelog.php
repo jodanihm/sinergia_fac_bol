@@ -33,6 +33,29 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-03',
+        'version' => '2.00',
+        'titulo'  => 'Buscar en mis clientes desde la factura',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Los documentos de venta tienen un boton nuevo, "Buscar en mis clientes", que abre una ventana con toda tu cartera.',
+            'Ya no hace falta saberse el RUT ni el nombre exacto: se busca tambien por giro, direccion, comuna y correo, y se pueden combinar palabras, como "ferreteria temuco".',
+            'Al pinchar un cliente se llenan solos los datos del receptor. Si le falta algo que el SII exige para facturar, la ventana lo avisa y el formulario marca el campo que hay que completar.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
+        'version' => '1.99',
+        'titulo'  => 'Buscador de productos en las lineas del detalle',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En facturas, boletas, notas de credito, cotizaciones y ordenes de compra, el producto de cada linea se busca mientras escribes, por parte del nombre o del codigo. La lista muestra el codigo, el precio sin IVA y si es exento.',
+            'Al elegir un producto se completan el precio, la unidad y el exento de la linea, igual que antes. Las lineas que agregas tambien tienen el buscador.',
+            'Si el producto no esta en tu catalogo, lo escribes igual: el buscador propone, no obliga.',
+            'Arreglado: con el cursor en el nombre de una linea, a veces el clic en "Agregar linea" no agregaba nada. El contador de caracteres se escondia al hacer clic, el boton se movia y el clic se perdia.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-03',
         'version' => '1.98',
         'titulo'  => 'Mensaje mas claro cuando se busca un nombre y no se elige',
         'tag'     => 'frontend',
