@@ -32,6 +32,17 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-11-12',
+        'version' => '2.05',
+        'titulo'  => 'Los clientes se pueden cargar desde otro sistema',
+        'tag'     => 'backend',
+        'items'   => [
+            'Un sistema externo con su propia lista de clientes puede crearlos y mantenerlos al dia aqui usando su clave de API, sin tener que tipearlos de nuevo en el panel.',
+            'Si el otro sistema no tiene un dato, por ejemplo el giro o la comuna, lo que ya estaba cargado en el panel se conserva y no se borra.',
+            'Dar de baja un cliente desde el otro sistema lo deja inactivo, igual que en el panel: nunca se borra.',
+        ],
+    ],
+    [
         'fecha'   => '2026-11-03',
         'version' => '2.04',
         'titulo'  => 'Todas las pantallas abren con efecto de carga',
