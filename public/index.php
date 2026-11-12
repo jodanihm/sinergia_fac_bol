@@ -76,6 +76,7 @@ use Plantiflex\FacturacionCl\Exceptions\RcvConsultaException;
 use Plantiflex\FacturacionCl\Exceptions\ConexionException;
 use Plantiflex\FacturacionCl\Correo\EncoladorCorreo;
 use Plantiflex\Integration\Facturacion\MySqlClienteRepository;
+use Plantiflex\Integration\Facturacion\SincronizacionCliente;
 
 // --- Timezone: el SII espera FchEmis/TmstFirma en hora de Chile. Sin esto PHP
 // usa UTC y las emisiones nocturnas (despues de ~20:00 CL) salen con fecha del
@@ -613,6 +614,25 @@ if ($metodo === 'GET' && preg_match('#^/api/v1/boleta/(\d+)/estado$#', $ruta, $m
 
 if ($metodo === 'GET' && $ruta === '/api/v1/identidad') {
     identidad($tenant);
+}
+
+if ($metodo === 'GET' && $ruta === '/api/v1/clientes') {
+    listarClientes($tenant);
+}
+
+// EL RUT DE LA URL VA SIN PUNTOS. No es una regla de este codigo sino del
+// servidor: el motor corre con `php -S` sin router, y el servidor integrado trata
+// una ruta con punto ("/api/v1/clientes/76.543.210-3") como un ARCHIVO estatico.
+// Un PUT asi responde 405 en HTML sin llegar nunca aqui. Medido el 12-11-2026.
+// El "rut" del CUERPO si puede traer puntos: lo normaliza SincronizacionCliente.
+if (preg_match('#^/api/v1/clientes/([0-9Kk\-]+)$#', $ruta, $mcli)) {
+    if ($metodo === 'GET') {
+        obtenerCliente($tenant, $mcli[1]);
+    }
+    if ($metodo === 'PUT') {
+        sincronizarCliente($tenant, $mcli[1]);
+    }
+    responder(405, ['error' => 'metodo no permitido', 'permitidos' => ['GET', 'PUT']]);
 }
 
 if ($metodo === 'GET' && $ruta === '/api/v1/dte') {
@@ -2310,6 +2330,105 @@ function identidad(array $tenant): never
         'razonSocial' => $row === false ? null : (string) $row['razon_social'],
         'ambiente'    => $tenant['ambiente'],
         'tipo'        => $tenant['tipo'],
+    ]);
+}
+
+// ===========================================================================
+//  Maestro de clientes por API: GET /api/v1/clientes, GET y PUT
+//  /api/v1/clientes/{rut}
+//
+//  Para que un sistema externo con su propia lista de clientes (el primero:
+//  el superadmin de EasyAgenda) la refleje aqui y despues facture contra ella.
+//  Todo queda acotado a la CUENTA de la api_key, igual que en el panel: el
+//  maestro es por cuenta, no por RUT emisor.
+//
+//  No hay DELETE: el maestro nunca borra fisico (015_cliente.sql). Dar de baja
+//  es PUT con "activo": false.
+//
+//  Ninguna de estas rutas usa CRYPTO_MASTER_KEY ni los certificados TLS: solo
+//  leen y escriben la tabla cliente.
+// ===========================================================================
+function listarClientes(array $tenant): never
+{
+    $limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 100;
+    if ($limit < 1 || $limit > 500) {
+        invalido('limit debe estar entre 1 y 500', 'limit');
+    }
+    $offset = isset($_GET['offset']) ? (int) $_GET['offset'] : 0;
+    if ($offset < 0) {
+        invalido('offset no puede ser negativo', 'offset');
+    }
+    $busqueda   = trim((string) ($_GET['busqueda'] ?? ''));
+    $busqueda   = $busqueda === '' ? null : $busqueda;
+    // Por omision tambien los inactivos: quien sincroniza necesita ver la lista
+    // completa para saber que ya esta dado de baja y no volver a crearlo.
+    $soloActivos = ($_GET['soloActivos'] ?? '') === '1';
+
+    $repo  = new MySqlClienteRepository(pdo());
+    $filas = $repo->listar($tenant['cuenta_id'], $busqueda, $soloActivos, $limit, $offset);
+
+    responder(200, [
+        'total'    => $repo->contar($tenant['cuenta_id'], $busqueda, $soloActivos),
+        'limit'    => $limit,
+        'offset'   => $offset,
+        'clientes' => array_map([SincronizacionCliente::class, 'aJson'], $filas),
+    ]);
+}
+
+function obtenerCliente(array $tenant, string $rutRuta): never
+{
+    $rut = Rut::normalizar($rutRuta);
+    if (! Rut::valido($rut)) {
+        invalido('RUT invalido (formato NNNNNNNN-DV, digito verificador incorrecto).', 'rut');
+    }
+    $cliente = (new MySqlClienteRepository(pdo()))->buscarPorRut($tenant['cuenta_id'], $rut);
+    if ($cliente === null) {
+        responder(404, ['error' => 'cliente no encontrado', 'rut' => $rut]);
+    }
+    responder(200, SincronizacionCliente::aJson($cliente));
+}
+
+/**
+ * PUT /api/v1/clientes/{rut}: crea el cliente si no existe, lo actualiza si
+ * existe. Los campos que NO vienen en el JSON se dejan como estan -- ver el
+ * docblock de SincronizacionCliente, que es donde vive la regla y su porque.
+ *
+ * Respuesta: 201 si lo creo, 200 si lo actualizo o no habia nada que cambiar.
+ * "accion" dice cual de las tres fue, para que quien sincroniza pueda contar.
+ */
+function sincronizarCliente(array $tenant, string $rutRuta): never
+{
+    $crudo  = file_get_contents('php://input') ?: '';
+    $cuerpo = json_decode($crudo, true);
+    if (! is_array($cuerpo) || (array_is_list($cuerpo) && $cuerpo !== [])) {
+        invalido('JSON invalido o vacio: se espera un objeto', 'body');
+    }
+
+    $v = SincronizacionCliente::validar($rutRuta, $cuerpo);
+    if ($v['errores'] !== []) {
+        $campo = (string) array_key_first($v['errores']);
+        responder(422, ['error' => $v['errores'][$campo], 'campo' => $campo, 'errores' => $v['errores']]);
+    }
+
+    try {
+        $r = SincronizacionCliente::aplicar(
+            new MySqlClienteRepository(pdo()),
+            $tenant['cuenta_id'],
+            $v['rut'],
+            $v['campos'],
+            $v['activo'],
+        );
+    } catch (InvalidArgumentException $e) {
+        invalido($e->getMessage(), 'razonSocial');
+    }
+
+    responder($r['accion'] === 'crear' ? 201 : 200, [
+        'accion'  => match ($r['accion']) {
+            'crear'      => 'creado',
+            'actualizar' => 'actualizado',
+            default      => 'sin_cambios',
+        },
+        'cliente' => SincronizacionCliente::aJson($r['cliente']),
     ]);
 }
 
