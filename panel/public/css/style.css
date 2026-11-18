@@ -5403,3 +5403,450 @@ tr:hover .pe-doc__icono { transform: scale(1.06) rotate(-3deg); }
     .co-kpi:hover { transform: none; }
     .pe-acciones .co-accion:hover .pe-rehacer__icono { transform: none; }
 }
+
+/* ==========================================================================
+   Login (views/login.php) -- body.auth-page.lg-page
+   --------------------------------------------------------------------------
+   Rediseno 2026-11-18. Pantalla dividida: panel de marca (gradiente con luces
+   animadas, malla y la mascota) y panel del formulario. Clases .lg-* propias:
+   las .auth-* las siguen usando pago-retorno.php y panel-gestion.php.
+   Barra de carga superior: corre sola al cargar (CSS) y el script la retoma al
+   enviar. Todo el movimiento se apaga con prefers-reduced-motion.
+   ========================================================================== */
+body.lg-page { background: #f6f8fc; }
+body.lg-page > main { min-height: 100vh; min-height: 100dvh; }
+
+/* --- Barra de carga superior --------------------------------------------- */
+.lg-barra {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 50;
+    height: 3px;
+    pointer-events: none;
+}
+.lg-barra__relleno {
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, var(--color-primario), #6366f1);
+    box-shadow: 0 0 10px rgba(56, 189, 248, 0.7);
+    transform-origin: left;
+    animation: lg-barra-carga 1.1s cubic-bezier(.16, 1, .3, 1) both, lg-barra-fuera 400ms ease 1.1s both;
+}
+@keyframes lg-barra-carga { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+@keyframes lg-barra-fuera { to { opacity: 0; } }
+/* Al enviar: avanza rapido hasta ~85% y luego se arrastra mientras el
+   servidor responde (no hay porcentaje real; nunca llega al 100). */
+.lg-barra--enviando .lg-barra__relleno {
+    opacity: 1;
+    animation: lg-barra-envio 8s cubic-bezier(.08, .82, .17, 1) both, lg-barra-brillo 1.4s linear infinite;
+    background-size: 200% 100%;
+}
+@keyframes lg-barra-envio { 0% { transform: scaleX(0.05); } 30% { transform: scaleX(0.7); } 100% { transform: scaleX(0.94); } }
+@keyframes lg-barra-brillo { to { background-position: -200% 0; } }
+
+/* --- Estructura ----------------------------------------------------------- */
+.lg {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    min-height: 100vh;
+    min-height: 100dvh;
+}
+
+/* --- Panel de marca ------------------------------------------------------- */
+.lg-marca {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+    padding: 4rem clamp(2rem, 5vw, 5rem);
+    background: linear-gradient(150deg, #00243d 0%, #003a63 45%, #0061a0 100%);
+    color: #fff;
+    isolation: isolate;
+}
+.lg-marca__aurora { position: absolute; inset: 0; z-index: -1; filter: blur(60px); opacity: 0.85; }
+.lg-marca__aurora span {
+    position: absolute;
+    border-radius: 50%;
+    mix-blend-mode: screen;
+    animation: lg-flota 18s ease-in-out infinite alternate;
+}
+.lg-marca__aurora span:nth-child(1) { width: 26rem; height: 26rem; top: -8rem; left: -6rem; background: rgba(56, 189, 248, 0.55); }
+.lg-marca__aurora span:nth-child(2) { width: 22rem; height: 22rem; bottom: -6rem; right: -4rem; background: rgba(99, 102, 241, 0.5); animation-duration: 22s; animation-delay: -6s; }
+.lg-marca__aurora span:nth-child(3) { width: 16rem; height: 16rem; top: 40%; left: 45%; background: rgba(14, 165, 233, 0.35); animation-duration: 26s; animation-delay: -12s; }
+@keyframes lg-flota {
+    0%   { transform: translate(0, 0) scale(1); }
+    50%  { transform: translate(3rem, 2rem) scale(1.12); }
+    100% { transform: translate(-2rem, 3rem) scale(0.95); }
+}
+.lg-marca__malla {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background-image:
+        linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+    background-size: 44px 44px;
+    -webkit-mask-image: radial-gradient(ellipse at 30% 40%, #000 20%, transparent 75%);
+    mask-image: radial-gradient(ellipse at 30% 40%, #000 20%, transparent 75%);
+}
+.lg-marca__contenido { position: relative; max-width: 30rem; animation: lg-sube 700ms cubic-bezier(.16, 1, .3, 1) both; }
+.lg-marca__sello {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--esp-2);
+    margin: 0 0 var(--esp-5);
+    padding: 6px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: var(--radio-pill);
+    background: rgba(255, 255, 255, 0.08);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    font-size: var(--txt-sm);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+.lg-marca__punto {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #4ade80;
+    box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.7);
+    animation: lg-latido 2.2s ease-out infinite;
+}
+@keyframes lg-latido {
+    0%   { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.6); }
+    70%  { box-shadow: 0 0 0 9px rgba(74, 222, 128, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); }
+}
+.lg-marca__titulo {
+    margin: 0;
+    font-size: clamp(2rem, 3.2vw, 2.9rem);
+    font-weight: 750;
+    line-height: 1.1;
+    letter-spacing: -0.03em;
+    color: #fff;
+}
+.lg-marca__titulo span {
+    background: linear-gradient(90deg, #7dd3fc, #a5b4fc);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.lg-marca__bajada { margin: var(--esp-4) 0 0; max-width: 26rem; font-size: var(--txt-md); line-height: 1.55; color: rgba(255, 255, 255, 0.78); }
+.lg-marca__puntos { display: grid; gap: var(--esp-3); margin: var(--esp-6, 2rem) 0 0; padding: 0; list-style: none; }
+.lg-marca__puntos li {
+    display: flex;
+    align-items: center;
+    gap: var(--esp-3);
+    font-size: var(--txt-base);
+    color: rgba(255, 255, 255, 0.92);
+    animation: lg-sube 700ms cubic-bezier(.16, 1, .3, 1) both;
+}
+.lg-marca__puntos li:nth-child(1) { animation-delay: 160ms; }
+.lg-marca__puntos li:nth-child(2) { animation-delay: 240ms; }
+.lg-marca__puntos li:nth-child(3) { animation-delay: 320ms; }
+.lg-marca__icono {
+    display: inline-flex;
+    flex: none;
+    width: 2.25rem;
+    height: 2.25rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 11px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #7dd3fc;
+}
+.lg-marca__mascota {
+    position: absolute;
+    right: clamp(1rem, 4vw, 4rem);
+    bottom: clamp(1rem, 4vh, 3rem);
+    width: clamp(150px, 15vw, 220px);
+    height: auto;
+    filter: drop-shadow(0 24px 30px rgba(0, 0, 0, 0.35));
+    animation: lg-mascota 6s ease-in-out infinite;
+}
+@keyframes lg-mascota {
+    0%, 100% { transform: translateY(0) rotate(-2deg); }
+    50%      { transform: translateY(-14px) rotate(2deg); }
+}
+@keyframes lg-sube { from { opacity: 0; transform: translateY(16px); } }
+
+/* --- Panel del formulario ------------------------------------------------- */
+.lg-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background:
+        radial-gradient(60% 50% at 100% 0%, rgba(0, 97, 160, 0.07), transparent 70%),
+        #f6f8fc;
+}
+.lg-cabecera {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--esp-3);
+    padding: var(--esp-5) clamp(1.25rem, 4vw, 3rem);
+}
+.lg-cabecera__logo img { display: block; width: auto; max-height: 2.6rem; height: auto; }
+.lg-cabecera__acciones { display: flex; align-items: center; gap: var(--esp-3); }
+.lg-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: var(--radio-pill);
+    background: #e8f5ee;
+    font-size: var(--txt-xs);
+    font-weight: 600;
+    color: var(--color-exito);
+}
+.lg-enlace-planes {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    border: 1px solid #d5dcea;
+    border-radius: var(--radio-pill);
+    background: #fff;
+    font-size: var(--txt-sm);
+    font-weight: 600;
+    color: var(--color-marino);
+    text-decoration: none;
+    transition: border-color 160ms ease, box-shadow 200ms ease, color 160ms ease;
+}
+.lg-enlace-planes:hover { border-color: var(--color-primario); color: var(--color-primario); box-shadow: 0 6px 14px -8px rgba(0, 97, 160, 0.5); }
+.lg-enlace-planes svg { transition: transform 220ms cubic-bezier(.16, 1, .3, 1); }
+.lg-enlace-planes:hover svg { transform: translate(2px, -2px); }
+
+.lg-centro {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    padding: var(--esp-4) clamp(1.25rem, 4vw, 3rem) var(--esp-6, 2rem);
+}
+.lg-tarjeta {
+    width: 100%;
+    max-width: 26rem;
+    padding: clamp(1.75rem, 3vw, 2.5rem);
+    border: 1px solid rgba(0, 44, 72, 0.07);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.92);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 1px 2px rgba(0, 44, 72, 0.05), 0 30px 60px -24px rgba(0, 44, 72, 0.28);
+    animation: lg-sube 600ms cubic-bezier(.16, 1, .3, 1) 80ms both;
+}
+.lg-tarjeta--error { animation: lg-sube 600ms cubic-bezier(.16, 1, .3, 1) 80ms both, lg-sacude 480ms ease 700ms; }
+@keyframes lg-sacude {
+    15%, 55% { transform: translateX(-7px); }
+    35%, 75% { transform: translateX(7px); }
+    90%      { transform: translateX(-2px); }
+}
+.lg-titulo { margin: 0; font-size: 1.65rem; font-weight: 750; letter-spacing: -0.02em; color: var(--color-marino); }
+.lg-bajada { margin: 6px 0 var(--esp-5); font-size: var(--txt-base); color: var(--color-texto-medio); }
+
+.lg-alerta {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--esp-2);
+    margin: 0 0 var(--esp-4);
+    padding: var(--esp-3);
+    border: 1px solid #f2c9c4;
+    border-radius: 12px;
+    background: var(--color-error-fondo);
+    font-size: var(--txt-sm);
+    line-height: 1.45;
+    color: var(--color-error);
+}
+.lg-alerta svg { flex: none; margin-top: 1px; }
+
+.lg-form { margin: 0; }
+.lg-campo + .lg-campo { margin-top: var(--esp-4); }
+.lg-page .lg-etiqueta {
+    display: block;
+    margin: 0 0 6px;
+    font-size: var(--txt-sm);
+    font-weight: 600;
+    color: var(--color-texto-suave);
+}
+.lg-input { position: relative; }
+.lg-input__icono {
+    position: absolute;
+    top: 50%;
+    left: 14px;
+    color: #8a93a6;
+    transform: translateY(-50%);
+    pointer-events: none;
+    transition: color 160ms ease;
+}
+.lg-input:focus-within .lg-input__icono { color: var(--color-primario); }
+.lg-page .lg-input input {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    height: 3.1rem;
+    margin: 0;
+    padding: 0 var(--esp-4) 0 2.85rem;
+    border: 1.5px solid #d5dcea;
+    border-radius: 12px;
+    background: #fbfcfe;
+    font: inherit;
+    font-size: var(--txt-md);
+    color: var(--color-texto);
+    transition: border-color 160ms ease, box-shadow 200ms ease, background-color 160ms ease;
+}
+.lg-page .lg-input--clave input { padding-right: 3.1rem; }
+.lg-page .lg-input input::placeholder { color: #a3abbb; }
+.lg-page .lg-input input:hover { border-color: #b9c4d9; }
+.lg-page .lg-input input:focus,
+.lg-page .lg-input input:focus-visible {
+    outline: none;
+    border-color: var(--color-primario);
+    background: #fff;
+    box-shadow: 0 0 0 4px rgba(0, 97, 160, 0.13);
+}
+.lg-page .lg-ojo {
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    display: inline-flex;
+    width: 2.4rem;
+    height: 2.4rem;
+    margin: 0;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #8a93a6;
+    cursor: pointer;
+    transform: translateY(-50%);
+    transition: background-color 160ms ease, color 160ms ease;
+}
+.lg-page .lg-ojo:hover { background: #eef2f8; color: var(--color-marino); }
+.lg-page .lg-ojo:focus-visible { outline: 2px solid var(--color-primario); outline-offset: 1px; }
+.lg-ojo__ocultar { display: none; }
+.lg-ojo[aria-pressed="true"] .lg-ojo__ver { display: none; }
+.lg-ojo[aria-pressed="true"] .lg-ojo__ocultar { display: block; }
+.lg-mayus {
+    max-height: 0;
+    margin: 0;
+    overflow: hidden;
+    font-size: var(--txt-xs);
+    font-weight: 600;
+    color: var(--color-alerta);
+    opacity: 0;
+    transition: max-height 200ms ease, opacity 200ms ease, margin 200ms ease;
+}
+.lg-mayus--visible { max-height: 2rem; margin-top: 6px; opacity: 1; }
+
+/* Boton: gradiente, flecha que avanza, y en espera spinner + barra interna. */
+.lg-page .lg-boton {
+    position: relative;
+    display: flex;
+    width: 100%;
+    height: 3.2rem;
+    margin: var(--esp-5) 0 0;
+    padding: 0 var(--esp-5);
+    overflow: hidden;
+    align-items: center;
+    justify-content: center;
+    gap: var(--esp-2);
+    border: 0;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #0a74bd 0%, var(--color-primario) 50%, #004b7c 100%);
+    background-size: 160% 100%;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 14px 26px -12px rgba(0, 97, 160, 0.7);
+    font: inherit;
+    font-size: var(--txt-md);
+    font-weight: 650;
+    color: #fff;
+    cursor: pointer;
+    transition: background-position 400ms ease, box-shadow 240ms ease, transform 160ms ease;
+}
+.lg-page .lg-boton:hover { background-position: 100% 0; box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 18px 32px -12px rgba(0, 97, 160, 0.8); }
+.lg-page .lg-boton:active { transform: translateY(1px); }
+.lg-page .lg-boton:focus-visible { outline: 3px solid rgba(0, 97, 160, 0.35); outline-offset: 3px; }
+.lg-boton__flecha { transition: transform 240ms cubic-bezier(.16, 1, .3, 1); }
+.lg-page .lg-boton:hover .lg-boton__flecha { transform: translateX(4px); }
+.lg-boton__espera { display: none; align-items: center; gap: var(--esp-2); }
+.lg-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: lg-gira 700ms linear infinite;
+}
+@keyframes lg-gira { to { transform: rotate(360deg); } }
+.lg-boton__progreso {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 3px;
+    background: rgba(255, 255, 255, 0.85);
+    transform: scaleX(0);
+    transform-origin: left;
+}
+.lg-page .lg-boton--cargando { cursor: progress; }
+.lg-page .lg-boton--cargando[disabled] { opacity: 1; }
+.lg-boton--cargando .lg-boton__texto,
+.lg-boton--cargando .lg-boton__flecha { display: none; }
+.lg-boton--cargando .lg-boton__espera { display: inline-flex; }
+.lg-boton--cargando .lg-boton__progreso { animation: lg-barra-envio 8s cubic-bezier(.08, .82, .17, 1) both; }
+
+.lg-pie {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--esp-2);
+    padding: var(--esp-4) clamp(1.25rem, 4vw, 3rem);
+    font-size: var(--txt-xs);
+    color: var(--color-texto-tenue);
+}
+
+/* --- Responsive: bajo 1024px el panel de marca pasa a franja superior ----- */
+@media (max-width: 1024px) {
+    .lg { grid-template-columns: minmax(0, 1fr); }
+    .lg-marca { padding: 2.25rem 1.5rem 2rem; }
+    .lg-marca__contenido { max-width: none; padding-right: 120px; }
+    .lg-marca__titulo { font-size: 1.7rem; }
+    .lg-marca__bajada { font-size: var(--txt-base); }
+    .lg-marca__puntos { display: none; }
+    .lg-marca__sello { margin-bottom: var(--esp-3); }
+    .lg-marca__mascota { width: 110px; right: 1rem; bottom: 50%; transform: translateY(50%); animation: none; }
+    .lg-centro { padding-top: var(--esp-5); }
+}
+/* En el celular el formulario va primero y solo: el panel de marca se retira
+   (es decorativo, aria-hidden) para que nadie tenga que bajar para entrar. */
+@media (max-width: 720px) {
+    .lg-marca { display: none; }
+}
+@media (max-width: 520px) {
+    .lg-chip { display: none; }
+    .lg-tarjeta { padding: 1.5rem; border-radius: 18px; }
+    .lg-pie { justify-content: center; text-align: center; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .lg-barra__relleno,
+    .lg-marca__aurora span,
+    .lg-marca__punto,
+    .lg-marca__mascota,
+    .lg-marca__contenido,
+    .lg-marca__puntos li,
+    .lg-tarjeta,
+    .lg-tarjeta--error { animation: none; }
+    .lg-barra { display: none; }
+    .lg-boton--cargando .lg-boton__progreso { animation: none; transform: scaleX(0.6); }
+    .lg-spinner { animation-duration: 2s; }
+}

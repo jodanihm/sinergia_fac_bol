@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.13',
+        'titulo'  => 'Nuevo inicio de sesion',
+        'tag'     => 'frontend',
+        'items'   => [
+            'La pantalla de acceso tiene un diseno nuevo: panel de marca con Sinergin y lo que hace la plataforma, y el formulario al lado.',
+            'Al entrar se ve una barra de carga y el boton indica que se estan verificando tus datos, asi no se aprieta dos veces.',
+            'Se puede mostrar u ocultar la contrasena con el icono del ojo, y aparece un aviso si Bloq Mayus esta activado.',
+            'Si el acceso falla, el cursor queda en la contrasena con el email ya escrito.',
+            'En el celular el formulario aparece primero, sin tener que bajar.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.12',
         'titulo'  => 'Envio de correos renovado: resumen, filtros en tarjetas y acciones claras',
         'tag'     => 'frontend',
