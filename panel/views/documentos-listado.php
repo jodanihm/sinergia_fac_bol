@@ -279,6 +279,11 @@ if (isset($filtros['estado'])) {
                             </td>
                             <td data-label="Estado SII" class="tabla-datos__estado">
                                 <span class="badge <?= $claseBadge; ?>"><?= iconoSvg($iconoBadge, 16, 'badge__icono'); ?><?= $e($textoBadge); ?></span>
+                                <?php if (\Plantiflex\FacturacionCl\Sii\RehacerDocumento::permite($tipoDte, $it['estado'] ?? null)): ?>
+                                    <?php /* Rechazado por el SII: abre el formulario con sus datos. No emite nada (ver handleDocumentoRehacerGet). */ ?>
+                                    <a class="tabla-datos__secundario" href="/ventas/panel-emision/<?= $tipoDte; ?>/<?= $folio; ?>/rehacer"
+                                       aria-label="Rehacer <?= $e($nombreTipo); ?> folio <?= $folio; ?> con los mismos datos">Rehacer con los mismos datos</a>
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

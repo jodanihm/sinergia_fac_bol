@@ -177,7 +177,7 @@ final class RespuestaDteBuilder
     private function add(DOMDocument $doc, DOMElement $parent, string $name, string $value): DOMElement
     {
         $el = $doc->createElementNS(self::NS_SII, $name);
-        $el->textContent = $value;
+        $el->textContent = TextoSii::normalizar($value); // ver TextoSii: lo firmado debe ser lo enviado
         $parent->appendChild($el);
         return $el;
     }

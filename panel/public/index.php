@@ -50,6 +50,7 @@ use Plantiflex\FacturacionCl\Sii\SetPruebasParser;
 use Plantiflex\FacturacionCl\Sii\SimulacionSetBuilder;
 use Plantiflex\FacturacionCl\Sii\SiiAutenticador;
 use Plantiflex\FacturacionCl\Sii\RegistroVeredictoSii;
+use Plantiflex\FacturacionCl\Sii\RehacerDocumento;
 use Plantiflex\FacturacionCl\Sii\SiiConsultor;
 use Plantiflex\FacturacionCl\Sii\SiiUploader;
 use Plantiflex\FacturacionCl\Sii\XmlSigner;
@@ -822,6 +823,10 @@ const PERMISOS_RUTA_PATRON = [
     ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)$#',        'ventas', 'ver'],
     ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)/pdf$#',    'ventas', 'ver'],
     ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)/xml$#',    'ventas', 'ver'],
+    // Rehacer un rechazado solo ABRE el formulario precargado; lo que emite es
+    // el POST del formulario, con su propio permiso. Mismo criterio que
+    // /ventas/cotizaciones/{id}/facturar.
+    ['GET',  '#^/ventas/panel-emision/(\d+)/(\d+)/rehacer$#', 'ventas', 'ver'],
     // estado-sii CONSULTA al SII, no emite: no consume folios. Si algun dia se
     // decide que hablar con el SII exige 'emitir', cambiar esta linea -- pero
     // entonces un contador no podria revisar el estado de lo ya emitido.
@@ -6296,6 +6301,83 @@ function handleDocumentoDetalleGet(int $tipoDte, int $folio): void
         'flash'      => flashTomar(),
         'navActivo'  => 'ventas.panel-emision',
     ]);
+}
+
+/**
+ * REHACER UN DOCUMENTO RECHAZADO: abre el formulario de emision con los datos
+ * del documento que el SII rechazo. NO EMITE NADA -- emite el formulario, con
+ * su confirmacion, y con un folio NUEVO.
+ *
+ * El estado se vuelve a comprobar aqui contra el motor, no se cree al enlace:
+ * el boton solo aparece en rechazados, pero la URL se puede escribir a mano, y
+ * "rehacer" un documento aceptado seria emitir la misma venta dos veces.
+ *
+ * Idempotency-Key NUEVA (la genera renderEmisionForm al recibirla): reusar la
+ * del documento rechazado haria que el motor devolviera ese mismo rechazo.
+ *
+ * EL RECEPTOR SE TOMA DEL MAESTRO DE CLIENTES SI EXISTE. El XML guarda lo que
+ * llego al SII, y eso puede ser justo lo que fallo: en el folio 43 la direccion
+ * quedo como "O?Higgins" por la conversion a ISO-8859-1 (ver TextoSii). El
+ * maestro tiene el dato original, y si el usuario ya lo corrigio, el corregido.
+ */
+function handleDocumentoRehacerGet(int $tipoDte, int $folio): void
+{
+    $pdo       = Db::conexion();
+    $cuentaId  = Auth::cuentaId();
+    $rutEmisor = exigirProduccionCompleto($pdo, $cuentaId, $tipoDte === 39 ? 39 : null);
+    $detalle   = "/ventas/panel-emision/{$tipoDte}/{$folio}";
+
+    $keyServicio = obtenerKeyServicio($pdo, $cuentaId, $rutEmisor);
+    if ($keyServicio === null || ! in_array($tipoDte, RehacerDocumento::TIPOS, true) || $folio <= 0) {
+        flashSet('error', 'No se pudo abrir este documento para rehacerlo.');
+        redirigir($detalle);
+    }
+
+    try {
+        $res = listarDocumentosEnMotor($keyServicio, ['tipoDte' => $tipoDte, 'folio' => $folio]);
+        $doc = ($res['status'] === 200 && ! empty($res['body']['items'])) ? $res['body']['items'][0] : null;
+        if ($doc === null || ! RehacerDocumento::permite($tipoDte, (string) ($doc['estado'] ?? ''))) {
+            flashSet('error', 'Solo se puede rehacer un documento que el SII rechazo. Si cambio su estado, vuelve a consultarlo.');
+            redirigir($detalle);
+        }
+
+        $xml  = obtenerBinarioEnMotor($keyServicio, "api/v1/dte/{$tipoDte}/{$folio}/xml");
+        if ($xml['status'] !== 200) {
+            throw new RuntimeException('el motor respondio ' . $xml['status'] . ' al pedir el XML');
+        }
+        $form = RehacerDocumento::formulario($xml['body'], $tipoDte, $folio);
+    } catch (Throwable $e) {
+        error_log(sprintf('panel rehacer: cuenta %d documento %d/%d - %s', $cuentaId, $tipoDte, $folio, $e->getMessage()));
+        flashSet('error', 'No se pudieron leer los datos de este documento para rehacerlo. Intenta de nuevo en un momento.');
+        redirigir($detalle);
+    }
+
+    $rut = (string) ($form['receptor']['rut'] ?? '');
+    if ($rut !== '') {
+        try {
+            $cliente = clienteRepo()->buscarPorRut($cuentaId, Rut::normalizar($rut));
+        } catch (Throwable $e) {
+            $cliente = null; // sin maestro se usa lo del XML, que es igual de editable
+        }
+        if (is_array($cliente)) {
+            foreach (['razonSocial' => 'razon_social', 'giro' => 'giro', 'direccion' => 'direccion', 'comuna' => 'comuna', 'email' => 'email'] as $campo => $col) {
+                $valor = trim((string) ($cliente[$col] ?? ''));
+                if ($valor !== '') {
+                    $form['receptor'][$campo] = $valor;
+                }
+            }
+        }
+    }
+
+    // Solo informativo: la vista lo muestra como aviso y lo arrastra en hidden
+    // para que siga visible si el motor devuelve un error y se re-renderiza.
+    $form['rehacer'] = [
+        'tipo'  => $tipoDte,
+        'folio' => $folio,
+        'glosa' => trim((string) ($doc['glosaSii'] ?? '')) ?: (string) $doc['estado'],
+    ];
+
+    renderEmisionForm($tipoDte, bin2hex(random_bytes(16)), $form, null, null, null);
 }
 
 /**
@@ -12864,6 +12946,11 @@ if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/pdf$#',
 if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/xml$#', $ruta, $mDocXml)) {
     Auth::requerirSesion();
     handleDocumentoXmlGet((int) $mDocXml[1], (int) $mDocXml[2]);
+}
+
+if ($metodo === 'GET' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/rehacer$#', $ruta, $mDocRehacer)) {
+    Auth::requerirSesion();
+    handleDocumentoRehacerGet((int) $mDocRehacer[1], (int) $mDocRehacer[2]);
 }
 
 if ($metodo === 'POST' && preg_match('#^/ventas/panel-emision/(\d+)/(\d+)/estado-sii$#', $ruta, $mDocEstado)) {

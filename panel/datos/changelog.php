@@ -32,6 +32,30 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-11-18',
+        'version' => '2.07',
+        'titulo'  => 'Un documento rechazado por el SII se puede rehacer con un clic',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En el panel de emision, los documentos que el SII rechazo muestran la opcion "Rehacer con los mismos datos". Abre el formulario de emision con el cliente, las lineas, la forma de pago y, en las notas, la referencia ya cargados. Antes habia que volver a escribir todo mirando el PDF.',
+            'Los datos del cliente salen de tu lista de clientes cuando esta registrado, porque ahi esta la version mas reciente. Si el rechazo vino por un dato mal escrito y ya lo corregiste, se usa el corregido.',
+            'Nada se emite hasta que lo confirmes en el formulario, y el documento nuevo sale con otro folio. El aviso de arriba recuerda cual se esta rehaciendo y por que lo rechazo el SII.',
+            'En la ficha de un documento rechazado ya no aparecen las opciones de corregir o anular con nota de credito: el SII no lo tiene registrado, asi que una nota sobre el tambien seria rechazada.',
+            'No se ofrece para "envio repetido" (RPT) ni para "datos no coinciden" (DNK), porque en esos casos el documento original probablemente si quedo en el SII y rehacerlo duplicaria la venta.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
+        'version' => '2.06',
+        'titulo'  => 'Textos copiados de Word ya no hacen rechazar la factura por "error de firma"',
+        'tag'     => 'backend',
+        'items'   => [
+            'Una factura se rechazo en el SII por "Error en Firma" aunque el certificado estaba bien. El motivo era la direccion del cliente: venia escrita con un apostrofo curvo (O’Higgins), como los que pone Word o el autocorrector del celular. Ese caracter no existe en el formato que exige el SII y llegaba cambiado por un "?", asi que el documento ya no calzaba con la firma.',
+            'Ahora, antes de firmar, el sistema reemplaza esos caracteres por su version simple: comillas y apostrofos curvos por rectos, rayas largas por guiones y puntos suspensivos por tres puntos. Los emojis y simbolos que no tienen equivalente se quitan.',
+            'Las tildes, la ñ, la º y el resto de los caracteres del español no cambian. Esto aplica a facturas, boletas, notas, libros y respuestas al SII.',
+        ],
+    ],
+    [
         'fecha'   => '2026-11-12',
         'version' => '2.05',
         'titulo'  => 'Los clientes se pueden cargar desde otro sistema',
