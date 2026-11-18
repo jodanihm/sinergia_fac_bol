@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.23',
+        'titulo'  => 'La boleta tambien permite elegir la fecha de emision',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El formulario de boleta electronica ahora tiene el campo "Fecha de emision", igual que la factura.',
+            'Viene con la fecha de hoy: si no la tocas, la boleta sale como siempre.',
+            'Si eliges otra fecha, la boleta sale con esa fecha y entra en el resumen diario de ventas (RVD) de ese dia, no en el de hoy.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.22',
         'titulo'  => 'Aviso al emitir con fecha de un mes ya cerrado',
         'tag'     => 'frontend',
