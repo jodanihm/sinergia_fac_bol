@@ -436,6 +436,27 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
                         $feHoy = date('Y-m-d');
                         $feVal = (string) ($form['fechaEmision'] ?? '');
                         $feVal = $feVal !== '' ? $feVal : $feHoy;
+                        /* MES ANTERIOR (2026-11-18). Una fecha de un mes ya
+                           cerrado no es un error: el SII recibe el documento,
+                           pero lo deja CON REPAROS (paso con el folio 906 de
+                           creapyme: getEstDte DOK, envio con 1 reparo) y el
+                           documento cuenta para el IVA de ese mes. Por eso el
+                           aviso es mas fuerte y en ambar. La misma regla esta
+                           repetida en el script de abajo (fechaEmisionAviso). */
+                        $feMeses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+                                    'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+                        $feAvisoHoy = 'Por defecto, hoy. Cambiala si el documento debe llevar otra fecha.';
+                        $feAlerta = false;
+                        if ($feVal === $feHoy) {
+                            $feAviso = $feAvisoHoy;
+                        } elseif (preg_match('/^\d{4}-(\d{2})-\d{2}$/', $feVal, $feM) === 1 && substr($feVal, 0, 7) < substr($feHoy, 0, 7)) {
+                            $feAlerta = true;
+                            $feAviso = 'Ojo: esta fecha es de ' . $feMeses[(int) $feM[1] - 1] . ', un mes que ya cerro. '
+                                . 'El SII recibe el documento pero lo deja con reparos, y cuenta para el IVA de ese mes: '
+                                . 'si ya esta declarado, habra que rectificarlo.';
+                        } else {
+                            $feAviso = 'Ojo: el documento saldra con fecha distinta a la de hoy.';
+                        }
                         ?>
                         <div class="<?= $cc('fecha-emision', 'form-campo--corto'); ?>">
                             <label for="fecha-emision">Fecha de emision</label>
@@ -443,8 +464,8 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
                                    value="<?= htmlspecialchars($feVal); ?>"
                                    aria-describedby="error-fecha-emision ayuda-fecha-emision"<?= $inv('fecha-emision'); ?>>
                             <?= $campoError('fecha-emision'); ?>
-                            <small class="form-ayuda" id="ayuda-fecha-emision" data-ayuda-hoy="Por defecto, hoy. Cambiala si el documento debe llevar otra fecha.">
-                                <?= $feVal === $feHoy ? 'Por defecto, hoy. Cambiala si el documento debe llevar otra fecha.' : 'Ojo: el documento saldra con fecha distinta a la de hoy.'; ?>
+                            <small class="form-ayuda<?= $feAlerta ? ' form-ayuda--alerta' : ''; ?>" id="ayuda-fecha-emision" aria-live="polite" data-ayuda-hoy="<?= htmlspecialchars($feAvisoHoy); ?>">
+                                <?= htmlspecialchars($feAviso); ?>
                             </small>
                         </div>
                     <?php endif; ?>
@@ -1442,7 +1463,11 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
                     var fe = document.getElementById('fecha-emision');
                     if (!fe || !fe.value || fe.value === fe.getAttribute('data-hoy')) { return ''; }
                     var p = fe.value.split('-');
-                    return ' Fecha de emision: ' + p[2] + '-' + p[1] + '-' + p[0] + ' (no es hoy).';
+                    var mesAnterior = fe.value.slice(0, 7) < fe.getAttribute('data-hoy').slice(0, 7);
+                    return ' Fecha de emision: ' + p[2] + '-' + p[1] + '-' + p[0] +
+                        (mesAnterior
+                            ? ' (de un mes que ya cerro: el SII lo dejara con reparos y cuenta para el IVA de ese mes).'
+                            : ' (no es hoy).');
                 })();
             dlg.returnValue = '';
             dlg.showModal();
@@ -1542,10 +1567,28 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
     var fe = document.getElementById('fecha-emision');
     var ayuda = document.getElementById('ayuda-fecha-emision');
     if (!fe || !ayuda) { return; }
-    fe.addEventListener('change', function () {
-        var esHoy = !fe.value || fe.value === fe.getAttribute('data-hoy');
-        ayuda.textContent = esHoy ? ayuda.getAttribute('data-ayuda-hoy') : 'Ojo: el documento saldra con fecha distinta a la de hoy.';
-    });
+    var meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+                 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    // Misma regla que el PHP del campo: hoy / mes anterior (alerta) / otra fecha.
+    function fechaEmisionAviso() {
+        var hoy = fe.getAttribute('data-hoy');
+        var alerta = false;
+        var texto;
+        if (!fe.value || fe.value === hoy) {
+            texto = ayuda.getAttribute('data-ayuda-hoy');
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(fe.value) && fe.value.slice(0, 7) < hoy.slice(0, 7)) {
+            alerta = true;
+            texto = 'Ojo: esta fecha es de ' + meses[parseInt(fe.value.slice(5, 7), 10) - 1] + ', un mes que ya cerro. ' +
+                'El SII recibe el documento pero lo deja con reparos, y cuenta para el IVA de ese mes: ' +
+                'si ya esta declarado, habra que rectificarlo.';
+        } else {
+            texto = 'Ojo: el documento saldra con fecha distinta a la de hoy.';
+        }
+        ayuda.textContent = texto;
+        ayuda.classList.toggle('form-ayuda--alerta', alerta);
+    }
+    fe.addEventListener('change', fechaEmisionAviso);
+    fe.addEventListener('input', fechaEmisionAviso);
 })();
 </script>
 <?php endif; ?>

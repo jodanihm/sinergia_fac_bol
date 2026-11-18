@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.22',
+        'titulo'  => 'Aviso al emitir con fecha de un mes ya cerrado',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Si eliges una fecha de emision de un mes anterior, el formulario lo advierte en ambar bajo el campo, y la confirmacion antes de emitir lo repite.',
+            'Por que: el SII recibe ese documento pero lo deja "con reparos", y la factura cuenta para el IVA de ese mes; si ya se declaro, hay que rectificar.',
+            'Se puede seguir emitiendo igual: es un aviso, no un bloqueo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.21',
         'titulo'  => 'Facturas y notas con fecha de emision a eleccion',
         'tag'     => 'frontend',
