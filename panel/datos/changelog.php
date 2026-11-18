@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.10',
+        'titulo'  => 'Panel de emision: boton Rehacer al costado derecho y efectos al pasar el mouse corregidos',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El boton "Rehacer" de los documentos rechazados queda ahora al borde derecho de la fila, todos alineados en una misma columna.',
+            'Se corrigieron los efectos al pasar el mouse sobre los iconos y sobre "Rehacer", que se veian descentrados o deformados.',
+            'Los iconos de PDF, XML y ficha, y el boton Rehacer, muestran una etiqueta propia al pasar el mouse en vez del aviso del navegador.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.09',
         'titulo'  => 'Panel de emision renovado: estados con color, detalle al pasar el mouse y acciones con iconos',
         'tag'     => 'frontend',

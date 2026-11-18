@@ -4660,45 +4660,81 @@ tr:hover .pe-doc__icono { transform: scale(1.06) rotate(-3deg); }
     letter-spacing: 0.02em;
 }
 
-/* Acciones de la fila: Rehacer destacado + iconos. */
+/* Acciones de la fila: iconos (PDF, XML, ficha) y "Rehacer" al borde derecho.
+   ESPECIFICIDAD A PROPOSITO (.pe-acciones .x = 0,2,0): la regla global
+   ".tabla-datos__acciones a" (0,1,1) les pone display:inline-block y 4px de
+   padding, y con eso el icono quedaba descentrado en su fondo de hover y el
+   boton Rehacer perdia su forma. */
 .pagina-panel-emision .tabla-documentos .tabla-datos__acciones { width: 1%; }
-.pe-acciones { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
-.pagina-panel-emision .tabla-datos__acciones a { margin-left: 0; }
-.pe-icono-accion {
+.pe-acciones {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+}
+.pe-acciones .pe-icono-accion {
+    box-sizing: border-box;
     display: inline-flex;
+    flex: none;
     width: 2.25rem;
     height: 2.25rem;
+    margin: 0;
+    padding: 0;
     align-items: center;
     justify-content: center;
     border-radius: 10px;
     color: var(--color-texto-medio);
-    transition: background-color 160ms ease, color 160ms ease, transform 220ms cubic-bezier(.16, 1, .3, 1);
+    text-decoration: none;
+    transition: background-color 160ms ease, color 160ms ease;
 }
-.pe-icono-accion:hover { background: var(--color-primario-suave); color: var(--color-primario); transform: translateY(-1px); }
-.pe-icono-accion:focus-visible { outline: 2px solid var(--color-primario); outline-offset: 1px; }
-.pe-icono-accion--ver:hover svg { transform: translateX(2px); }
-.pe-icono-accion svg { transition: transform 200ms ease; }
+.pe-acciones .pe-icono-accion svg { display: block; transition: transform 220ms cubic-bezier(.16, 1, .3, 1); }
+.pe-acciones .pe-icono-accion:hover { background: var(--color-primario-suave); color: var(--color-primario); }
+.pe-acciones .pe-icono-accion:hover svg { transform: translateY(1px); }
+.pe-acciones .pe-icono-accion--ver:hover svg { transform: translateX(2px); }
+.pe-acciones .pe-icono-accion:focus-visible { outline: 2px solid var(--color-primario); outline-offset: 1px; }
+.tabla-datos__fila--rechazada .pe-acciones .pe-icono-accion:hover { background: #fff; }
 
-.pe-rehacer {
+/* Rehacer: ancho fijo para que todos queden alineados en columna al borde
+   derecho; las filas sin Rehacer reservan el mismo hueco (.pe-rehacer-hueco)
+   cuando la pagina tiene al menos uno. Reposo: rojo suave con borde; hover:
+   se rellena de rojo y la flecha gira media vuelta. Sin escalas ni saltos de
+   tamano: solo color, sombra y el giro del icono. */
+.pe-acciones .pe-rehacer,
+.pe-rehacer-hueco {
+    box-sizing: border-box;
+    flex: none;
+    width: 7.25rem;
+    margin: 0 0 0 var(--esp-3);
+}
+.pe-acciones .pe-rehacer {
     display: inline-flex;
+    height: 2.25rem;
+    padding: 0 var(--esp-3);
     align-items: center;
+    justify-content: center;
     gap: 6px;
-    margin-right: var(--esp-2);
-    padding: 7px 14px 7px 11px;
+    border: 1px solid color-mix(in srgb, var(--color-error) 35%, transparent);
     border-radius: var(--radio-pill);
-    background: linear-gradient(180deg, #c8102e, var(--color-error));
-    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 6px 14px -6px rgba(176, 0, 32, 0.55);
+    background: #fff;
     font-size: var(--txt-sm);
     font-weight: 600;
-    color: #fff;
+    line-height: 1;
+    color: var(--color-error);
     text-decoration: none;
     white-space: nowrap;
-    transition: transform 220ms cubic-bezier(.16, 1, .3, 1), box-shadow 220ms ease, filter 160ms ease;
+    transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 220ms ease;
 }
-.pe-rehacer:hover { transform: translateY(-1px); filter: brightness(1.06); box-shadow: 0 1px 0 rgba(255, 255, 255, 0.2) inset, 0 10px 20px -8px rgba(176, 0, 32, 0.6); color: #fff; }
-.pe-rehacer:focus-visible { outline: 2px solid var(--color-error); outline-offset: 2px; }
-.pe-rehacer__icono { flex: none; transition: transform 480ms cubic-bezier(.34, 1.56, .64, 1); }
-.pe-rehacer:hover .pe-rehacer__icono { transform: rotate(-300deg); }
+.pe-acciones .pe-rehacer:hover {
+    border-color: var(--color-error);
+    background: var(--color-error);
+    color: #fff;
+    box-shadow: 0 8px 18px -8px rgba(176, 0, 32, 0.6);
+}
+.pe-acciones .pe-rehacer:active { box-shadow: 0 2px 6px -2px rgba(176, 0, 32, 0.5); }
+.pe-acciones .pe-rehacer:focus-visible { outline: 2px solid var(--color-error); outline-offset: 2px; }
+.pe-rehacer__icono { display: block; flex: none; transition: transform 420ms cubic-bezier(.34, 1.4, .64, 1); }
+.pe-acciones .pe-rehacer:hover .pe-rehacer__icono { transform: rotate(-180deg); }
+.pe-rehacer-hueco { display: inline-block; height: 1px; }
 
 /* --- Detalle flotante del estado (capa unica en <body>, ver JS) ------------- */
 .pe-tip {
@@ -4739,6 +4775,19 @@ tr:hover .pe-doc__icono { transform: scale(1.06) rotate(-3deg); }
 .pe-tip[data-lado="arriba"]::after { bottom: -7px; border-top: 0; border-left: 0; }
 .pe-tip[data-lado="abajo"]::after { top: -7px; border-bottom: 0; border-right: 0; }
 .pe-tip p { margin: 0; }
+/* Etiqueta corta (iconos y Rehacer): oscura, una o dos lineas. */
+.pe-tip--corto {
+    max-width: 16rem;
+    padding: 6px 10px;
+    border-color: transparent;
+    border-radius: 8px;
+    background: rgba(0, 28, 46, 0.94);
+    font-size: var(--txt-xs);
+    font-weight: 500;
+    line-height: 1.4;
+    color: #fff;
+    text-align: center;
+}
 .pe-tip__cabecera { display: flex; align-items: center; gap: var(--esp-2); margin-bottom: var(--esp-2); }
 .pe-tip__codigo {
     padding: 3px 8px;
@@ -4773,13 +4822,15 @@ tr:hover .pe-doc__icono { transform: scale(1.06) rotate(-3deg); }
     .pagina-panel-emision .tabla-documentos tbody tr.tabla-datos__fila--rechazada td:first-child { box-shadow: none; }
     .pagina-panel-emision .tabla-documentos tbody tr.tabla-datos__fila--rechazada { box-shadow: inset 3px 0 0 var(--color-error); }
     .pe-acciones { justify-content: flex-start; padding-top: var(--esp-2); }
+    .pe-rehacer-hueco { display: none; }
+    .pe-acciones .pe-rehacer { margin-left: auto; }
     .pagina-panel-emision .tabla-documentos .tabla-datos__acciones { width: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .pe-boton, .pe-estado, .pe-icono-accion, .pe-icono-accion svg, .pe-rehacer, .pe-rehacer__icono, .pe-doc__icono, .pe-tip,
+    .pe-boton, .pe-estado, .pe-acciones .pe-icono-accion, .pe-acciones .pe-icono-accion svg, .pe-acciones .pe-rehacer, .pe-rehacer__icono, .pe-doc__icono, .pe-tip,
     .pe-cabecera__acciones .boton-secundario, .pe-cabecera__acciones .boton-principal { transition: none; }
-    .pe-boton:hover, .pe-estado:hover, .pe-icono-accion:hover, .pe-rehacer:hover, tr:hover .pe-doc__icono,
+    .pe-boton:hover, .pe-estado:hover, .pe-acciones .pe-icono-accion:hover svg, tr:hover .pe-doc__icono,
     .pe-cabecera__acciones .boton-secundario:hover, .pe-cabecera__acciones .boton-principal:hover,
-    .pe-rehacer:hover .pe-rehacer__icono { transform: none; }
+    .pe-acciones .pe-rehacer:hover .pe-rehacer__icono { transform: none; }
 }

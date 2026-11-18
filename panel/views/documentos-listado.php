@@ -267,6 +267,18 @@ if (isset($filtros['estado'])) {
     </div>
 <?php endif; ?>
 
+<?php
+// Con al menos un rehacible en la pagina, las filas sin "Rehacer" reservan su
+// hueco: asi los iconos quedan alineados en columna y "Rehacer" siempre al
+// borde derecho.
+$hayRehacibles = false;
+foreach ($items as $it) {
+    if (RehacerDocumento::permite((int) $it['tipoDte'], $it['estado'] ?? null)) {
+        $hayRehacibles = true;
+        break;
+    }
+}
+?>
 <?php if ($items === []): ?>
     <div class="estado-vacio estado-vacio--centrado">
         <?= iconoSvg('panel-emision', 32, 'estado-vacio__icono'); ?>
@@ -382,20 +394,22 @@ if (isset($filtros['estado'])) {
                             </td>
                             <td data-label="" class="tabla-datos__acciones">
                                 <div class="pe-acciones">
+                                    <a class="pe-icono-accion" href="<?= $urlFicha; ?>/pdf" data-tip-texto="Descargar PDF"
+                                       aria-label="Descargar PDF de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('descargar', 17, ''); ?></a>
+                                    <a class="pe-icono-accion" href="<?= $urlFicha; ?>/xml" data-tip-texto="Descargar XML"
+                                       aria-label="Descargar XML de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('codigo', 17, ''); ?></a>
+                                    <a class="pe-icono-accion pe-icono-accion--ver" href="<?= $urlFicha; ?>" data-tip-texto="Ver ficha"
+                                       aria-label="Ver la ficha de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('chevron-der', 18, ''); ?></a>
                                     <?php if ($rechazado): ?>
                                         <?php /* Rechazado por el SII: abre el formulario con sus datos. No emite nada (ver handleDocumentoRehacerGet). */ ?>
                                         <a class="pe-rehacer" href="<?= $urlFicha; ?>/rehacer"
-                                           aria-label="Rehacer <?= $e($nombreTipo); ?> folio <?= $folio; ?> con los mismos datos"
-                                           title="Abre el formulario con los mismos datos. No se emite nada hasta que confirmes.">
+                                           data-tip-texto="Abre el formulario con los mismos datos. No se emite nada hasta que confirmes."
+                                           aria-label="Rehacer <?= $e($nombreTipo); ?> folio <?= $folio; ?> con los mismos datos">
                                             <?= iconoSvg('rehacer', 15, 'pe-rehacer__icono'); ?><span>Rehacer</span>
                                         </a>
+                                    <?php elseif ($hayRehacibles): ?>
+                                        <span class="pe-rehacer-hueco" aria-hidden="true"></span>
                                     <?php endif; ?>
-                                    <a class="pe-icono-accion" href="<?= $urlFicha; ?>/pdf" title="Descargar PDF"
-                                       aria-label="Descargar PDF de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('descargar', 17, ''); ?></a>
-                                    <a class="pe-icono-accion" href="<?= $urlFicha; ?>/xml" title="Descargar XML"
-                                       aria-label="Descargar XML de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('codigo', 17, ''); ?></a>
-                                    <a class="pe-icono-accion pe-icono-accion--ver" href="<?= $urlFicha; ?>" title="Ver ficha"
-                                       aria-label="Ver la ficha de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('chevron-der', 18, ''); ?></a>
                                 </div>
                             </td>
                         </tr>
@@ -426,7 +440,7 @@ if (isset($filtros['estado'])) {
        por aria-describedby, asi que el lector de pantalla lo lee aunque este
        JS no corra). Aqui solo se copia a UNA capa flotante en <body> con
        position: fixed, para que el overflow de .tabla-scroll no lo recorte. */
-    var disparadores = document.querySelectorAll('[data-estado-tip]');
+    var disparadores = document.querySelectorAll('[data-estado-tip], [data-tip-texto]');
     if (!disparadores.length) { return; }
     var capa = document.createElement('div');
     capa.className = 'pe-tip';
@@ -453,10 +467,14 @@ if (isset($filtros['estado'])) {
     function abrir(el) {
         clearTimeout(tCerrar);
         if (actual === el && capa.classList.contains('pe-tip--visible')) { return; }
-        var fuente = document.getElementById(el.getAttribute('aria-describedby'));
-        if (!fuente) { return; }
+        var texto = el.getAttribute('data-tip-texto');
+        var fuente = texto === null ? document.getElementById(el.getAttribute('aria-describedby')) : null;
+        if (texto === null && !fuente) { return; }
         actual = el;
-        capa.innerHTML = fuente.innerHTML;
+        // Dos formatos: el detalle del estado (HTML de la fila) o una etiqueta
+        // corta de texto (iconos y Rehacer), que se inserta como texto plano.
+        capa.classList.toggle('pe-tip--corto', texto !== null);
+        if (texto !== null) { capa.textContent = texto; } else { capa.innerHTML = fuente.innerHTML; }
         capa.classList.remove('pe-tip--visible');
         capa.style.display = 'block';
         posicionar(el);
