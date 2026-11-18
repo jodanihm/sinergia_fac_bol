@@ -138,6 +138,17 @@ $detalles = (isset($form['detalles']) && is_array($form['detalles']) && $form['d
 $cotizacionId     = isset($form['cotizacion_id']) ? (int) $form['cotizacion_id'] : null;
 $cotizacionNumero = isset($form['cotizacion_numero']) ? (int) $form['cotizacion_numero'] : null;
 
+// REHACER UN DOCUMENTO RECHAZADO (handleDocumentoRehacerGet): de que documento
+// vienen los datos. Solo informa; no viaja al motor ni cambia la emision. Llega
+// en el GET y, si el motor devuelve un error, en el POST re-renderizado (hidden).
+$rehacer = is_array($form['rehacer'] ?? null) && ctype_digit((string) ($form['rehacer']['folio'] ?? ''))
+    ? [
+        'tipo'  => (int) ($form['rehacer']['tipo'] ?? 0),
+        'folio' => (int) $form['rehacer']['folio'],
+        'glosa' => trim((string) ($form['rehacer']['glosa'] ?? '')),
+    ]
+    : null;
+
 // Mapa nombre -> datos para el autocompletado de linea desde el maestro.
 $mapaProductos = [];
 foreach ($productos as $p) {
@@ -280,6 +291,23 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
            la cotizacion Y contra la cuenta (pendientesDeLineas()). */
         ?>
         <input type="hidden" name="cotizacion_id" value="<?= (int) $cotizacionId; ?>">
+    <?php endif; ?>
+    <?php if ($rehacer !== null): ?>
+        <input type="hidden" name="rehacer[tipo]" value="<?= $rehacer['tipo']; ?>">
+        <input type="hidden" name="rehacer[folio]" value="<?= $rehacer['folio']; ?>">
+        <input type="hidden" name="rehacer[glosa]" value="<?= htmlspecialchars($rehacer['glosa']); ?>">
+        <div class="alerta alerta--info" role="status">
+            <?= iconoSvg('info', 20, 'alerta__icono'); ?>
+            <div class="alerta__cuerpo">
+                <p class="alerta__titulo">Rehaciendo <?= htmlspecialchars(\Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe($rehacer['tipo'])); ?> N&deg; <?= $rehacer['folio']; ?>, rechazada por el SII</p>
+                <?php if ($rehacer['glosa'] !== ''): ?>
+                    <p><strong>Motivo del rechazo:</strong> <?= htmlspecialchars($rehacer['glosa']); ?></p>
+                <?php endif; ?>
+                <p>Copiamos sus datos; los del cliente salen de tus clientes si esta registrado.
+                Revisalos y corrige lo que causo el rechazo antes de emitir. <strong>Se usara un folio nuevo</strong>:
+                el documento rechazado no cuenta para el SII y no hay que anularlo.</p>
+            </div>
+        </div>
     <?php endif; ?>
 
     <div class="config-columnas config-columnas--2">
@@ -607,7 +635,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 <tbody>
                     <?php foreach ($detalles as $i => $d): ?>
                         <tr>
-                            <td class="col-producto" data-label="Producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" id="det-<?= $i; ?>-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $inv("det-{$i}-nombre"); ?>><?= $campoError("det-{$i}-nombre"); ?><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
+                            <td class="col-producto" data-label="Producto"><?php if (! empty($d['cotizacion_linea_id'])): ?><input type="hidden" name="detalles[<?= $i; ?>][cotizacion_linea_id]" value="<?= (int) $d['cotizacion_linea_id']; ?>"><?php endif; ?><input type="text" data-buscar-cliente data-buscar-fuente="productos" autocomplete="off" name="detalles[<?= $i; ?>][nombre]" value="<?= htmlspecialchars((string) ($d['nombre'] ?? '')); ?>" class="det-nombre" id="det-<?= $i; ?>-nombre" data-max-sii="80" data-contador="discreto" aria-label="Producto o servicio"<?= $inv("det-{$i}-nombre"); ?>><?= $campoError("det-{$i}-nombre"); ?><?php /* La descripcion (DscItem) no tiene columna: solo llega al rehacer un documento que la traia. Se conserva y se deja a la vista. */ if (trim((string) ($d['descripcion'] ?? '')) !== ''): ?><input type="hidden" name="detalles[<?= $i; ?>][descripcion]" value="<?= htmlspecialchars((string) $d['descripcion']); ?>"><span class="tabla-datos__secundario"><?= htmlspecialchars((string) $d['descripcion']); ?></span><?php endif; ?><?php if (isset($d['pendiente'])): ?><span class="tabla-datos__secundario"><?= ((float) $d['pendiente']) > 0 ? 'pendiente: ' . rtrim(rtrim(number_format((float) $d['pendiente'], 4, ',', '.'), '0'), ',') : 'ya facturada por completo'; ?></span><?php endif; ?></td>
                             <td class="col-cantidad" data-label="Cantidad"><input type="text" inputmode="decimal" name="detalles[<?= $i; ?>][cantidad]" value="<?= htmlspecialchars((string) ($d['cantidad'] ?? '')); ?>" id="det-<?= $i; ?>-cantidad" aria-label="Cantidad"<?= $inv("det-{$i}-cantidad"); ?>><?= $campoError("det-{$i}-cantidad"); ?></td>
                             <?php
                             $celdaNeto  = '<td class="col-precio" data-label="Precio sin IVA ($)"><input type="hidden" name="detalles[' . $i . '][origen]" value="' . htmlspecialchars((string) ($d['origen'] ?? '')) . '" class="det-origen"><input type="text" inputmode="decimal" name="detalles[' . $i . '][precioUnitario]" value="' . htmlspecialchars((string) ($d['precioUnitario'] ?? '')) . '" class="det-precio" id="det-' . $i . '-precioUnitario" aria-label="Precio unitario sin IVA, en pesos"' . $inv("det-{$i}-precioUnitario") . '>' . $campoError("det-{$i}-precioUnitario") . '</td>';

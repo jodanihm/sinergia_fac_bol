@@ -249,6 +249,20 @@ $rutaBase = '/ventas/panel-emision/' . $tipoDte . '/' . $folio;
                 </div>
             </section>
 
+            <?php if (\Plantiflex\FacturacionCl\Sii\RehacerDocumento::permite($tipoDte, $documento['estado'] ?? null)): ?>
+            <?php /* RECHAZADO POR EL SII: no existe para el SII, asi que no se corrige con
+                     notas (una NC o ND que lo referencie tambien seria rechazada). Lo que
+                     corresponde es emitirlo de nuevo, con otro folio. El enlace solo abre
+                     el formulario precargado; nada se emite hasta confirmarlo ahi. */ ?>
+            <section class="tarjeta" aria-labelledby="titulo-rehacer">
+                <h2 id="titulo-rehacer">Rehacer este documento</h2>
+                <p class="tarjeta__intro">El SII rechazo este documento, asi que no cuenta como emitido y no hay que anularlo. Puedes emitirlo de nuevo con los mismos datos, corrigiendo lo que causo el rechazo.</p>
+                <div class="acciones-grupo">
+                    <a class="boton-principal" href="<?= $e($rutaBase); ?>/rehacer">Rehacer con los mismos datos</a>
+                </div>
+                <p class="nota">Abre el formulario de emision con el cliente y las lineas ya cargados. Se usara un folio nuevo, y nada se emite hasta que lo confirmes ahi.</p>
+            </section>
+            <?php else: ?>
             <section class="tarjeta" aria-labelledby="titulo-correcciones">
                 <h2 id="titulo-correcciones">Corregir este documento</h2>
                 <p class="tarjeta__intro">Cada opcion abre el formulario de la nota con este documento ya referenciado. Nada se emite hasta que lo confirmes ahi.</p>
@@ -267,6 +281,7 @@ $rutaBase = '/ventas/panel-emision/' . $tipoDte . '/' . $folio;
                     </li>
                 </ul>
             </section>
+            <?php endif; ?>
         </div>
     </div>
 <?php endif; ?>
