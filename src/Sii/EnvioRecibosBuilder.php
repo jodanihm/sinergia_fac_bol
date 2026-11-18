@@ -132,7 +132,7 @@ final class EnvioRecibosBuilder
     private function add(DOMDocument $doc, DOMElement $parent, string $name, string $value, bool $conNs = false): DOMElement
     {
         $el = $conNs ? $doc->createElementNS(self::NS_SII, $name) : $doc->createElement($name);
-        $el->textContent = $value;
+        $el->textContent = TextoSii::normalizar($value); // ver TextoSii: lo firmado debe ser lo enviado
         $parent->appendChild($el);
         return $el;
     }

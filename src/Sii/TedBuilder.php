@@ -111,12 +111,14 @@ final class TedBuilder
     private function el(DOMDocument $dom, string $name, string $value): DOMElement
     {
         $el = $dom->createElementNS(self::NS_SII, $name);
-        $el->appendChild($dom->createTextNode($value));
+        // El DD se firma con la llave del CAF tras pasarlo a ISO-8859-1: un
+        // caracter que no exista ahi se volveria "?" y romperia el timbre.
+        $el->appendChild($dom->createTextNode(TextoSii::normalizar($value)));
         return $el;
     }
     private function trunc(string $s, int $max): string
     {
-        return mb_substr($s, 0, $max);
+        return mb_substr(TextoSii::normalizar($s), 0, $max);
     }
     private function primerTexto(DOMDocument $doc, string $tag): string
     {

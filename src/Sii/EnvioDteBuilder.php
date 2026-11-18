@@ -172,7 +172,7 @@ final class EnvioDteBuilder
     private function el(DOMDocument $dom, string $name, string $value): DOMElement
     {
         $el = $dom->createElementNS(self::NS_SII, $name);
-        $el->appendChild($dom->createTextNode($value));
+        $el->appendChild($dom->createTextNode(TextoSii::normalizar($value)));
         return $el;
     }
 }

@@ -489,6 +489,9 @@ final class DteXmlBuilder
 
     private function el(DOMDocument $dom, string $name, string $value): DOMElement
     {
+        // Antes de truncar: "…" pasa a "..." y cambia el largo. Ver TextoSii
+        // (folio 43 de EASY AGENDA, rechazado por un ’ en la direccion).
+        $value = TextoSii::normalizar($value);
         if (isset(self::LARGO_MAX[$name])) {
             $value = rtrim(mb_substr(trim($value), 0, self::LARGO_MAX[$name]));
         }
