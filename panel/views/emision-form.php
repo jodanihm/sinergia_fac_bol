@@ -57,6 +57,14 @@
  *   - Ids nuevos en las celdas del detalle (det-{i}-{campo}) para poder
  *     enlazar y enfocar el error del motor; tambien en nuevaFilaHTML().
  *
+ * REDISENO (2026-11-18), SOLO PRESENTACION: cabecera con icono, pasos
+ * numerados con anclas, tarjetas con su numero de paso, barra inferior fija con
+ * el total en vivo y el boton de emitir, y el dialogo de confirmacion con otro
+ * aspecto. NO cambia ningun name, id ni clase de los que lista el CONTRATO de
+ * arriba, ni la fila del detalle (la de PHP y la de nuevaFilaHTML() siguen
+ * iguales). El total de la barra es una COPIA del de #resumen-totales, que lo
+ * hace un MutationObserver al final del archivo: no hay segunda formula.
+ *
  * CONVERSION DE COTIZACION (segunda entrega): $form puede traer cotizacion_id,
  * cotizacion_numero y, en cada detalle, cotizacion_linea_id y pendiente. Cuando
  * NO vienen -- toda emision normal -- esta vista produce el mismo HTML que antes.
@@ -66,7 +74,8 @@
  * olvido -- es la regla: una linea que el usuario agrega a mano es venta nueva
  * dentro de la misma factura y no descuenta saldo de ninguna cotizacion.
  */
-$titulo = $tituloDoc;
+$titulo    = $tituloDoc;
+$bodyClase = 'pagina-emision';
 require __DIR__ . '/partials/header.php';
 
 // Prellenado desde $form ($_POST en re-render, o [] en GET limpio).
@@ -233,17 +242,43 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     . '<span class="visualmente-oculto">(obligatorio)</span>';
 ?>
 
-<div class="dash-header">
-    <div>
-        <h1><?= htmlspecialchars($tituloDoc); ?></h1>
+<?php
+// Icono del tipo y numeracion de los pasos (la referencia solo existe en NC/ND).
+$emIcono = match ($tipoDte) {
+    39      => 'boleta',
+    56      => 'nota-debito',
+    61      => 'nota-credito',
+    default => 'factura',
+};
+$emPasos = [['titulo-receptor', 'Receptor'], ['titulo-condiciones', 'Condiciones']];
+if ($esNota) {
+    $emPasos[] = ['titulo-referencia', 'Referencia'];
+}
+$emPasos[] = ['titulo-detalle', 'Detalle'];
+$emPasos[] = ['boton-emitir', 'Emitir'];
+$emNum = array_flip(array_column($emPasos, 0));
+$emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="true">' . (($emNum[$id] ?? 0) + 1) . '</span>';
+?>
+<div class="pe-cabecera em-cabecera">
+    <div class="pe-cabecera__titulo">
+        <span class="pe-cabecera__emblema" aria-hidden="true"><?= iconoSvg($emIcono, 24, ''); ?></span>
+        <div>
+            <h1><?= htmlspecialchars($tituloDoc); ?></h1>
+            <p class="pe-cabecera__sub">Completa el receptor y el detalle. Los campos con <span class="campo-obligatorio">*</span> son obligatorios para el SII.</p>
+        </div>
     </div>
-    <div class="acciones-grupo acciones-grupo--header">
-        <a class="boton-secundario" href="/ventas/panel-emision">Ver documentos emitidos</a>
+    <div class="pe-cabecera__acciones">
+        <a class="boton-secundario pe-boton" href="/ventas/panel-emision"><?= iconoSvg('panel-emision', 16, ''); ?><span>Ver documentos emitidos</span></a>
     </div>
 </div>
-<p class="dash-subtitulo">
-    Completa el receptor y el detalle. Los campos con <span class="campo-obligatorio">*</span> son obligatorios para el SII.
-</p>
+
+<nav class="em-pasos" aria-label="Pasos para emitir">
+    <ol>
+        <?php foreach ($emPasos as $n => [$ancla, $nombre]): ?>
+            <li><a href="#<?= $ancla; ?>"><span class="em-pasos__num"><?= $n + 1; ?></span><span><?= $nombre; ?></span></a></li>
+        <?php endforeach; ?>
+    </ol>
+</nav>
 
 <div class="config-ancho">
 
@@ -313,7 +348,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
     <div class="config-columnas config-columnas--2">
             <section class="tarjeta" aria-labelledby="titulo-receptor">
                 <div class="tarjeta__cabecera">
-                    <h2 id="titulo-receptor">Datos del receptor</h2>
+                    <h2 id="titulo-receptor"><?= $emPaso('titulo-receptor'); ?>Datos del receptor</h2>
                     <?php /* Oculto hasta que js/selector-clientes.js lo active: sin JavaScript no abriria nada. */ ?>
                     <button type="button" class="boton-secundario" data-abrir-selector-cliente aria-haspopup="dialog" hidden><?= iconoSvg('clientes', 16, ''); ?> Buscar en mis clientes</button>
                 </div>
@@ -384,7 +419,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
         <div>
             <section class="tarjeta" aria-labelledby="titulo-condiciones">
-                <h2 id="titulo-condiciones">Condiciones del documento</h2>
+                <h2 id="titulo-condiciones"><?= $emPaso('titulo-condiciones'); ?>Condiciones del documento</h2>
                 <div class="form-grid form-grid--1">
                     <?php if ($esFactura): ?>
                         <?php
@@ -498,7 +533,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 
             <?php if ($esNota): ?>
                 <section class="tarjeta" aria-labelledby="titulo-referencia">
-                    <h2 id="titulo-referencia">Referencia del documento</h2>
+                    <h2 id="titulo-referencia"><?= $emPaso('titulo-referencia'); ?>Referencia del documento</h2>
                     <p class="tarjeta__intro">Una nota de credito o debito debe referenciar el documento que corrige o anula.</p>
                     <div class="config-columnas config-columnas--2">
                     <div class="form-grid">
@@ -600,7 +635,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             <?php endif; ?>
 
     <section class="tarjeta" aria-labelledby="titulo-detalle">
-        <h2 id="titulo-detalle">Detalle del documento</h2>
+        <h2 id="titulo-detalle"><?= $emPaso('titulo-detalle'); ?>Detalle del documento</h2>
         <?php if ($cotizacionId !== null): ?>
             <div class="alerta alerta--info" role="status">
                 <?= iconoSvg('info', 20, 'alerta__icono'); ?>
@@ -650,8 +685,10 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
                 </tbody>
             </table>
         </div>
-        <p><button type="button" id="agregar-linea" class="boton-secundario">Agregar linea</button></p>
+        <div class="em-pie-detalle">
+        <p class="em-agregar"><button type="button" id="agregar-linea" class="boton-secundario pe-boton"><?= iconoSvg('agregar', 16, ''); ?><span>Agregar linea</span></button></p>
         <?php /* Misma formula que DteXmlBuilder::totales(): ver calcularTotales(). */ ?>
+        <div class="em-resumen">
         <h3 id="titulo-resumen">Resumen</h3>
         <dl class="ficha ficha--montos" id="resumen-totales" aria-labelledby="titulo-resumen">
             <dt>Subtotal sin IVA</dt><dd data-total="neto">$0</dd>
@@ -660,13 +697,21 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
             <dt data-fila="exento" hidden>Sin IVA (exento)</dt><dd data-total="exento" data-fila="exento" hidden>$0</dd>
             <dt class="ficha__total">Total a pagar</dt><dd class="ficha__total" data-total="total">$0</dd>
         </dl>
+        </div>
+        </div>
     </section>
 
     <?php /* Botonera: lo que sale va a la izquierda, separado; emitir es el
              ultimo, donde termina el recorrido. */ ?>
-    <div class="acciones-formulario">
+    <?php /* BARRA FIJA abajo: total en vivo (copia de #resumen-totales, ver el
+             script del final) y el boton de emitir siempre a mano. */ ?>
+    <div class="acciones-formulario em-barra">
         <a class="boton-texto acciones-formulario__aparte" href="/panel">Volver al panel</a>
-        <button type="submit" class="boton-principal" id="boton-emitir"><?= htmlspecialchars($textoEmitir); ?></button>
+        <div class="em-barra__total" aria-hidden="true">
+            <span class="em-barra__rotulo">Total a pagar</span>
+            <span class="em-barra__monto" data-em-total>$0</span>
+        </div>
+        <button type="submit" class="boton-principal pe-boton em-barra__emitir" id="boton-emitir"><?= iconoSvg('enviar', 16, ''); ?><span><?= htmlspecialchars($textoEmitir); ?></span></button>
     </div>
     <?php /* Espera larga (seccion 14): existe desde la carga, oculta, para que
              la region viva se anuncie al aparecer el texto. */ ?>
@@ -679,6 +724,7 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 </div>
 
 <dialog class="dialogo-confirmar" id="confirmar-emision" aria-labelledby="confirmar-emision-titulo" aria-describedby="confirmar-emision-texto">
+    <span class="em-dialogo-icono" aria-hidden="true"><?= iconoSvg($emIcono, 24, ''); ?></span>
     <h2 class="dialogo-confirmar__titulo" id="confirmar-emision-titulo">Emitir <?= htmlspecialchars($docConArticulo); ?>?</h2>
     <p id="confirmar-emision-texto">Se asigna un folio real y el documento se envia al SII. No se puede deshacer: para corregirlo despues hay que emitir una nota.</p>
     <p data-confirmar-resumen></p>
@@ -1386,5 +1432,27 @@ $req = '<span class="campo-obligatorio" aria-hidden="true">*</span>'
 })();
 </script>
 <?php endif; ?>
+
+<script>
+(function () {
+    'use strict';
+    /* COPIA DEL TOTAL EN LA BARRA FIJA. No calcula nada: observa el
+       [data-total="total"] de #resumen-totales, que pinta calcularTotales(), y
+       repite su texto. La barra es aria-hidden: el total accesible es el del
+       resumen. El rebote del monto es solo visual. */
+    var origen = document.querySelector('#resumen-totales [data-total="total"]');
+    var copia = document.querySelector('[data-em-total]');
+    if (!origen || !copia) { return; }
+    function copiar() {
+        if (copia.textContent === origen.textContent) { return; }
+        copia.textContent = origen.textContent;
+        copia.classList.remove('em-barra__monto--cambio');
+        void copia.offsetWidth;
+        copia.classList.add('em-barra__monto--cambio');
+    }
+    copiar();
+    new MutationObserver(copiar).observe(origen, { childList: true, characterData: true, subtree: true });
+})();
+</script>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>

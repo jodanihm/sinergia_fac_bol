@@ -188,6 +188,8 @@ const ICONOS = [
         . '<line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
     'chevron-izq' => '<polyline points="15 18 9 12 15 6"/>',
     'chevron-der' => '<polyline points="9 18 15 12 9 6"/>',
+    // 'agregar' (plus): agregar una linea al detalle del formulario de emision.
+    'agregar' => '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
 ];
 
 /**

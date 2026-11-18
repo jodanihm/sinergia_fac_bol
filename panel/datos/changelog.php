@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.16',
+        'titulo'  => 'Formulario de emision renovado',
+        'tag'     => 'frontend',
+        'items'   => [
+            'La factura, la factura exenta, la boleta y las notas de credito y debito tienen un formulario con diseno nuevo: pasos numerados arriba (Receptor, Condiciones, Referencia, Detalle, Emitir) que llevan a cada seccion.',
+            'Una barra fija abajo muestra el total a pagar mientras completas el detalle, con el boton para emitir siempre a mano.',
+            'El detalle tiene campos mas comodos y el resumen de totales queda al costado del boton "Agregar linea".',
+            'La ventana para confirmar la emision tiene un diseno nuevo. Las reglas, validaciones y lo que se envia al SII no cambian.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.15',
         'titulo'  => 'Despedida al cerrar sesion',
         'tag'     => 'frontend',
