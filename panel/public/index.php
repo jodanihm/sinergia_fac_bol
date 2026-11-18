@@ -6161,6 +6161,13 @@ function filtrosDocumentosDesdeGet(): array
     if (isset($filtros['desde']) !== isset($filtros['hasta'])) {
         unset($filtros['desde'], $filtros['hasta']);
     }
+    // SWITCH "SOLO ACEPTADOS". Manda sobre el campo Estado: con el encendido el
+    // estado escrito se descarta (el switch ya dice que estados se muestran).
+    // Los codigos los pone handleDocumentosListadoGet() desde el catalogo.
+    if (($_GET['aceptados'] ?? '') === '1') {
+        $filtros['aceptados'] = '1';
+        unset($filtros['estado']);
+    }
     return $filtros;
 }
 
@@ -6202,7 +6209,18 @@ function handleDocumentosListadoGet(): void
     $filtros   = filtrosDocumentosDesdeGet();
     $pagina    = max(1, (int) ($_GET['pagina'] ?? 1));
 
-    $filtrosMotor           = $filtros;
+    $filtrosMotor = $filtros;
+    // "Solo aceptados": los codigos del grupo 'aceptado' de datos/estados-sii.php
+    // (EPR, DOK, RPR), el mismo catalogo que pinta los colores. El motor los
+    // recibe como lista y filtra con IN.
+    if (isset($filtrosMotor['aceptados'])) {
+        unset($filtrosMotor['aceptados']);
+        $catalogo = require __DIR__ . '/../datos/estados-sii.php';
+        $filtrosMotor['estado'] = implode(',', array_column(array_filter(
+            $catalogo['estados'],
+            static fn (array $x): bool => $x['grupo'] === 'aceptado' && $x['codigo'] !== null
+        ), 'codigo'));
+    }
     $filtrosMotor['limit']  = $porPagina;
     $filtrosMotor['offset'] = ($pagina - 1) * $porPagina;
 
@@ -6256,7 +6274,16 @@ function handleDocumentosListadoGet(): void
     $items = resolverRazonSocialReceptores($cuentaId, $items);
     $total = (int) ($res['body']['total'] ?? 0);
 
+    // EL RANGO QUE APLICO EL MOTOR (sin fechas, el mes actual completo). La
+    // vista lo pone en los campos Desde/Hasta para que se vea que se busco.
+    // Viene null en la busqueda por folio sin fechas, que no acota periodo.
+    $rangoMotor = [
+        'desde' => is_string($res['body']['desde'] ?? null) ? $res['body']['desde'] : null,
+        'hasta' => is_string($res['body']['hasta'] ?? null) ? $res['body']['hasta'] : null,
+    ];
+
     vista('documentos-listado', [
+        'rangoMotor'   => $rangoMotor,
         'items'        => $items,
         'total'        => $total,
         'pagina'       => $pagina,

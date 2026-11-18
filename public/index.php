@@ -2498,8 +2498,9 @@ function listarDte(array $tenant): never
     }
 
     // receptorRut: busqueda parcial (LIKE). estado: igualdad exacta (sin
-    // catalogo cerrado, ver filtroPeriodo()). Ambos opcionales, para el
-    // listado del panel (M5).
+    // catalogo cerrado, ver filtroPeriodo()), o varios separados por coma que
+    // se filtran con IN (el switch "solo aceptados" del panel). Ambos
+    // opcionales, para el listado del panel (M5).
     $receptorRut = trim((string) ($_GET['receptorRut'] ?? ''));
     $receptorRut = $receptorRut !== '' ? $receptorRut : null;
     $estado      = trim((string) ($_GET['estado'] ?? ''));

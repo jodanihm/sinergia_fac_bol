@@ -38,6 +38,17 @@
  * iconos (ficha, PDF, XML) y el "Rehacer" de los rechazados; entra desde que
  * el <main> ocupa todo el ancho.
  *
+ * FECHAS A LA VISTA: sin rango en la url, Desde/Hasta muestran el que aplico
+ * el motor ($rangoMotor: el mes actual completo), marcados con data-defecto.
+ * Si se envia el formulario sin haber tocado esas fechas, el script las vacia
+ * antes de enviar: el motor aplica el mismo mes, la url queda limpia, y un
+ * folio sin fechas busca en todos los periodos, como siempre.
+ *
+ * SWITCH "SOLO ACEPTADOS" (aceptados=1): muestra solo los estados del grupo
+ * 'aceptado' del catalogo (EPR, DOK, RPR). Manda sobre el campo Estado, que se
+ * deshabilita mientras esta encendido. Con JS se aplica al cambiarlo; sin JS,
+ * al pulsar Filtrar.
+ *
  * ESTADO: color, nombre e icono salen de datos/estados-sii.php, el mismo
  * catalogo de la Guia de estados (partials/_guia-estados-sii.php). Al pasar el
  * mouse o enfocar el badge se abre un detalle con que significa y que hacer;
@@ -175,6 +186,16 @@ if (isset($filtros['receptorRut'])) {
 if (isset($filtros['estado'])) {
     $chips[] = ['Estado: ' . $e((string) $filtros['estado']), ['estado']];
 }
+$soloAceptados = isset($filtros['aceptados']);
+if ($soloAceptados) {
+    $chips[] = ['Solo aceptados', ['aceptados']];
+}
+
+// Fechas que se ven en Desde/Hasta: las del filtro, o las que aplico el motor.
+$rangoMotor = $rangoMotor ?? ['desde' => null, 'hasta' => null];
+$fechaDefecto = ! $hayRangoFechas && ! $hayFolio && $rangoMotor['desde'] !== null && $rangoMotor['hasta'] !== null;
+$valorDesde = (string) ($filtros['desde'] ?? ($fechaDefecto ? $rangoMotor['desde'] : ''));
+$valorHasta = (string) ($filtros['hasta'] ?? ($fechaDefecto ? $rangoMotor['hasta'] : ''));
 ?>
 
 <div class="pe-cabecera">
@@ -205,10 +226,10 @@ if (isset($filtros['estado'])) {
 
 <form method="get" action="/ventas/panel-emision" class="filtros pe-filtros" id="form-filtros" aria-label="Filtrar documentos">
     <label class="filtros__campo">Desde
-        <input type="date" name="desde" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['desde'] ?? '')); ?>">
+        <input type="date" name="desde" id="filtro-desde" class="filtros__input filtros__input--medio" value="<?= $e($valorDesde); ?>"<?= $fechaDefecto ? ' data-defecto="' . $e($valorDesde) . '"' : ''; ?>>
     </label>
     <label class="filtros__campo">Hasta
-        <input type="date" name="hasta" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['hasta'] ?? '')); ?>">
+        <input type="date" name="hasta" id="filtro-hasta" class="filtros__input filtros__input--medio" value="<?= $e($valorHasta); ?>"<?= $fechaDefecto ? ' data-defecto="' . $e($valorHasta) . '"' : ''; ?>>
     </label>
     <label class="filtros__campo">Tipo
         <select name="tipoDte" class="filtros__input filtros__input--medio">
@@ -232,10 +253,21 @@ if (isset($filtros['estado'])) {
                placeholder="RUT o nombre del cliente" spellcheck="false" data-buscar-cliente="normalizado">
     </label>
     <label class="filtros__campo">Estado
-        <input type="text" name="estado" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['estado'] ?? '')); ?>"
-               placeholder="enviado, EPR" spellcheck="false" aria-describedby="ayuda-filtro-estado">
+        <input type="text" name="estado" id="filtro-estado" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['estado'] ?? '')); ?>"
+               placeholder="<?= $soloAceptados ? 'Solo aceptados' : 'enviado, EPR'; ?>" spellcheck="false" aria-describedby="ayuda-filtro-estado"<?= $soloAceptados ? ' disabled' : ''; ?>>
     </label>
     <span class="visualmente-oculto" id="ayuda-filtro-estado">El estado tal como lo guarda el sistema: enviado, o el codigo que respondio el SII.</span>
+    <?php /* SWITCH "SOLO ACEPTADOS": un checkbox con role="switch". Encendido
+             = aceptados=1 en la url. */ ?>
+    <label class="pe-switch" for="filtro-aceptados">
+        <input type="checkbox" name="aceptados" value="1" id="filtro-aceptados" role="switch"
+               aria-describedby="ayuda-aceptados"<?= $soloAceptados ? ' checked' : ''; ?>>
+        <span class="pe-switch__pista" aria-hidden="true"><span class="pe-switch__perilla"></span></span>
+        <span class="pe-switch__texto">
+            <span class="pe-switch__titulo">Solo aceptados</span>
+            <span class="pe-switch__ayuda" id="ayuda-aceptados"><?= $soloAceptados ? 'Mostrando EPR, DOK y RPR' : 'Mostrando todos los estados'; ?></span>
+        </span>
+    </label>
     <div class="pe-filtros__acciones">
         <button type="submit" class="boton-principal pe-boton" id="filtrar"><?= iconoSvg('buscar', 16, ''); ?><span>Filtrar</span></button>
         <?php if ($hayFiltros): ?>
@@ -528,9 +560,33 @@ foreach ($items as $it) {
     });
     form.addEventListener('submit', function (ev) {
         if (enviando) { ev.preventDefault(); return; }
+        // Fechas por defecto SIN TOCAR: no se envian. Sin fechas el motor
+        // aplica el mismo mes, y un folio se busca en todos los periodos
+        // (ver el docblock).
+        var desde = document.getElementById('filtro-desde');
+        var hasta = document.getElementById('filtro-hasta');
+        if (desde && hasta && desde.hasAttribute('data-defecto') && desde.value === desde.getAttribute('data-defecto')
+            && hasta.value === hasta.getAttribute('data-defecto')) {
+            desde.value = '';
+            hasta.value = '';
+        }
         enviando = true;
         umbral = setTimeout(function () { ocupado(true); }, 300);
     });
+
+    // El switch se aplica en el acto. El campo Estado se deshabilita mientras
+    // esta encendido (el switch manda), y se habilita al apagarlo.
+    var sw = document.getElementById('filtro-aceptados');
+    var campoEstado = document.getElementById('filtro-estado');
+    if (sw) {
+        sw.addEventListener('change', function () {
+            if (campoEstado) {
+                campoEstado.disabled = sw.checked;
+                if (sw.checked) { campoEstado.value = ''; }
+            }
+            if (form.requestSubmit) { form.requestSubmit(boton); } else { form.submit(); }
+        });
+    }
 })();
 </script>
 

@@ -6542,3 +6542,63 @@ html.em-cargando { overflow: hidden; }
     .pagina-cotizaciones .ct-filtros { padding: var(--esp-4); }
     .ct-filtros__acciones { width: 100%; }
 }
+
+/* --- Panel de emision: switch "Solo aceptados" ---------------------------
+   Checkbox nativo con role="switch", oculto a la vista pero enfocable; la
+   pista y la perilla son decorativas. */
+.pe-switch {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: var(--esp-3);
+    min-height: 2.5rem;
+    margin: 0;
+    padding: 0 var(--esp-3) 0 var(--esp-2);
+    border: 1px solid #d9dee5;
+    border-radius: 12px;
+    background: #fbfcfd;
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+.pe-switch:hover { border-color: #b9c4d0; }
+.pe-switch input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    opacity: 0;
+}
+.pe-switch__pista {
+    position: relative;
+    flex: none;
+    width: 2.6rem;
+    height: 1.5rem;
+    border-radius: var(--radio-pill);
+    background: #cfd6df;
+    transition: background-color 220ms ease;
+}
+.pe-switch__perilla {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: calc(1.5rem - 6px);
+    height: calc(1.5rem - 6px);
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: transform 260ms cubic-bezier(.34, 1.4, .64, 1);
+}
+.pe-switch input:checked + .pe-switch__pista { background: var(--color-exito); }
+.pe-switch input:checked + .pe-switch__pista .pe-switch__perilla { transform: translateX(1.1rem); }
+.pe-switch input:focus-visible + .pe-switch__pista { outline: 2px solid var(--color-primario); outline-offset: 2px; }
+.pe-switch:has(input:checked) { border-color: color-mix(in srgb, var(--color-exito) 45%, transparent); background: #f1f8f1; }
+.pe-switch__texto { display: flex; flex-direction: column; line-height: 1.2; }
+.pe-switch__titulo { font-size: var(--txt-sm); font-weight: 600; letter-spacing: 0; color: var(--color-texto); }
+.pe-switch__ayuda { font-size: var(--txt-xs); font-weight: 400; letter-spacing: 0; color: var(--color-texto-tenue); }
+.pe-switch:has(input:checked) .pe-switch__ayuda { color: var(--color-exito); }
+.pagina-panel-emision .pe-filtros .pe-switch { align-self: end; }
+.pagina-panel-emision .pe-filtros .filtros__input:disabled { opacity: 0.6; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) {
+    .pe-switch__pista, .pe-switch__perilla { transition: none; }
+}

@@ -182,7 +182,8 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
      * a tipo_dte, unico por rut_emisor+ambiente+tipo_dte+folio). $receptorRut
      * es LIKE (busqueda parcial, para el listado M5); $estado es igualdad
      * exacta (no hay catalogo cerrado de valores: vienen de distintas fuentes
-     * SII -- 'enviado', 'EPR', 'DOK', 'DNK', etc).
+     * SII -- 'enviado', 'EPR', 'DOK', 'DNK', etc), o una lista separada por
+     * comas que se filtra con IN.
      *
      * @return array{0:string, 1:array<string,mixed>}
      */
@@ -216,8 +217,26 @@ final class MySqlDteEmitidoRepository implements DteEmitidoRepositoryInterface
             $params[':receptor'] = '%' . $receptorRut . '%';
         }
         if ($estado !== null && $estado !== '') {
-            $where .= ' AND estado = :estado';
-            $params[':estado'] = $estado;
+            // UNO O VARIOS ESTADOS. Varios van separados por coma
+            // ('EPR,DOK,RPR': el switch "solo aceptados" del panel) y se filtran
+            // con IN, un placeholder por valor. Un solo valor sigue siendo
+            // igualdad exacta, como siempre: ningun codigo de estado lleva coma.
+            // Tope de 10 para que la lista no crezca sin limite desde afuera.
+            $lista = array_slice(array_values(array_unique(array_filter(
+                array_map('trim', explode(',', $estado)),
+                static fn (string $v): bool => $v !== ''
+            ))), 0, 10);
+            if (count($lista) <= 1) {
+                $where .= ' AND estado = :estado';
+                $params[':estado'] = $lista[0] ?? $estado;
+            } else {
+                $marcas = [];
+                foreach ($lista as $i => $v) {
+                    $marcas[] = ':estado' . $i;
+                    $params[':estado' . $i] = $v;
+                }
+                $where .= ' AND estado IN (' . implode(', ', $marcas) . ')';
+            }
         }
         return [$where, $params];
     }

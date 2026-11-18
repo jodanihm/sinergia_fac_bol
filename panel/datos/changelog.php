@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.19',
+        'titulo'  => 'Panel de emision: fechas a la vista y switch "Solo aceptados"',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al entrar al panel de emision, los campos Desde y Hasta muestran las fechas del mes que se esta mostrando, en vez de quedar vacios.',
+            'Nuevo switch "Solo aceptados": encendido, la lista muestra solo los documentos aceptados por el SII (EPR, DOK y RPR); apagado, muestra todos. Se aplica al instante.',
+            'Buscar por folio sin cambiar las fechas sigue buscando en todos los meses, como antes.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.18',
         'titulo'  => 'Cotizaciones renovadas: resumen, vigencia y facturar desde la lista',
         'tag'     => 'frontend',
