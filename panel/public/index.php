@@ -6164,11 +6164,63 @@ function filtrosDocumentosDesdeGet(): array
     // SWITCH "SOLO ACEPTADOS". Manda sobre el campo Estado: con el encendido el
     // estado escrito se descarta (el switch ya dice que estados se muestran).
     // Los codigos los pone handleDocumentosListadoGet() desde el catalogo.
-    if (($_GET['aceptados'] ?? '') === '1') {
+    // Su valor sale de la url o, si no viene, de la cookie que lo recuerda
+    // (ver preferenciaSoloAceptados()).
+    if (preferenciaSoloAceptados()) {
         $filtros['aceptados'] = '1';
         unset($filtros['estado']);
     }
     return $filtros;
+}
+
+/**
+ * Estado del switch "Solo aceptados" del panel de emision, RECORDADO EN UNA
+ * COOKIE para que el sitio lo mantenga entre visitas.
+ *
+ *   ?aceptados=1 / ?aceptados=0  eleccion explicita: se usa y se guarda.
+ *   ?estado=X sin aceptados      apagado solo en esta visita (enlaces que
+ *                                piden un estado concreto); no se guarda.
+ *   sin el parametro             se usa lo guardado (apagado si no hay nada).
+ *
+ * El formulario manda SIEMPRE el parametro (un hidden aceptados=0 delante del
+ * checkbox), asi que apagarlo tambien queda guardado: un checkbox desmarcado no
+ * viaja, y sin el hidden "apagar" seria indistinguible de "no dijo nada".
+ *
+ * La cookie solo guarda '0' o '1' -- nada de la cuenta ni del usuario --, vive
+ * un ano, se limita a /ventas/panel-emision, es HttpOnly (ningun script la
+ * necesita) y Secure cuando la conexion es https (mismo criterio que la sesion).
+ */
+function preferenciaSoloAceptados(): bool
+{
+    static $valor = null;
+    if ($valor !== null) {
+        return $valor;
+    }
+    $pedido = (string) ($_GET['aceptados'] ?? '');
+    if ($pedido === '0' || $pedido === '1') {
+        $valor = $pedido === '1';
+        if (! headers_sent() && ($_COOKIE['pe_solo_aceptados'] ?? null) !== $pedido) {
+            setcookie('pe_solo_aceptados', $pedido, [
+                'expires'  => time() + 365 * 24 * 3600,
+                'path'     => '/ventas/panel-emision',
+                'secure'   => Auth::esHttps(),
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ]);
+        }
+        return $valor;
+    }
+    // UN ESTADO PEDIDO EN LA URL GANA A LO RECORDADO. Los enlaces del dashboard
+    // y de la Guia ("ver documentos en este estado") llegan con ?estado=RCT;
+    // con el switch recordado encendido, ese estado se descartaria y la persona
+    // veria aceptados en vez de lo que pidio. Se apaga solo para esta visita:
+    // la cookie no se toca.
+    if (trim((string) ($_GET['estado'] ?? '')) !== '') {
+        $valor = false;
+        return $valor;
+    }
+    $valor = ($_COOKIE['pe_solo_aceptados'] ?? '') === '1';
+    return $valor;
 }
 
 /**
@@ -20846,6 +20898,35 @@ function dashDistribucionEstado(PDO $pdo, string $rutEmisor, string $desde, stri
 }
 
 /**
+ * Envio por correo de los documentos DEL PERIODO (cola dte_envio_correo): cuantos
+ * hay en cada estado. Acotado por cuenta_id (la cola) y por emisor, ambiente y
+ * fecha de emision (el documento), asi que cuenta lo mismo que la tabla de
+ * arriba del dashboard. Un documento que nunca se encolo no aparece.
+ *
+ * @return array{enviado:int, pendiente:int, error:int, sin_destinatario:int, total:int}
+ */
+function dashCorreosPeriodo(PDO $pdo, int $cuentaId, string $rutEmisor, string $desde, string $hasta): array
+{
+    $salida = ['enviado' => 0, 'pendiente' => 0, 'error' => 0, 'sin_destinatario' => 0, 'total' => 0];
+    $stmt = $pdo->prepare(
+        'SELECT q.estado, COUNT(*) AS n '
+        . 'FROM dte_envio_correo q JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+        . "WHERE q.cuenta_id = :c AND e.rut_emisor = :rut AND e.ambiente = 'produccion' "
+        . '  AND e.fecha_emision BETWEEN :desde AND :hasta '
+        . 'GROUP BY q.estado'
+    );
+    $stmt->execute([':c' => $cuentaId, ':rut' => $rutEmisor, ':desde' => $desde, ':hasta' => $hasta]);
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $f) {
+        if (isset($salida[$f['estado']])) {
+            $salida[$f['estado']] = (int) $f['n'];
+        }
+        $salida['total'] += (int) $f['n'];
+    }
+
+    return $salida;
+}
+
+/**
  * Q6. Top 5 receptores por neto del periodo, agrupando por RUT NORMALIZADO.
  *
  * La expresion SQL replica exactamente a Rut::normalizar():
@@ -21811,6 +21892,16 @@ function handlePanelGet(): void
             ),
             'estados'     => dashDistribucionEstado($pdo, $rut, $periodo['desde'], $periodo['hasta']),
             'topClientes' => dashTopClientes($pdo, $cuentaId, $rut, $periodo['desde'], $periodo['hasta']),
+            // Correos a clientes del periodo. Si la consulta falla, la tarjeta
+            // no se muestra: el resto del dashboard no depende de ella.
+            'correos'     => (static function () use ($pdo, $cuentaId, $rut, $periodo): ?array {
+                try {
+                    return dashCorreosPeriodo($pdo, $cuentaId, $rut, $periodo['desde'], $periodo['hasta']);
+                } catch (Throwable $ex) {
+                    error_log('dashboard: no se pudo leer la cola de correos - ' . $ex->getMessage());
+                    return null;
+                }
+            })(),
             // LA CONTRAPARTIDA DE EXCLUIR: lo que se saco del total, con su
             // monto. Se calcula con la MISMA consulta y la MISMA funcion de
             // resumen que los KPI, solo que con el filtro invertido, asi que por

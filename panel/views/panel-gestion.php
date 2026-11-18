@@ -28,12 +28,22 @@
  *
  * El patron es el mismo <div class="tabla-scroll"> que ya usaban el detalle del
  * grafico y otras 15 vistas -- se copia tal cual, sin variantes.
+ *
+ * REDISENO (2026-11-18): cabecera con saludo y el selector de periodo como
+ * control segmentado; accesos rapidos ARRIBA como fichas con icono (antes al
+ * final, donde casi no se veian); "Estado de los documentos" deja de ser una
+ * tabla de codigos crudos: cada codigo sale con el nombre, color y grupo del
+ * catalogo datos/estados-sii.php (el mismo del panel de emision), una barra con
+ * su proporcion y un enlace al panel filtrado por ese estado y este periodo. Y
+ * una tarjeta nueva, "Correos a clientes" ($correos, dashCorreosPeriodo()),
+ * con lo que paso con el envio de los documentos del periodo. Ninguna cifra
+ * nueva es estimada.
  */
 $titulo    = 'Panel';
 // Raiz de la vista: partials/header.php la pone en el <body>. Es el mismo
 // mecanismo con el que login.php pide .auth-page, y la unica linea de markup
 // que cambia en esta entrega: el resto es CSS.
-$bodyClase = 'dash-page';
+$bodyClase = 'dash-page pagina-dashboard';
 /* Iconos de los encabezados de seccion. require_once porque partials/_nav.php,
    que incluye header.php un par de lineas mas abajo, tambien lo carga: una
    constante o funcion redeclarada es error fatal. */
@@ -62,13 +72,22 @@ $pintarDelta = static function (?array $d): string {
 };
 ?>
 
-<div class="dash-header">
-    <div>
-        <h1>Panel de gestion</h1>
-        <p class="dash-header__emisor">
-            <?= htmlspecialchars($contexto['razonSocial'] !== '' ? $contexto['razonSocial'] : 'Tu empresa'); ?>
-            <span class="dash-header__rut">RUT <?= htmlspecialchars($contexto['rut']); ?></span>
-        </p>
+<?php
+$hora    = (int) date('G');
+$saludo  = $hora < 12 ? 'Buenos dias' : ($hora < 20 ? 'Buenas tardes' : 'Buenas noches');
+$correos = $correos ?? null;
+?>
+<div class="pe-cabecera dg-cabecera">
+    <div class="pe-cabecera__titulo">
+        <span class="pe-cabecera__emblema" aria-hidden="true"><?= iconoSvg('dashboard', 24, ''); ?></span>
+        <div>
+            <p class="dg-saludo"><?= $saludo; ?></p>
+            <h1>Panel de gestion</h1>
+            <p class="dash-header__emisor">
+                <?= htmlspecialchars($contexto['razonSocial'] !== '' ? $contexto['razonSocial'] : 'Tu empresa'); ?>
+                <span class="dash-header__rut">RUT <?= htmlspecialchars($contexto['rut']); ?></span>
+            </p>
+        </div>
     </div>
     <nav class="dash-periodo" aria-label="Periodo del dashboard">
         <span class="dash-periodo__etiqueta">Periodo</span>
@@ -85,6 +104,19 @@ $pintarDelta = static function (?array $d): string {
     Mostrando <strong><?= htmlspecialchars($periodo['etiqueta']); ?></strong>.
     Comparado con <?= htmlspecialchars($periodo['prevEtiqueta']); ?>.
 </p>
+
+<?php /* ACCESOS RAPIDOS, arriba: lo que se viene a hacer al entrar. */ ?>
+<nav class="dg-accesos" aria-labelledby="titulo-accesos">
+    <h2 class="visualmente-oculto" id="titulo-accesos">Accesos rapidos</h2>
+    <ul>
+        <li><a class="dg-acceso dg-acceso--principal" href="/ventas/factura"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('factura', 20, ''); ?></span><span><strong>Emitir factura</strong><small>Documento al SII</small></span></a></li>
+        <li><a class="dg-acceso" href="/ventas/cotizaciones/nueva"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('informe-detalle', 20, ''); ?></span><span><strong>Nueva cotizacion</strong><small>Sin folio ni SII</small></span></a></li>
+        <li><a class="dg-acceso" href="/ventas/carga-masiva/adaptar"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('carga-masiva', 20, ''); ?></span><span><strong>Importar notas</strong><small>Desde un Excel</small></span></a></li>
+        <li><a class="dg-acceso" href="/ventas/panel-emision"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('panel-emision', 20, ''); ?></span><span><strong>Panel de emision</strong><small>Tus documentos</small></span></a></li>
+        <li><a class="dg-acceso" href="/ventas/correos"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('envio-correo', 20, ''); ?></span><span><strong>Envio de correos</strong><small>A tus clientes</small></span></a></li>
+        <li><a class="dg-acceso" href="/maestros/clientes"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('clientes', 20, ''); ?></span><span><strong>Clientes</strong><small>Tu maestro</small></span></a></li>
+    </ul>
+</nav>
 
 <?php if ($vacio): ?>
 
@@ -267,22 +299,47 @@ $pintarDelta = static function (?array $d): string {
         <?php if ($estados === []): ?>
             <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
         <?php else: ?>
-            <div class="tabla-scroll">
-                <table>
-                    <caption>Codigo de estado tal como lo devolvio el SII, sin interpretar.</caption>
-                    <thead>
-                        <tr><th scope="col">Estado</th><th scope="col" class="num">Documentos</th></tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($estados as $e): ?>
-                            <tr>
-                                <th scope="row"><code><?= htmlspecialchars($e['estado']); ?></code></th>
-                                <td class="num"><?= $fmtNum($e['documentos']); ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+            <?php
+            // Cada codigo con su nombre, tono y grupo del catalogo compartido.
+            // Un codigo que el catalogo no conoce sale crudo y en neutro.
+            $dgCatalogo = require __DIR__ . '/../datos/estados-sii.php';
+            $dgPorCodigo = [];
+            foreach ($dgCatalogo['estados'] as $x) {
+                $dgPorCodigo[(string) ($x['codigo'] ?? '')] = $x + ['tono' => $dgCatalogo['grupos'][$x['grupo']]['tono']];
+            }
+            $dgTotal = array_sum(array_column($estados, 'documentos'));
+            $dgPorTono = [];
+            foreach ($estados as $fila) {
+                $t = $dgPorCodigo[$fila['estado']]['tono'] ?? 'neutro';
+                $dgPorTono[$t] = ($dgPorTono[$t] ?? 0) + $fila['documentos'];
+            }
+            ?>
+            <div class="dg-estados__barra" role="img" aria-label="Reparto de los <?= $dgTotal; ?> documentos del periodo por estado">
+                <?php foreach (['exito', 'proceso', 'alerta', 'error', 'neutro'] as $t): ?>
+                    <?php if (! empty($dgPorTono[$t])): ?>
+                        <span class="dg-tono--<?= $t; ?>" style="--ancho: <?= round($dgPorTono[$t] * 100 / max(1, $dgTotal), 1); ?>%"></span>
+                    <?php endif; ?>
+                <?php endforeach; ?>
             </div>
+            <ul class="dg-estados">
+                <?php foreach ($estados as $fila): ?>
+                    <?php
+                    $info = $dgPorCodigo[$fila['estado']] ?? null;
+                    $tono = $info['tono'] ?? 'neutro';
+                    $pct  = round($fila['documentos'] * 100 / max(1, $dgTotal));
+                    $url  = '/ventas/panel-emision?' . http_build_query(['desde' => $periodo['desde'], 'hasta' => $periodo['hasta'], 'estado' => $fila['estado']]);
+                    ?>
+                    <li>
+                        <a class="dg-estado" href="<?= htmlspecialchars($url); ?>"
+                           aria-label="<?= htmlspecialchars(($info['nombre'] ?? $fila['estado']) . ': ' . $fila['documentos'] . ' documentos. Ver en el panel de emision'); ?>">
+                            <span class="dg-estado__codigo dg-tono--<?= $tono; ?>"><?= htmlspecialchars($fila['estado'] !== '' ? $fila['estado'] : '-'); ?></span>
+                            <span class="dg-estado__nombre"><?= htmlspecialchars($info['nombre'] ?? 'Codigo sin descripcion'); ?></span>
+                            <span class="dg-estado__cifra"><?= $fmtNum($fila['documentos']); ?> <small><?= $pct; ?>%</small></span>
+                            <span class="dg-estado__pista" aria-hidden="true"><span class="dg-tono--<?= $tono; ?>" style="--ancho: <?= max(2, $pct); ?>%"></span></span>
+                        </a>
+                    </li>
+                <?php endforeach; ?>
+            </ul>
         <?php endif; ?>
         <p class="nota">El estado solo avanza cuando se consulta al SII desde el
         panel de emision: no hay un proceso automatico que lo actualice.</p>
@@ -323,29 +380,41 @@ $pintarDelta = static function (?array $d): string {
         <?php endif; ?>
     </section>
 
+    <?php if ($correos !== null): ?>
+        <?php
+        // CORREOS A CLIENTES del periodo (dashCorreosPeriodo()). Lo que pide
+        // accion -- error y sin destinatario -- va con su enlace.
+        $dgPct = $correos['total'] > 0 ? (int) round($correos['enviado'] * 100 / $correos['total']) : 0;
+        ?>
+        <section class="tarjeta dg-correos" aria-labelledby="titulo-correos">
+            <h2 class="dash-titulo" id="titulo-correos"><?= iconoSvg('envio-correo', 18, 'dash-titulo__icono'); ?>Correos a clientes</h2>
+            <?php if ($correos['total'] === 0): ?>
+                <p class="dash-vacio-inline">Ningun documento del periodo paso por el envio de correos.</p>
+            <?php else: ?>
+                <div class="dg-correos__cuerpo">
+                    <div class="dg-correos__anillo" role="img" aria-label="<?= $dgPct; ?> por ciento de los correos enviados" style="--pct: <?= $dgPct; ?>">
+                        <span><?= $dgPct; ?><small>%</small></span>
+                    </div>
+                    <div>
+                        <p class="dg-correos__titulo"><strong><?= $fmtNum($correos['enviado']); ?></strong> de <?= $fmtNum($correos['total']); ?> documentos llegaron por correo a su cliente.</p>
+                        <ul class="dg-correos__lista">
+                            <?php if ($correos['pendiente'] > 0): ?><li class="dg-tono--proceso"><?= $fmtNum($correos['pendiente']); ?> en cola</li><?php endif; ?>
+                            <?php if ($correos['sin_destinatario'] > 0): ?><li class="dg-tono--alerta"><a href="/ventas/correos?estado=sin_destinatario"><?= $fmtNum($correos['sin_destinatario']); ?> sin correo del cliente</a></li><?php endif; ?>
+                            <?php if ($correos['error'] > 0): ?><li class="dg-tono--error"><a href="/ventas/correos?estado=error"><?= $fmtNum($correos['error']); ?> con error</a></li><?php endif; ?>
+                        </ul>
+                        <a class="dg-enlace" href="/ventas/correos">Ver envio de correos <?= iconoSvg('flecha', 14, ''); ?></a>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </section>
+    <?php endif; ?>
+
 <?php endif; ?>
 
-<section class="accesos" aria-labelledby="titulo-accesos">
-    <h2 class="dash-titulo" id="titulo-accesos"><?= iconoSvg('accesos-rapidos', 18, 'dash-titulo__icono'); ?>Accesos rapidos</h2>
-    <ul class="accesos__lista">
-        <li><a href="/ventas/factura">Emitir factura</a></li>
-        <li><a href="/ventas/carga-masiva/adaptar">Importar notas de venta</a></li>
-        <li><a href="/ventas/panel-emision">Panel de emision</a></li>
-        <li><a href="/maestros/clientes">Clientes</a></li>
-    </ul>
-    <?php
-        /* VA AQUI Y NO EN .dash-header. Esa cabecera es un flex de DOS hijos con
-           justify-content:space-between (el titulo y el selector de periodo);
-           meterle un tercero recolocaria el selector, que es navegacion en uso.
-           Esta seccion es la ultima de la vista y es literalmente "lo que
-           puedes hacer": un enlace a los planes cabe sin mover nada de arriba.
-
-           Mismo .boton-secundario que en el login, para que el mismo boton no se
-           vea de dos formas segun la pantalla. Y misma pestana nueva, por el
-           mismo motivo: planes.html no tiene vuelta. */
-    ?>
-    <a class="boton-secundario accesos__planes" href="/planes.html"
-       target="_blank" rel="noopener">Ver planes</a>
-</section>
+<?php /* Los accesos rapidos subieron arriba; aqui queda el enlace a los planes.
+         Misma pestana nueva que en el login: planes.html no tiene vuelta. */ ?>
+<p class="dg-planes">
+    <a class="boton-secundario pe-boton" href="/planes.html" target="_blank" rel="noopener">Ver planes<span class="visualmente-oculto"> (se abre en otra pestana)</span></a>
+</p>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>

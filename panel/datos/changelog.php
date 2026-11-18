@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.20',
+        'titulo'  => 'Dashboard renovado y el switch "Solo aceptados" se recuerda',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El panel de emision recuerda si dejaste encendido "Solo aceptados": al volver, la lista sale como la dejaste.',
+            'El dashboard tiene accesos rapidos arriba (emitir factura, nueva cotizacion, importar notas, panel de emision, correos y clientes).',
+            '"Estado de los documentos" ahora muestra el nombre de cada estado con su color y cuanto representa del periodo; cada uno abre el panel de emision filtrado.',
+            'Nueva tarjeta "Correos a clientes": que parte de los documentos del periodo llego por correo, y cuales estan en cola, sin correo del cliente o con error.',
+            'Nuevo diseno de la cabecera, el selector de periodo, los indicadores y las tablas.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.19',
         'titulo'  => 'Panel de emision: fechas a la vista y switch "Solo aceptados"',
         'tag'     => 'frontend',

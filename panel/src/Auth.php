@@ -93,7 +93,9 @@ final class Auth
      * inyectarla, lo unico que consigue es que su propia cookie salga marcada
      * Secure. La cabecera solo puede ENDURECER, nunca relajar.
      */
-    private static function esHttps(): bool
+    // Publico desde 2026-11-18: lo usa tambien la cookie de preferencia del
+    // panel de emision (preferenciaSoloAceptados), con el mismo criterio.
+    public static function esHttps(): bool
     {
         $https = (string) ($_SERVER['HTTPS'] ?? '');
         if ($https !== '' && strtolower($https) !== 'off') {

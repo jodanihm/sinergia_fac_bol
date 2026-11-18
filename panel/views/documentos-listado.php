@@ -47,7 +47,8 @@
  * SWITCH "SOLO ACEPTADOS" (aceptados=1): muestra solo los estados del grupo
  * 'aceptado' del catalogo (EPR, DOK, RPR). Manda sobre el campo Estado, que se
  * deshabilita mientras esta encendido. Con JS se aplica al cambiarlo; sin JS,
- * al pulsar Filtrar.
+ * al pulsar Filtrar. SE RECUERDA EN UNA COOKIE (preferenciaSoloAceptados() en
+ * public/index.php): por eso todo enlace que lo apaga lleva aceptados=0.
  *
  * ESTADO: color, nombre e icono salen de datos/estados-sii.php, el mismo
  * catalogo de la Guia de estados (partials/_guia-estados-sii.php). Al pasar el
@@ -166,8 +167,15 @@ $hayFolio       = isset($filtros['folio']);
 /** Url del listado sin los filtros indicados (para el chip que los quita). */
 $sinFiltros = static function (array $quitar) use ($filtros): string {
     $resto = array_diff_key($filtros, array_flip($quitar));
+    // Quitar "Solo aceptados" tiene que decirlo (aceptados=0): sin el
+    // parametro, la cookie que recuerda el switch lo volveria a encender.
+    if (in_array('aceptados', $quitar, true)) {
+        $resto['aceptados'] = '0';
+    }
     return '/ventas/panel-emision' . ($resto === [] ? '' : '?' . http_build_query($resto));
 };
+/** "Limpiar filtros" apaga tambien el switch recordado. */
+$urlLimpiar = isset($filtros['aceptados']) ? '/ventas/panel-emision?aceptados=0' : '/ventas/panel-emision';
 
 // Los chips de filtros activos: [texto visible, campos que quita].
 $chips = [];
@@ -259,6 +267,10 @@ $valorHasta = (string) ($filtros['hasta'] ?? ($fechaDefecto ? $rangoMotor['hasta
     <span class="visualmente-oculto" id="ayuda-filtro-estado">El estado tal como lo guarda el sistema: enviado, o el codigo que respondio el SII.</span>
     <?php /* SWITCH "SOLO ACEPTADOS": un checkbox con role="switch". Encendido
              = aceptados=1 en la url. */ ?>
+    <?php /* El hidden va ANTES del checkbox: apagado viaja aceptados=0, encendido
+             viajan los dos y PHP se queda con el ultimo (1). Asi apagarlo tambien
+             se guarda en la cookie. */ ?>
+    <input type="hidden" name="aceptados" value="0">
     <label class="pe-switch" for="filtro-aceptados">
         <input type="checkbox" name="aceptados" value="1" id="filtro-aceptados" role="switch"
                aria-describedby="ayuda-aceptados"<?= $soloAceptados ? ' checked' : ''; ?>>
@@ -271,7 +283,7 @@ $valorHasta = (string) ($filtros['hasta'] ?? ($fechaDefecto ? $rangoMotor['hasta
     <div class="pe-filtros__acciones">
         <button type="submit" class="boton-principal pe-boton" id="filtrar"><?= iconoSvg('buscar', 16, ''); ?><span>Filtrar</span></button>
         <?php if ($hayFiltros): ?>
-            <a class="boton-texto" href="/ventas/panel-emision">Limpiar filtros</a>
+            <a class="boton-texto" href="<?= $urlLimpiar; ?>">Limpiar filtros</a>
         <?php endif; ?>
     </div>
 </form>
@@ -318,7 +330,7 @@ foreach ($items as $it) {
             <h2 class="estado-vacio__titulo">Ningun documento coincide con estos filtros</h2>
             <p>Prueba con otro rango de fechas, otro tipo o quita alguno de los filtros de arriba.</p>
             <p class="estado-vacio__acciones">
-                <a class="boton-secundario" href="/ventas/panel-emision">Limpiar filtros</a>
+                <a class="boton-secundario" href="<?= $urlLimpiar; ?>">Limpiar filtros</a>
             </p>
         <?php else: ?>
             <h2 class="estado-vacio__titulo">Todavia no emites documentos este mes</h2>
