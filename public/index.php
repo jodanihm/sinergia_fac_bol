@@ -923,7 +923,7 @@ function validarReferencias(array $referencias, string $p): void
 //  @return array{
 //      tipoDte:int, receptor:array, detalles:array, montosSonBrutos:bool,
 //      referencias:array, descuentoGlobalPct:?float, formaPago:?int,
-//      fechaVencimiento:?string, emailReceptor:?string
+//      fechaVencimiento:?string, fechaEmision:?string, emailReceptor:?string
 //  }
 // ===========================================================================
 function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLote = false): array
@@ -968,6 +968,7 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         'descuentoGlobalPct',
         'formaPago',
         'fechaVencimiento',
+        'fechaEmision',
     ];
     $clavesDesconocidas = array_diff(array_keys($body), $clavesConocidas);
     if ($clavesDesconocidas !== []) {
@@ -1209,6 +1210,32 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         );
     }
 
+    // --- fechaEmision (FchEmis): OPCIONAL. Si no viene, el motor pone la de hoy ---
+    //
+    // El DTO, el XML (DteXmlBuilder) y el timbre (TedBuilder) ya la soportaban;
+    // faltaba dejarla pasar por aqui. Se usa para emitir con una fecha distinta
+    // a la de hoy (anterior o posterior), a pedido del usuario del panel.
+    //
+    // EN LOTE SE RECHAZA, no se ignora: el lote fija UNA fecha para todos sus
+    // documentos (sus FchRef intra-lote dependen de eso) y descartarla en
+    // silencio emitiria con una fecha que el cliente no pidio.
+    $fechaEmision = $body['fechaEmision'] ?? null;
+    if ($fechaEmision !== null) {
+        if ($enLote) {
+            invalido("{$p}fechaEmision no esta soportada en POST /api/v1/dte/lote", "{$p}fechaEmision");
+        }
+        if (! is_string($fechaEmision) || ! validaFecha($fechaEmision)) {
+            invalido("{$p}fechaEmision debe ser una fecha AAAA-MM-DD valida", "{$p}fechaEmision");
+        }
+        // Un vencimiento anterior a la emision no tiene sentido para cobrar.
+        if (is_string($fechaVencimiento) && $fechaVencimiento < $fechaEmision) {
+            invalido(
+                "{$p}fechaVencimiento no puede ser anterior a la fecha de emision",
+                "{$p}fechaVencimiento",
+            );
+        }
+    }
+
     $montosSonBrutos = (bool) ($body['montosSonBrutos'] ?? false);
     $referencias     = is_array($body['referencias'] ?? null) ? $body['referencias'] : [];
 
@@ -1295,6 +1322,7 @@ function validarDocumentoDte(array $body, string $prefijoCampo = '', bool $enLot
         'descuentoGlobalPct' => $descuentoGlobalPct !== null ? (float) $descuentoGlobalPct : null,
         'formaPago'          => $formaPago !== null ? (int) $formaPago : null,
         'fechaVencimiento'   => $fechaVencimiento,
+        'fechaEmision'       => $fechaEmision,
         // Ya normalizado: string valido o null. Solo se usa para encolar el correo.
         'emailReceptor'      => $emailReceptor,
     ];
@@ -1343,6 +1371,7 @@ function emitirDte(array $tenant): never
         descuentoGlobalPct: $v['descuentoGlobalPct'],
         formaPago:       $v['formaPago'],
         fechaVencimiento: $v['fechaVencimiento'] !== null ? new DateTimeImmutable($v['fechaVencimiento']) : null,
+        fechaEmision:    $v['fechaEmision'] !== null ? new DateTimeImmutable($v['fechaEmision']) : null,
     );
 
     // --- Ambiente y emisor: SOLO del tenant autenticado ---

@@ -22,8 +22,12 @@
  * Si cambia la formula del motor, cambia tambien la de aqui.
  *
  * LO QUE ESTA PANTALLA NO PUEDE PROMETER, y por eso no aparece:
- *   - Fecha de emision, forma de pago, vencimiento y moneda: no existen en el
- *     payload ni en el motor. La fecha la pone el motor al emitir.
+ *   - Moneda: no existe en el payload ni en el motor.
+ *
+ * FECHA DE EMISION (2026-11-18). Campo #fecha-emision (name fechaEmision),
+ * prellenado con hoy. Si se deja en hoy no viaja y el motor pone la fecha como
+ * siempre; si se cambia, va como FchEmis del XML y del timbre. No se ofrece en
+ * boleta (39), que va por otro camino.
  *   - Descripcion y descuento por linea: el backend los lee, pero no forman
  *     parte de la interfaz autorizada todavia.
  *
@@ -99,6 +103,7 @@ $mapaCampos = [
     'receptor.email'        => 'receptor-email',
     'formaPago'             => 'forma-pago',
     'fechaVencimiento'      => 'fecha-vencimiento',
+    'fechaEmision'          => 'fecha-emision',
     'descuentoGlobalPct'    => 'descuento-global',
     'referencias'           => 'ref-tipo',
     'referencias[0].tipoDocumento' => 'ref-tipo',
@@ -131,6 +136,7 @@ $etiquetaError = match (true) {
         'receptor-rut' => 'RUT', 'receptor-razonSocial' => 'Razon social', 'receptor-giro' => 'Giro',
         'receptor-direccion' => 'Direccion', 'receptor-comuna' => 'Comuna', 'receptor-email' => 'Email',
         'forma-pago' => 'Forma de pago', 'fecha-vencimiento' => 'Fecha de vencimiento',
+        'fecha-emision' => 'Fecha de emision',
         'descuento-global' => 'Descuento global', 'ref-tipo' => 'Tipo de documento referenciado',
         'ref-folio' => 'Folio referenciado', 'ref-fecha' => 'Fecha del documento referenciado',
         'ref-codigo' => 'Codigo de referencia', 'ref-razon' => 'Razon de la referencia',
@@ -421,6 +427,27 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
             <section class="tarjeta" aria-labelledby="titulo-condiciones">
                 <h2 id="titulo-condiciones"><?= $emPaso('titulo-condiciones'); ?>Condiciones del documento</h2>
                 <div class="form-grid form-grid--1">
+                    <?php if (! $esBoleta): ?>
+                        <?php
+                        /* FECHA DE EMISION. Prellenada con hoy: dejarla asi es lo
+                           de siempre (no viaja y el motor pone la de hoy). Si se
+                           cambia, el documento sale con esa fecha (FchEmis). El
+                           aviso de abajo aparece solo cuando no es hoy. */
+                        $feHoy = date('Y-m-d');
+                        $feVal = (string) ($form['fechaEmision'] ?? '');
+                        $feVal = $feVal !== '' ? $feVal : $feHoy;
+                        ?>
+                        <div class="<?= $cc('fecha-emision', 'form-campo--corto'); ?>">
+                            <label for="fecha-emision">Fecha de emision</label>
+                            <input type="date" name="fechaEmision" id="fecha-emision" data-hoy="<?= $feHoy; ?>"
+                                   value="<?= htmlspecialchars($feVal); ?>"
+                                   aria-describedby="error-fecha-emision ayuda-fecha-emision"<?= $inv('fecha-emision'); ?>>
+                            <?= $campoError('fecha-emision'); ?>
+                            <small class="form-ayuda" id="ayuda-fecha-emision" data-ayuda-hoy="Por defecto, hoy. Cambiala si el documento debe llevar otra fecha.">
+                                <?= $feVal === $feHoy ? 'Por defecto, hoy. Cambiala si el documento debe llevar otra fecha.' : 'Ojo: el documento saldra con fecha distinta a la de hoy.'; ?>
+                            </small>
+                        </div>
+                    <?php endif; ?>
                     <?php if ($esFactura): ?>
                         <?php
                         /* FORMA DE PAGO. SIN VALOR POR DEFECTO, y no es un descuido:
@@ -1410,7 +1437,13 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
             dlg.querySelector('[data-confirmar-resumen]').textContent =
                 'Receptor: ' + (rs || (r ? r : 'Consumidor Final')) + (r && rs ? ' (' + r + ')' : '') + '. ' +
                 lineas + (lineas === 1 ? ' linea' : ' lineas') + ' de detalle.' +
-                (window.emisionTotales ? ' Total a pagar: ' + window.emisionTotales().total.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' }) + '.' : '');
+                (window.emisionTotales ? ' Total a pagar: ' + window.emisionTotales().total.toLocaleString('es-CL', { style: 'currency', currency: 'CLP' }) + '.' : '') +
+                (function () {
+                    var fe = document.getElementById('fecha-emision');
+                    if (!fe || !fe.value || fe.value === fe.getAttribute('data-hoy')) { return ''; }
+                    var p = fe.value.split('-');
+                    return ' Fecha de emision: ' + p[2] + '-' + p[1] + '-' + p[0] + ' (no es hoy).';
+                })();
             dlg.returnValue = '';
             dlg.showModal();
             return;
@@ -1501,6 +1534,21 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
     if (primero) { primero.focus(); }
 })();
 </script>
+
+<?php if (! $esBoleta): ?>
+<script>
+// AVISO DE FECHA DE EMISION DISTINTA A HOY: solo cambia el texto de ayuda.
+(function () {
+    var fe = document.getElementById('fecha-emision');
+    var ayuda = document.getElementById('ayuda-fecha-emision');
+    if (!fe || !ayuda) { return; }
+    fe.addEventListener('change', function () {
+        var esHoy = !fe.value || fe.value === fe.getAttribute('data-hoy');
+        ayuda.textContent = esHoy ? ayuda.getAttribute('data-ayuda-hoy') : 'Ojo: el documento saldra con fecha distinta a la de hoy.';
+    });
+})();
+</script>
+<?php endif; ?>
 
 <?php if ($esFactura): ?>
 <script>

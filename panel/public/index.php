@@ -5447,6 +5447,16 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
         }
     }
 
+    // FECHA DE EMISION (FchEmis). Opcional: vacia o igual a hoy NO se manda y el
+    // motor pone la de hoy, como siempre. Solo para los tipos que pasan por
+    // /api/v1/dte (la boleta 39 va por otro camino y no ofrece el campo).
+    if (in_array($tipoDte, [33, 34, 61, 56], true)) {
+        $fe = trim((string) ($post['fechaEmision'] ?? ''));
+        if ($fe !== '' && $fe !== date('Y-m-d')) {
+            $doc['fechaEmision'] = $fe;
+        }
+    }
+
     $dg = trim((string) ($post['descuentoGlobalPct'] ?? ''));
     if ($dg !== '' && is_numeric($dg)) {
         $doc['descuentoGlobalPct'] = (float) $dg;
