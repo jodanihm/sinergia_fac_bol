@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.17',
+        'titulo'  => 'Pantalla de carga con porcentaje al emitir',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al confirmar la emision aparece una pantalla de carga con un anillo y el porcentaje de avance, para que se vea que el sistema esta trabajando.',
+            'Muestra en que etapa va: validando los datos, asignando el folio, firmando, enviando al SII y esperando su respuesta.',
+            'El porcentaje es una estimacion por tiempo (el SII no informa avance intermedio) y llega a 100% solo cuando la respuesta ya esta lista.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.16',
         'titulo'  => 'Formulario de emision renovado',
         'tag'     => 'frontend',

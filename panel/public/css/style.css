@@ -6305,3 +6305,131 @@ html.saliendo .salida__barra span { animation: salida-barra var(--salida-ms, 110
     .pagina-emision .tabla-editable .quitar-linea:hover,
     .pagina-emision .em-barra .em-barra__emitir:hover { transform: none; }
 }
+
+/* --- Carga de la emision con porcentaje estimado (#em-carga) --------------
+   Capa a pantalla completa mientras el motor emite. Ver el comentario en
+   emision-form.php: el % es una estimacion por tiempo y solo llega a 100
+   cuando la respuesta empieza a llegar. */
+html.em-cargando { overflow: hidden; }
+.em-carga {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--esp-4);
+    background: radial-gradient(60% 60% at 50% 45%, rgba(0, 58, 99, 0.45), rgba(0, 20, 34, 0.7));
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    opacity: 0;
+    transition: opacity 260ms ease;
+}
+.em-carga[hidden] { display: none; }
+.em-carga--visible { opacity: 1; }
+.em-carga__tarjeta {
+    width: min(25rem, 100%);
+    padding: var(--esp-6, 2rem) var(--esp-5) var(--esp-5);
+    border-radius: 24px;
+    background: #fff;
+    box-shadow: 0 30px 80px -20px rgba(0, 20, 40, 0.6);
+    text-align: center;
+    transform: translateY(16px) scale(0.95);
+    transition: transform 480ms cubic-bezier(.16, 1, .3, 1);
+}
+.em-carga__tarjeta:focus { outline: none; }
+.em-carga--visible .em-carga__tarjeta { transform: none; }
+
+/* Anillo con el porcentaje en el centro. */
+.em-carga__anillo { position: relative; width: 132px; height: 132px; margin: 0 auto var(--esp-4); }
+.em-carga__anillo svg { display: block; transform: rotate(-90deg); }
+.em-carga__pista { fill: none; stroke: #e8edf3; stroke-width: 9; }
+.em-carga__arco {
+    fill: none;
+    stroke: var(--color-primario);
+    stroke-width: 9;
+    stroke-linecap: round;
+    stroke-dasharray: 100;
+    stroke-dashoffset: 100;
+    transition: stroke-dashoffset 300ms linear;
+    filter: drop-shadow(0 0 6px rgba(0, 97, 160, 0.35));
+}
+.em-carga__pct {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.2rem;
+    font-weight: 750;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-marino);
+}
+.em-carga__pct small { margin-left: 2px; font-size: 1rem; font-weight: 700; color: var(--color-texto-tenue); }
+/* Halo que respira detras del anillo: senal de que sigue trabajando. */
+.em-carga__anillo::before {
+    content: "";
+    position: absolute;
+    inset: 10px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(0, 97, 160, 0.12), transparent 70%);
+    animation: em-respira 1.8s ease-in-out infinite;
+}
+@keyframes em-respira { 50% { transform: scale(1.12); opacity: 0.5; } }
+
+.em-carga__titulo { margin: 0; font-size: var(--txt-lg); font-weight: 700; color: var(--color-marino); }
+.em-carga__etapa { margin: 4px 0 var(--esp-3); min-height: 1.4em; font-size: var(--txt-sm); font-weight: 600; color: var(--color-primario); }
+
+.em-carga__barra { height: 6px; overflow: hidden; border-radius: var(--radio-pill); background: #e8edf3; }
+.em-carga__barra span {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, var(--color-primario), #6366f1);
+    background-size: 200% 100%;
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 300ms linear;
+    animation: lg-barra-brillo 1.4s linear infinite;
+}
+
+.em-carga__pasos { display: grid; gap: 6px; margin: var(--esp-4) 0 0; padding: 0; list-style: none; text-align: left; }
+.em-carga__pasos li {
+    position: relative;
+    padding-left: 1.75rem;
+    font-size: var(--txt-sm);
+    color: var(--color-texto-tenue);
+    transition: color 200ms ease;
+}
+.em-carga__pasos li::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 1.1rem;
+    height: 1.1rem;
+    border: 2px solid #d6dee8;
+    border-radius: 50%;
+    box-sizing: border-box;
+    transform: translateY(-50%);
+    transition: background-color 200ms ease, border-color 200ms ease;
+}
+.em-carga__paso--actual { font-weight: 600; color: var(--color-marino) !important; }
+.em-carga__paso--actual::before {
+    border-color: var(--color-primario) !important;
+    border-top-color: transparent !important;
+    animation: lg-gira 800ms linear infinite;
+}
+.em-carga__paso--hecho { color: var(--color-exito) !important; }
+.em-carga__paso--hecho::before {
+    border-color: var(--color-exito) !important;
+    background: var(--color-exito) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'/%3E%3C/svg%3E") center / 70% no-repeat;
+}
+@keyframes lg-gira-centro { to { transform: translateY(-50%) rotate(360deg); } }
+.em-carga__paso--actual::before { animation-name: lg-gira-centro; }
+.em-carga__nota { margin: var(--esp-4) 0 0; font-size: var(--txt-xs); line-height: 1.5; color: var(--color-texto-tenue); }
+
+@media (prefers-reduced-motion: reduce) {
+    .em-carga, .em-carga__tarjeta, .em-carga__arco, .em-carga__barra span { transition: none; }
+    .em-carga__anillo::before, .em-carga__barra span, .em-carga__paso--actual::before { animation: none; }
+}

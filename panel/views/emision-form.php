@@ -734,6 +734,48 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
     </form>
 </dialog>
 
+<?php
+/* CARGA DE LA EMISION. Aparece en el mismo instante en que se envia el
+   formulario ya confirmado, y queda hasta que llega la respuesta (la pagina de
+   resultado o el re-render con el error).
+
+   EL PORCENTAJE ES UNA ESTIMACION, Y LO DICE. El motor emite en UNA sola
+   peticion (validar, tomar folio del CAF, armar y firmar, autenticarse y enviar
+   al SII, guardar) y no informa avance intermedio. El % avanza con el tiempo
+   por una curva que se frena (95 * (1 - e^(-t/4s))) y NUNCA llega a 100 por si
+   solo: el 100 se pinta recien cuando la respuesta empieza a llegar
+   (pagehide). Las etapas siguen el orden real del motor, pero sus tiempos son
+   aproximados.
+
+   Para lectores de pantalla: role="progressbar" con aria-valuetext que dice
+   "estimado", y el cambio de etapa se anuncia en una region viva. */
+?>
+<div class="em-carga" id="em-carga" hidden>
+    <div class="em-carga__tarjeta" role="dialog" aria-modal="true" aria-labelledby="em-carga-titulo" tabindex="-1">
+        <div class="em-carga__anillo" aria-hidden="true">
+            <svg viewBox="0 0 120 120" width="132" height="132" focusable="false">
+                <circle class="em-carga__pista" cx="60" cy="60" r="52"/>
+                <circle class="em-carga__arco" cx="60" cy="60" r="52" pathLength="100" data-em-arco/>
+            </svg>
+            <span class="em-carga__pct"><span data-em-pct>0</span><small>%</small></span>
+        </div>
+        <p class="em-carga__titulo" id="em-carga-titulo">Emitiendo <?= htmlspecialchars($docConArticulo); ?></p>
+        <p class="em-carga__etapa" data-em-etapa aria-live="polite">Validando los datos</p>
+        <div class="em-carga__barra" role="progressbar" aria-label="Avance estimado de la emision"
+             aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-valuetext="0% estimado" data-em-barra>
+            <span data-em-relleno></span>
+        </div>
+        <ol class="em-carga__pasos">
+            <li data-em-paso="0">Validando los datos</li>
+            <li data-em-paso="1">Asignando el folio</li>
+            <li data-em-paso="2">Firmando el documento</li>
+            <li data-em-paso="3">Enviando al SII</li>
+            <li data-em-paso="4">Esperando la respuesta del SII</li>
+        </ol>
+        <p class="em-carga__nota">No cierres esta pagina ni vuelvas a emitir. El porcentaje es una estimacion: el SII puede tardar hasta un minuto.</p>
+    </div>
+</div>
+
 <?php /* MODAL DE BUSQUEDA DE CLIENTES (js/selector-clientes.js). Fuera de
          #form-emision a proposito: Enter en su buscador no puede enviar el
          documento, y sus campos no viajan en el POST. */ ?>
@@ -1376,6 +1418,7 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
         confirmado = false;
 
         enviando = true;
+        cargaIniciar();
         umbral = setTimeout(function () { ocupado(true); }, 300);
         largo = setTimeout(function () {
             espera.hidden = false;
@@ -1394,8 +1437,63 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
         });
     }
 
+    /* CARGA CON PORCENTAJE ESTIMADO -- ver el comentario de #em-carga. */
+    var carga = document.getElementById('em-carga');
+    var cargaTimer = null;
+    var ETAPAS = [
+        [0, 'Validando los datos'],
+        [12, 'Asignando el folio'],
+        [30, 'Firmando el documento'],
+        [55, 'Enviando al SII'],
+        [85, 'Esperando la respuesta del SII']
+    ];
+    function cargaPintar(pct) {
+        var n = Math.round(pct);
+        carga.querySelector('[data-em-pct]').textContent = n;
+        carga.querySelector('[data-em-relleno]').style.transform = 'scaleX(' + (pct / 100) + ')';
+        carga.querySelector('[data-em-arco]').style.strokeDashoffset = String(100 - pct);
+        var barra = carga.querySelector('[data-em-barra]');
+        barra.setAttribute('aria-valuenow', String(n));
+        barra.setAttribute('aria-valuetext', n + '% estimado');
+        var actual = 0;
+        for (var i = 0; i < ETAPAS.length; i++) { if (pct >= ETAPAS[i][0]) { actual = i; } }
+        var etapa = carga.querySelector('[data-em-etapa]');
+        var texto = pct >= 100 ? 'Listo, cargando el resultado' : ETAPAS[actual][1];
+        if (etapa.textContent !== texto) { etapa.textContent = texto; }
+        Array.prototype.forEach.call(carga.querySelectorAll('[data-em-paso]'), function (li) {
+            var k = Number(li.getAttribute('data-em-paso'));
+            li.classList.toggle('em-carga__paso--hecho', pct >= 100 || k < actual);
+            li.classList.toggle('em-carga__paso--actual', pct < 100 && k === actual);
+        });
+    }
+    function cargaIniciar() {
+        if (!carga) { return; }
+        var inicio = performance.now();
+        carga.hidden = false;
+        document.documentElement.classList.add('em-cargando');
+        requestAnimationFrame(function () { carga.classList.add('em-carga--visible'); });
+        carga.querySelector('.em-carga__tarjeta').focus({ preventScroll: true });
+        cargaPintar(0);
+        clearInterval(cargaTimer);
+        cargaTimer = setInterval(function () {
+            var t = performance.now() - inicio;
+            cargaPintar(95 * (1 - Math.exp(-t / 4000)));
+        }, 120);
+    }
+    function cargaTerminar() {
+        if (!carga) { return; }
+        clearInterval(cargaTimer);
+        carga.classList.remove('em-carga--visible');
+        carga.hidden = true;
+        document.documentElement.classList.remove('em-cargando');
+    }
+    // La respuesta empieza a llegar: recien ahi se pinta el 100.
+    window.addEventListener('pagehide', function () {
+        if (carga && !carga.hidden) { clearInterval(cargaTimer); cargaPintar(100); }
+    });
+
     window.addEventListener('pageshow', function (ev) {
-        if (ev.persisted) { enviando = false; confirmado = false; ocupado(false); }
+        if (ev.persisted) { enviando = false; confirmado = false; ocupado(false); cargaTerminar(); }
     });
 
     // Tras un 422 del motor, el foco va directo al control que fallo.
