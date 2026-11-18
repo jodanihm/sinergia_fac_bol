@@ -6293,11 +6293,42 @@ function handleDocumentoDetalleGet(int $tipoDte, int $folio): void
         }
     }
 
+    // ENVIO POR CORREO AL CLIENTE (cola dte_envio_correo, migracion 024). La
+    // cola es del panel, asi que se lee DIRECTO, igual que en
+    // handleCorreosListadoGet(). Se busca por la clave natural del documento
+    // (emisor + ambiente + tipo + folio, el uq_emitido de dte_emitido) y
+    // acotado por cuenta_id en el WHERE: un folio de otra cuenta no aparece.
+    // null = el documento nunca se encolo (p. ej. emitido antes de la cola).
+    // Un fallo aqui NO tumba la ficha: se avisa en la tarjeta del correo.
+    $correo      = null;
+    $errorCorreo = false;
+    if ($documento !== null) {
+        try {
+            $stmt = $pdo->prepare(
+                'SELECT q.id, q.destinatario, q.estado, q.intentos, q.ultimo_error, q.enviado_at, '
+                . '       q.created_at, q.updated_at, p.estado AS pago_estado '
+                . 'FROM dte_envio_correo q JOIN dte_emitido e ON e.id = q.dte_emitido_id '
+                // Cobro en linea: con el link de pago 'pendiente' el correo
+                // espera al link (mismo criterio que la lista de correos).
+                . 'LEFT JOIN dte_pago_link p ON p.dte_emitido_id = q.dte_emitido_id '
+                . "WHERE q.cuenta_id = :c AND e.rut_emisor = :r AND e.ambiente = 'produccion' "
+                . '  AND e.tipo_dte = :t AND e.folio = :f LIMIT 1'
+            );
+            $stmt->execute([':c' => $cuentaId, ':r' => $rutEmisor, ':t' => $tipoDte, ':f' => $folio]);
+            $correo = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        } catch (Throwable $e) {
+            error_log('panel documentos: fallo al leer el envio por correo - ' . $e->getMessage());
+            $errorCorreo = true;
+        }
+    }
+
     vista('documento-detalle', [
         'tipoDte'    => $tipoDte,
         'folio'      => $folio,
         'documento'  => $documento,
         'errorMotor' => $errorMotor,
+        'correo'      => $correo,
+        'errorCorreo' => $errorCorreo,
         'flash'      => flashTomar(),
         'navActivo'  => 'ventas.panel-emision',
     ]);
@@ -7016,6 +7047,19 @@ function handleCorreosListadoGet(): void
 }
 
 /**
+ * A donde volver despues de una accion sobre UN envio de correo. Por defecto la
+ * lista de correos; si el formulario viene de la ficha de un documento, trae
+ * volver=/ventas/panel-emision/T/F y se vuelve ahi. Solo se acepta ESA forma
+ * exacta (ruta local, sin host ni query): cualquier otro valor se ignora, asi
+ * que el campo no sirve para redirigir afuera.
+ */
+function destinoTrasAccionCorreo(): string
+{
+    $volver = (string) ($_POST['volver'] ?? '');
+    return preg_match('#^/ventas/panel-emision/\d+/\d+$#', $volver) === 1 ? $volver : '/ventas/correos';
+}
+
+/**
  * Devuelve una fila a la cola para que el runner la vuelva a tomar.
  *
  * POR QUE TAMBIEN RESETEA intentos, y no solo el estado: el runner toma las
@@ -7052,7 +7096,7 @@ function handleCorreoReintentarPost(int $envioId): void
         flashSet('error', "No se pudo reintentar el envio {$envioId}.");
     }
 
-    redirigirPrg('/ventas/correos');
+    redirigirPrg(destinoTrasAccionCorreo());
 }
 
 /**
@@ -7217,7 +7261,7 @@ function handleCorreoBuscarDestinatarioPost(int $envioId): void
 
     if ($fila === false) {
         flashSet('error', 'No pudimos buscar el correo de ese envio. Intentalo de nuevo en un momento.');
-        redirigirPrg('/ventas/correos');
+        redirigirPrg(destinoTrasAccionCorreo());
     }
 
     $r     = reresolverDestinatarios($pdo, $cuentaId, [$fila]);
@@ -7241,7 +7285,7 @@ function handleCorreoBuscarDestinatarioPost(int $envioId): void
         ));
     }
 
-    redirigirPrg('/ventas/correos');
+    redirigirPrg(destinoTrasAccionCorreo());
 }
 
 /**

@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.11',
+        'titulo'  => 'Ficha del documento renovada y con el estado del correo al cliente',
+        'tag'     => 'frontend',
+        'items'   => [
+            'La ficha de cada documento muestra ahora si el correo le llego al cliente: enviado (con fecha y hora), en cola, esperando el link de pago, sin correo del cliente o con error, a que direccion y cuantos intentos lleva.',
+            'Desde la misma ficha se puede reintentar un correo que fallo o buscar el correo del cliente cuando no lo tenia, y se vuelve a la ficha.',
+            'El estado en el SII se ve con su color, que significa y que hacer, igual que en el listado y la Guia de estados.',
+            'Si el SII rechazo el documento, un aviso arriba ofrece rehacerlo con los mismos datos.',
+            'Nuevo diseno: total destacado, receptor, linea de tiempo del envio y opciones de correccion mas claras.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.10',
         'titulo'  => 'Panel de emision: boton Rehacer al costado derecho y efectos al pasar el mouse corregidos',
         'tag'     => 'frontend',
