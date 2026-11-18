@@ -72,6 +72,13 @@ $jsContadorVersion = @filemtime(__DIR__ . '/../../public/js/contador-caracteres.
 $jsBuscadorVersion = @filemtime(__DIR__ . '/../../public/js/buscador-clientes.js');
 ?>
 <script src="/js/buscador-clientes.js<?= $jsBuscadorVersion ? '?v=' . $jsBuscadorVersion : ''; ?>" defer></script>
+<?php if ($panelAutenticado):
+// Despedida al cerrar sesion (capa animada antes de ir a /logout). Solo con
+// sesion: sin ella no hay enlace de salida que interceptar.
+$jsSalidaVersion = @filemtime(__DIR__ . '/../../public/js/cerrar-sesion.js');
+?>
+<script src="/js/cerrar-sesion.js<?= $jsSalidaVersion ? '?v=' . $jsSalidaVersion : ''; ?>" defer></script>
+<?php endif; ?>
 <?php if ($panelAutenticado) { require __DIR__ . '/_arranque.php'; } ?>
 </head>
 <body class="<?= htmlspecialchars($bodyClaseExtra); ?>">

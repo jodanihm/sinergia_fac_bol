@@ -5929,3 +5929,106 @@ a.lg-boton:hover { color: #fff; }
     .lg-paso-icono { animation: none; }
     .lg-fuerza span { transition: none; }
 }
+
+/* ==========================================================================
+   Despedida al cerrar sesion (public/js/cerrar-sesion.js)
+   --------------------------------------------------------------------------
+   html.saliendo: la aplicacion se desenfoca y se aleja; .salida es la capa con
+   la tarjeta centrada. --salida-ms (lo pone el script) es lo que tarda la barra
+   en llenarse, el mismo tiempo que espera antes de ir a /logout.
+   ========================================================================== */
+html.saliendo body.con-sidebar > .sidebar,
+html.saliendo body.con-sidebar > main {
+    filter: blur(6px) saturate(0.8);
+    opacity: 0.55;
+    transform: scale(0.97);
+    transition: filter 600ms ease, opacity 600ms ease, transform 700ms cubic-bezier(.16, 1, .3, 1);
+}
+.salida {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--esp-4);
+    background: radial-gradient(60% 60% at 50% 45%, rgba(0, 58, 99, 0.35), rgba(0, 28, 46, 0.6));
+    opacity: 0;
+    transition: opacity 320ms ease;
+}
+html.saliendo .salida { opacity: 1; }
+.salida__tarjeta {
+    width: min(22rem, 100%);
+    padding: var(--esp-5) var(--esp-5) var(--esp-4);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 30px 70px -20px rgba(0, 20, 40, 0.55);
+    text-align: center;
+    transform: translateY(18px) scale(0.94);
+    opacity: 0;
+    transition: transform 520ms cubic-bezier(.16, 1, .3, 1) 60ms, opacity 360ms ease 60ms;
+}
+html.saliendo .salida__tarjeta { transform: none; opacity: 1; }
+.salida__mascota {
+    display: block;
+    width: 120px;
+    height: 120px;
+    margin: -4.5rem auto var(--esp-2);
+    filter: drop-shadow(0 14px 18px rgba(0, 44, 72, 0.3));
+    transform-origin: 50% 90%;
+    animation: salida-saluda 900ms ease-in-out 200ms 2;
+}
+@keyframes salida-saluda {
+    0%, 100% { transform: rotate(0deg); }
+    25%      { transform: rotate(-8deg); }
+    75%      { transform: rotate(8deg); }
+}
+.salida__titulo { margin: 0; font-size: var(--txt-lg); font-weight: 700; letter-spacing: -0.01em; color: var(--color-marino); }
+.salida__texto { margin: 4px 0 var(--esp-4); font-size: var(--txt-sm); color: var(--color-texto-medio); }
+.salida__barra { height: 4px; overflow: hidden; border-radius: var(--radio-pill); background: #e6ebf2; }
+.salida__barra span {
+    display: block;
+    height: 100%;
+    background: linear-gradient(90deg, #38bdf8, var(--color-primario), #6366f1);
+    transform: scaleX(0);
+    transform-origin: left;
+}
+html.saliendo .salida__barra span { animation: salida-barra var(--salida-ms, 1100ms) cubic-bezier(.4, 0, .2, 1) forwards; }
+@keyframes salida-barra { to { transform: scaleX(1); } }
+
+/* Login: despedida al llegar desde /logout. */
+.lg-despedida {
+    display: flex;
+    align-items: center;
+    gap: var(--esp-3);
+    margin: 0 0 var(--esp-4);
+    padding: var(--esp-3);
+    border: 1px solid #cfe0ec;
+    border-radius: 14px;
+    background: linear-gradient(100deg, #eef6fc, #fff 85%);
+    animation: lg-sube 600ms cubic-bezier(.16, 1, .3, 1) 200ms both;
+}
+.lg-despedida div { display: flex; flex-direction: column; }
+.lg-despedida strong { font-size: var(--txt-base); color: var(--color-marino); }
+.lg-despedida span:not(.lg-despedida__mano) { font-size: var(--txt-xs); color: var(--color-texto-medio); }
+.lg-despedida__mano {
+    display: inline-flex;
+    flex: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 4px 12px -6px rgba(0, 97, 160, 0.5);
+    color: var(--color-primario);
+    transform-origin: 70% 80%;
+    animation: salida-saluda 900ms ease-in-out 600ms 2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.saliendo body.con-sidebar > .sidebar,
+    html.saliendo body.con-sidebar > main { transition: none; transform: none; }
+    .salida, .salida__tarjeta { transition: none; }
+    .salida__mascota, .lg-despedida, .lg-despedida__mano { animation: none; }
+}

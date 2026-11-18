@@ -12752,7 +12752,8 @@ if ($metodo === 'POST' && $ruta === '/login') {
 
 if ($metodo === 'GET' && $ruta === '/logout') {
     Auth::logout();
-    redirigir('/login');
+    // ?sesion=cerrada solo enciende la despedida del login (texto fijo).
+    redirigir('/login?sesion=cerrada');
 }
 
 // --- Activacion de invitacion (M6, publica, sin sesion) ---

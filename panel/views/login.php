@@ -98,6 +98,19 @@ $hayError       = ! empty($error);
                 <h1 id="titulo-login" class="lg-titulo">Bienvenido de vuelta</h1>
                 <p class="lg-bajada">Ingresa a tu plataforma de facturacion Sinergia.</p>
 
+                <?php if (! $hayError && ($_GET['sesion'] ?? '') === 'cerrada'): ?>
+                    <?php /* Llega aqui desde /logout. Texto fijo segun un valor fijo de la url. */ ?>
+                    <div class="lg-despedida" role="status">
+                        <span class="lg-despedida__mano" aria-hidden="true">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M18 11V6a2 2 0 0 0-4 0v5"/><path d="M14 10V4a2 2 0 0 0-4 0v6"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg>
+                        </span>
+                        <div>
+                            <strong>Cerraste sesion. Hasta pronto!</strong>
+                            <span>Tu sesion quedo cerrada en este navegador.</span>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
                 <?php if (! $hayError && ($_GET['clave'] ?? '') === 'actualizada'): ?>
                     <?php /* Llega aqui tras /recuperar/{token}. Solo un texto fijo segun un
                              valor fijo de la url: nada de lo que viene en ella se imprime. */ ?>

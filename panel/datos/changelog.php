@@ -33,6 +33,16 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.15',
+        'titulo'  => 'Despedida al cerrar sesion',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al pinchar "Cerrar sesion", la pantalla se desenfoca y aparece Sinergin despidiendose con una barra de progreso, en vez de saltar de golpe al inicio.',
+            'Al llegar al inicio de sesion se confirma "Cerraste sesion. Hasta pronto!".',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.14',
         'titulo'  => 'Recuperar la contrasena desde el inicio de sesion',
         'tag'     => 'backend',
