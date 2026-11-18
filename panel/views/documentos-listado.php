@@ -33,12 +33,16 @@
  * quita con un clic. Quitar el rango de fechas quita "desde" y "hasta" juntos,
  * igual que filtrosDocumentosDesdeGet(), que descarta uno suelto.
  *
- * CINCO COLUMNAS Y NO NUEVE: neto e IVA van como linea secundaria bajo el
- * total, y el enlace a la ficha es el propio folio (antes, una columna
- * "Acciones" con un unico "Ver detalle").
- * Con el menu lateral, a 900px de pantalla la tabla tiene ~560px y ocho
- * columnas obligaban a desplazarse hacia el lado; el total, que es lo que se
- * compara de un vistazo, sigue en su columna alineado a la derecha.
+ * SEIS COLUMNAS Y NO NUEVE: neto e IVA van como linea secundaria bajo el
+ * total y el enlace a la ficha es el propio folio. La sexta, Acciones, son
+ * iconos (ficha, PDF, XML) y el "Rehacer" de los rechazados; entra desde que
+ * el <main> ocupa todo el ancho.
+ *
+ * ESTADO: color, nombre e icono salen de datos/estados-sii.php, el mismo
+ * catalogo de la Guia de estados (partials/_guia-estados-sii.php). Al pasar el
+ * mouse o enfocar el badge se abre un detalle con que significa y que hacer;
+ * su contenido va en el HTML (aria-describedby) y el JS solo lo posiciona en
+ * una capa flotante para que el scroll de la tabla no lo recorte.
  *
  * EN MOVIL LA TABLA PASA A TARJETAS (.tabla-datos--cards): cada documento se
  * lee de arriba abajo con el nombre de la columna como titulo de cada linea.
@@ -47,36 +51,81 @@
  * Si tarda mas de 300 ms el boton "Filtrar documentos" muestra su spinner sin
  * cambiar de ancho; antes de eso no se muestra nada.
  */
-$titulo = 'Panel de emision';
+$titulo    = 'Panel de emision';
+$bodyClase = 'pagina-panel-emision';
 require __DIR__ . '/partials/header.php';
+
+use Plantiflex\FacturacionCl\Enums\TipoDte;
+use Plantiflex\FacturacionCl\Sii\EstadoContable;
+use Plantiflex\FacturacionCl\Sii\RehacerDocumento;
 
 $e = static fn (string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
 
-/**
- * Badge del estado. Identico al de documento-detalle.php. El estado NO tiene
- * catalogo cerrado: el motor escribe 'enviado' al emitir y luego guarda tal cual
- * el <ESTADO> del SII (EPR, RCT, RCH...). Solo se colorean los tres valores que
- * produce el propio codigo; cualquier codigo del SII va en neutro y con su valor
- * crudo, sin traducir. Cada variante lleva ademas su icono: el estado no se
- * comunica solo por color (WCAG 1.4.1).
- *
- * PENDIENTE: $badgeEstado sigue duplicado en las dos vistas. Extraerlo a un
- * partial compartido queda para cuando se toquen ambas juntas con un partial
- * nuevo (fuera del alcance de esta pasada).
- *
- * @return array{0:string,1:string,2:string} clase, texto, icono
+/*
+ * Catalogo de estados (compartido con la Guia). Se indexa por codigo; la clave
+ * '' es "sin estado". Un codigo que no esta en el catalogo se muestra crudo y
+ * en neutro: el SII puede devolver uno que no conocemos y no se inventa texto.
  */
-$badgeEstado = static function (?string $estado): array {
-    $e = trim((string) $estado);
-    if ($e === '') {
-        return ['badge--neutro', 'Sin estado', 'sin-cargar'];
+$catalogoEstados = require __DIR__ . '/../datos/estados-sii.php';
+$gruposEstado    = $catalogoEstados['grupos'];
+$estadoPorCodigo = [];
+foreach ($catalogoEstados['estados'] as $est) {
+    $estadoPorCodigo[(string) ($est['codigo'] ?? '')] = $est;
+}
+
+/**
+ * Todo lo que el listado necesita del estado de un documento.
+ *
+ * @return array{codigo:string,nombre:string,tono:string,icono:string,explica:string,hacer:string,grupo:string}
+ */
+$infoEstado = static function (?string $estado) use ($estadoPorCodigo, $gruposEstado): array {
+    $c = trim((string) $estado);
+    if (isset($estadoPorCodigo[$c])) {
+        $est   = $estadoPorCodigo[$c];
+        $grupo = $gruposEstado[$est['grupo']];
+        return [
+            'codigo'  => $c,
+            'nombre'  => $est['nombre'],
+            'tono'    => $grupo['tono'],
+            'icono'   => $grupo['icono'],
+            'explica' => $est['explica'],
+            'hacer'   => $est['hacer'],
+            'grupo'   => $grupo['titulo'],
+        ];
     }
-    return match ($e) {
-        'enviado'     => ['badge--proceso', 'Enviado al SII', 'reloj'],
-        'sin_trackid' => ['badge--advertencia', 'Sin track ID', 'alerta'],
-        'desconocido' => ['badge--neutro', 'Desconocido', 'sin-cargar'],
-        default       => ['badge--neutro', $e, 'info'],
-    };
+    return [
+        'codigo'  => $c,
+        'nombre'  => $c,
+        'tono'    => 'neutro',
+        'icono'   => 'info',
+        'explica' => 'Codigo que respondio el SII y que todavia no tiene descripcion en la guia.',
+        'hacer'   => 'Abre la ficha del documento para ver el detalle de la respuesta.',
+        'grupo'   => 'Otro codigo',
+    ];
+};
+
+/** Icono del tipo de documento. */
+$iconoTipo = static fn (int $t): string => match ($t) {
+    39, 41  => 'boleta',
+    56      => 'nota-debito',
+    61      => 'nota-credito',
+    default => 'factura',
+};
+
+/**
+ * Iniciales y tono (0-5) del avatar del receptor. El tono sale del RUT, asi que
+ * un mismo cliente tiene siempre el mismo color en todas las paginas.
+ *
+ * @return array{0:string,1:int}
+ */
+$avatarReceptor = static function (?string $razon, string $rut): array {
+    $palabras = preg_split('/\s+/', trim((string) $razon)) ?: [];
+    $palabras = array_values(array_filter($palabras, static fn ($p) => preg_match('/^[\p{L}\p{N}]/u', $p) === 1));
+    $ini = '';
+    foreach (array_slice($palabras, 0, 2) as $p) {
+        $ini .= mb_strtoupper(mb_substr($p, 0, 1));
+    }
+    return [$ini, abs(crc32($rut)) % 6];
 };
 
 // Query string que arrastra los filtros al cambiar de pagina. Se conserva tal
@@ -128,20 +177,21 @@ if (isset($filtros['estado'])) {
 }
 ?>
 
-<div class="dash-header">
-    <div>
-        <h1>Panel de emision</h1>
+<div class="pe-cabecera">
+    <div class="pe-cabecera__titulo">
+        <span class="pe-cabecera__emblema" aria-hidden="true"><?= iconoSvg('panel-emision', 24, ''); ?></span>
+        <div>
+            <h1>Panel de emision</h1>
+            <p class="pe-cabecera__sub">Busca un documento emitido, revisa si el SII ya lo recibio y abre su ficha para descargarlo.</p>
+        </div>
     </div>
-    <div class="acciones-grupo acciones-grupo--header">
+    <div class="pe-cabecera__acciones">
         <?php require __DIR__ . '/partials/_guia-estados-sii.php'; ?>
-        <a class="boton-secundario" href="/ventas/nota-credito">Nota de credito</a>
-        <a class="boton-secundario" href="/ventas/nota-debito">Nota de debito</a>
-        <a class="boton-principal" href="/ventas/factura">Emitir factura</a>
+        <a class="boton-secundario pe-boton" href="/ventas/nota-credito"><?= iconoSvg('nota-credito', 16, ''); ?><span>Nota de credito</span></a>
+        <a class="boton-secundario pe-boton" href="/ventas/nota-debito"><?= iconoSvg('nota-debito', 16, ''); ?><span>Nota de debito</span></a>
+        <a class="boton-principal pe-boton" href="/ventas/factura"><?= iconoSvg('factura', 16, ''); ?><span>Emitir factura</span></a>
     </div>
 </div>
-<p class="dash-subtitulo">
-    Busca un documento emitido, revisa si el SII ya lo recibio y abre su ficha para descargarlo.
-</p>
 
 <?php if (! empty($errorMotor)): ?>
     <div class="alerta alerta--error" role="alert">
@@ -153,7 +203,7 @@ if (isset($filtros['estado'])) {
     </div>
 <?php endif; ?>
 
-<form method="get" action="/ventas/panel-emision" class="filtros" id="form-filtros" aria-label="Filtrar documentos">
+<form method="get" action="/ventas/panel-emision" class="filtros pe-filtros" id="form-filtros" aria-label="Filtrar documentos">
     <label class="filtros__campo">Desde
         <input type="date" name="desde" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['desde'] ?? '')); ?>">
     </label>
@@ -177,7 +227,7 @@ if (isset($filtros['estado'])) {
     <label class="filtros__campo">Folio
         <input type="text" inputmode="numeric" name="folio" class="filtros__input filtros__input--corto" value="<?= $e((string) ($filtros['folio'] ?? '')); ?>">
     </label>
-    <label class="filtros__campo">RUT receptor
+    <label class="filtros__campo pe-filtros__ancho">RUT receptor
         <input type="text" name="receptorRut" class="filtros__input filtros__input--medio" value="<?= $e((string) ($filtros['receptorRut'] ?? '')); ?>"
                placeholder="RUT o nombre del cliente" spellcheck="false" data-buscar-cliente="normalizado">
     </label>
@@ -186,10 +236,12 @@ if (isset($filtros['estado'])) {
                placeholder="enviado, EPR" spellcheck="false" aria-describedby="ayuda-filtro-estado">
     </label>
     <span class="visualmente-oculto" id="ayuda-filtro-estado">El estado tal como lo guarda el sistema: enviado, o el codigo que respondio el SII.</span>
-    <button type="submit" class="boton-secundario" id="filtrar">Filtrar documentos</button>
-    <?php if ($hayFiltros): ?>
-        <a class="boton-texto" href="/ventas/panel-emision">Limpiar filtros</a>
-    <?php endif; ?>
+    <div class="pe-filtros__acciones">
+        <button type="submit" class="boton-principal pe-boton" id="filtrar"><?= iconoSvg('buscar', 16, ''); ?><span>Filtrar</span></button>
+        <?php if ($hayFiltros): ?>
+            <a class="boton-texto" href="/ventas/panel-emision">Limpiar filtros</a>
+        <?php endif; ?>
+    </div>
 </form>
 
 <?php if ($chips !== [] || (! $hayRangoFechas && ! $hayFolio)): ?>
@@ -233,13 +285,16 @@ if (isset($filtros['estado'])) {
         <?php endif; ?>
     </div>
 <?php else: ?>
-    <section class="tarjeta" aria-labelledby="titulo-documentos">
-        <h2 id="titulo-documentos">Documentos</h2>
+    <section class="tarjeta pe-tabla" aria-labelledby="titulo-documentos">
+        <div class="pe-tabla__cabecera">
+            <h2 id="titulo-documentos">Documentos</h2>
+            <span class="pe-tabla__total"><?= $total; ?> documento<?= $total === 1 ? '' : 's'; ?><?= $hayFiltros ? ' con los filtros aplicados' : ''; ?><?php
+                if ($totalPaginas > 1): ?> &middot; pagina <?= $pagina; ?> de <?= $totalPaginas; ?><?php endif; ?></span>
+        </div>
         <div class="tabla-scroll">
             <table class="tabla-datos tabla-datos--cards tabla-documentos">
-                <caption>
-                    <?= $total; ?> documento<?= $total === 1 ? '' : 's'; ?><?= $hayFiltros ? ' con los filtros aplicados' : ''; ?><?php
-                    if ($totalPaginas > 1): ?> &middot; pagina <?= $pagina; ?> de <?= $totalPaginas; ?><?php endif; ?>
+                <caption class="visualmente-oculto">
+                    <?= $total; ?> documento<?= $total === 1 ? '' : 's'; ?><?= $hayFiltros ? ' con los filtros aplicados' : ''; ?>
                 </caption>
                 <thead>
                     <tr>
@@ -248,49 +303,100 @@ if (isset($filtros['estado'])) {
                         <th scope="col">Receptor</th>
                         <th scope="col" class="tabla-datos__num">Total</th>
                         <th scope="col" class="tabla-datos__estado">Estado SII</th>
+                        <th scope="col" class="tabla-datos__acciones"><span class="visualmente-oculto">Acciones</span></th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php foreach ($items as $it): ?>
+                    <?php foreach ($items as $n => $it): ?>
                         <?php
                             $tipoDte    = (int) $it['tipoDte'];
                             $folio      = (int) $it['folio'];
-                            $nombreTipo = \Plantiflex\FacturacionCl\Enums\TipoDte::nombreDe($tipoDte);
-                            [$claseBadge, $textoBadge, $iconoBadge] = $badgeEstado($it['estado'] ?? null);
-                            $razon = $it['receptorRazonSocial'] ?? null;
-                            // Rechazado por el SII y rehacible (mismo criterio que el enlace
-                            // "Rehacer"): fila en rojo suave y badge de error con el estado.
-                            $rechazado = \Plantiflex\FacturacionCl\Sii\RehacerDocumento::permite($tipoDte, $it['estado'] ?? null);
-                            if ($rechazado) {
-                                $claseBadge = 'badge--error';
-                            }
+                            $nombreTipo = TipoDte::nombreDe($tipoDte);
+                            $est        = $infoEstado($it['estado'] ?? null);
+                            $razon      = $it['receptorRazonSocial'] ?? null;
+                            $rut        = (string) $it['receptorRut'];
+                            [$iniciales, $tonoAvatar] = $avatarReceptor($razon, $rut);
+                            $urlFicha   = '/ventas/panel-emision/' . $tipoDte . '/' . $folio;
+                            // Rechazado por el SII y rehacible (mismo criterio que el boton
+                            // Rehacer): la fila se marca en rojo suave.
+                            $rechazado  = RehacerDocumento::permite($tipoDte, $it['estado'] ?? null);
+                            $fueraTotal = $est['codigo'] !== '' && EstadoContable::esRechazado($est['codigo']);
+                            $tipId      = 'estado-tip-' . $n;
                         ?>
                         <tr<?= $rechazado ? ' class="tabla-datos__fila--rechazada"' : ''; ?>>
                             <td data-label="Documento">
-                                <span class="badge badge--etiqueta"><?= $e($nombreTipo); ?></span>
-                                <a class="tabla-datos__secundario tabla-datos__cifra" href="/ventas/panel-emision/<?= $tipoDte; ?>/<?= $folio; ?>"
-                                   aria-label="Ver la ficha de <?= $e($nombreTipo); ?> folio <?= $folio; ?>">Folio <?= $folio; ?></a>
+                                <div class="pe-doc">
+                                    <span class="pe-doc__icono" aria-hidden="true"><?= iconoSvg($iconoTipo($tipoDte), 18, ''); ?></span>
+                                    <div class="pe-doc__texto">
+                                        <a class="pe-doc__folio" href="<?= $urlFicha; ?>"
+                                           aria-label="Ver la ficha de <?= $e($nombreTipo); ?> folio <?= $folio; ?>">Folio <?= $folio; ?></a>
+                                        <span class="pe-doc__tipo"><?= $e($nombreTipo); ?></span>
+                                    </div>
+                                </div>
                             </td>
-                            <td data-label="Fecha" class="tabla-datos__cifra"><?= $fmtFecha($it['fechaEmision'] ?? ''); ?></td>
+                            <td data-label="Fecha" class="tabla-datos__cifra">
+                                <span class="pe-fecha"><?= iconoSvg('calendario', 14, ''); ?><?= $fmtFecha($it['fechaEmision'] ?? ''); ?></span>
+                            </td>
                             <td data-label="Receptor">
-                                <?php if (! empty($razon)): ?>
-                                    <?= $e((string) $razon); ?>
-                                    <span class="tabla-datos__secundario"><?= $e((string) $it['receptorRut']); ?></span>
-                                <?php else: ?>
-                                    <?= $e((string) $it['receptorRut']); ?>
-                                <?php endif; ?>
+                                <div class="pe-receptor">
+                                    <span class="pe-avatar pe-avatar--<?= $tonoAvatar; ?>" aria-hidden="true"><?= $iniciales !== '' ? $e($iniciales) : iconoSvg('clientes', 16, ''); ?></span>
+                                    <div class="pe-receptor__texto">
+                                        <?php if (! empty($razon)): ?>
+                                            <span class="pe-receptor__nombre"><?= $e((string) $razon); ?></span>
+                                            <span class="pe-receptor__rut"><?= $e($rut); ?></span>
+                                        <?php else: ?>
+                                            <span class="pe-receptor__nombre"><?= $e($rut); ?></span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
                             </td>
                             <td data-label="Total" class="tabla-datos__num">
                                 <span class="tabla-datos__num--destacado"><?= $fmtMonto($it['total'] ?? null); ?></span>
                                 <span class="tabla-datos__secundario">Neto <?= $fmtMonto($it['neto'] ?? null); ?> &middot; IVA <?= $fmtMonto($it['iva'] ?? null); ?></span>
                             </td>
                             <td data-label="Estado SII" class="tabla-datos__estado">
-                                <span class="badge <?= $claseBadge; ?>"><?= iconoSvg($iconoBadge, 16, 'badge__icono'); ?><?= $e($textoBadge); ?></span>
-                                <?php if ($rechazado): ?>
-                                    <?php /* Rechazado por el SII: abre el formulario con sus datos. No emite nada (ver handleDocumentoRehacerGet). */ ?>
-                                    <a class="tabla-datos__secundario" href="/ventas/panel-emision/<?= $tipoDte; ?>/<?= $folio; ?>/rehacer"
-                                       aria-label="Rehacer <?= $e($nombreTipo); ?> folio <?= $folio; ?> con los mismos datos">Rehacer con los mismos datos</a>
-                                <?php endif; ?>
+                                <span class="pe-estado pe-estado--<?= $est['tono']; ?>" tabindex="0" data-estado-tip aria-describedby="<?= $tipId; ?>">
+                                    <?= iconoSvg($est['icono'], 14, 'pe-estado__icono'); ?>
+                                    <span class="pe-estado__nombre"><?= $e($est['nombre'] !== '' ? $est['nombre'] : 'Sin estado'); ?></span>
+                                    <?php if ($est['codigo'] !== '' && $est['codigo'] !== $est['nombre']): ?>
+                                        <span class="pe-estado__codigo"><?= $e($est['codigo']); ?></span>
+                                    <?php endif; ?>
+                                </span>
+                                <div class="pe-tip__fuente" id="<?= $tipId; ?>" role="tooltip" hidden>
+                                    <div class="pe-tip__cabecera">
+                                        <span class="pe-tip__codigo pe-tip__codigo--<?= $est['tono']; ?>"><?= $e($est['codigo'] !== '' ? $est['codigo'] : '-'); ?></span>
+                                        <div>
+                                            <p class="pe-tip__nombre"><?= $e($est['nombre'] !== '' ? $est['nombre'] : 'Sin estado'); ?></p>
+                                            <p class="pe-tip__grupo"><?= $e($est['grupo']); ?></p>
+                                        </div>
+                                    </div>
+                                    <p class="pe-tip__explica"><?= $e($est['explica']); ?></p>
+                                    <p class="pe-tip__hacer"><strong>Que hacer:</strong> <?= $e($est['hacer']); ?></p>
+                                    <?php if ($rechazado || $fueraTotal): ?>
+                                        <p class="pe-tip__etiquetas">
+                                            <?php if ($rechazado): ?><span class="pe-tip__etiqueta pe-tip__etiqueta--rehacer">Se puede rehacer</span><?php endif; ?>
+                                            <?php if ($fueraTotal): ?><span class="pe-tip__etiqueta">Fuera de los totales</span><?php endif; ?>
+                                        </p>
+                                    <?php endif; ?>
+                                </div>
+                            </td>
+                            <td data-label="" class="tabla-datos__acciones">
+                                <div class="pe-acciones">
+                                    <?php if ($rechazado): ?>
+                                        <?php /* Rechazado por el SII: abre el formulario con sus datos. No emite nada (ver handleDocumentoRehacerGet). */ ?>
+                                        <a class="pe-rehacer" href="<?= $urlFicha; ?>/rehacer"
+                                           aria-label="Rehacer <?= $e($nombreTipo); ?> folio <?= $folio; ?> con los mismos datos"
+                                           title="Abre el formulario con los mismos datos. No se emite nada hasta que confirmes.">
+                                            <?= iconoSvg('rehacer', 15, 'pe-rehacer__icono'); ?><span>Rehacer</span>
+                                        </a>
+                                    <?php endif; ?>
+                                    <a class="pe-icono-accion" href="<?= $urlFicha; ?>/pdf" title="Descargar PDF"
+                                       aria-label="Descargar PDF de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('descargar', 17, ''); ?></a>
+                                    <a class="pe-icono-accion" href="<?= $urlFicha; ?>/xml" title="Descargar XML"
+                                       aria-label="Descargar XML de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('codigo', 17, ''); ?></a>
+                                    <a class="pe-icono-accion pe-icono-accion--ver" href="<?= $urlFicha; ?>" title="Ver ficha"
+                                       aria-label="Ver la ficha de <?= $e($nombreTipo); ?> folio <?= $folio; ?>"><?= iconoSvg('chevron-der', 18, ''); ?></a>
+                                </div>
                             </td>
                         </tr>
                     <?php endforeach; ?>
@@ -300,17 +406,80 @@ if (isset($filtros['estado'])) {
     </section>
 
     <?php if ($totalPaginas > 1): ?>
-        <nav class="paginacion" aria-label="Paginas de documentos">
+        <nav class="paginacion pe-paginacion" aria-label="Paginas de documentos">
             <?php if ($pagina > 1): ?>
-                <a class="boton-secundario" href="/ventas/panel-emision?pagina=<?= $pagina - 1; ?><?= $e($qs); ?>">Pagina anterior</a>
+                <a class="boton-secundario pe-boton" href="/ventas/panel-emision?pagina=<?= $pagina - 1; ?><?= $e($qs); ?>"><?= iconoSvg('chevron-izq', 16, ''); ?><span>Anterior</span></a>
             <?php endif; ?>
             <span class="nota" aria-current="page">Pagina <?= $pagina; ?> de <?= $totalPaginas; ?> (<?= $total; ?> documentos)</span>
             <?php if ($pagina < $totalPaginas): ?>
-                <a class="boton-secundario" href="/ventas/panel-emision?pagina=<?= $pagina + 1; ?><?= $e($qs); ?>">Pagina siguiente</a>
+                <a class="boton-secundario pe-boton" href="/ventas/panel-emision?pagina=<?= $pagina + 1; ?><?= $e($qs); ?>"><span>Siguiente</span><?= iconoSvg('chevron-der', 16, ''); ?></a>
             <?php endif; ?>
         </nav>
     <?php endif; ?>
 <?php endif; ?>
+
+<script>
+(function () {
+    'use strict';
+    /* DETALLE DEL ESTADO AL PASAR EL MOUSE (o al enfocar con teclado / tocar).
+       El contenido ya esta en el HTML de cada fila (.pe-tip__fuente, enlazado
+       por aria-describedby, asi que el lector de pantalla lo lee aunque este
+       JS no corra). Aqui solo se copia a UNA capa flotante en <body> con
+       position: fixed, para que el overflow de .tabla-scroll no lo recorte. */
+    var disparadores = document.querySelectorAll('[data-estado-tip]');
+    if (!disparadores.length) { return; }
+    var capa = document.createElement('div');
+    capa.className = 'pe-tip';
+    capa.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(capa);
+    var actual = null;
+    var tAbrir = null;
+    var tCerrar = null;
+
+    function posicionar(el) {
+        var r = el.getBoundingClientRect();
+        var w = capa.offsetWidth;
+        var h = capa.offsetHeight;
+        var m = 10;
+        var arriba = r.top - h - m >= 8;
+        var top = arriba ? r.top - h - m : r.bottom + m;
+        var left = r.left + r.width / 2 - w / 2;
+        left = Math.max(8, Math.min(left, window.innerWidth - w - 8));
+        capa.style.top = top + 'px';
+        capa.style.left = left + 'px';
+        capa.setAttribute('data-lado', arriba ? 'arriba' : 'abajo');
+        capa.style.setProperty('--flecha-x', (r.left + r.width / 2 - left) + 'px');
+    }
+    function abrir(el) {
+        clearTimeout(tCerrar);
+        if (actual === el && capa.classList.contains('pe-tip--visible')) { return; }
+        var fuente = document.getElementById(el.getAttribute('aria-describedby'));
+        if (!fuente) { return; }
+        actual = el;
+        capa.innerHTML = fuente.innerHTML;
+        capa.classList.remove('pe-tip--visible');
+        capa.style.display = 'block';
+        posicionar(el);
+        void capa.offsetWidth;
+        capa.classList.add('pe-tip--visible');
+    }
+    function cerrar() {
+        clearTimeout(tAbrir);
+        actual = null;
+        capa.classList.remove('pe-tip--visible');
+        tCerrar = setTimeout(function () { if (!actual) { capa.style.display = 'none'; } }, 180);
+    }
+    disparadores.forEach(function (el) {
+        el.addEventListener('mouseenter', function () { clearTimeout(tAbrir); tAbrir = setTimeout(function () { abrir(el); }, 140); });
+        el.addEventListener('mouseleave', cerrar);
+        el.addEventListener('focus', function () { abrir(el); });
+        el.addEventListener('blur', cerrar);
+    });
+    document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && actual) { cerrar(); } });
+    window.addEventListener('scroll', function () { if (actual) { cerrar(); } }, true);
+    window.addEventListener('resize', function () { if (actual) { cerrar(); } });
+})();
+</script>
 
 <script>
 (function () {

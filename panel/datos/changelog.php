@@ -33,6 +33,20 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.09',
+        'titulo'  => 'Panel de emision renovado: estados con color, detalle al pasar el mouse y acciones con iconos',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El estado de cada documento ahora se ve con el color de su grupo (en proceso, aceptado, rechazado o requiere revision), con su nombre en palabras y el codigo del SII al lado.',
+            'Al pasar el mouse por un estado (o tocarlo en el celular) aparece una explicacion de que significa y que hacer, la misma de la Guia de estados.',
+            'Cada fila tiene iconos para descargar el PDF o el XML y abrir la ficha, sin tener que entrar al documento.',
+            'El boton "Rehacer" de los documentos rechazados ahora es un boton destacado en la fila, y la fila rechazada lleva una barra roja al costado.',
+            'Iconos por tipo de documento, iniciales del cliente y filtros mas comodos.',
+            'Todo el panel usa ahora el ancho completo de la pantalla.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.08',
         'titulo'  => 'Guia de estados del SII y rechazados resaltados en el panel de emision',
         'tag'     => 'frontend',

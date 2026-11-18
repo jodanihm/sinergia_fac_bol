@@ -10,8 +10,8 @@
  * LOS DOS INDICADORES NO SE ESCRIBEN A MANO. "Se puede rehacer" sale de
  * RehacerDocumento::permite y "Fuera de los totales" de EstadoContable::
  * esRechazado: son las mismas reglas que pintan la fila roja y que calculan los
- * totales. Si una de esas listas cambia, la guia cambia con ella. Lo unico que
- * vive aqui es el texto para el usuario.
+ * totales. Si una de esas listas cambia, la guia cambia con ella. El texto
+ * para el usuario vive en datos/estados-sii.php, compartido con el listado.
  *
  * El texto evita tildes a proposito, igual que el resto del panel.
  */
@@ -21,116 +21,12 @@ use Plantiflex\FacturacionCl\Sii\RehacerDocumento;
 
 $guiaE = static fn (string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
 
-/**
- * Grupos en el orden en que se muestran. 'tono' elige el color (ver CSS
- * .guia-estados__codigo--*); 'icono' es una clave de ICONOS.
- */
-$guiaGrupos = [
-    'proceso' => [
-        'titulo' => 'En proceso',
-        'sub'    => 'El SII todavia esta revisando el envio. Se actualizan solos.',
-        'tono'   => 'proceso',
-        'icono'  => 'reloj',
-    ],
-    'aceptado' => [
-        'titulo' => 'Aceptados',
-        'sub'    => 'El documento quedo emitido y cuenta como venta.',
-        'tono'   => 'exito',
-        'icono'  => 'check',
-    ],
-    'rechazado' => [
-        'titulo' => 'Rechazados',
-        'sub'    => 'El documento no quedo emitido. Se pueden rehacer con los mismos datos.',
-        'tono'   => 'error',
-        'icono'  => 'cerrar',
-    ],
-    'revisar' => [
-        'titulo' => 'Requieren revision',
-        'sub'    => 'Casos especiales: miralos antes de volver a emitir.',
-        'tono'   => 'alerta',
-        'icono'  => 'alerta',
-    ],
-];
-
-/**
- * Catalogo. 'codigo' es el valor tal como lo guarda el sistema (y el que acepta
- * el filtro Estado); null = sin estado, que no se puede filtrar.
- */
-$guiaEstados = [
-    // En proceso
-    ['proceso', 'enviado', 'Enviado al SII',
-        'Firmamos el documento y lo enviamos. El SII aun no responde.',
-        'Nada. El estado se actualiza solo, normalmente en minutos.'],
-    ['proceso', 'REC', 'Envio recibido',
-        'El SII recibio el archivo y lo puso en cola para revisarlo.',
-        'Nada. Espera a que avance.'],
-    ['proceso', 'SOK', 'Schema validado',
-        'La estructura del XML es correcta. El SII sigue con las demas validaciones.',
-        'Nada. Espera a que avance.'],
-    ['proceso', 'FOK', 'Firma validada',
-        'La firma electronica del envio es valida. Faltan las validaciones del contenido.',
-        'Nada. Espera a que avance.'],
-    ['proceso', 'CRT', 'Caratula correcta',
-        'Los datos del envio (emisor, resolucion, fechas) calzan con lo que tiene el SII.',
-        'Nada. Espera a que avance.'],
-    ['proceso', 'PRD', 'Envio en proceso',
-        'El SII esta revisando los documentos del envio uno por uno.',
-        'Nada. Espera a que avance.'],
-    ['proceso', '-11', 'Aun sin resultado',
-        'Consultamos al SII y todavia no tiene un veredicto para este envio.',
-        'Nada. Lo volvemos a consultar mas tarde.'],
-
-    // Aceptados
-    ['aceptado', 'EPR', 'Envio procesado',
-        'El SII termino de revisar el envio. Es el estado normal de un documento emitido correctamente.',
-        'Nada. Si el SII dejo observaciones dentro del envio, te avisamos por correo.'],
-    ['aceptado', 'DOK', 'Documento aceptado',
-        'El SII confirmo el documento y sus datos coinciden con los nuestros.',
-        'Nada. Esta todo en orden.'],
-    ['aceptado', 'RPR', 'Aceptado con reparos',
-        'El documento es valido y la venta existe, pero el SII dejo una observacion.',
-        'Revisa la observacion para corregirla en los proximos documentos.'],
-
-    // Rechazados (rehacibles)
-    ['rechazado', 'RCT', 'Error en caratula',
-        'Los datos del envio no calzan con el SII: RUT del emisor, numero o fecha de resolucion.',
-        'Revisa los datos de tu empresa y usa "Rehacer con los mismos datos".'],
-    ['rechazado', 'RCH', 'Error en la informacion',
-        'Algun dato del documento es invalido: receptor, giro, fechas o detalle.',
-        'Corrige el dato y usa "Rehacer con los mismos datos".'],
-    ['rechazado', 'RCO', 'Error de consistencia',
-        'Los montos no cuadran entre si: neto, IVA, total o las referencias.',
-        'Revisa los montos y usa "Rehacer con los mismos datos".'],
-    ['rechazado', 'RFR', 'Error en la firma',
-        'La firma no fue valida: certificado vencido o un caracter que el SII no acepta.',
-        'Revisa tu certificado y usa "Rehacer con los mismos datos".'],
-    ['rechazado', 'RSC', 'Error de estructura',
-        'El XML no cumple el formato del SII (schema).',
-        'Usa "Rehacer con los mismos datos". Si se repite, escribenos.'],
-    ['rechazado', 'VOF', 'Archivo no encontrado',
-        'El SII no encontro el archivo XML del envio.',
-        'Usa "Rehacer con los mismos datos".'],
-
-    // Requieren revision
-    ['revisar', 'RPT', 'Envio repetido',
-        'El SII rechazo una copia de un envio que ya tenia. El original probablemente si entro.',
-        'No lo rehagas: duplicarias la venta. Busca el documento original.'],
-    ['revisar', 'DNK', 'Datos no coinciden',
-        'El SII tiene ese folio, pero con datos distintos a los nuestros.',
-        'Revisalo a mano y escribenos antes de emitir otro.'],
-    ['revisar', 'ANC', 'Documento anulado',
-        'El documento existio y se anulo con una nota de credito.',
-        'Si hace falta, emite un documento nuevo desde cero.'],
-    ['revisar', 'sin_trackid', 'Sin track ID',
-        'El envio salio, pero el SII no devolvio un numero de seguimiento para consultarlo.',
-        'Abre la ficha del documento. Si sigue igual, escribenos.'],
-    ['revisar', 'desconocido', 'Respuesta no legible',
-        'El SII respondio, pero sin un estado que pudieramos leer. La venta se sigue contando.',
-        'Abre la ficha y consulta de nuevo el estado.'],
-    ['revisar', null, 'Sin estado',
-        'Todavia no tenemos ninguna respuesta registrada para este documento.',
-        'Abre la ficha del documento para revisarlo.'],
-];
+$guiaCatalogo = require __DIR__ . '/../../datos/estados-sii.php';
+$guiaGrupos   = $guiaCatalogo['grupos'];
+$guiaEstados  = array_map(
+    static fn (array $x): array => [$x['grupo'], $x['codigo'], $x['nombre'], $x['explica'], $x['hacer']],
+    $guiaCatalogo['estados']
+);
 
 $guiaPorGrupo = array_fill_keys(array_keys($guiaGrupos), []);
 foreach ($guiaEstados as $fila) {
