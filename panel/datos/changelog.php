@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.21',
+        'titulo'  => 'Facturas y notas con fecha de emision a eleccion',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El formulario de factura, factura exenta, nota de credito y nota de debito ahora tiene el campo "Fecha de emision".',
+            'Viene con la fecha de hoy: si no la tocas, todo sigue igual que antes.',
+            'Si eliges otra fecha, el documento sale con esa fecha, y la pantalla de confirmacion te lo recuerda antes de emitir.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.20',
         'titulo'  => 'Dashboard renovado y el switch "Solo aceptados" se recuerda',
         'tag'     => 'frontend',
