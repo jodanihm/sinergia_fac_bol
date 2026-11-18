@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.08',
+        'titulo'  => 'Guia de estados del SII y rechazados resaltados en el panel de emision',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Nuevo boton "Guia de estados" en el panel de emision: abre una ventana con todos los estados que puede tener un documento (en proceso, aceptados, rechazados y los que requieren revision), que significa cada uno y que hacer.',
+            'Cada estado indica si el documento se puede rehacer y si queda fuera de los totales de venta, con un acceso directo para ver los documentos en ese estado.',
+            'En el listado, los documentos rechazados que se pueden rehacer aparecen con fondo rojo suave, para encontrarlos de un vistazo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.07',
         'titulo'  => 'Un documento rechazado por el SII se puede rehacer con un clic',
         'tag'     => 'frontend',

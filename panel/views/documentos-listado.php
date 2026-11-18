@@ -133,6 +133,7 @@ if (isset($filtros['estado'])) {
         <h1>Panel de emision</h1>
     </div>
     <div class="acciones-grupo acciones-grupo--header">
+        <?php require __DIR__ . '/partials/_guia-estados-sii.php'; ?>
         <a class="boton-secundario" href="/ventas/nota-credito">Nota de credito</a>
         <a class="boton-secundario" href="/ventas/nota-debito">Nota de debito</a>
         <a class="boton-principal" href="/ventas/factura">Emitir factura</a>
