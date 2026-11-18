@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.14',
+        'titulo'  => 'Recuperar la contrasena desde el inicio de sesion',
+        'tag'     => 'backend',
+        'items'   => [
+            'Nuevo enlace "Olvidaste tu contrasena?" en el inicio de sesion. Se escribe el email y llega un correo con un enlace para elegir una contrasena nueva.',
+            'El enlace vence en 60 minutos y sirve una sola vez. La pantalla responde lo mismo exista o no el email, para no revelar que correos estan registrados.',
+            'La pantalla de contrasena nueva muestra que tan segura es y avisa si las dos no coinciden.',
+            'Hay un limite de solicitudes seguidas para evitar abusos, y cada cambio queda en la auditoria.',
+            'Antes, una contrasena olvidada solo se podia reponer a mano en la base de datos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.13',
         'titulo'  => 'Nuevo inicio de sesion',
         'tag'     => 'frontend',

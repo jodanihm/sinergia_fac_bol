@@ -785,6 +785,16 @@ const MIGRACIONES = [
             ['tipo' => 'columnas', 'desc' => 'proveedor.nombre_fantasia', 'tabla' => 'proveedor', 'columnas' => ['nombre_fantasia'], 'esperado' => 1],
         ],
     ],
+    [
+        'id' => '059', 'archivo' => '059_usuario_recuperacion_clave.sql', 'nota' => 'CREATE TABLE (recuperar contrasena desde el login)',
+        'huellas' => [
+            ['tipo' => 'tablas', 'desc' => 'usuario_recuperacion_clave', 'tablas' => ['usuario_recuperacion_clave'], 'esperado' => 1],
+            // El UNIQUE del hash es lo que hace imposible que dos solicitudes
+            // compartan enlace.
+            ['tipo' => 'indice', 'desc' => 'uk_recuperacion_token (unico)', 'tabla' => 'usuario_recuperacion_clave',
+             'indice' => 'uk_recuperacion_token', 'esperado' => 1],
+        ],
+    ],
 ];
 
 // -----------------------------------------------------------------------------

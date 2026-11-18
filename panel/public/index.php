@@ -879,6 +879,9 @@ const RUTA_RETORNO_PAGO = '/pagos/retorno';
 const RUTAS_PUBLICAS = [
     'GET /', 'GET /registro', 'POST /registro',
     'GET /login', 'POST /login', 'GET /logout',
+    // Recuperar contrasena (paso 1: pedir el enlace). El paso 2 lleva el token
+    // en la url y va en PATRONES_PUBLICOS.
+    'GET /recuperar', 'POST /recuperar',
     // Acceso del panel de control. UNICA ruta de /admin/* sin sesion, y por eso
     // esta declarada aqui y no cubierta por el prefijo: el paso 1 del gate
     // (publicas) corre ANTES del paso 2 (espacios con gate propio), asi que
@@ -930,6 +933,7 @@ const PATRON_CONFIRMACION_PAGO = '#^/pagos/flow/confirmacion/(\d+)$#';
 /** @var list<string> Regex de rutas publicas con parametro. */
 const PATRONES_PUBLICOS = [
     '#^/activar/[0-9a-f]{64}$#',
+    '#^/recuperar/[0-9a-f]{64}$#',
     // La confirmacion de pago de la pasarela. Ver el comentario de RUTAS_PUBLICAS.
     PATRON_CONFIRMACION_PAGO,
 ];
@@ -10960,6 +10964,276 @@ function handleActivarCuentaPost(string $token): void
 }
 
 // ===========================================================================
+//  RECUPERAR CONTRASENA (migracion 059)
+//
+//  GET/POST /recuperar            pide el email y manda el enlace.
+//  GET/POST /recuperar/{token}    fija la contrasena nueva.
+//
+//  NO REVELA SI EL EMAIL EXISTE. El POST de /recuperar responde SIEMPRE la
+//  misma pantalla ("si el correo existe, te enviamos un enlace"), y el correo
+//  se manda DESPUES de entregar la respuesta (fastcgi_finish_request): llamar a
+//  Brevo tarda cientos de ms, y si se hiciera antes, el tiempo de respuesta
+//  delataria que el email existe aunque el texto sea identico.
+//
+//  QUIEN PUEDE RECUPERAR: usuarios ACTIVOS, que no sean de demostracion ni
+//  superadmin.
+//    - inactivo: o no termino su invitacion (para eso esta /activar) o lo
+//      desactivo su administrador; un enlace por correo no debe reabrirle la
+//      puerta.
+//    - demo: cuenta compartida de solo lectura; nadie es "dueno" de su clave.
+//    - superadmin: entra al panel de control; su acceso no se delega a un
+//      enlace por correo. Si la olvida, se repone a mano.
+//
+//  LIMITES (fila por solicitud en usuario_recuperacion_clave):
+//    - por IP: 10 solicitudes por hora. Pasado eso se dice que espere; el
+//      mensaje no depende del email, asi que no filtra nada.
+//    - por usuario: 3 enlaces por hora. Pasado eso NO se manda otro, pero la
+//      respuesta es la misma de siempre.
+//
+//  El enlace vence en 60 minutos, sirve una sola vez, y en la base solo queda
+//  su sha256. Al usarse, los demas enlaces pendientes del usuario se anulan.
+//  La nueva contrasena sigue las reglas de la activacion (8 caracteres y
+//  confirmacion). Tras fijarla NO se inicia sesion: se vuelve al login, para
+//  que quien la cambio demuestre que la conoce.
+// ===========================================================================
+
+/** Minutos de vigencia del enlace. */
+function recuperacionMinutosVigencia(): int
+{
+    return 60;
+}
+
+function handleRecuperarClaveGet(): void
+{
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+    vista('recuperar-clave', ['paso' => 'solicitar', 'email' => '', 'errores' => []]);
+}
+
+function handleRecuperarClavePost(): void
+{
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+
+    $email = trim((string) ($_POST['email'] ?? ''));
+    if ($email === '' || filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+        vista('recuperar-clave', ['paso' => 'solicitar', 'email' => $email, 'errores' => ['Escribe un email valido.']]);
+    }
+
+    $pdo = Db::conexion();
+    $ip  = ActividadAdmin::ip($_SERVER);
+
+    // Limite por IP. Cuenta TODAS las solicitudes de la ultima hora, existan o
+    // no los emails: es lo que hace caro probar una lista de correos.
+    if ($ip !== null) {
+        $stmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM usuario_recuperacion_clave '
+            . 'WHERE solicitado_ip = :ip AND created_at > (NOW() - INTERVAL 1 HOUR)'
+        );
+        $stmt->execute([':ip' => $ip]);
+        if ((int) $stmt->fetchColumn() >= 10) {
+            vista('recuperar-clave', ['paso' => 'solicitar', 'email' => $email, 'errores' => [
+                'Hiciste demasiadas solicitudes seguidas. Espera una hora y vuelve a intentarlo.',
+            ]]);
+        }
+    }
+
+    $stmt = $pdo->prepare('SELECT id, email, estado, rol, demo FROM usuario WHERE email = :email LIMIT 1');
+    $stmt->execute([':email' => $email]);
+    $usuario = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+
+    $puede = $usuario !== null
+        && $usuario['estado'] === 'activo'
+        && (int) $usuario['demo'] === 0
+        && $usuario['rol'] !== 'superadmin';
+
+    $token = null;
+    if ($puede) {
+        $stmt = $pdo->prepare(
+            'SELECT COUNT(*) FROM usuario_recuperacion_clave '
+            . 'WHERE usuario_id = :u AND token_hash IS NOT NULL AND created_at > (NOW() - INTERVAL 1 HOUR)'
+        );
+        $stmt->execute([':u' => $usuario['id']]);
+        if ((int) $stmt->fetchColumn() < 3) {
+            $token = bin2hex(random_bytes(32));
+        }
+    }
+
+    $pdo->prepare(
+        'INSERT INTO usuario_recuperacion_clave (usuario_id, token_hash, expira_en, solicitado_ip) '
+        . 'VALUES (:u, :h, :exp, :ip)'
+    )->execute([
+        ':u'   => $token !== null ? $usuario['id'] : null,
+        ':h'   => $token !== null ? hash('sha256', $token) : null,
+        ':exp' => $token !== null ? date('Y-m-d H:i:s', time() + recuperacionMinutosVigencia() * 60) : null,
+        ':ip'  => $ip,
+    ]);
+
+    if ($token !== null) {
+        $destino = (string) $usuario['email'];
+        register_shutdown_function(static function () use ($destino, $token): void {
+            // Primero se entrega la respuesta y se cierra la conexion; recien
+            // despues se habla con Brevo. Ver el encabezado de la seccion.
+            if (function_exists('fastcgi_finish_request')) {
+                fastcgi_finish_request();
+            }
+            enviarCorreoRecuperacionClave($destino, $token);
+        });
+    }
+
+    vista('recuperar-clave', ['paso' => 'enviado', 'email' => $email, 'errores' => []]);
+}
+
+/**
+ * Manda el correo con el enlace. Nunca lanza: un fallo va al error_log (sin el
+ * token) y la persona simplemente no recibe el correo y puede pedir otro.
+ */
+function enviarCorreoRecuperacionClave(string $destino, string $token): void
+{
+    try {
+        $base = rtrim(trim((string) (getenv('PANEL_URL_PUBLICA') ?: '')), '/');
+        if ($base === '' || ! preg_match('#^https?://#i', $base)) {
+            error_log('recuperar clave: PANEL_URL_PUBLICA vacia o invalida, no se envia el correo');
+            return;
+        }
+        $enlace  = $base . '/recuperar/' . $token;
+        $minutos = recuperacionMinutosVigencia();
+        $e       = static fn (string $v): string => htmlspecialchars($v, ENT_QUOTES, 'UTF-8');
+
+        $html = '<!DOCTYPE html><html lang="es"><body style="margin:0;padding:0;background:#f4f7fa;font-family:Arial,Helvetica,sans-serif;color:#222">'
+            . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f7fa;padding:32px 12px"><tr><td align="center">'
+            . '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e6ee">'
+            . '<tr><td style="background:linear-gradient(135deg,#003a63,#0061a0);background-color:#0061a0;padding:28px 32px;color:#ffffff">'
+            . '<p style="margin:0;font-size:13px;letter-spacing:.04em;opacity:.85">SINERGIA FACTURACION</p>'
+            . '<h1 style="margin:8px 0 0;font-size:22px;line-height:1.3">Restablece tu contrasena</h1></td></tr>'
+            . '<tr><td style="padding:28px 32px">'
+            . '<p style="margin:0 0 16px;font-size:15px;line-height:1.6">Recibimos una solicitud para cambiar la contrasena de la cuenta <strong>' . $e($destino) . '</strong>.</p>'
+            . '<p style="margin:0 0 24px;font-size:15px;line-height:1.6">Usa el boton para elegir una nueva. El enlace vence en ' . $minutos . ' minutos y sirve una sola vez.</p>'
+            . '<p style="margin:0 0 24px;text-align:center"><a href="' . $e($enlace) . '" style="display:inline-block;padding:14px 28px;border-radius:10px;background:#0061a0;color:#ffffff;font-weight:bold;font-size:15px;text-decoration:none">Elegir una contrasena nueva</a></p>'
+            . '<p style="margin:0 0 8px;font-size:13px;line-height:1.6;color:#5c5c5c">Si el boton no funciona, copia este enlace en tu navegador:</p>'
+            . '<p style="margin:0 0 24px;font-size:12px;line-height:1.5;word-break:break-all;color:#0061a0">' . $e($enlace) . '</p>'
+            . '<p style="margin:0;padding-top:16px;border-top:1px solid #eef1f4;font-size:13px;line-height:1.6;color:#6e6e6e">Si no pediste este cambio, ignora este correo: tu contrasena actual sigue funcionando y nadie puede cambiarla sin este enlace.</p>'
+            . '</td></tr></table></td></tr></table></body></html>';
+
+        $r = \Plantiflex\FacturacionCl\Correo\BrevoMailer::desdeEntorno()->enviar(
+            $destino,
+            'Restablece tu contrasena de Sinergia Facturacion',
+            $html
+        );
+        if ($r['status'] < 200 || $r['status'] >= 300) {
+            error_log('recuperar clave: Brevo respondio ' . $r['status'] . ' al enviar el enlace');
+        }
+    } catch (Throwable $ex) {
+        error_log('recuperar clave: no se pudo enviar el correo - ' . $ex->getMessage());
+    }
+}
+
+/**
+ * Busca la solicitud vigente de un token. null si no existe, ya se uso, vencio,
+ * o el usuario ya no puede recuperar (lo desactivaron despues de pedirlo).
+ *
+ * @return array{id:int, usuario_id:int, email:string}|null
+ */
+function resolverRecuperacionClave(PDO $pdo, string $token): ?array
+{
+    $stmt = $pdo->prepare(
+        'SELECT r.id, r.usuario_id, u.email, u.estado, u.rol, u.demo '
+        . 'FROM usuario_recuperacion_clave r JOIN usuario u ON u.id = r.usuario_id '
+        . 'WHERE r.token_hash = :h AND r.usado_en IS NULL AND r.expira_en > NOW() LIMIT 1'
+    );
+    $stmt->execute([':h' => hash('sha256', $token)]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false || $fila['estado'] !== 'activo' || (int) $fila['demo'] !== 0 || $fila['rol'] === 'superadmin') {
+        return null;
+    }
+
+    return ['id' => (int) $fila['id'], 'usuario_id' => (int) $fila['usuario_id'], 'email' => (string) $fila['email']];
+}
+
+function handleRecuperarClaveTokenGet(string $token): void
+{
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+    $sol = resolverRecuperacionClave(Db::conexion(), $token);
+    vista('recuperar-clave', [
+        'paso'    => $sol === null ? 'invalido' : 'nueva',
+        'token'   => $token,
+        'email'   => $sol['email'] ?? '',
+        'errores' => [],
+    ]);
+}
+
+function handleRecuperarClaveTokenPost(string $token): void
+{
+    if (Auth::autenticado()) {
+        redirigir('/panel');
+    }
+    $pdo = Db::conexion();
+    $sol = resolverRecuperacionClave($pdo, $token);
+    if ($sol === null) {
+        vista('recuperar-clave', ['paso' => 'invalido', 'token' => $token, 'email' => '', 'errores' => []]);
+    }
+
+    $pass     = (string) ($_POST['password'] ?? '');
+    $confirma = (string) ($_POST['password_confirmacion'] ?? '');
+    $errores  = [];
+    if (strlen($pass) < 8) {
+        $errores[] = 'La contrasena debe tener al menos 8 caracteres.';
+    }
+    if ($pass !== $confirma) {
+        $errores[] = 'Las contrasenas no coinciden.';
+    }
+    if ($errores !== []) {
+        vista('recuperar-clave', ['paso' => 'nueva', 'token' => $token, 'email' => $sol['email'], 'errores' => $errores]);
+    }
+
+    $pdo->beginTransaction();
+    try {
+        // Consumo ATOMICO del enlace: si llegan dos envios a la vez, solo uno
+        // encuentra la fila con usado_en en NULL.
+        $consumo = $pdo->prepare(
+            'UPDATE usuario_recuperacion_clave SET usado_en = NOW() '
+            . 'WHERE id = :id AND usado_en IS NULL AND expira_en > NOW()'
+        );
+        $consumo->execute([':id' => $sol['id']]);
+        if ($consumo->rowCount() !== 1) {
+            $pdo->rollBack();
+            vista('recuperar-clave', ['paso' => 'invalido', 'token' => $token, 'email' => '', 'errores' => []]);
+        }
+
+        // debe_cambiar_clave a 0: la eligio la persona, no el equipo interno.
+        $pdo->prepare('UPDATE usuario SET password_hash = :hash, debe_cambiar_clave = 0 WHERE id = :id AND estado = \'activo\'')
+            ->execute([':hash' => password_hash($pass, PASSWORD_DEFAULT), ':id' => $sol['usuario_id']]);
+
+        // Los otros enlaces pendientes de este usuario dejan de servir.
+        $pdo->prepare('UPDATE usuario_recuperacion_clave SET usado_en = NOW() WHERE usuario_id = :u AND usado_en IS NULL')
+            ->execute([':u' => $sol['usuario_id']]);
+
+        $pdo->commit();
+    } catch (Throwable $ex) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        error_log('recuperar clave: fallo al guardar la contrasena nueva - ' . $ex->getMessage());
+        vista('recuperar-clave', ['paso' => 'nueva', 'token' => $token, 'email' => $sol['email'], 'errores' => [
+            'No pudimos guardar tu contrasena. Intentalo de nuevo en un momento.',
+        ]]);
+    }
+
+    try {
+        registrarAuditoria($pdo, $sol['usuario_id'], 'usuario.clave_recuperada', 'usuario', $sol['usuario_id'], null, null);
+    } catch (Throwable $ex) {
+        error_log('recuperar clave: no se pudo auditar - ' . $ex->getMessage());
+    }
+
+    Csrf::regenerarToken();
+    redirigir('/login?clave=actualizada');
+}
+
+// ===========================================================================
 //  Auditoria de tenant (M6, pieza 2): filtra admin_auditoria por los eventos
 //  que pertenecen a ESTA cuenta especifica. La tabla no tiene columna
 //  cuenta_id propia (ver PASO 0 de M6): se resuelve indirectamente segun
@@ -12488,6 +12762,23 @@ if ($metodo === 'GET' && preg_match('#^/activar/([0-9a-f]{64})$#', $ruta, $mActi
 
 if ($metodo === 'POST' && preg_match('#^/activar/([0-9a-f]{64})$#', $ruta, $mActivar)) {
     handleActivarCuentaPost($mActivar[1]);
+}
+
+// --- Recuperar contrasena (publica, sin sesion) ---
+if ($metodo === 'GET' && $ruta === '/recuperar') {
+    handleRecuperarClaveGet();
+}
+
+if ($metodo === 'POST' && $ruta === '/recuperar') {
+    handleRecuperarClavePost();
+}
+
+if ($metodo === 'GET' && preg_match('#^/recuperar/([0-9a-f]{64})$#', $ruta, $mRecuperar)) {
+    handleRecuperarClaveTokenGet($mRecuperar[1]);
+}
+
+if ($metodo === 'POST' && preg_match('#^/recuperar/([0-9a-f]{64})$#', $ruta, $mRecuperar)) {
+    handleRecuperarClaveTokenPost($mRecuperar[1]);
 }
 
 // ===========================================================================

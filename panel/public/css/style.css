@@ -5850,3 +5850,82 @@ body.lg-page > main { min-height: 100vh; min-height: 100dvh; }
     .lg-boton--cargando .lg-boton__progreso { animation: none; transform: scaleX(0.6); }
     .lg-spinner { animation-duration: 2s; }
 }
+
+/* --- Login: enlace "Olvidaste..." y pantallas de recuperar contrasena ------
+   (views/recuperar-clave.php, migracion 059). Reusa todo .lg-*; aqui solo lo
+   que agregan esas pantallas. */
+.lg-etiqueta-fila { display: flex; align-items: baseline; justify-content: space-between; gap: var(--esp-2); }
+.lg-page .lg-etiqueta-fila .lg-etiqueta { margin-bottom: 6px; }
+.lg-olvide {
+    font-size: var(--txt-sm);
+    font-weight: 600;
+    color: var(--color-primario);
+    text-decoration: none;
+}
+.lg-olvide:hover { color: var(--color-marino); text-decoration: underline; text-underline-offset: 3px; }
+.lg-alerta--exito { border-color: #cbe3cc; background: var(--color-exito-fondo); color: var(--color-exito); }
+
+.lg-paso-icono {
+    display: inline-flex;
+    width: 3.25rem;
+    height: 3.25rem;
+    margin: 0 0 var(--esp-4);
+    align-items: center;
+    justify-content: center;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #e6f0f7, #dbe9f6);
+    color: var(--color-primario);
+    box-shadow: inset 0 0 0 1px rgba(0, 97, 160, 0.12);
+    animation: lg-pop 520ms cubic-bezier(.34, 1.56, .64, 1) 200ms both;
+}
+.lg-paso-icono--exito { background: linear-gradient(135deg, #e6f4e7, #d8eedb); color: var(--color-exito); box-shadow: inset 0 0 0 1px rgba(46, 125, 50, 0.15); }
+.lg-paso-icono--alerta { background: linear-gradient(135deg, #fff1e0, #ffe8cc); color: var(--color-alerta); box-shadow: inset 0 0 0 1px rgba(180, 83, 9, 0.15); }
+@keyframes lg-pop { from { opacity: 0; transform: scale(0.6) rotate(-8deg); } }
+
+.lg-nota { margin: var(--esp-4) 0 0; font-size: var(--txt-sm); text-align: center; color: var(--color-texto-medio); }
+.lg-nota a { font-weight: 600; }
+
+.lg-pasos { display: grid; gap: var(--esp-3); margin: 0 0 var(--esp-5); padding: 0; list-style: none; }
+.lg-pasos li { display: flex; align-items: flex-start; gap: var(--esp-3); font-size: var(--txt-sm); line-height: 1.5; color: var(--color-texto-suave); }
+.lg-pasos span {
+    display: inline-flex;
+    flex: none;
+    width: 1.6rem;
+    height: 1.6rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--color-primario-suave);
+    font-size: var(--txt-xs);
+    font-weight: 700;
+    color: var(--color-primario);
+}
+
+/* El boton como enlace (pasos 'enviado' e 'invalido'). */
+a.lg-boton { text-decoration: none; color: #fff; }
+a.lg-boton:hover { color: #fff; }
+.lg-page .lg-boton--secundario {
+    margin-top: 0;
+    border: 1.5px solid #d5dcea;
+    background: #fff;
+    box-shadow: none;
+    color: var(--color-marino);
+}
+.lg-page a.lg-boton--secundario:hover { border-color: var(--color-primario); color: var(--color-primario); box-shadow: 0 8px 18px -10px rgba(0, 97, 160, 0.45); }
+
+/* Medidor de fuerza: cuatro tramos que se encienden por nivel. */
+.lg-fuerza { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: var(--esp-2); }
+.lg-fuerza span { height: 4px; border-radius: var(--radio-pill); background: #e6ebf2; transition: background-color 260ms ease; }
+.lg-fuerza[data-nivel="0"] span:nth-child(-n+1) { background: var(--color-error); }
+.lg-fuerza[data-nivel="1"] span:nth-child(-n+1) { background: var(--color-alerta-borde); }
+.lg-fuerza[data-nivel="2"] span:nth-child(-n+2) { background: #eab308; }
+.lg-fuerza[data-nivel="3"] span:nth-child(-n+3) { background: #22c55e; }
+.lg-fuerza[data-nivel="4"] span:nth-child(-n+4) { background: var(--color-exito); }
+.lg-fuerza__texto, .lg-coincide { margin: 6px 0 0; font-size: var(--txt-xs); color: var(--color-texto-tenue); min-height: 1em; }
+.lg-coincide--ok { color: var(--color-exito); font-weight: 600; }
+.lg-coincide--no { color: var(--color-error); }
+
+@media (prefers-reduced-motion: reduce) {
+    .lg-paso-icono { animation: none; }
+    .lg-fuerza span { transition: none; }
+}
