@@ -26,8 +26,8 @@
  *
  * FECHA DE EMISION (2026-11-18). Campo #fecha-emision (name fechaEmision),
  * prellenado con hoy. Si se deja en hoy no viaja y el motor pone la fecha como
- * siempre; si se cambia, va como FchEmis del XML y del timbre. No se ofrece en
- * boleta (39), que va por otro camino.
+ * siempre; si se cambia, va como FchEmis del XML y del timbre. Vale tambien
+ * para boleta (39): la manda armarDocumentoBoleta() a /api/v1/boleta.
  *   - Descripcion y descuento por linea: el backend los lee, pero no forman
  *     parte de la interfaz autorizada todavia.
  *
@@ -427,7 +427,6 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
             <section class="tarjeta" aria-labelledby="titulo-condiciones">
                 <h2 id="titulo-condiciones"><?= $emPaso('titulo-condiciones'); ?>Condiciones del documento</h2>
                 <div class="form-grid form-grid--1">
-                    <?php if (! $esBoleta): ?>
                         <?php
                         /* FECHA DE EMISION. Prellenada con hoy: dejarla asi es lo
                            de siempre (no viaja y el motor pone la de hoy). Si se
@@ -468,7 +467,6 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
                                 <?= htmlspecialchars($feAviso); ?>
                             </small>
                         </div>
-                    <?php endif; ?>
                     <?php if ($esFactura): ?>
                         <?php
                         /* FORMA DE PAGO. SIN VALOR POR DEFECTO, y no es un descuido:
@@ -1560,7 +1558,6 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
 })();
 </script>
 
-<?php if (! $esBoleta): ?>
 <script>
 // AVISO DE FECHA DE EMISION DISTINTA A HOY: solo cambia el texto de ayuda.
 (function () {
@@ -1591,7 +1588,6 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
     fe.addEventListener('input', fechaEmisionAviso);
 })();
 </script>
-<?php endif; ?>
 
 <?php if ($esFactura): ?>
 <script>

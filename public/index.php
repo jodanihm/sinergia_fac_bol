@@ -2022,6 +2022,14 @@ function emitirBoleta(array $tenant): never
 
     $montosSonBrutos = (bool) ($body['montosSonBrutos'] ?? false);
 
+    // fechaEmision (FchEmis): OPCIONAL, mismo contrato que en emitirDte(). Si no
+    // viene, el builder pone la de hoy. Va al XML y al timbre (FE del TED), y
+    // decide en que RVD diario cae la boleta (se agrupa por fecha_emision).
+    $fechaEmision = $body['fechaEmision'] ?? null;
+    if ($fechaEmision !== null && (! is_string($fechaEmision) || ! validaFecha($fechaEmision))) {
+        invalido('fechaEmision debe ser una fecha AAAA-MM-DD valida', 'fechaEmision');
+    }
+
     // Receptor de boleta: SOLO rut+razonSocial. giro/direccion/comuna quedan
     // null (no aplican a boleta, ver fix de persistencia/PDF de hoy).
     $doc = new DocumentoTributario(
@@ -2039,6 +2047,7 @@ function emitirBoleta(array $tenant): never
             $detalles,
         ),
         montosSonBrutos: $montosSonBrutos,
+        fechaEmision: $fechaEmision !== null ? new DateTimeImmutable($fechaEmision) : null,
     );
 
     $ambiente = ambienteDesdeTenant($tenant);

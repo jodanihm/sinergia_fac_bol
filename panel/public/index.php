@@ -5449,7 +5449,7 @@ function armarDocumentoEmision(int $tipoDte, array $post): array
 
     // FECHA DE EMISION (FchEmis). Opcional: vacia o igual a hoy NO se manda y el
     // motor pone la de hoy, como siempre. Solo para los tipos que pasan por
-    // /api/v1/dte (la boleta 39 va por otro camino y no ofrece el campo).
+    // /api/v1/dte; la boleta 39 la arma armarDocumentoBoleta().
     if (in_array($tipoDte, [33, 34, 61, 56], true)) {
         $fe = trim((string) ($post['fechaEmision'] ?? ''));
         if ($fe !== '' && $fe !== date('Y-m-d')) {
@@ -5990,11 +5990,19 @@ function armarDocumentoBoleta(array $post): array
         ];
     }
 
-    return [
+    $doc = [
         'receptor'        => $receptor,
         'detalles'        => $detalles,
         'montosSonBrutos' => $precios['brutos'],
     ];
+    // FECHA DE EMISION: mismo criterio que armarDocumentoEmision(). Vacia o
+    // igual a hoy no se manda y el motor pone la de hoy, como siempre.
+    $fe = trim((string) ($post['fechaEmision'] ?? ''));
+    if ($fe !== '' && $fe !== date('Y-m-d')) {
+        $doc['fechaEmision'] = $fe;
+    }
+
+    return $doc;
 }
 
 function handleBoletaGet(): void
