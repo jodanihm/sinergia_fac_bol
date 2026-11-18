@@ -1654,6 +1654,8 @@ a.stepper__contenido:hover { color: var(--color-primario); }
 .tabla-datos__acciones button { margin-left: var(--esp-2); }
 .tabla-datos__secundario { display: block; color: var(--color-texto-tenue); font-size: var(--txt-sm); }
 .tabla-datos tbody tr.tabla-datos__fila--inactiva { color: var(--color-texto-tenue); background: var(--color-superficie-alt); }
+.tabla-datos tbody tr.tabla-datos__fila--rechazada { background: var(--color-error-fondo); }
+.tabla-datos tbody tr.tabla-datos__fila--rechazada:hover { background: #fbdcd8; }
 
 /* --------------------------------------------------------------------------
    Botones
