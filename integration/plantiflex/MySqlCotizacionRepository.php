@@ -149,6 +149,34 @@ final class MySqlCotizacionRepository
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
+    /**
+     * Resumen de las cotizaciones VIGENTES (activo = 1) de la cuenta, por
+     * estado: cuantas hay y cuanto suman. Es la cabecera del listado y se
+     * calcula SIN la busqueda ni el filtro de estado, a proposito: contesta
+     * "como esta mi cartera" aunque se este mirando un solo estado.
+     *
+     * El monto usa la MISMA formula que total_estimado de listar().
+     *
+     * @return array<string, array{n:int, monto:float}> clave = estado_cache
+     */
+    public function resumenPorEstado(int $cuentaId): array
+    {
+        $stmt = $this->pdo->prepare(
+            'SELECT c.estado_cache, COUNT(*) AS n, '
+            . 'COALESCE(SUM((SELECT SUM(l.cantidad * l.precio_unitario * (1 - l.descuento_pct / 100)) '
+            . '              FROM cotizacion_linea l WHERE l.cotizacion_id = c.id)), 0) AS monto '
+            . 'FROM cotizacion c WHERE c.cuenta_id = ? AND c.activo = 1 GROUP BY c.estado_cache'
+        );
+        $stmt->execute([$cuentaId]);
+
+        $resumen = [];
+        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $f) {
+            $resumen[(string) $f['estado_cache']] = ['n' => (int) $f['n'], 'monto' => (float) $f['monto']];
+        }
+
+        return $resumen;
+    }
+
     public function contar(
         int $cuentaId,
         ?string $busqueda = null,

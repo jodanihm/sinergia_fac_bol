@@ -4895,7 +4895,17 @@ function handleCotizacionesListar(): void
     $cots      = $repo->listar($cuentaId, $q !== '' ? $q : null, ! $incluirInactivas, $estado,
         $porPagina, ($pagina - 1) * $porPagina);
 
+    // Cabecera del listado (cuantas y cuanto por estado). Si falla, la lista
+    // se muestra igual, sin el resumen.
+    try {
+        $resumen = $repo->resumenPorEstado($cuentaId);
+    } catch (Throwable $ex) {
+        error_log('cotizaciones: no se pudo calcular el resumen - ' . $ex->getMessage());
+        $resumen = null;
+    }
+
     vista('cotizaciones-listado', [
+        'resumen'          => $resumen,
         'cotizaciones'     => $cots,
         'q'                => $q,
         'estado'           => $estado,

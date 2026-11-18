@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.18',
+        'titulo'  => 'Cotizaciones renovadas: resumen, vigencia y facturar desde la lista',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Arriba de la lista, tarjetas con cuantas cotizaciones vigentes hay por estado y cuanto suman, incluido el monto que queda por facturar. Cada tarjeta filtra la lista con un clic.',
+            'Cada cotizacion abierta muestra su vigencia: vigente hasta una fecha, vence en pocos dias, vence hoy o vencida.',
+            'Las cotizaciones que quedan por facturar tienen el boton "Facturar" en la misma fila, ademas del PDF y el acceso a la ficha.',
+            'Nuevo diseno de la busqueda y de la tabla, con icono, iniciales del cliente y estado con color.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.17',
         'titulo'  => 'Pantalla de carga con porcentaje al emitir',
         'tag'     => 'frontend',
