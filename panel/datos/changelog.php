@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-18',
+        'version' => '2.12',
+        'titulo'  => 'Envio de correos renovado: resumen, filtros en tarjetas y acciones claras',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Una barra muestra de un vistazo que parte de tus correos ya llego al cliente, cuantos esperan, cuantos no tienen correo y cuantos fallaron.',
+            'Las tarjetas de cada estado (Enviados, En cola, Sin destinatario, Con error) ahora filtran la lista con un clic.',
+            'Lo que necesita tu accion aparece junto en un bloque "Requiere atencion", con el boton para reintentar los que fallaron o buscar los correos que faltan.',
+            'Cada fila enlaza a la ficha de su documento, y las acciones (Reintentar, Buscar correo, Enviar sin link) son botones con icono.',
+            'La ventana de confirmacion tiene un diseno nuevo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-18',
         'version' => '2.11',
         'titulo'  => 'Ficha del documento renovada y con el estado del correo al cliente',
         'tag'     => 'frontend',

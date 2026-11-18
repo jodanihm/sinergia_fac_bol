@@ -4525,7 +4525,7 @@ html:has(.guia-estados[open]) { overflow: hidden; }
 }
 
 /* --- Tarjeta de la tabla --------------------------------------------------- */
-.pagina-panel-emision .pe-tabla {
+:is(.pagina-panel-emision, .pagina-correos) .pe-tabla {
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -4542,11 +4542,11 @@ html:has(.guia-estados[open]) { overflow: hidden; }
     gap: var(--esp-2);
     padding: var(--esp-4) var(--esp-5) var(--esp-3);
 }
-.pagina-panel-emision .pe-tabla__cabecera h2 { margin: 0; font-size: var(--txt-md); color: var(--color-marino); }
+:is(.pagina-panel-emision, .pagina-correos) .pe-tabla__cabecera h2 { margin: 0; font-size: var(--txt-md); color: var(--color-marino); }
 .pe-tabla__total { font-size: var(--txt-sm); color: var(--color-texto-tenue); font-variant-numeric: tabular-nums; }
 
-.pagina-panel-emision .tabla-documentos { width: 100%; border-collapse: separate; border-spacing: 0; }
-.pagina-panel-emision .tabla-documentos thead th {
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos { width: 100%; border-collapse: separate; border-spacing: 0; }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos thead th {
     padding: var(--esp-2) var(--esp-3);
     border-top: 1px solid var(--color-borde-tenue);
     border-bottom: 1px solid var(--color-borde-tenue);
@@ -4557,22 +4557,22 @@ html:has(.guia-estados[open]) { overflow: hidden; }
     text-transform: uppercase;
     color: var(--color-texto-tenue);
 }
-.pagina-panel-emision .tabla-documentos thead th:first-child,
-.pagina-panel-emision .tabla-documentos tbody td:first-child { padding-left: var(--esp-5); }
-.pagina-panel-emision .tabla-documentos thead th:last-child,
-.pagina-panel-emision .tabla-documentos tbody td:last-child { padding-right: var(--esp-5); }
-.pagina-panel-emision .tabla-documentos tbody td {
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos thead th:first-child,
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody td:first-child { padding-left: var(--esp-5); }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos thead th:last-child,
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody td:last-child { padding-right: var(--esp-5); }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody td {
     padding: var(--esp-3);
     border-bottom: 1px solid #eef1f4;
     transition: background-color 160ms ease;
 }
-.pagina-panel-emision .tabla-documentos tbody tr:last-child td { border-bottom: 0; }
-.pagina-panel-emision .tabla-documentos tbody tr:hover { background: #f6f9fc; }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr:last-child td { border-bottom: 0; }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr:hover { background: #f6f9fc; }
 
 /* Rechazado rehacible: rojo suave + barra lateral, que se ve aun sin color. */
-.pagina-panel-emision .tabla-documentos tbody tr.tabla-datos__fila--rechazada { background: var(--color-error-fondo); }
-.pagina-panel-emision .tabla-documentos tbody tr.tabla-datos__fila--rechazada:hover { background: #fbdcd8; }
-.pagina-panel-emision .tabla-documentos tbody tr.tabla-datos__fila--rechazada td:first-child { box-shadow: inset 3px 0 0 var(--color-error); }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr.tabla-datos__fila--rechazada { background: var(--color-error-fondo); }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr.tabla-datos__fila--rechazada:hover { background: #fbdcd8; }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr.tabla-datos__fila--rechazada td:first-child { box-shadow: inset 3px 0 0 var(--color-error); }
 
 /* Documento: icono por tipo + folio + tipo. */
 .pe-doc { display: flex; align-items: center; gap: var(--esp-3); }
@@ -4665,7 +4665,7 @@ tr:hover .pe-doc__icono { transform: scale(1.06) rotate(-3deg); }
    ".tabla-datos__acciones a" (0,1,1) les pone display:inline-block y 4px de
    padding, y con eso el icono quedaba descentrado en su fondo de hover y el
    boton Rehacer perdia su forma. */
-.pagina-panel-emision .tabla-documentos .tabla-datos__acciones { width: 1%; }
+:is(.pagina-panel-emision, .pagina-correos) .tabla-documentos .tabla-datos__acciones { width: 1%; }
 .pe-acciones {
     display: flex;
     align-items: center;
@@ -4814,17 +4814,17 @@ tr:hover .pe-doc__icono { transform: scale(1.06) rotate(-3deg); }
 @media (max-width: 720px) {
     .pe-cabecera__acciones { width: 100%; }
     .pe-tabla__cabecera { padding: var(--esp-4); }
-    .pagina-panel-emision .tabla-scroll { padding: 0 var(--esp-3) var(--esp-3); }
-    .pagina-panel-emision .tabla-documentos tbody tr { border-radius: 14px; border-color: var(--color-borde-tenue); }
-    .pagina-panel-emision .tabla-documentos tbody td,
-    .pagina-panel-emision .tabla-documentos tbody td:first-child,
-    .pagina-panel-emision .tabla-documentos tbody td:last-child { padding: var(--esp-1) 0; border: 0; }
-    .pagina-panel-emision .tabla-documentos tbody tr.tabla-datos__fila--rechazada td:first-child { box-shadow: none; }
-    .pagina-panel-emision .tabla-documentos tbody tr.tabla-datos__fila--rechazada { box-shadow: inset 3px 0 0 var(--color-error); }
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-scroll { padding: 0 var(--esp-3) var(--esp-3); }
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr { border-radius: 14px; border-color: var(--color-borde-tenue); }
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody td,
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody td:first-child,
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody td:last-child { padding: var(--esp-1) 0; border: 0; }
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr.tabla-datos__fila--rechazada td:first-child { box-shadow: none; }
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-documentos tbody tr.tabla-datos__fila--rechazada { box-shadow: inset 3px 0 0 var(--color-error); }
     .pe-acciones { justify-content: flex-start; padding-top: var(--esp-2); }
     .pe-rehacer-hueco { display: none; }
     .pe-acciones .pe-rehacer { margin-left: auto; }
-    .pagina-panel-emision .tabla-documentos .tabla-datos__acciones { width: auto; }
+    :is(.pagina-panel-emision, .pagina-correos) .tabla-documentos .tabla-datos__acciones { width: auto; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5175,4 +5175,231 @@ tr:hover .pe-doc__icono { transform: scale(1.06) rotate(-3deg); }
     .fd-linea__paso--actual .fd-linea__punto { animation: none; }
     .fd-volver svg, .fd-enlace svg, .fd-correcciones__flecha, .fd-correcciones a, .fd-rechazo__boton { transition: none; }
     .fd-volver:hover svg, .fd-enlace:hover svg, .fd-correcciones a:hover .fd-correcciones__flecha { transform: none; }
+}
+
+/* ==========================================================================
+   Envio de correos (views/correos-listado.php) -- body.pagina-correos
+   --------------------------------------------------------------------------
+   Misma familia visual del panel de emision: la tabla comparte las reglas de
+   .tabla-documentos (acotadas con :is(.pagina-panel-emision, .pagina-correos)).
+   Propias: barra de resumen, KPI que filtran, bloque de atencion, acciones de
+   fila y el dialogo de confirmacion. Prefijo .co-*.
+   ========================================================================== */
+.pagina-correos > main { background: var(--color-dash-fondo); }
+
+.co-tono--proceso { --tono: var(--color-primario); --tono-fondo: var(--color-primario-suave); }
+.co-tono--exito   { --tono: var(--color-exito);    --tono-fondo: #e6f4e7; }
+.co-tono--error   { --tono: var(--color-error);    --tono-fondo: var(--color-error-fondo); }
+.co-tono--alerta  { --tono: var(--color-alerta);   --tono-fondo: #fff1e0; }
+
+/* Barra de resumen: proporcion de cada estado sobre el total de la cuenta. */
+.co-resumen { margin: 0 0 var(--esp-4); }
+.co-resumen__barra {
+    display: flex;
+    height: 10px;
+    overflow: hidden;
+    border-radius: var(--radio-pill);
+    background: #e6ebf0;
+    gap: 2px;
+}
+.co-resumen__tramo {
+    width: var(--ancho);
+    min-width: 6px;
+    background: var(--tono);
+    transform-origin: left;
+    animation: co-crece 900ms cubic-bezier(.16, 1, .3, 1) both;
+}
+.co-resumen__tramo:nth-child(2) { animation-delay: 80ms; }
+.co-resumen__tramo:nth-child(3) { animation-delay: 160ms; }
+.co-resumen__tramo:nth-child(4) { animation-delay: 240ms; }
+@keyframes co-crece { from { transform: scaleX(0); } }
+.co-resumen__leyenda { margin: var(--esp-2) 0 0; font-size: var(--txt-sm); color: var(--color-texto-medio); }
+.co-resumen__leyenda strong { color: var(--color-exito); font-variant-numeric: tabular-nums; }
+
+/* KPI que filtran. */
+.co-kpis {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--esp-3);
+    margin: 0 0 var(--esp-4);
+}
+@media (max-width: 1200px) { .co-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 720px)  { .co-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.co-kpi {
+    --tono: var(--color-marino);
+    --tono-fondo: var(--color-primario-suave);
+    position: relative;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas: "icono etiqueta" "valor valor" "nota nota";
+    align-items: center;
+    gap: 2px var(--esp-2);
+    padding: var(--esp-4);
+    border: 1px solid var(--color-borde-tenue);
+    border-radius: 16px;
+    background: var(--color-superficie);
+    box-shadow: var(--sombra-tarjeta);
+    color: var(--color-texto);
+    text-decoration: none;
+    transition: border-color 180ms ease, box-shadow 240ms ease, transform 240ms cubic-bezier(.16, 1, .3, 1);
+}
+.co-kpi--todos { --tono: var(--color-primario); }
+.co-kpi:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--tono) 35%, transparent); box-shadow: 0 12px 26px -14px rgba(0, 44, 72, 0.4); }
+.co-kpi:focus-visible { outline: 2px solid var(--tono); outline-offset: 2px; }
+.co-kpi[aria-current="true"] {
+    border-color: var(--tono);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--tono) 18%, transparent), var(--sombra-tarjeta);
+}
+.co-kpi__icono {
+    grid-area: icono;
+    display: inline-flex;
+    width: 2rem;
+    height: 2rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: var(--tono-fondo);
+    color: var(--tono);
+}
+.co-kpi__etiqueta { grid-area: etiqueta; font-size: var(--txt-sm); font-weight: 600; color: var(--color-texto-medio); }
+.co-kpi__valor {
+    grid-area: valor;
+    margin-top: var(--esp-2);
+    font-size: 1.85rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-marino);
+}
+.co-kpi__nota { grid-area: nota; font-size: var(--txt-xs); color: var(--color-texto-tenue); }
+
+/* Requiere atencion: una fila por problema con su accion masiva. */
+.co-atencion {
+    margin: 0 0 var(--esp-4);
+    padding: var(--esp-4) var(--esp-5);
+    border: 1px solid #f3dcc0;
+    border-radius: 16px;
+    background: linear-gradient(100deg, #fff8f0, #fff 80%);
+    box-shadow: var(--sombra-tarjeta);
+}
+.co-atencion__titulo {
+    display: flex;
+    align-items: center;
+    gap: var(--esp-2);
+    margin: 0 0 var(--esp-3);
+    font-size: var(--txt-md);
+    color: var(--color-alerta);
+}
+.co-atencion__lista { display: grid; gap: var(--esp-2); margin: 0; padding: 0; list-style: none; }
+.co-atencion__item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--esp-3);
+    padding: var(--esp-3);
+    border: 1px solid var(--color-borde-tenue);
+    border-left: 3px solid var(--tono);
+    border-radius: 12px;
+    background: var(--color-superficie);
+}
+.co-atencion__icono {
+    display: inline-flex;
+    flex: none;
+    width: 2.2rem;
+    height: 2.2rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    background: var(--tono-fondo);
+    color: var(--tono);
+}
+.co-atencion__texto { display: flex; flex: 1 1 16rem; flex-direction: column; min-width: 0; }
+.co-atencion__texto strong { font-size: var(--txt-base); color: var(--color-texto); }
+.co-atencion__texto span { font-size: var(--txt-sm); color: var(--color-texto-medio); }
+.co-atencion form { margin: 0; }
+.co-atencion .boton-principal,
+.co-atencion .boton-secundario { margin: 0; }
+
+/* Celdas. */
+.co-correo { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--color-texto); overflow-wrap: anywhere; }
+.co-correo svg { flex: none; color: var(--color-texto-tenue); }
+.co-correo--vacio { color: var(--color-texto-tenue); font-style: italic; }
+.co-estado { cursor: default; }
+.co-estado:hover { transform: none; }
+.co-sub { display: block; margin-top: 4px; font-size: var(--txt-xs); color: var(--color-texto-tenue); }
+.co-error {
+    display: -webkit-box;
+    max-width: 22rem;
+    margin-top: 4px;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    font-size: var(--txt-xs);
+    line-height: 1.4;
+    color: var(--color-error);
+}
+
+/* Acciones de fila. Especificidad (0,2,0) para ganarle a la regla global
+   ".tabla-datos__acciones button" (0,1,1), igual que en el panel de emision. */
+.pe-acciones .co-accion {
+    --tono: var(--color-primario);
+    box-sizing: border-box;
+    display: inline-flex;
+    height: 2.25rem;
+    margin: 0 var(--esp-2) 0 0;
+    padding: 0 var(--esp-3);
+    align-items: center;
+    gap: 6px;
+    border: 1px solid color-mix(in srgb, var(--tono) 35%, transparent);
+    border-radius: var(--radio-pill);
+    background: #fff;
+    font: inherit;
+    font-size: var(--txt-sm);
+    font-weight: 600;
+    line-height: 1;
+    color: var(--tono);
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, box-shadow 220ms ease;
+}
+.pe-acciones .co-accion--error { --tono: var(--color-error); }
+.pe-acciones .co-accion--alerta { --tono: var(--color-alerta); }
+.pe-acciones .co-accion:hover { border-color: var(--tono); background: var(--tono); color: #fff; box-shadow: 0 8px 18px -8px var(--tono); }
+.pe-acciones .co-accion:hover .pe-rehacer__icono { transform: rotate(-180deg); }
+.pe-acciones .co-accion:focus-visible { outline: 2px solid var(--tono); outline-offset: 2px; }
+.pe-acciones .co-accion svg { flex: none; }
+.pe-acciones form { display: inline-flex; margin: 0; }
+.pe-acciones .co-accion[data-cargando="true"] { color: transparent; }
+
+/* Dialogo de confirmacion, solo en esta pantalla (la regla global sigue para
+   el resto). Entrada animada y fondo desenfocado, como la Guia de estados. */
+.pagina-correos .dialogo-confirmar {
+    max-width: min(28rem, calc(100vw - 2rem));
+    padding: var(--esp-5);
+    border: 0;
+    border-radius: 18px;
+    box-shadow: 0 0 0 1px rgba(0, 44, 72, 0.06), 0 24px 64px -12px rgba(0, 44, 72, 0.35);
+}
+.pagina-correos .dialogo-confirmar[open] { animation: guia-entra 360ms cubic-bezier(.16, 1, .3, 1) both; }
+.pagina-correos .dialogo-confirmar::backdrop {
+    background: rgba(0, 28, 46, 0.42);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: guia-fondo-entra 280ms ease-out both;
+}
+.pagina-correos .dialogo-confirmar__titulo { font-size: var(--txt-lg); letter-spacing: -0.01em; }
+.pagina-correos .dialogo-confirmar p { line-height: 1.5; color: var(--color-texto-suave); }
+.pagina-correos .dialogo-confirmar .acciones-formulario { display: flex; justify-content: flex-end; gap: var(--esp-2); }
+.pagina-correos .dialogo-confirmar .acciones-formulario button { margin: 0; border-radius: 10px; }
+
+@media (max-width: 720px) {
+    .co-atencion { padding: var(--esp-4); }
+    .co-atencion__item form, .co-atencion__item .boton-principal, .co-atencion__item .boton-secundario { width: 100%; justify-content: center; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .co-resumen__tramo, .pagina-correos .dialogo-confirmar[open], .pagina-correos .dialogo-confirmar::backdrop { animation: none; }
+    .co-kpi, .pe-acciones .co-accion { transition: none; }
+    .co-kpi:hover { transform: none; }
+    .pe-acciones .co-accion:hover .pe-rehacer__icono { transform: none; }
 }
