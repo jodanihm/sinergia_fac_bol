@@ -32,6 +32,18 @@ declare(strict_types=1);
 
 return [
     [
+        'fecha'   => '2026-11-19',
+        'version' => '2.24',
+        'titulo'  => 'Pegar los datos del cliente y que se llene el receptor solo',
+        'tag'     => 'frontend',
+        'items'   => [
+            'En factura, boleta y notas, junto a "Buscar en mis clientes" hay un boton nuevo: "Pegar datos".',
+            'Pegas el texto que te mando el cliente (RUT, razon social, giro, direccion, comuna, correo) y el sistema reparte cada dato en su campo.',
+            'Entiende las etiquetas habituales ("Razon social", "Nombre", "Domicilio", "Correo DTE"...) y tambien textos sin etiquetas; telefono, ciudad o contacto se ignoran.',
+            'Al terminar avisa que lleno, que dedujo sin etiqueta (para que lo revises) y que falta. Si el RUT ya esta en tus clientes, lo que el texto no traia se completa desde ahi.',
+        ],
+    ],
+    [
         'fecha'   => '2026-11-18',
         'version' => '2.23',
         'titulo'  => 'La boleta tambien permite elegir la fecha de emision',
