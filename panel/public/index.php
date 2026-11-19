@@ -1032,7 +1032,7 @@ const RUTAS_GATE_PROPIO = [
 function definicionMenu(): array
 {
     return [
-        ['clave' => 'dashboard', 'label' => 'Dashboard', 'destino' => '/panel', 'icono' => 'dashboard', 'construido' => true, 'requiereProduccion' => false],
+        ['seccion' => 'General', 'clave' => 'dashboard', 'label' => 'Dashboard', 'destino' => '/panel', 'icono' => 'dashboard', 'construido' => true, 'requiereProduccion' => false],
         // CHAT VA EN EL NIVEL SUPERIOR, Y NO DENTRO DE INFORMES.
         //
         // Estuvo en Informes y ahi no se encontraba, por dos motivos que se
@@ -1056,6 +1056,8 @@ function definicionMenu(): array
         // dice "esto es de Ventas" en cada opcion; la etiqueta dice cual.
         // El grupo que contiene la pagina actual se pinta abierto.
         [
+            // 'seccion': titulo que el menu pone ANTES de este item (_nav.php).
+            'seccion'  => 'Operacion',
             'label'    => 'Ventas',
             'icono'    => 'factura',
             'plegable' => true,
@@ -1150,6 +1152,7 @@ function definicionMenu(): array
         // Los tres van JUNTOS en "Configuracion" desde que todo grupo es un
         // desplegable: sueltos eran tres destinos mas en el primer nivel.
         [
+            'seccion'  => 'Administracion',
             'label'    => 'Configuracion',
             'icono'    => 'ajustes',
             'plegable' => true,

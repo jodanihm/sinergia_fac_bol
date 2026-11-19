@@ -33,6 +33,19 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-19',
+        'version' => '2.28',
+        'titulo'  => 'Nuevo diseno del menu lateral',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El menu lateral cambio por completo: fondo azul marino oscuro, la marca SinergIA arriba y la pantalla actual marcada con un brillo azul.',
+            'Las opciones se ordenan en tres secciones: General, Operacion y Administracion.',
+            'Nuevo boton en el borde del menu para contraerlo a solo iconos y ganar espacio en tablas anchas; al pasar el mouse por un icono se ve su nombre. El menu recuerda si lo dejaste contraido.',
+            'Al pie, una tarjeta con la empresa y el usuario conectados, y el boton para cerrar sesion.',
+            'Se mantienen el buscador (tecla /), los grupos recordados y el menu deslizable en el celular, ahora con el mismo diseno oscuro.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-19',
         'version' => '2.27',
         'titulo'  => 'Menu lateral renovado: fijo, con buscador y mas limpio',
         'tag'     => 'frontend',

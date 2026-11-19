@@ -506,381 +506,525 @@ body.con-sidebar > main {
     box-sizing: border-box;
 }
 
-/* La separacion con el contenido la da una SOMBRA y no un border-right de 1px.
-   Un borde plano es una linea; la sombra lee como una superficie que esta por
-   encima, que es lo que hace que un panel lateral se sienta como una aplicacion
-   y no como una tabla con marco.
-   La linea de 1px no se pierde: va como primera capa de --sombra-borde. Y como
-   la sombra NO ocupa espacio de layout, el ancho util interior sube 1px (de 259
-   a 260), sin mover nada del contenido principal.
-
-   260 Y NO 232: con los iconos delante, cada item perdio 26px de ancho para el
-   texto (18 del icono + 8 del gap) y dos labels dejaron de caber en una linea
-   -- "Carga masiva de notas de venta" necesita 190.8px y "Detalle documento a
-   documento" 198.1px, contra los 174px que quedaban. Los dos pasaban a 52px de
-   alto y rompian la uniformidad del menu.
-   260 es el MINIMO medido que devuelve los 27 items a una linea: a 252 y 256
-   todavia envolvia uno. Se prefirio esto a acortar los labels, que son los
-   nombres reales de cada modulo.
-   El <main> no calcula nada a partir de este valor (flex: 1 1 auto con
-   max-width propio), asi que no hay ningun otro numero que ajustar. */
-.sidebar {
-    flex: 0 0 260px;
-    width: 260px;
-    box-sizing: border-box;
-    background: var(--color-nav-fondo);
-    box-shadow: var(--sombra-borde);
-    padding: var(--esp-3) var(--esp-2) 1.1rem;
-    display: flex;
-    flex-direction: column;
-    /* La sombra del sidebar debe quedar POR ENCIMA del contenido, no debajo:
-       sin contexto de apilamiento propio, el <main> que viene despues en el DOM
-       la tapa y el efecto no se ve. */
-    position: relative;
-    z-index: 1;
-}
-/* Separador bajo la marca, mismo tratamiento que .sidebar__pie: una linea
-   tenue que cierra el bloque. Antes el logo quedaba flotando pegado al primer
-   item del menu, sin nada que los distinguiera. */
-.sidebar__marca {
-    font-weight: 700;
-    font-size: var(--txt-md);
-    padding: var(--esp-1) var(--esp-2) var(--esp-3);
-    margin-bottom: var(--esp-2);
-    border-bottom: 1px solid var(--color-borde-tenue);
-}
-
-/* Logo de la marca. El max-height es la pieza que importa: bajo 720px el
-   sidebar pasa a ancho completo y .sidebar__marca se ensancha con el, asi que
-   un ancho porcentual solo dejaria crecer el logo hasta comerse el menu (que
-   ahi vive en una caja de 50dvh con scroll propio). Acotando la ALTURA, el
-   limite manda igual en 260px que en pantalla completa. */
-.sidebar__logo {
-    display: block;
-    width: auto;
-    max-width: 100%;
-    max-height: 2.5rem;
-    height: auto;
-}
-.sidebar__grupo { margin-bottom: var(--esp-2); }
-
-/* JERARQUIA DEL MENU: seccion > subgrupo > item > subitem.
-   Antes el subtitulo de subgrupo (0.72rem) era MAS GRANDE que el titulo de
-   seccion (0.68rem) y no llevaba uppercase, asi que "Produccion" competia con
-   "Configuracion" en vez de subordinarse. Ahora la jerarquia se lee por cuatro
-   ejes a la vez -- tamano, peso, color y sangria -- y no solo por el tamano,
-   que a estas escalas se percibe poco.
-   Contrastes sobre #f7f7f8: #5c5c5c 6.24:1, #6e6e6e 4.76:1. Ambos cumplen AA. */
-.sidebar__grupo-titulo {
-    font-size: var(--txt-xs);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--color-texto-medio);
-    padding: 0 var(--esp-2);
-    margin: var(--esp-2) 0 var(--esp-1);
-}
-/* GRUPO DESPLEGABLE (octubre 2026: todo grupo del menu es uno).
-   El summary se ve como un item mas (.nav-grupo: mismo alto, radio, padding e
-   icono de 18px que .nav-item), con peso 600 y un chevron a la derecha que
-   gira al abrir. Las opciones van con sangria y una linea vertical tenue, y
-   llevan el MISMO icono que el grupo (lo pone _nav.php): el dibujo dice de que
-   grupo es cada opcion; la etiqueta dice cual.
-   Se quita el marcador nativo porque cada navegador lo pinta distinto. */
-.sidebar__grupo--plegable { margin-bottom: var(--esp-1); }
-.nav-grupo {
-    display: flex;
-    align-items: center;
-    gap: var(--esp-2);
-    padding: var(--esp-2);
-    border-radius: var(--radio-md);
-    font-size: var(--txt-sm);
-    font-weight: 600;
-    color: var(--color-texto);
-    cursor: pointer;
-    list-style: none;
-    transition: background-color 150ms ease;
-}
-.nav-grupo::-webkit-details-marker { display: none; }
-.nav-grupo__texto { flex: 1 1 auto; min-width: 0; }
-.nav-grupo::after {
-    content: "";
-    flex: none;
-    width: 0.4em;
-    height: 0.4em;
-    margin-right: var(--esp-1);
-    border-right: 2px solid currentColor;
-    border-bottom: 2px solid currentColor;
-    transform: rotate(-45deg);
-    transition: transform 150ms ease;
-}
-.sidebar__grupo--plegable[open] > .nav-grupo::after { transform: rotate(45deg); }
-.nav-grupo:hover { background: var(--color-nav-hover); }
-.nav-grupo:focus-visible { border-radius: var(--radio-md); }
-/* Grupo que contiene la pagina actual: el titulo va en marino. Cuando alguien
-   lo pliega, sigue diciendo donde esta (el item activo queda escondido). */
-.sidebar__grupo--actual > .nav-grupo { color: var(--color-marino); }
-.sidebar__grupo--actual:not([open]) > .nav-grupo { background: var(--color-primario-suave); box-shadow: inset 3px 0 0 var(--color-acento); }
-.nav-grupo__opciones {
-    margin: var(--esp-1) 0 var(--esp-1) calc(var(--esp-2) + 9px);
-    padding-left: var(--esp-2);
-    border-left: 1px solid var(--color-borde-tenue);
-}
-@media (prefers-reduced-motion: reduce) {
-    .nav-grupo,
-    .nav-grupo::after { transition: none; }
-}
-
-/* Agrupacion ligera: una linea vertical y sangria, sin card ni fondo. El mismo
-   tratamiento vale para Ventas > Emision y para los dos subgrupos de ambiente
-   de Configuracion empresa: es el mismo componente y no se disena uno distinto
-   del otro. */
-.sidebar__subgrupo {
-    margin: var(--esp-1) 0 var(--esp-1);
-    padding-left: var(--esp-2);
-    border-left: 1px solid var(--color-borde-tenue);
-}
-
-/* SUBE de 0.64rem/600 a --txt-xs/700, el mismo tratamiento que un titulo de
-   seccion. Certificacion y Produccion son subgrupos HERMANOS y ninguno puede
-   pesar menos que el otro: cargar un CAF en el ambiente equivocado quema folios
-   reales ante el SII.
-   La subordinacion a "Configuracion empresa" no se pierde, la sostienen la
-   sangria y la linea vertical del contenedor -- la jerarquia se lee por varios
-   ejes a la vez, no solo por el tamano.
-   Afecta tambien a "Emision" bajo Ventas, que es el otro subgrupo del menu.
-   Es deliberado: mismo componente, mismo tratamiento.
-   #5c5c5c sobre #f7f7f8 da 6.25:1, cumple AA. */
-.sidebar__subtitulo {
-    font-size: var(--txt-xs);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--color-texto-medio);
-    padding: 0 var(--esp-2);
-    margin: var(--esp-2) 0 var(--esp-1);
-}
-
-/* AMBIENTE DE PRODUCCION. Dos senales y no mas: la linea vertical del bloque
-   completo y el color del encabezado. Los items NO se tinen -- cuatro enlaces
-   ambar seguidos serian ruido y pisarian el azul del item activo, que es
-   informacion distinta. Tampoco llevan badge: las ocho vistas ya traen el suyo
-   en el <h1>, y aqui serian cuatro repeticiones de lo mismo.
-   Certificacion se queda neutra a proposito: el contraste ENTRE los dos bloques
-   es lo que comunica; tenir ambos anularia el efecto.
-   --color-alerta (#b45309) sobre #f7f7f8 da 4.69:1 y cumple AA.
-   --color-alerta-borde (#ed6c02) da 2.91:1: NO sirve como texto, solo aqui,
-   como borde, donde no hay requisito de contraste.
-   El padding-left compensa el pixel extra del borde de 2px para que los items
-   de los dos subgrupos queden alineados a la misma sangria. */
-.sidebar__subgrupo--produccion {
-    padding-left: calc(var(--esp-2) - 1px);
-    border-left: 2px solid var(--color-alerta-borde);
-}
-.sidebar__subgrupo--produccion .sidebar__subtitulo { color: var(--color-alerta); }
-.sidebar__pie { margin-top: auto; padding-top: var(--esp-3); border-top: 1px solid var(--color-borde-tenue); }
-
-/* DENSIDAD. El padding vertical sube de --esp-1 (4px) a --esp-2 (8px) y el
-   radio de --radio-sm (4px) a --radio-md (6px): 4px es el radio de un control
-   de formulario de hace veinte anos y a 24px de alto los enlaces se leian como
-   filas de una tabla, no como destinos en los que se hace clic.
-   El alto pasa de 24-26px a 32-34px, que ademas cruza el minimo de 24px de
-   WCAG 2.5.8 sin depender de la excepcion de enlace en linea. */
-.nav-item {
-    display: flex;
-    align-items: center;
-    /* flex-start y NO space-between: con el icono delante, un item con badge
-       pasa a tener tres hijos y space-between mandaria el texto al centro,
-       separandolo de su propio icono. El badge se mantiene a la derecha con un
-       margin-left:auto propio, mas abajo. */
-    justify-content: flex-start;
-    gap: var(--esp-2);
-    padding: var(--esp-2);
-    border-radius: var(--radio-md);
-    font-size: var(--txt-sm);
-    text-decoration: none;
-    color: var(--color-texto);
-    /* PRIMERA TRANSICION DEL PROYECTO. Solo background-color: animar 'all'
-       arrastraria el box-shadow del item activo y el outline del foco, que
-       deben aparecer de inmediato. 150ms es el rango en que el cambio se
-       percibe como respuesta y no como retardo.
-       El bloque @media (prefers-reduced-motion: reduce) del final la reduce a
-       0.01ms; estaba preparado desde antes y hasta hoy no tenia nada que
-       neutralizar. */
-    transition: background-color 150ms ease;
-}
-/* Separacion entre enlaces. Antes iban pegados (0px) y el bloque se leia como
-   un parrafo continuo. Solo entre hermanos: no agrega aire sobrante al final
-   de cada grupo ni bajo el ultimo item. */
-.nav-item + .nav-item { margin-top: var(--esp-1); }
-.nav-item--sub { padding-left: var(--esp-3); font-size: var(--txt-xs); }
-a.nav-item:hover { background: var(--color-nav-hover); }
-
-/* ICONO DEL MENU.
-   18px y no 20: el item mide 34px con 8px de padding, o sea 18px de caja util.
-   A 18 el icono entra exacto y la altura del item no se mueve; a 20 subiria a
-   36 y habria que recalcular el area tactil ya verificada.
-   flex:none para que no lo encoja un label largo ("Detalle documento a
-   documento" es el mas largo del menu).
-   COLOR (octubre 2026): todos los iconos en --color-primario, el azul SII,
-   UNO SOLO para todo el menu. Se descarto un color por grupo: el design
-   system fija "un color, un significado", y verde/rojo/ambar ya significan
-   exito/error/advertencia en el panel. #0061a0 sobre el fondo del menu da
-   6.07:1 (un icono pide 3:1).
-   El activo hereda el marino de su texto, y la opcion deshabilitada
-   (proximamente / sin produccion) vuelve al gris: un icono azul la haria
-   parecer clicable. */
-.nav-item__icono { width: 18px; height: 18px; flex: none; color: var(--color-primario); }
-.nav-item--activo .nav-item__icono,
-.sidebar__grupo--actual > .nav-grupo .nav-item__icono { color: inherit; }
-.nav-item--proximo .nav-item__icono,
-.nav-item--bloqueado .nav-item__icono { color: var(--color-texto-tenue); }
-
-/* El badge se va a la derecha por su cuenta, ahora que el item alinea a la
-   izquierda. SCOPEADO al sidebar: .nav-item__badge tambien lo usa
-   panel-gestion.php, donde el margin-left:auto no tiene nada que hacer. */
-.sidebar .nav-item__badge { margin-left: auto; }
-/* El radio del foco acompana al del item: la regla global :focus-visible usa
-   --radio-sm y con el item en --radio-md el anillo quedaria con las esquinas
-   mas cerradas que la caja que rodea. Se ajusta SOLO aqui; la global sigue
-   sirviendo al resto del panel, que no cambio de radio. */
-.nav-item:focus-visible { border-radius: var(--radio-md); }
-/* Indicador lateral con box-shadow inset y NO con border-left: un borde
-   desplazaria el texto 3px solo en el item activo, descuadrandolo respecto de
-   sus vecinos, y quedaria recortado si el contenedor tuviera overflow. El
-   inset-shadow no ocupa espacio de layout. El estado sigue comunicandose
-   ademas por fondo, color y peso: la barra no es la unica senal. */
-/* PALETA SII: texto marino y barra NARANJA, como el activo de los menus de
-   sii.cl. La barra es la unica pieza naranja del menu (3.44:1 sobre el fondo
-   del sidebar, sobre el 3:1 que pide un indicador no textual). */
-.nav-item--activo {
-    background: var(--color-primario-suave);
-    color: var(--color-marino);
-    font-weight: 600;
-    box-shadow: inset 3px 0 0 var(--color-acento);
-}
-/* #6e6e6e y no #aaa: sobre #f7f7f8 da 4.76:1 (antes 2.17:1, no cumplia AA). */
-.nav-item--proximo,
-.nav-item--bloqueado { color: var(--color-texto-tenue); cursor: default; }
-.nav-item__badge {
-    font-size: 0.58rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    border-radius: var(--radio-sm);
-    padding: 0.05rem var(--esp-1);
-    white-space: nowrap;
-}
-/* #5c5c5c y no #999: sobre #eaeaea da 5.56:1 (antes 2.37:1, no cumplia AA). */
-.nav-item--proximo .nav-item__badge,
-.badge--proximo { background: #eaeaea; color: var(--color-texto-medio); }
-.nav-item--bloqueado .nav-item__badge { background: #fff7e6; color: #7a4b00; border: 1px solid var(--color-alerta-borde); }
-
 /* ==========================================================================
-   Menu lateral, ronda de noviembre 2026 (js/menu-lateral.js).
-   ========================================================================== */
+   MENU LATERAL (partials/_nav.php, js/menu-lateral.js) -- rediseno de
+   noviembre 2026.
 
-/* FIJO CON SCROLL PROPIO. Antes el menu se iba con la pagina: en una tabla
-   larga habia que volver arriba para cambiar de pantalla. Ahora queda a la
-   vista y, si no cabe, se desplaza solo el. */
-.sidebar {
+   SUPERFICIE OSCURA: el marino de la marca, profundizado, con un brillo azul
+   arriba a la izquierda. El contenido sigue claro; el contraste entre los dos
+   planos es lo que ordena la pantalla (navegacion a un lado, trabajo al otro).
+
+   Colores propios del menu en variables --sb-*: viven solo aqui y no se
+   mezclan con la paleta del contenido. Contrastes sobre el fondo (#0b1d30):
+     --sb-texto   (#c9d6e3 aprox.)  11.4:1
+     --sb-tenue   (#8da0b3 aprox.)   6.1:1   titulos de seccion, correo
+     --sb-acento  #5cc0ff            8.4:1   icono activo, barra, foco
+   Todo cumple AA para texto chico.
+
+   ANCHOS: 268px expandido, 76px contraido (html.menu-contraido). Movil
+   (<= 720px, con JS): panel de 300px que entra desde la izquierda; sin JS,
+   apilado arriba como siempre.
+   ========================================================================== */
+.sb {
+    --sb-fondo: #0b1d30;
+    --sb-fondo-2: #06131f;
+    --sb-texto: rgba(220, 232, 244, 0.86);
+    --sb-fuerte: #ffffff;
+    --sb-tenue: rgba(190, 208, 226, 0.66);
+    --sb-icono: rgba(190, 210, 230, 0.62);
+    --sb-linea: rgba(255, 255, 255, 0.08);
+    --sb-hover: rgba(255, 255, 255, 0.06);
+    --sb-acento: #5cc0ff;
+    --sb-acento-2: #2f7ff0;
+    --sb-activo: linear-gradient(90deg, rgba(92, 192, 255, 0.20) 0%, rgba(92, 192, 255, 0.07) 100%);
+    --sb-ambar: #f6b24e;
+    --sb-ancho: 268px;
+    --sb-radio: 10px;
+
+    flex: 0 0 var(--sb-ancho);
+    width: var(--sb-ancho);
+    box-sizing: border-box;
     position: sticky;
     top: 0;
+    z-index: 5;
     align-self: flex-start;
     height: 100vh;
     height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    padding: 18px 12px 12px;
+    color: var(--sb-texto);
+    background:
+        radial-gradient(140% 55% at 0% 0%, rgba(47, 127, 240, 0.22) 0%, rgba(47, 127, 240, 0) 62%),
+        radial-gradient(90% 40% at 100% 100%, rgba(92, 192, 255, 0.08) 0%, rgba(92, 192, 255, 0) 70%),
+        linear-gradient(180deg, var(--sb-fondo) 0%, var(--sb-fondo-2) 100%);
+    box-shadow: 1px 0 0 rgba(255, 255, 255, 0.04), 10px 0 34px rgba(3, 14, 26, 0.16);
+    transition: flex-basis 220ms cubic-bezier(.2, .8, .2, 1), width 220ms cubic-bezier(.2, .8, .2, 1), padding 220ms ease;
+}
+.sb [hidden], .barra-movil[hidden], .sidebar-fondo[hidden] { display: none !important; }
+.sb :focus-visible { outline: 2px solid var(--sb-acento); outline-offset: 2px; }
+.sb:focus { outline: none; }
+
+/* --- Marca ---------------------------------------------------------------- */
+.sb__cabecera {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 0 6px 16px;
+}
+.sb__marca {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    text-decoration: none;
+    color: inherit;
+    border-radius: var(--sb-radio);
+}
+/* El simbolo sale del mismo logo.png, recortado: el dibujo ocupa el primer
+   cuarto de la imagen. Sin un archivo nuevo que mantener. */
+.sb__simbolo {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), rgba(225, 238, 252, 0.92));
+    box-shadow: 0 6px 18px rgba(47, 127, 240, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+    overflow: hidden;
+}
+.sb__simbolo img {
+    display: block;
+    height: 34px;
+    width: auto;
+    max-width: none;
+    /* 254x80 a 34px de alto mide 108px; el simbolo es el primer 28%. Se
+       recorta el resto y se corre para centrarlo en la caja de 40px. */
+    margin-left: 5px;
+    clip-path: inset(0 72% 0 0);
+}
+.sb__marca-texto { display: flex; flex-direction: column; min-width: 0; line-height: 1.15; }
+.sb__nombre {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--sb-fuerte, #fff);
+    white-space: nowrap;
+}
+.sb__nombre span {
+    background: linear-gradient(90deg, #6fd0ff, #3b8cff);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+.sb__lema { margin-top: 3px; font-size: 0.7rem; letter-spacing: 0.02em; color: var(--sb-tenue); white-space: nowrap; }
+
+/* Boton redondo sobre el borde derecho: contraer / expandir. */
+.sb__contraer {
+    position: absolute;
+    top: 30px;
+    right: -13px;
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: #12304d;
+    color: var(--sb-fuerte);
+    box-shadow: 0 4px 12px rgba(3, 14, 26, 0.35);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 160ms ease, background-color 160ms ease, transform 220ms ease;
+}
+.sb:hover .sb__contraer,
+.sb__contraer:focus-visible,
+.menu-contraido .sb__contraer { opacity: 1; }
+.sb__contraer:hover { background: var(--sb-acento-2); }
+.sb__contraer svg { transition: transform 220ms ease; }
+.menu-contraido .sb__contraer svg { transform: rotate(180deg); }
+
+.sb__cerrar,
+.barra-movil__menu {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: var(--sb-radio);
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+}
+.sb__cerrar:hover { background: var(--sb-hover); }
+
+/* --- Buscar ---------------------------------------------------------------- */
+.sb__buscar { position: relative; margin: 0 0 10px; }
+.sb__buscar-icono {
+    position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+    width: 16px; height: 16px; color: var(--sb-icono); pointer-events: none;
+}
+.sb__buscar input {
+    width: 100%;
+    box-sizing: border-box;
+    height: 40px;
+    padding: 0 36px 0 38px;
+    border: 1px solid var(--sb-linea);
+    border-radius: var(--sb-radio);
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--sb-fuerte);
+    font: inherit;
+    font-size: 0.875rem;
+    transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+.sb__buscar input::placeholder { color: var(--sb-tenue); }
+.sb__buscar input:hover { background: rgba(255, 255, 255, 0.07); }
+.sb__buscar input:focus {
+    outline: none;
+    border-color: rgba(92, 192, 255, 0.6);
+    background: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 0 0 3px rgba(92, 192, 255, 0.16);
+}
+.sb__buscar input::-webkit-search-cancel-button { display: none; }
+.sb__atajo {
+    position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+    min-width: 20px; height: 20px; padding: 0 5px; box-sizing: border-box;
+    border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    font: 600 0.7rem/18px system-ui, sans-serif; text-align: center;
+    color: var(--sb-tenue);
+}
+.sb__buscar input:focus ~ .sb__atajo,
+.sb__buscar input:not(:placeholder-shown) ~ .sb__atajo { display: none; }
+
+/* --- Lista ----------------------------------------------------------------- */
+.sb__menu {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
+    margin: 0 -12px;
+    padding: 0 12px 12px;
     overscroll-behavior: contain;
     scrollbar-width: thin;
-    scrollbar-color: var(--color-borde-suave) transparent;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+    /* El borde inferior se desvanece: dice que hay mas abajo sin una linea. */
+    -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(180deg, #000 calc(100% - 18px), transparent);
 }
-.sidebar__menu { display: flex; flex-direction: column; }
-/* hidden tiene que ganarle al display:flex de los items al filtrar. */
-.sidebar [hidden], .barra-movil[hidden], .sidebar-fondo[hidden] { display: none !important; }
-
-/* Densidad: 34px por item y 4px entre ellos daban 38px por fila; las
-   opciones de un grupo (que ya no llevan icono) pasan a 30px y 2px. */
-.nav-grupo__opciones .nav-item { padding: 6px var(--esp-2); }
-.nav-grupo__opciones .nav-item + .nav-item { margin-top: 2px; }
-.nav-grupo__opciones { margin-top: 2px; }
-.sidebar__subtitulo { margin: var(--esp-2) 0 2px; font-size: 0.66rem; color: var(--color-texto-tenue); }
-.sidebar__subgrupo { margin: 2px 0; }
-/* Sin icono, la sangria extra del subitem ya no hace falta: el subgrupo tiene
-   su propia linea y su propio padding. */
-.nav-grupo__opciones .nav-item--sub { padding-left: var(--esp-2); font-size: var(--txt-sm); }
-
-/* Marca: el logo y, en movil, el boton de cerrar a la derecha. */
-.sidebar__marca { display: flex; align-items: center; justify-content: space-between; gap: var(--esp-2); }
-.sidebar__cerrar,
-.barra-movil__menu {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 2.5rem; height: 2.5rem; padding: 0;
-    border: 0; border-radius: var(--radio-md);
-    background: transparent; color: var(--color-marino); cursor: pointer;
+.sb__vacio { margin: 8px 12px; font-size: 0.85rem; color: var(--sb-tenue); }
+.sb__bloque + .sb__bloque { margin-top: 6px; }
+.sb__seccion {
+    margin: 14px 0 6px;
+    padding: 0 12px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sb-tenue);
+    white-space: nowrap;
 }
-.sidebar__cerrar:hover,
-.barra-movil__menu:hover { background: var(--color-nav-hover); }
-/* El boton de cerrar solo existe en el panel movil. */
-.sidebar__cerrar { display: none; }
+.sb__bloque:first-child .sb__seccion { margin-top: 4px; }
 
-/* BUSCAR EN EL MENU. */
-.sidebar__buscar {
+/* Item de primer nivel y cabecera de grupo. */
+.sb-item {
     position: relative;
     display: flex;
     align-items: center;
-    margin: 0 0 var(--esp-2);
+    gap: 12px;
+    min-height: 40px;
+    padding: 0 12px;
+    margin: 2px 0;
+    border-radius: var(--sb-radio);
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--sb-texto);
+    text-decoration: none;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: background-color 150ms ease, color 150ms ease;
 }
-.sidebar__buscar-icono {
-    position: absolute; left: 0.6rem; top: 50%; transform: translateY(-50%);
-    width: 16px; height: 16px; color: var(--color-texto-tenue); pointer-events: none;
-}
-.sidebar__buscar input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 0.45rem 2rem 0.45rem 2rem;
-    border: 1px solid var(--color-borde-tenue);
-    border-radius: var(--radio-md);
-    background: #fff;
-    color: var(--color-texto);
-    font: inherit;
-    font-size: var(--txt-sm);
-}
-.sidebar__buscar input::placeholder { color: var(--color-texto-tenue); }
-.sidebar__buscar input:focus { border-color: var(--color-primario); outline: 2px solid var(--color-primario-suave); outline-offset: 0; }
-.sidebar__buscar input::-webkit-search-cancel-button { display: none; }
-.sidebar__atajo {
-    position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%);
-    min-width: 1.2rem; padding: 0 0.3rem;
-    border: 1px solid var(--color-borde-tenue); border-radius: 4px;
-    background: var(--color-nav-fondo);
-    font: inherit; font-size: 0.7rem; line-height: 1.2rem; text-align: center;
-    color: var(--color-texto-tenue);
-}
-.sidebar__buscar input:focus ~ .sidebar__atajo,
-.sidebar__buscar input:not(:placeholder-shown) ~ .sidebar__atajo { display: none; }
-.sidebar__sin-resultados { margin: var(--esp-2); font-size: var(--txt-sm); color: var(--color-texto-tenue); }
-/* Mientras se busca, la primera coincidencia (la de Enter) se marca. */
-.sidebar--buscando .nav-item--primero:not(.nav-item--activo) { background: var(--color-nav-hover); }
+.sb-item::-webkit-details-marker { display: none; }
+.sb-item__icono { flex: none; width: 18px; height: 18px; color: var(--sb-icono); transition: color 150ms ease; }
+.sb-item__texto { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb-item__chevron { flex: none; color: var(--sb-tenue); transition: transform 200ms ease; }
+.sb-grupo[open] > .sb-item .sb-item__chevron { transform: rotate(90deg); }
+a.sb-item:hover,
+.sb-item--grupo:hover { background: var(--sb-hover); color: var(--sb-fuerte); }
+a.sb-item:hover .sb-item__icono,
+.sb-item--grupo:hover .sb-item__icono { color: var(--sb-fuerte); }
 
-/* PIE: quien esta conectado y la salida. */
-.sidebar__pie { padding-top: var(--esp-2); }
-.sidebar__cuenta {
-    display: flex; align-items: center; gap: var(--esp-2);
-    padding: var(--esp-2);
-    margin-bottom: 2px;
-    min-width: 0;
+/* Activo: degradado azul, texto blanco, icono en acento y una barra que brilla
+   pegada al borde izquierdo del menu. */
+.sb-item--activo {
+    background: var(--sb-activo);
+    color: var(--sb-fuerte);
+    font-weight: 600;
+    box-shadow: inset 0 0 0 1px rgba(92, 192, 255, 0.14);
 }
-.sidebar__avatar {
+.sb-item--activo .sb-item__icono { color: var(--sb-acento); }
+.sb-item--activo::before,
+.sb-sub--activo::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 3px;
+    height: 20px;
+    border-radius: 0 3px 3px 0;
+    background: var(--sb-acento);
+    box-shadow: 0 0 12px rgba(92, 192, 255, 0.8);
+    transform: translateY(-50%);
+}
+.sb-item--activo::before { left: -12px; }
+
+/* Grupo que contiene la pagina: su cabecera en blanco e icono en acento. */
+.sb-grupo--actual > .sb-item { color: var(--sb-fuerte); }
+.sb-grupo--actual > .sb-item .sb-item__icono { color: var(--sb-acento); }
+/* Plegado pero con la pagina adentro: que se note donde se esta. */
+.sb-grupo--actual:not([open]) > .sb-item { background: var(--sb-activo); }
+
+/* Asistente IA: el unico item con color propio en el icono. */
+.sb-item--ia .sb-item__icono { color: #8fd8ff; }
+
+/* Opciones de un grupo: linea guia y sangria, sin icono. */
+.sb-grupo__opciones {
+    position: relative;
+    margin: 2px 0 8px 21px;
+    padding-left: 12px;
+    border-left: 1px solid var(--sb-linea);
+}
+.sb-sub {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 0 10px;
+    margin: 1px 0;
+    border-radius: 8px;
+    font-size: 0.84rem;
+    color: var(--sb-texto);
+    text-decoration: none;
+    transition: background-color 150ms ease, color 150ms ease;
+}
+a.sb-sub:hover { background: var(--sb-hover); color: var(--sb-fuerte); }
+.sb-sub--activo { background: rgba(92, 192, 255, 0.13); color: var(--sb-fuerte); font-weight: 600; }
+/* La barra del activo se monta sobre la linea guia. */
+.sb-sub--activo::before { left: -13px; height: 18px; border-radius: 3px; }
+.sb-sub__texto { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.sb-subgrupo { margin: 4px 0 6px; }
+.sb-subgrupo__titulo {
+    margin: 8px 0 3px;
+    padding: 0 10px;
+    font-size: 0.64rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sb-tenue);
+}
+/* AMBIENTE DE PRODUCCION: los folios son reales. Titulo ambar con un punto;
+   las opciones no se tinen (pisarian el azul del activo). */
+.sb-subgrupo--produccion .sb-subgrupo__titulo { color: var(--sb-ambar); }
+.sb-subgrupo--produccion .sb-subgrupo__titulo::before {
+    content: "";
+    display: inline-block;
+    width: 6px; height: 6px; margin-right: 6px;
+    border-radius: 50%;
+    background: var(--sb-ambar);
+    box-shadow: 0 0 8px rgba(246, 178, 78, 0.8);
+    vertical-align: 1px;
+}
+
+/* Deshabilitados (proximamente / sin configurar produccion). */
+.sb-item--deshabilitado,
+.sb-sub--deshabilitado { color: var(--sb-tenue); cursor: default; }
+.sb-badge {
     flex: none;
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 2rem; height: 2rem; border-radius: 50%;
-    background: var(--color-marino); color: #fff;
-    font-weight: 700; font-size: var(--txt-sm);
+    margin-left: auto;
+    padding: 2px 6px;
+    border-radius: 999px;
+    font-size: 0.6rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: var(--sb-tenue);
+    background: rgba(255, 255, 255, 0.07);
 }
-.sidebar__cuenta-texto { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
-.sidebar__empresa,
-.sidebar__correo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar__empresa { font-size: var(--txt-sm); font-weight: 600; color: var(--color-texto); }
-.sidebar__correo { font-size: var(--txt-xs); color: var(--color-texto-tenue); }
+.sb-badge--alerta { color: var(--sb-ambar); background: rgba(246, 178, 78, 0.12); }
+
+/* Busqueda: la primera coincidencia (la de Enter) se ve marcada. */
+.sb--buscando .sb-hoja--primera:not(.sb-sub--activo):not(.sb-item--activo) { background: var(--sb-hover); color: var(--sb-fuerte); }
+
+/* --- Pie: tarjeta de la cuenta ---------------------------------------------- */
+.sb__pie { padding-top: 10px; }
+.sb__cuenta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid var(--sb-linea);
+}
+.sb__avatar {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #5cc0ff 0%, #2f7ff0 100%);
+    box-shadow: 0 4px 14px rgba(47, 127, 240, 0.4);
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+.sb__cuenta-texto { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.sb__empresa,
+.sb__correo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sb__empresa { font-size: 0.84rem; font-weight: 600; color: var(--sb-fuerte); }
+.sb__correo { font-size: 0.72rem; color: var(--sb-tenue); }
+.sb__salir {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    color: var(--sb-tenue);
+    transition: background-color 150ms ease, color 150ms ease;
+}
+.sb__salir:hover { background: rgba(255, 99, 99, 0.14); color: #ff9c9c; }
+
+/* --- Tooltip del menu contraido (capa en <body>, ver el JS) ----------------- */
+.sb-tip {
+    position: fixed;
+    z-index: 60;
+    transform: translateY(-50%);
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: #0f2740;
+    color: #fff;
+    font-size: 0.8rem;
+    font-weight: 500;
+    white-space: nowrap;
+    box-shadow: 0 8px 24px rgba(3, 14, 26, 0.3);
+    pointer-events: none;
+}
+.sb-tip[hidden] { display: none; }
+
+/* --- Menu contraido (escritorio) -------------------------------------------- */
+@media (min-width: 721px) {
+    .menu-contraido .sb { --sb-ancho: 76px; padding-left: 14px; padding-right: 14px; }
+    .menu-contraido .sb__cabecera { justify-content: center; padding-left: 0; padding-right: 0; }
+    .menu-contraido .sb__marca-texto,
+    .menu-contraido .sb-item__texto,
+    .menu-contraido .sb-item__chevron,
+    .menu-contraido .sb-badge,
+    .menu-contraido .sb-grupo__opciones,
+    .menu-contraido .sb__atajo,
+    .menu-contraido .sb__cuenta-texto,
+    .menu-contraido .sb__avatar { display: none; }
+    .menu-contraido .sb__menu { margin: 0 -14px; padding: 0 14px 12px; }
+    .menu-contraido .sb-item { justify-content: center; padding: 0; gap: 0; }
+    .menu-contraido .sb-item--activo::before { left: -14px; }
+    /* Contraido no se ven las opciones: el grupo de la pagina actual lleva el
+       fondo y la barra del activo. */
+    .menu-contraido .sb-grupo--actual > .sb-item { background: var(--sb-activo); }
+    .menu-contraido .sb-grupo--actual > .sb-item::before {
+        content: ""; position: absolute; top: 50%; left: -14px;
+        width: 3px; height: 20px; border-radius: 0 3px 3px 0;
+        background: var(--sb-acento); box-shadow: 0 0 12px rgba(92, 192, 255, 0.8);
+        transform: translateY(-50%);
+    }
+    .menu-contraido .sb__seccion { height: 1px; margin: 12px 8px; padding: 0; background: var(--sb-linea); }
+    .menu-contraido .sb__seccion span { display: none; }
+    .menu-contraido .sb__bloque:first-child .sb__seccion { display: none; }
+    /* La lupa sola, como un boton: pincharla expande el menu. */
+    .menu-contraido .sb__buscar input { padding: 0; color: transparent; cursor: pointer; }
+    .menu-contraido .sb__buscar input::placeholder { color: transparent; }
+    .menu-contraido .sb__buscar-icono { left: 50%; transform: translate(-50%, -50%); }
+    .menu-contraido .sb__cuenta { justify-content: center; padding: 6px; background: transparent; border-color: transparent; }
+}
+
+/* --- Movil ---------------------------------------------------------------- */
+.barra-movil, .sidebar-fondo { display: none; }
+.barra-movil__marca { display: inline-flex; align-items: center; gap: 10px; }
+.barra-movil__marca .sb__simbolo { width: 34px; height: 34px; border-radius: 10px; }
+.barra-movil__marca .sb__simbolo img { height: 30px; margin-left: 4px; }
+.barra-movil__marca .sb__nombre { font-size: 1.05rem; color: #fff; }
+.barra-movil__marca .sb__nombre span {
+    background: linear-gradient(90deg, #6fd0ff, #3b8cff);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+
+@media (max-width: 720px) {
+    /* Sin JS: apilado arriba, alto acotado y scroll propio. */
+    .sb {
+        position: relative;
+        top: auto;
+        align-self: stretch;
+        flex: none;
+        width: 100%;
+        height: auto;
+        max-height: 60vh;
+        max-height: 60dvh;
+    }
+    .sb__contraer { display: none; }
+    .sb-item, .sb-sub { min-height: 44px; }
+
+    /* Con JS: barra superior y panel deslizable. */
+    .menu-js .barra-movil {
+        position: sticky; top: 0; z-index: 20;
+        display: flex; align-items: center; gap: 8px;
+        padding: 8px 12px;
+        background: linear-gradient(180deg, #0b1d30, #081827);
+        color: #fff;
+        box-shadow: 0 4px 18px rgba(3, 14, 26, 0.18);
+    }
+    .menu-js .barra-movil__menu { display: inline-flex; }
+    .barra-movil__menu:hover { background: rgba(255, 255, 255, 0.08); }
+    .menu-js .sb {
+        position: fixed; top: 0; left: 0; bottom: 0; z-index: 40;
+        width: min(300px, 86vw);
+        height: 100%;
+        max-height: none;
+        transform: translateX(-105%);
+        visibility: hidden;
+        transition: transform 240ms cubic-bezier(.2, .8, .2, 1), visibility 0s linear 240ms;
+    }
+    .menu-abierto .sb {
+        transform: none;
+        visibility: visible;
+        box-shadow: 0 0 60px rgba(3, 14, 26, 0.45);
+        transition: transform 240ms cubic-bezier(.2, .8, .2, 1);
+    }
+    .menu-js .sb__cerrar { display: inline-flex; }
+    .menu-js .sidebar-fondo {
+        position: fixed; inset: 0; z-index: 30;
+        background: rgba(3, 14, 26, 0.5);
+        -webkit-backdrop-filter: blur(2px);
+        backdrop-filter: blur(2px);
+    }
+    .menu-abierto body { overflow: hidden; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .sb, .menu-abierto .sb, .sb__contraer, .sb__contraer svg, .sb-item__chevron { transition: none; }
+}
 
 /* ==========================================================================
    Dashboard de gestion (panel-gestion.php).
@@ -1495,36 +1639,6 @@ a.nav-item:hover { background: var(--color-nav-hover); }
    grillas caen a una sola columna. */
 @media (max-width: 720px) {
     body.con-sidebar { flex-direction: column; }
-    /* El menu apilado medía 954px de alto: el contenido de la pagina empezaba
-       1.19 pantallas mas abajo, en CADA carga. Se le acota la altura y se le da
-       scroll propio, asi el contenido queda visible de inmediato y el menu
-       completo sigue alcanzable dentro de su caja.
-       dvh va DESPUES de vh: los navegadores que no lo soportan se quedan con la
-       primera declaracion. No se usa overscroll-behavior a proposito -- con el
-       valor por defecto, al agotar el scroll del menu la pagina sigue
-       desplazandose, que es lo que evita la sensacion de scroll atrapado. */
-    .sidebar {
-        flex: none;
-        width: 100%;
-        border-right: none;
-        border-bottom: 1px solid var(--color-borde-suave);
-        max-height: 50vh;
-        max-height: 50dvh;
-        overflow-y: auto;
-        scrollbar-width: thin;
-    }
-    .sidebar__pie { margin-top: var(--esp-4); }
-    /* Objetivo tactil: la densidad del escritorio (28px) es demasiado chica
-       para el dedo. En movil los enlaces vuelven a 40px de alto minimo y a un
-       cuerpo de 0.9rem, aunque el menu tenga que desplazarse. */
-    .sidebar .nav-item {
-        font-size: var(--txt-base);
-        padding: var(--esp-2) var(--esp-3);
-        min-height: 2.5rem;
-        box-sizing: border-box;
-    }
-    .sidebar .nav-item--sub { font-size: var(--txt-sm); padding-left: 1.1rem; }
-    .sidebar__grupo { margin-bottom: var(--esp-1); }
     body.con-sidebar > main { padding: var(--esp-4); }
     .dash-grid,
     .dash-grid--2 { grid-template-columns: minmax(0, 1fr); }
@@ -6975,50 +7089,4 @@ html.em-cargando { overflow: hidden; }
     .dg-acceso, .dg-acceso__icono, .pagina-dashboard .kpi { transition: none; }
     .dg-acceso:hover, .dg-acceso:hover .dg-acceso__icono, .pagina-dashboard .kpi:hover { transform: none; }
     .dg-estado__pista span { animation: none; }
-}
-
-
-/* ==========================================================================
-   Menu lateral en movil CON JavaScript (html.menu-js, js/menu-lateral.js):
-   barra superior con hamburguesa y el menu como panel que entra desde la
-   izquierda. Sin JS rige el bloque de 720px de arriba (menu apilado).
-   ========================================================================== */
-.barra-movil, .sidebar-fondo { display: none; }
-@media (max-width: 720px) {
-    /* Sin JS el menu va apilado arriba (bloque de 720px anterior): ahi no
-       puede ser fijo ni medir una pantalla entera. */
-    .sidebar { position: relative; top: auto; align-self: stretch; height: auto; }
-    .menu-js .barra-movil {
-        position: sticky; top: 0; z-index: 20;
-        display: flex; align-items: center; gap: var(--esp-2);
-        padding: var(--esp-1) var(--esp-3);
-        background: var(--color-nav-fondo);
-        box-shadow: var(--sombra-borde);
-    }
-    .barra-movil__logo { display: block; max-height: 2rem; width: auto; }
-    .menu-js .sidebar {
-        position: fixed; top: 0; left: 0; bottom: 0; z-index: 40;
-        width: min(300px, 86vw);
-        height: 100%;
-        max-height: none;
-        border-bottom: 0;
-        box-shadow: var(--sombra-lg);
-        transform: translateX(-105%);
-        visibility: hidden;
-        transition: transform 200ms ease, visibility 0s linear 200ms;
-    }
-    .menu-abierto .sidebar {
-        transform: none;
-        visibility: visible;
-        transition: transform 200ms ease;
-    }
-    .menu-js .sidebar__cerrar { display: inline-flex; }
-    .menu-js .sidebar-fondo {
-        position: fixed; inset: 0; z-index: 30;
-        background: rgba(0, 44, 72, 0.35);
-    }
-    .menu-abierto body { overflow: hidden; }
-}
-@media (prefers-reduced-motion: reduce) {
-    .menu-js .sidebar, .menu-abierto .sidebar { transition: none; }
 }

@@ -1,49 +1,55 @@
 /*
- * MENU LATERAL (partials/_nav.php). Tres cosas, todas prescindibles: sin
- * JavaScript el menu funciona igual que siempre (grupos <details> nativos,
- * menu apilado arriba en movil).
+ * MENU LATERAL (partials/_nav.php). Todo es prescindible: sin JavaScript el
+ * menu funciona completo (grupos <details> nativos, siempre expandido,
+ * apilado arriba en movil).
  *
- * 1. RECUERDA LOS GRUPOS ABIERTOS. Cada <details data-grupo> guarda en el
- *    navegador si la persona lo dejo abierto o cerrado. El grupo de la pagina
- *    actual se abre SIEMPRE, aunque se haya guardado cerrado: nadie aterriza en
- *    una pantalla con su grupo plegado. Se carga sin defer, justo despues del
- *    menu, para aplicar el estado antes de pintar (sin parpadeo).
+ * 1. GRUPOS RECORDADOS. Cada <details data-grupo> guarda si la persona lo dejo
+ *    abierto o cerrado. El de la pagina actual se abre SIEMPRE.
  *
- * 2. BUSCAR EN EL MENU. Filtra mientras se escribe (sin tildes ni mayusculas;
- *    tambien por el nombre del grupo: "informes" muestra los seis), abre los
- *    grupos con coincidencias y Enter lleva a la primera. Escape limpia. La
- *    tecla "/" enfoca el buscador desde cualquier parte que no sea un campo.
+ * 2. MENU CONTRAIDO (escritorio). El boton del borde lo reduce a una columna
+ *    de iconos; el nombre de cada opcion sale en un tooltip al pasar o
+ *    enfocar. Pinchar un grupo con el menu contraido lo vuelve a expandir y
+ *    abre ese grupo. Se recuerda (la clase se pone antes de pintar, en
+ *    _nav.php, para que no salte).
  *
- * 3. MOVIL (<= 720px): el menu pasa a un panel que entra desde la izquierda,
- *    con una barra superior y boton de hamburguesa. Escape, el fondo o el boton
- *    de cerrar lo cierran, y el foco vuelve al boton que lo abrio.
+ * 3. BUSCAR. Filtra mientras se escribe (sin tildes ni mayusculas, tambien por
+ *    el nombre del grupo y del subgrupo), abre los grupos con coincidencias y
+ *    Enter lleva a la primera. Escape limpia. "/" enfoca el buscador.
  *
- * localStorage puede fallar (modo privado, cookies bloqueadas): todo acceso va
- * en try/catch y sin el, simplemente no se recuerda nada.
+ * 4. MOVIL (<= 720px): panel que entra desde la izquierda con barra superior y
+ *    hamburguesa. Escape, el fondo, la X o elegir una opcion lo cierran.
+ *
+ * localStorage puede fallar (modo privado): todo acceso va en try/catch.
  */
 (function () {
     'use strict';
 
     var nav = document.getElementById('menu-lateral');
     if (!nav) { return; }
-    document.documentElement.classList.add('menu-js');
+    var raiz = document.documentElement;
+    raiz.classList.add('menu-js');
 
-    var CLAVE = 'sinergia.menu.grupos';
+    var CLAVE_GRUPOS = 'sinergia.menu.grupos';
+    var CLAVE_CONTRAIDO = 'sinergia.menu.contraido';
+    var mq = window.matchMedia ? window.matchMedia('(max-width: 720px)') : null;
+    function esMovil() { return !!(mq && mq.matches); }
+    function contraido() { return raiz.classList.contains('menu-contraido') && !esMovil(); }
 
-    // --- 1. Grupos abiertos -------------------------------------------------
-    function leer() {
-        try { return JSON.parse(window.localStorage.getItem(CLAVE) || '{}') || {}; } catch (e) { return {}; }
+    function leer(clave, porDefecto) {
+        try { var v = window.localStorage.getItem(clave); return v === null ? porDefecto : v; } catch (e) { return porDefecto; }
     }
-    function guardar(estado) {
-        try { window.localStorage.setItem(CLAVE, JSON.stringify(estado)); } catch (e) { /* sin memoria */ }
+    function guardar(clave, valor) {
+        try { window.localStorage.setItem(clave, valor); } catch (e) { /* sin memoria */ }
     }
-    var grupos = Array.prototype.slice.call(nav.querySelectorAll('details[data-grupo]'));
-    var recordado = leer();
-    // Abrir o cerrar DESDE EL CODIGO (al cargar, al buscar) no es una
-    // eleccion de la persona y no se guarda. El evento 'toggle' llega
-    // DESPUES, en otra vuelta del navegador, por eso no sirve una bandera
-    // global: cada grupo anota el cambio que se le hizo y su toggle lo
-    // reconoce y lo descarta.
+    function todos(sel, base) { return Array.prototype.slice.call((base || nav).querySelectorAll(sel)); }
+
+    // --- 1. Grupos recordados -------------------------------------------------
+    // Abrir o cerrar DESDE EL CODIGO no es una eleccion de la persona y no se
+    // guarda. 'toggle' llega despues, en otra vuelta del navegador: cada grupo
+    // anota el cambio programado y su toggle lo descarta.
+    var grupos = todos('details[data-grupo]');
+    var recordado = {};
+    try { recordado = JSON.parse(leer(CLAVE_GRUPOS, '{}')) || {}; } catch (e) { recordado = {}; }
     function poner(g, abierto) {
         if (g.open === abierto) { return; }
         g._programado = true;
@@ -51,33 +57,120 @@
     }
     grupos.forEach(function (g) {
         var k = g.getAttribute('data-grupo');
-        if (g.classList.contains('sidebar__grupo--actual')) { poner(g, true); }
+        if (g.classList.contains('sb-grupo--actual')) { poner(g, true); }
         else if (recordado.hasOwnProperty(k)) { poner(g, !!recordado[k]); }
         g.addEventListener('toggle', function () {
             if (g._programado) { g._programado = false; return; }
-            var e = leer();
+            var e = {};
+            try { e = JSON.parse(leer(CLAVE_GRUPOS, '{}')) || {}; } catch (x) { e = {}; }
             e[k] = g.open;
-            guardar(e);
+            guardar(CLAVE_GRUPOS, JSON.stringify(e));
         });
     });
 
-    // El item activo a la vista: con el menu fijo y scroll propio, una pagina
-    // del fondo (Configuracion empresa) quedaria escondida bajo el pliegue.
-    var activo = nav.querySelector('.nav-item--activo');
-    if (activo && activo.scrollIntoView) {
-        var r = activo.getBoundingClientRect();
-        if (r.bottom > window.innerHeight - 80) { activo.scrollIntoView({ block: 'center' }); }
+    // La opcion activa a la vista si quedo bajo el pliegue del menu.
+    var menu = nav.querySelector('[data-menu-items]');
+    var activo = nav.querySelector('.sb-sub--activo, .sb-item--activo');
+    if (activo && menu) {
+        var rm = menu.getBoundingClientRect(), ra = activo.getBoundingClientRect();
+        if (ra.bottom > rm.bottom - 24) { menu.scrollTop += ra.top - rm.top - rm.height / 2; }
     }
 
-    // --- 2. Buscar ---------------------------------------------------------
-    var caja = nav.querySelector('.sidebar__buscar');
+    // --- 2. Menu contraido ----------------------------------------------------
+    var botonContraer = nav.querySelector('[data-menu-contraer]');
+    var textoContraer = nav.querySelector('[data-menu-contraer-texto]');
+    var tip = null;
+    function ocultarTip() { if (tip) { tip.hidden = true; } }
+    function pintarBotonContraer() {
+        if (!botonContraer) { return; }
+        var c = raiz.classList.contains('menu-contraido');
+        botonContraer.setAttribute('aria-pressed', c ? 'true' : 'false');
+        botonContraer.title = c ? 'Expandir menu' : 'Contraer menu';
+        if (textoContraer) { textoContraer.textContent = c ? 'Expandir menu' : 'Contraer menu'; }
+    }
+    function fijarContraido(c) {
+        raiz.classList.toggle('menu-contraido', c);
+        guardar(CLAVE_CONTRAIDO, c ? '1' : '0');
+        pintarBotonContraer();
+        ocultarTip();
+    }
+    if (botonContraer) {
+        botonContraer.hidden = false;
+        pintarBotonContraer();
+        botonContraer.addEventListener('click', function () { fijarContraido(!raiz.classList.contains('menu-contraido')); });
+    }
+    // Contraido, un grupo no puede mostrar sus opciones: pincharlo expande el
+    // menu y abre ese grupo.
+    grupos.forEach(function (g) {
+        g.querySelector('summary').addEventListener('click', function (e) {
+            if (!contraido()) { return; }
+            e.preventDefault();
+            fijarContraido(false);
+            g.open = true;
+        });
+    });
+
+    // Tooltip del menu contraido: una capa fija en el <body> (el menu tiene
+    // scroll propio y recortaria un tooltip dentro de el).
+    tip = document.createElement('div');
+    tip.className = 'sb-tip';
+    tip.setAttribute('role', 'tooltip');
+    tip.hidden = true;
+    document.body.appendChild(tip);
+    function mostrarTip(el) {
+        var texto = el.getAttribute('data-tip');
+        if (!texto || !contraido()) { ocultarTip(); return; }
+        tip.textContent = texto;
+        tip.hidden = false;
+        var r = el.getBoundingClientRect();
+        tip.style.top = (r.top + r.height / 2) + 'px';
+        tip.style.left = (r.right + 12) + 'px';
+    }
+    nav.addEventListener('mouseover', function (e) {
+        var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+        if (el) { mostrarTip(el); } else { ocultarTip(); }
+    });
+    nav.addEventListener('mouseleave', ocultarTip);
+    nav.addEventListener('focusin', function (e) {
+        var el = e.target.closest ? e.target.closest('[data-tip]') : null;
+        if (el) { mostrarTip(el); }
+    });
+    nav.addEventListener('focusout', ocultarTip);
+    if (menu) { menu.addEventListener('scroll', ocultarTip, { passive: true }); }
+
+    // --- 3. Buscar ------------------------------------------------------------
+    var caja = nav.querySelector('.sb__buscar');
     var q = nav.querySelector('[data-menu-buscar]');
     var vacio = nav.querySelector('[data-menu-vacio]');
     var estado = document.getElementById('menu-buscar-estado');
-    var menu = nav.querySelector('[data-menu-items]');
 
     function normal(s) {
         return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    }
+    function primeraVisible() { return menu.querySelector('a[data-hoja]:not([hidden])'); }
+
+    // Se declaran antes del atajo "/" que los usa.
+    var barra = document.querySelector('.barra-movil');
+    var fondo = document.querySelector('.sidebar-fondo');
+    var botonAbrir = document.querySelector('[data-menu-abrir]');
+    var botonCerrar = nav.querySelector('.sb__cerrar');
+
+    function abrir() {
+        if (!esMovil() || !botonAbrir) { return; }
+        raiz.classList.add('menu-abierto');
+        fondo.hidden = false;
+        botonAbrir.setAttribute('aria-expanded', 'true');
+        // El foco entra al panel (no a un enlace: pintaria su anillo como si
+        // se hubiera llegado con teclado). Tab sigue desde ahi.
+        if (!nav.hasAttribute('tabindex')) { nav.setAttribute('tabindex', '-1'); }
+        nav.focus({ preventScroll: true });
+    }
+    function cerrar(devolverFoco) {
+        if (!raiz.classList.contains('menu-abierto')) { return; }
+        raiz.classList.remove('menu-abierto');
+        fondo.hidden = true;
+        botonAbrir.setAttribute('aria-expanded', 'false');
+        if (devolverFoco !== false) { botonAbrir.focus(); }
     }
 
     if (caja && q && menu) {
@@ -86,63 +179,66 @@
 
         var filtrar = function () {
             var t = normal(q.value);
-            var items = menu.querySelectorAll('.nav-item');
+            var hojas = todos('[data-hoja]', menu);
+            todos('.sb-hoja--primera', menu).forEach(function (x) { x.classList.remove('sb-hoja--primera'); });
             if (t === '') {
-                Array.prototype.forEach.call(items, function (it) { it.hidden = false; });
-                Array.prototype.forEach.call(menu.querySelectorAll('.sidebar__subgrupo, .sidebar__grupo'), function (c) { c.hidden = false; });
+                hojas.forEach(function (h) { h.hidden = false; });
+                todos('.sb-subgrupo, .sb-grupo, .sb__bloque', menu).forEach(function (c) { c.hidden = false; });
                 if (abiertosAntes) {
                     grupos.forEach(function (g, i) { poner(g, abiertosAntes[i]); });
                     abiertosAntes = null;
                 }
-                nav.classList.remove('sidebar--buscando');
+                nav.classList.remove('sb--buscando');
                 vacio.hidden = true;
                 estado.textContent = '';
                 return;
             }
             if (!abiertosAntes) { abiertosAntes = grupos.map(function (g) { return g.open; }); }
-            nav.classList.add('sidebar--buscando');
+            nav.classList.add('sb--buscando');
             var n = 0;
-            Array.prototype.forEach.call(items, function (it) {
-                // Texto del item + los titulos que lo contienen (grupo y subgrupo).
-                var contexto = it.textContent;
-                var sub = it.closest('.sidebar__subgrupo');
-                if (sub) { contexto += ' ' + (sub.querySelector('.sidebar__subtitulo') || {}).textContent; }
-                var grp = it.closest('details[data-grupo]');
+            hojas.forEach(function (h) {
+                var contexto = h.textContent;
+                var sub = h.closest('.sb-subgrupo');
+                if (sub) { contexto += ' ' + sub.querySelector('.sb-subgrupo__titulo').textContent; }
+                var grp = h.closest('details[data-grupo]');
                 if (grp) { contexto += ' ' + grp.querySelector('summary').textContent; }
                 var si = normal(contexto).indexOf(t) !== -1;
-                it.hidden = !si;
+                h.hidden = !si;
                 if (si) { n++; }
             });
-            Array.prototype.forEach.call(menu.querySelectorAll('.sidebar__subgrupo'), function (sub) {
-                sub.hidden = !sub.querySelector('.nav-item:not([hidden])');
-            });
-            Array.prototype.forEach.call(menu.querySelectorAll('.sidebar__grupo'), function (g) {
-                var hay = !!g.querySelector('.nav-item:not([hidden])');
+            todos('.sb-subgrupo', menu).forEach(function (s) { s.hidden = !s.querySelector('[data-hoja]:not([hidden])'); });
+            grupos.forEach(function (g) {
+                var hay = !!g.querySelector('[data-hoja]:not([hidden])');
                 g.hidden = !hay;
-                if (g.tagName === 'DETAILS') { poner(g, hay); }
+                poner(g, hay);
+            });
+            todos('.sb__bloque', menu).forEach(function (b) {
+                b.hidden = !b.querySelector('[data-hoja]:not([hidden])');
             });
             vacio.hidden = n !== 0;
             estado.textContent = n === 0 ? 'Ninguna pantalla coincide.' : (n === 1 ? '1 pantalla.' : n + ' pantallas.');
-            var primero = menu.querySelector('a.nav-item:not([hidden])');
-            Array.prototype.forEach.call(menu.querySelectorAll('.nav-item--primero'), function (x) { x.classList.remove('nav-item--primero'); });
-            if (primero) { primero.classList.add('nav-item--primero'); }
+            var p = primeraVisible();
+            if (p) { p.classList.add('sb-hoja--primera'); }
         };
 
         q.addEventListener('input', filtrar);
         q.addEventListener('keydown', function (e) {
             if (e.key === 'Enter') {
-                var primero = menu.querySelector('a.nav-item:not([hidden])');
-                if (primero && q.value.trim() !== '') { e.preventDefault(); window.location.href = primero.href; }
+                var p = primeraVisible();
+                if (p && q.value.trim() !== '') { e.preventDefault(); window.location.href = p.href; }
             } else if (e.key === 'Escape') {
                 if (q.value !== '') { e.preventDefault(); e.stopPropagation(); q.value = ''; filtrar(); }
                 else { q.blur(); }
             } else if (e.key === 'ArrowDown') {
-                var p = menu.querySelector('a.nav-item:not([hidden])');
-                if (p) { e.preventDefault(); p.focus(); }
+                var p2 = primeraVisible();
+                if (p2) { e.preventDefault(); p2.focus(); }
             }
         });
+        // Contraido, la lupa expande el menu para poder escribir.
+        caja.addEventListener('mousedown', function (e) {
+            if (contraido()) { e.preventDefault(); fijarContraido(false); q.focus(); }
+        });
 
-        // "/" enfoca el buscador, salvo que se este escribiendo en un campo.
         document.addEventListener('keydown', function (e) {
             if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) { return; }
             var a = document.activeElement;
@@ -150,55 +246,29 @@
             if (document.querySelector('dialog[open]')) { return; }
             e.preventDefault();
             if (esMovil()) { abrir(); }
+            if (contraido()) { fijarContraido(false); }
             q.focus();
             q.select();
         });
     }
 
-    // --- 3. Movil ----------------------------------------------------------
-    var barra = document.querySelector('.barra-movil');
-    var fondo = document.querySelector('.sidebar-fondo');
-    var botonAbrir = document.querySelector('[data-menu-abrir]');
-    var botonCerrar = nav.querySelector('.sidebar__cerrar');
-    var mq = window.matchMedia ? window.matchMedia('(max-width: 720px)') : null;
-
-    function esMovil() { return !!(mq && mq.matches); }
-
+    // --- 4. Movil -------------------------------------------------------------
     if (barra) { barra.hidden = false; }
     if (botonCerrar) { botonCerrar.hidden = false; }
-
-    function abrir() {
-        if (!esMovil()) { return; }
-        document.documentElement.classList.add('menu-abierto');
-        fondo.hidden = false;
-        botonAbrir.setAttribute('aria-expanded', 'true');
-        var foco = nav.querySelector('.nav-item--activo') || (q && !q.closest('[hidden]') ? q : null) || nav.querySelector('a');
-        if (foco) { foco.focus({ preventScroll: false }); }
-    }
-    function cerrar(devolverFoco) {
-        if (!document.documentElement.classList.contains('menu-abierto')) { return; }
-        document.documentElement.classList.remove('menu-abierto');
-        fondo.hidden = true;
-        botonAbrir.setAttribute('aria-expanded', 'false');
-        if (devolverFoco !== false) { botonAbrir.focus(); }
-    }
-
     if (botonAbrir) { botonAbrir.addEventListener('click', abrir); }
-    // Al elegir una pantalla se cierra el panel: asi se ve el skeleton de
-    // carga (js/arranque-pantalla.js) y no el menu tapando todo.
+    todos('[data-menu-cerrar]', document).forEach(function (b) {
+        b.addEventListener('click', function () { cerrar(); });
+    });
+    // Elegir una pantalla cierra el panel: se ve el skeleton de carga.
     nav.addEventListener('click', function (e) {
         var a = e.target.closest ? e.target.closest('a[href]') : null;
         if (a && esMovil()) { cerrar(false); }
     });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-menu-cerrar]'), function (b) {
-        b.addEventListener('click', function () { cerrar(); });
-    });
     document.addEventListener('keydown', function (e) {
         if (e.key === 'Escape' && esMovil()) { cerrar(); }
     });
-    // Al volver a escritorio (girar la tablet) no queda el panel abierto.
     if (mq) {
-        var alCambiar = function () { if (!esMovil()) { cerrar(false); } };
+        var alCambiar = function () { if (!esMovil()) { cerrar(false); } ocultarTip(); };
         if (mq.addEventListener) { mq.addEventListener('change', alCambiar); } else if (mq.addListener) { mq.addListener(alCambiar); }
     }
 })();
