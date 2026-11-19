@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-19',
+        'version' => '2.29',
+        'titulo'  => 'Titulos del menu destacados y con divisores',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Los titulos del menu (General, Operacion, Administracion, Emision, Facturacion masiva, Certificacion) ahora van en color turquesa para que se distingan de las opciones.',
+            'Cada titulo lleva una linea a su derecha que separa visualmente un bloque del siguiente.',
+            'Produccion mantiene su color ambar, que avisa que ahi los folios son reales.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-19',
         'version' => '2.28',
         'titulo'  => 'Nuevo diseno del menu lateral',
         'tag'     => 'frontend',
