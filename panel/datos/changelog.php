@@ -33,6 +33,21 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-19',
+        'version' => '2.27',
+        'titulo'  => 'Menu lateral renovado: fijo, con buscador y mas limpio',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El menu queda fijo a la izquierda mientras bajas por una pagina larga: ya no hay que volver arriba para cambiar de pantalla.',
+            'Nuevo buscador arriba del menu: escribe "folio", "nota" o "clientes" y aparecen solo esas pantallas; Enter abre la primera. Atajo: la tecla /.',
+            'El menu recuerda que grupos dejaste abiertos o cerrados entre una pantalla y otra.',
+            'Las opciones dentro de cada grupo ya no repiten el mismo icono una y otra vez: se leen mas rapido.',
+            'Al pie se ve la empresa y el usuario conectados, junto a "Cerrar sesion".',
+            'En el celular el menu ya no ocupa media pantalla arriba: se abre con el boton de tres lineas y se cierra al elegir una opcion.',
+            'Se quito una franja vacia que quedaba a los costados de todas las pantallas.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-19',
         'version' => '2.26',
         'titulo'  => 'El panel de emision avisa cuantos documentos esconde "Solo aceptados"',
         'tag'     => 'frontend',

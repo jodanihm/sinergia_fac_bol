@@ -54,8 +54,12 @@ $navPintarItem = static function (array $item, ?string $iconoGrupo = null) use (
     $label   = htmlspecialchars((string) $item['label']);
     $sub     = ! empty($item['sub']) ? ' nav-item--sub' : '';
     $estado  = navEstadoItem($item, $navPuedeEmitir);
-    // Dentro de un grupo, el icono es el del GRUPO: las opciones lo heredan.
-    $icono   = $navIcono($iconoGrupo ?? ($item['icono'] ?? null));
+    // OPCIONES DE UN GRUPO SIN ICONO (noviembre 2026). Antes heredaban el del
+    // grupo: Ventas pintaba el mismo documento doce veces seguidas, y un
+    // dibujo repetido no distingue nada -- solo agrega ruido. La pertenencia
+    // al grupo la dicen la sangria y la linea vertical; la etiqueta dice cual.
+    // Los items sueltos (Dashboard, Asistente IA) conservan el suyo.
+    $icono   = $iconoGrupo !== null ? '' : $navIcono($item['icono'] ?? null);
 
     if ($estado === 'habilitado') {
         $destino = (string) $item['destino'];
@@ -144,11 +148,62 @@ $navSeccionContieneActual = static function (array $seccion) use ($navRutaActual
 };
 
 $navMenu = definicionMenu();
+
+/* QUIEN ESTA CONECTADO, al pie del menu: la empresa (la que se esta viendo, si
+   un superadmin abrio otra cuenta) y el correo del usuario. Si la consulta
+   falla el pie queda solo con "Cerrar sesion", como antes. */
+$navEmpresa = '';
+$navCorreo  = '';
+if ($navPdo instanceof PDO) {
+    try {
+        $navStmt = $navPdo->prepare('SELECT nombre FROM cuenta WHERE id = :id LIMIT 1');
+        $navStmt->execute([':id' => Auth::cuentaId()]);
+        $navEmpresa = (string) ($navStmt->fetchColumn() ?: '');
+        $navStmt = $navPdo->prepare('SELECT email FROM usuario WHERE id = :id LIMIT 1');
+        $navStmt->execute([':id' => Auth::usuarioId()]);
+        $navCorreo = (string) ($navStmt->fetchColumn() ?: '');
+    } catch (Throwable $e) {
+        error_log('sidebar: no se pudo leer empresa/usuario - ' . $e->getMessage());
+    }
+}
+$navInicial = mb_strtoupper(mb_substr($navEmpresa !== '' ? $navEmpresa : ($navCorreo !== '' ? $navCorreo : 'S'), 0, 1));
+
+/* Clave estable de cada grupo plegable, para recordar en el navegador cuales
+   dejo abiertos la persona (js/menu-lateral.js). Sale del label: es unico. */
+$navClaveGrupo = static function (string $label): string {
+    return trim((string) preg_replace('/[^a-z0-9]+/', '-', strtolower($label)), '-');
+};
 ?>
-<nav class="sidebar" aria-label="Menu principal">
+<?php /* BARRA SUPERIOR EN MOVIL (js/menu-lateral.js). Oculta en escritorio y
+         sin JavaScript: sin JS el menu sigue apilado arriba, como siempre. */ ?>
+<div class="barra-movil" hidden>
+    <button type="button" class="barra-movil__menu" data-menu-abrir aria-controls="menu-lateral" aria-expanded="false">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        <span class="visualmente-oculto">Abrir menu</span>
+    </button>
+    <img src="/img/logo.png" alt="Sinergia" class="barra-movil__logo">
+</div>
+<div class="sidebar-fondo" data-menu-cerrar hidden></div>
+<nav class="sidebar" id="menu-lateral" aria-label="Menu principal">
     <div class="sidebar__marca">
         <img src="/img/logo.png" alt="Sinergia" class="sidebar__logo">
+        <button type="button" class="sidebar__cerrar" data-menu-cerrar hidden>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            <span class="visualmente-oculto">Cerrar menu</span>
+        </button>
     </div>
+    <?php /* BUSCAR EN EL MENU (js/menu-lateral.js): filtra mientras se escribe,
+             abre los grupos con coincidencias y Enter lleva a la primera. Atajo:
+             la tecla "/". Oculto sin JavaScript, donde no haria nada. */ ?>
+    <div class="sidebar__buscar" role="search" hidden>
+        <label for="menu-buscar" class="visualmente-oculto">Buscar en el menu</label>
+        <?= iconoSvg('buscar', 16, 'sidebar__buscar-icono'); ?>
+        <input type="search" id="menu-buscar" data-menu-buscar placeholder="Buscar en el menu" autocomplete="off" spellcheck="false" aria-describedby="menu-buscar-estado">
+        <kbd class="sidebar__atajo" aria-hidden="true">/</kbd>
+    </div>
+    <p class="visualmente-oculto" id="menu-buscar-estado" role="status" aria-live="polite"></p>
+    <p class="sidebar__sin-resultados" data-menu-vacio hidden>Ninguna pantalla se llama asi.</p>
+    <div class="sidebar__menu" data-menu-items>
     <?php foreach ($navMenu as $seccion): ?>
         <?php if (isset($seccion['items']) && ! empty($seccion['plegable'])): ?>
             <?php /* GRUPO DESPLEGABLE. <details> nativo: se abre y cierra con
@@ -158,7 +213,7 @@ $navMenu = definicionMenu();
                      suya; --activo marca el summary cuando esta cerrado pero
                      contiene la pagina (no pasa al cargar, si al plegarlo). */ ?>
             <?php $navContiene = $navSeccionContieneActual($seccion); ?>
-            <details class="sidebar__grupo sidebar__grupo--plegable<?= $navContiene ? ' sidebar__grupo--actual' : ''; ?>"<?= $navContiene ? ' open' : ''; ?>>
+            <details class="sidebar__grupo sidebar__grupo--plegable<?= $navContiene ? ' sidebar__grupo--actual' : ''; ?>" data-grupo="<?= htmlspecialchars($navClaveGrupo((string) $seccion['label'])); ?>"<?= $navContiene ? ' open' : ''; ?>>
                 <summary class="nav-grupo"><?= $navIcono($seccion['icono'] ?? null); ?><span class="nav-grupo__texto"><?= htmlspecialchars((string) $seccion['label']); ?></span></summary>
                 <div class="nav-grupo__opciones">
                     <?php $navRender($seccion['items'], isset($seccion['icono']) ? (string) $seccion['icono'] : null); ?>
@@ -173,10 +228,25 @@ $navMenu = definicionMenu();
             <div class="sidebar__grupo"><?php $navPintarItem($seccion); ?></div>
         <?php endif; ?>
     <?php endforeach; ?>
+    </div>
     <div class="sidebar__pie">
+        <?php if ($navEmpresa !== '' || $navCorreo !== ''): ?>
+            <div class="sidebar__cuenta">
+                <span class="sidebar__avatar" aria-hidden="true"><?= htmlspecialchars($navInicial); ?></span>
+                <span class="sidebar__cuenta-texto">
+                    <?php if ($navEmpresa !== ''): ?><span class="sidebar__empresa" title="<?= htmlspecialchars($navEmpresa); ?>"><?= htmlspecialchars($navEmpresa); ?></span><?php endif; ?>
+                    <?php if ($navCorreo !== ''): ?><span class="sidebar__correo" title="<?= htmlspecialchars($navCorreo); ?>"><?= htmlspecialchars($navCorreo); ?></span><?php endif; ?>
+                </span>
+            </div>
+        <?php endif; ?>
         <?php /* Fuera de definicionMenu() porque no es navegacion sino salida de
                  la sesion, pero lleva icono igual que el resto: si fuera el unico
                  enlace sin uno, se leeria como un elemento a medio terminar. */ ?>
         <a class="nav-item" href="/logout"><?= $navIcono('logout'); ?>Cerrar sesion</a>
     </div>
 </nav>
+<?php /* SIN defer, a proposito: corre apenas existe el menu y ANTES de pintar,
+         asi los grupos que la persona dejo abiertos aparecen abiertos de una,
+         sin parpadeo. Es chico y no espera nada de la red. */ ?>
+<?php $jsMenuVersion = @filemtime(__DIR__ . '/../../public/js/menu-lateral.js'); ?>
+<script src="/js/menu-lateral.js<?= $jsMenuVersion ? '?v=' . $jsMenuVersion : ''; ?>"></script>
