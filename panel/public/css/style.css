@@ -3288,6 +3288,10 @@ svg.alerta__icono { margin-top: 0.05rem; }
 .dialogo-confirmar__titulo { margin: 0 0 var(--esp-2); font-size: var(--txt-lg); color: var(--color-marino); }
 .dialogo-confirmar p { margin: 0 0 var(--esp-2); font-size: var(--txt-base); }
 .dialogo-confirmar .acciones-formulario { margin-top: var(--esp-4); }
+/* Pegar datos del cliente: mas ancho que una confirmacion, para leer el texto. */
+.dialogo-pegar { width: min(36rem, calc(100vw - 2rem)); max-width: none; }
+.dialogo-pegar textarea { min-height: 11rem; font-size: var(--txt-sm); }
+.dialogo-pegar [data-pegar-estado]:empty { display: none; }
 
 /* --- Carga de archivo: zona de arrastre ------------------------------------ */
 .upload__area[data-arrastrando="true"] { border-color: var(--color-primario); background: var(--color-primario-suave); }
