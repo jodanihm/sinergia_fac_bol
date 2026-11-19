@@ -33,6 +33,17 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-19',
+        'version' => '2.25',
+        'titulo'  => 'Pegar los datos del cliente tambien en cotizaciones',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Al crear o editar una cotizacion, la tarjeta "Cliente" tiene el mismo boton "Pegar datos" que la factura.',
+            'Pegas el texto que te mando el cliente y se reparten solos el RUT, la razon social, el giro, la direccion, la comuna y el correo.',
+            'Si el cliente ya esta en tus clientes, se completa desde ahi lo que el texto no traia, y no se vuelve a guardar como nuevo.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-19',
         'version' => '2.24',
         'titulo'  => 'Pegar los datos del cliente y que se llene el receptor solo',
         'tag'     => 'frontend',

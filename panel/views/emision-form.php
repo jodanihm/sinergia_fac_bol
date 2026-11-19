@@ -882,24 +882,7 @@ $emPaso = static fn (string $id): string => '<span class="em-paso" aria-hidden="
         <span data-icono="aviso-clientes"><?= iconoSvg('clientes', 32, ''); ?></span>
     </template>
 </dialog>
-<?php /* PEGAR LOS DATOS DEL CLIENTE (js/pegar-receptor.js): el texto que manda
-         el cliente se reparte en los campos del receptor. Fuera de
-         #form-emision por lo mismo que el selector: el textarea no viaja en el POST. */ ?>
-<dialog class="dialogo-confirmar dialogo-pegar" id="pegar-receptor" aria-labelledby="pegar-receptor-titulo" aria-describedby="pegar-receptor-sub">
-    <h2 class="dialogo-confirmar__titulo" id="pegar-receptor-titulo">Pegar datos del cliente</h2>
-    <p id="pegar-receptor-sub">Pega el texto que te mando el cliente (RUT, razon social, giro, direccion, comuna, correo). Los datos se reparten solos en el receptor; revisalos antes de emitir.</p>
-    <div class="form-compacto">
-        <label for="pegar-receptor-texto" class="visualmente-oculto">Texto con los datos del cliente</label>
-        <textarea id="pegar-receptor-texto" data-pegar-texto rows="9" spellcheck="false" placeholder="RUT: 76.123.456-7&#10;Razon social: Comercial Los Andes SpA&#10;Giro: Venta al por mayor&#10;Direccion: Av. Providencia 1234&#10;Comuna: Providencia&#10;Correo: facturas@losandes.cl"></textarea>
-    </div>
-    <p class="form-ayuda" data-pegar-estado role="status" aria-live="polite"></p>
-    <div class="acciones-formulario">
-        <button type="button" class="boton-secundario" data-pegar-cerrar>Cancelar</button>
-        <button type="button" class="boton-principal" data-pegar-aplicar>Rellenar receptor</button>
-    </div>
-</dialog>
-<?php $jsPegarVersion = @filemtime(__DIR__ . '/../public/js/pegar-receptor.js'); ?>
-<script src="/js/pegar-receptor.js<?= $jsPegarVersion ? '?v=' . $jsPegarVersion : ''; ?>" defer></script>
+<?php require __DIR__ . '/partials/_pegar-receptor.php'; ?>
 
 <?php $jsSelectorVersion = @filemtime(__DIR__ . '/../public/js/selector-clientes.js'); ?>
 <script src="/js/selector-clientes.js<?= $jsSelectorVersion ? '?v=' . $jsSelectorVersion : ''; ?>" defer></script>
