@@ -6291,6 +6291,10 @@ function handleDocumentosListadoGet(): void
             static fn (array $x): bool => $x['grupo'] === 'aceptado' && $x['codigo'] !== null
         ), 'codigo'));
     }
+    // Los mismos filtros SIN el de estado: para contar cuantos esconde el
+    // switch. Se arma antes de agregarle limit/offset al listado.
+    $filtrosSinEstado = $filtrosMotor;
+    unset($filtrosSinEstado['estado']);
     $filtrosMotor['limit']  = $porPagina;
     $filtrosMotor['offset'] = ($pagina - 1) * $porPagina;
 
@@ -6352,7 +6356,26 @@ function handleDocumentosListadoGet(): void
         'hasta' => is_string($res['body']['hasta'] ?? null) ? $res['body']['hasta'] : null,
     ];
 
+    // CUANTOS ESCONDE "SOLO ACEPTADOS". Con el switch encendido la pantalla no
+    // decia que habia documentos fuera de la lista: un rechazado o uno todavia
+    // en proceso quedaba invisible sin aviso. Se pregunta al motor el total
+    // con los mismos filtros y sin el de estado (limit=1: solo interesa el
+    // total) y la diferencia son los ocultos. Si esa segunda consulta falla,
+    // no se muestra numero: el listado no depende de ella.
+    $ocultos = null;
+    if (isset($filtros['aceptados'])) {
+        try {
+            $resTodos = listarDocumentosEnMotor($keyServicio, $filtrosSinEstado + ['limit' => 1, 'offset' => 0]);
+            if ($resTodos['status'] === 200 && isset($resTodos['body']['total'])) {
+                $ocultos = max(0, (int) $resTodos['body']['total'] - $total);
+            }
+        } catch (Throwable $e) {
+            error_log('panel documentos: no se pudo contar los ocultos por "Solo aceptados" - ' . $e->getMessage());
+        }
+    }
+
     vista('documentos-listado', [
+        'ocultos'      => $ocultos,
         'rangoMotor'   => $rangoMotor,
         'items'        => $items,
         'total'        => $total,

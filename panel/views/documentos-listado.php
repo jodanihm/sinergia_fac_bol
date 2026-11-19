@@ -195,6 +195,10 @@ if (isset($filtros['estado'])) {
     $chips[] = ['Estado: ' . $e((string) $filtros['estado']), ['estado']];
 }
 $soloAceptados = isset($filtros['aceptados']);
+// Cuantos documentos deja fuera el switch con los demas filtros iguales
+// (handleDocumentosListadoGet). null: apagado, o no se pudo contar.
+$ocultos = $soloAceptados ? ($ocultos ?? null) : null;
+$txtOcultos = $ocultos === null ? '' : ($ocultos === 1 ? '1 oculto' : $ocultos . ' ocultos');
 if ($soloAceptados) {
     $chips[] = ['Solo aceptados', ['aceptados']];
 }
@@ -277,7 +281,7 @@ $valorHasta = (string) ($filtros['hasta'] ?? ($fechaDefecto ? $rangoMotor['hasta
         <span class="pe-switch__pista" aria-hidden="true"><span class="pe-switch__perilla"></span></span>
         <span class="pe-switch__texto">
             <span class="pe-switch__titulo">Solo aceptados</span>
-            <span class="pe-switch__ayuda" id="ayuda-aceptados"><?= $soloAceptados ? 'Mostrando EPR, DOK y RPR' : 'Mostrando todos los estados'; ?></span>
+            <span class="pe-switch__ayuda" id="ayuda-aceptados"><?= $soloAceptados ? 'Mostrando EPR, DOK y RPR' . ($ocultos ? ' &middot; ' . $txtOcultos : '') : 'Mostrando todos los estados'; ?></span>
         </span>
     </label>
     <div class="pe-filtros__acciones">
@@ -327,11 +331,19 @@ foreach ($items as $it) {
     <div class="estado-vacio estado-vacio--centrado">
         <?= iconoSvg('panel-emision', 32, 'estado-vacio__icono'); ?>
         <?php if ($hayFiltros): ?>
+            <?php if ($ocultos): ?>
+                <h2 class="estado-vacio__titulo">Ningun documento aceptado con estos filtros</h2>
+                <p>Hay <?= $txtOcultos; ?> por &laquo;Solo aceptados&raquo;: rechazados, todavia en proceso en el SII o que hay que revisar.</p>
+                <p class="estado-vacio__acciones">
+                    <a class="boton-principal" href="<?= $e($sinFiltros(['aceptados'])); ?>">Ver los <?= $txtOcultos; ?></a>
+                </p>
+            <?php else: ?>
             <h2 class="estado-vacio__titulo">Ningun documento coincide con estos filtros</h2>
             <p>Prueba con otro rango de fechas, otro tipo o quita alguno de los filtros de arriba.</p>
             <p class="estado-vacio__acciones">
                 <a class="boton-secundario" href="<?= $urlLimpiar; ?>">Limpiar filtros</a>
             </p>
+            <?php endif; ?>
         <?php else: ?>
             <h2 class="estado-vacio__titulo">Todavia no emites documentos este mes</h2>
             <p>Cuando emitas una factura, boleta o nota, aparecera aqui con su estado en el SII. Si buscas uno anterior, filtra por fechas o por folio.</p>
@@ -346,6 +358,16 @@ foreach ($items as $it) {
             <h2 id="titulo-documentos">Documentos</h2>
             <span class="pe-tabla__total"><?= $total; ?> documento<?= $total === 1 ? '' : 's'; ?><?= $hayFiltros ? ' con los filtros aplicados' : ''; ?><?php
                 if ($totalPaginas > 1): ?> &middot; pagina <?= $pagina; ?> de <?= $totalPaginas; ?><?php endif; ?></span>
+            <?php if ($ocultos): ?>
+                <?php /* Lo que el switch "Solo aceptados" deja fuera: rechazados,
+                         en proceso o sin enviar. El enlace apaga el switch y
+                         conserva el resto de los filtros. */ ?>
+                <span class="pe-tabla__ocultos">
+                    <?= iconoSvg('info', 16, ''); ?>
+                    <span><?= $txtOcultos; ?> por &laquo;Solo aceptados&raquo;</span>
+                    <a href="<?= $e($sinFiltros(['aceptados'])); ?>">Ver todos</a>
+                </span>
+            <?php endif; ?>
         </div>
         <div class="tabla-scroll">
             <table class="tabla-datos tabla-datos--cards tabla-documentos">
