@@ -38,6 +38,15 @@
  * una tarjeta nueva, "Correos a clientes" ($correos, dashCorreosPeriodo()),
  * con lo que paso con el envio de los documentos del periodo. Ninguna cifra
  * nueva es estimada.
+ *
+ * REDISENO PREMIUM (2026-11-19): cabecera "hero" en el marino del menu, con el
+ * saludo, la empresa, el periodo y el boton de emitir; los cuatro indicadores
+ * flotan sobre su borde inferior. Todo lo demas va en un solo tipo de tarjeta
+ * (.db-card, cabecera con icono en caja) y en filas: ventas por dia + estados,
+ * facturacion por tipo + clientes, folios, problemas + correos. Mismas cifras,
+ * mismos textos aclaratorios: solo cambia la presentacion y el orden (que es
+ * el del DOM, asi que teclado y lector de pantalla lo siguen igual).
+ * Estilos: bloque "Dashboard premium" de css/style.css (prefijo .db).
  */
 $titulo    = 'Panel';
 // Raiz de la vista: partials/header.php la pone en el <body>. Es el mismo
@@ -77,74 +86,28 @@ $hora    = (int) date('G');
 $saludo  = $hora < 12 ? 'Buenos dias' : ($hora < 20 ? 'Buenas tardes' : 'Buenas noches');
 $correos = $correos ?? null;
 ?>
-<div class="pe-cabecera dg-cabecera">
-    <div class="pe-cabecera__titulo">
-        <span class="pe-cabecera__emblema" aria-hidden="true"><?= iconoSvg('dashboard', 24, ''); ?></span>
-        <div>
-            <p class="dg-saludo"><?= $saludo; ?></p>
-            <h1>Panel de gestion</h1>
-            <p class="dash-header__emisor">
-                <?= htmlspecialchars($contexto['razonSocial'] !== '' ? $contexto['razonSocial'] : 'Tu empresa'); ?>
-                <span class="dash-header__rut">RUT <?= htmlspecialchars($contexto['rut']); ?></span>
-            </p>
-        </div>
-    </div>
-    <nav class="dash-periodo" aria-label="Periodo del dashboard">
-        <span class="dash-periodo__etiqueta">Periodo</span>
-        <a class="dash-periodo__opcion <?= $periodo['clave'] === 'actual' ? 'dash-periodo__opcion--activa' : ''; ?>"
-           href="/panel?periodo=actual"
-           <?= $periodo['clave'] === 'actual' ? 'aria-current="page"' : ''; ?>>Mes actual</a>
-        <a class="dash-periodo__opcion <?= $periodo['clave'] === 'anterior' ? 'dash-periodo__opcion--activa' : ''; ?>"
-           href="/panel?periodo=anterior"
-           <?= $periodo['clave'] === 'anterior' ? 'aria-current="page"' : ''; ?>>Mes anterior</a>
-    </nav>
-</div>
+<div class="db">
 
-<p class="dash-subtitulo">
-    Mostrando <strong><?= htmlspecialchars($periodo['etiqueta']); ?></strong>.
-    Comparado con <?= htmlspecialchars($periodo['prevEtiqueta']); ?>.
-</p>
-
-<?php /* ACCESOS RAPIDOS, arriba: lo que se viene a hacer al entrar. */ ?>
-<nav class="dg-accesos" aria-labelledby="titulo-accesos">
-    <h2 class="visualmente-oculto" id="titulo-accesos">Accesos rapidos</h2>
-    <ul>
-        <li><a class="dg-acceso dg-acceso--principal" href="/ventas/factura"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('factura', 20, ''); ?></span><span><strong>Emitir factura</strong><small>Documento al SII</small></span></a></li>
-        <li><a class="dg-acceso" href="/ventas/cotizaciones/nueva"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('informe-detalle', 20, ''); ?></span><span><strong>Nueva cotizacion</strong><small>Sin folio ni SII</small></span></a></li>
-        <li><a class="dg-acceso" href="/ventas/carga-masiva/adaptar"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('carga-masiva', 20, ''); ?></span><span><strong>Importar notas</strong><small>Desde un Excel</small></span></a></li>
-        <li><a class="dg-acceso" href="/ventas/panel-emision"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('panel-emision', 20, ''); ?></span><span><strong>Panel de emision</strong><small>Tus documentos</small></span></a></li>
-        <li><a class="dg-acceso" href="/ventas/correos"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('envio-correo', 20, ''); ?></span><span><strong>Envio de correos</strong><small>A tus clientes</small></span></a></li>
-        <li><a class="dg-acceso" href="/maestros/clientes"><span class="dg-acceso__icono" aria-hidden="true"><?= iconoSvg('clientes', 20, ''); ?></span><span><strong>Clientes</strong><small>Tu maestro</small></span></a></li>
-    </ul>
-</nav>
-
-<?php if ($vacio): ?>
-
-    <section class="estado-vacio" aria-labelledby="titulo-vacio">
-        <h2 id="titulo-vacio">Aun no has emitido documentos</h2>
-        <p>Tu ambiente de produccion esta configurado y listo. Cuando emitas tu
-        primer documento tributario, aqui vas a ver la facturacion del periodo,
-        el consumo de folios y tus principales clientes.</p>
-        <p class="estado-vacio__acciones">
-            <a class="boton-principal" href="/ventas/factura">Emitir una factura</a>
-            <a href="/ventas/carga-masiva/adaptar">o importar notas de venta desde un Excel</a>
+<header class="db-hero">
+    <div class="db-hero__texto">
+        <p class="db-hero__saludo"><?= $saludo; ?></p>
+        <h1 class="db-hero__titulo">Panel de gestion</h1>
+        <p class="db-hero__empresa">
+            <?= htmlspecialchars($contexto['razonSocial'] !== '' ? $contexto['razonSocial'] : 'Tu empresa'); ?>
+            <span class="db-hero__rut">RUT <?= htmlspecialchars($contexto['rut']); ?></span>
         </p>
-    </section>
+        <p class="db-hero__periodo">Mostrando <strong><?= htmlspecialchars($periodo['etiqueta']); ?></strong> &middot; comparado con <?= htmlspecialchars($periodo['prevEtiqueta']); ?></p>
+    </div>
+    <div class="db-hero__acciones">
+        <nav class="db-periodo" aria-label="Periodo del dashboard">
+            <a class="db-periodo__opcion<?= $periodo['clave'] === 'actual' ? ' db-periodo__opcion--activa' : ''; ?>" href="/panel?periodo=actual"<?= $periodo['clave'] === 'actual' ? ' aria-current="page"' : ''; ?>>Mes actual</a>
+            <a class="db-periodo__opcion<?= $periodo['clave'] === 'anterior' ? ' db-periodo__opcion--activa' : ''; ?>" href="/panel?periodo=anterior"<?= $periodo['clave'] === 'anterior' ? ' aria-current="page"' : ''; ?>>Mes anterior</a>
+        </nav>
+        <a class="db-hero__cta" href="/ventas/factura"><?= iconoSvg('agregar', 18, ''); ?> Emitir factura</a>
+    </div>
+</header>
 
-    <?php if ($folios !== []): ?>
-        <section aria-labelledby="titulo-folios-vacio">
-            <h2 id="titulo-folios-vacio">Folios disponibles</h2>
-            <?php require __DIR__ . '/partials/_folios.php'; ?>
-        </section>
-    <?php endif; ?>
-
-    <details class="progreso-colapsado">
-        <summary>Ver el progreso de configuracion</summary>
-        <?php require __DIR__ . '/partials/_estaciones.php'; ?>
-    </details>
-
-<?php else: ?>
-
+<?php if (! $vacio): ?>
     <?php
         $foliosTotales = 0;
         foreach ($folios as $f) {
@@ -161,260 +124,285 @@ $correos = $correos ?? null;
             }
         }
     ?>
-
-    <section class="dash-grid" aria-label="Indicadores del periodo">
-        <article class="kpi">
-            <h2 class="kpi__etiqueta"><?= iconoSvg('factura', 18, 'kpi__icono'); ?>Documentos emitidos</h2>
-            <p class="kpi__valor"><?= $fmtNum($resumen['documentos']); ?></p>
+    <section class="db-kpis" aria-label="Indicadores del periodo">
+        <article class="db-kpi">
+            <span class="db-kpi__icono db-kpi__icono--azul" aria-hidden="true"><?= iconoSvg('factura', 20, ''); ?></span>
+            <h2 class="db-kpi__etiqueta">Documentos emitidos</h2>
+            <p class="db-kpi__valor"><?= $fmtNum($resumen['documentos']); ?></p>
             <?= $pintarDelta($deltas['documentos']); ?>
         </article>
-
-        <article class="kpi">
-            <h2 class="kpi__etiqueta"><?= iconoSvg('monto', 18, 'kpi__icono'); ?>Neto del periodo</h2>
-            <p class="kpi__valor"><?= $fmtMonto($resumen['netoPeriodo']); ?></p>
+        <article class="db-kpi db-kpi--destacado">
+            <span class="db-kpi__icono db-kpi__icono--verde" aria-hidden="true"><?= iconoSvg('monto', 20, ''); ?></span>
+            <h2 class="db-kpi__etiqueta">Neto del periodo</h2>
+            <p class="db-kpi__valor"><?= $fmtMonto($resumen['netoPeriodo']); ?></p>
             <?= $pintarDelta($deltas['neto']); ?>
-            <p class="kpi__formula"><?= htmlspecialchars($resumen['formula']); ?></p>
+            <p class="db-kpi__nota"><?= htmlspecialchars($resumen['formula']); ?></p>
         </article>
-
-        <article class="kpi">
-            <h2 class="kpi__etiqueta"><?= iconoSvg('impuesto', 18, 'kpi__icono'); ?>IVA debito</h2>
-            <p class="kpi__valor"><?= $fmtMonto($resumen['ivaDebito']); ?></p>
+        <article class="db-kpi">
+            <span class="db-kpi__icono db-kpi__icono--violeta" aria-hidden="true"><?= iconoSvg('impuesto', 20, ''); ?></span>
+            <h2 class="db-kpi__etiqueta">IVA debito</h2>
+            <p class="db-kpi__valor"><?= $fmtMonto($resumen['ivaDebito']); ?></p>
             <?= $pintarDelta($deltas['iva']); ?>
-            <p class="kpi__formula">Mismo criterio que el neto</p>
+            <p class="db-kpi__nota">Mismo criterio que el neto</p>
         </article>
-
-        <article class="kpi kpi--<?= htmlspecialchars($nivelFolios); ?>">
-            <h2 class="kpi__etiqueta"><?= iconoSvg('informe-folios', 18, 'kpi__icono'); ?>Folios disponibles</h2>
-            <p class="kpi__valor"><?= $fmtNum($foliosTotales); ?></p>
-            <p class="kpi__formula">Suma de todos los tipos. Detalle mas abajo.</p>
+        <article class="db-kpi db-kpi--<?= htmlspecialchars($nivelFolios); ?>">
+            <span class="db-kpi__icono db-kpi__icono--<?= $nivelFolios === 'ok' ? 'turquesa' : ($nivelFolios === 'ambar' ? 'ambar' : 'rojo'); ?>" aria-hidden="true"><?= iconoSvg('informe-folios', 20, ''); ?></span>
+            <h2 class="db-kpi__etiqueta">Folios disponibles</h2>
+            <p class="db-kpi__valor"><?= $fmtNum($foliosTotales); ?></p>
+            <p class="db-kpi__nota">Suma de todos los tipos. <a href="#titulo-folios">Ver detalle</a></p>
         </article>
     </section>
+<?php endif; ?>
 
-    <?php
-        /* FILA 1. Las dos tablas del periodo, en mitades parejas. El
-           contenedor SOLO ENVUELVE. "Clientes con mayor facturacion" si
-           cambio de sitio: subio desde el final de la vista hasta aqui,
-           moviendo su markup completo. No se uso order ni grid-area, que
-           habrian cambiado el orden visual dejando el del DOM atras: el
-           foco por teclado y los lectores de pantalla siguen el DOM. */
-    ?>
-    <div class="dash-fila dash-fila--tablas">
-    <section aria-labelledby="titulo-por-tipo">
-        <h2 class="dash-titulo" id="titulo-por-tipo"><?= iconoSvg('informe-tipos', 18, 'dash-titulo__icono'); ?>Facturacion por tipo de documento</h2>
-        <div class="tabla-scroll">
-            <table>
-                <caption>Documentos y montos del periodo, separados por tipo. Las notas
-                de credito se muestran aparte porque rebajan lo facturado.</caption>
-                <thead>
-                    <tr>
-                        <th scope="col">Tipo</th>
-                        <th scope="col" class="num">Documentos</th>
-                        <th scope="col" class="num">Neto</th>
-                        <th scope="col" class="num">IVA</th>
-                        <th scope="col" class="num">Total</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($resumen['porTipo'] as $tipo => $d): ?>
-                        <tr<?= $tipo === 61 ? ' class="fila-resta"' : ''; ?>>
-                            <th scope="row">
-                                <?= htmlspecialchars(nombreTipoDte((int) $tipo)); ?>
-                                <?php if ($tipo === 61): ?>
-                                    <span class="subpaso__aclaracion">&mdash; resta</span>
-                                <?php endif; ?>
-                            </th>
-                            <td class="num"><?= $fmtNum($d['documentos']); ?></td>
-                            <td class="num"><?= $fmtMonto($d['neto']); ?></td>
-                            <td class="num"><?= $fmtMonto($d['iva']); ?></td>
-                            <td class="num"><?= $fmtMonto($d['total']); ?></td>
-                        </tr>
+<?php /* ACCESOS RAPIDOS: lo que se viene a hacer al entrar. Emitir factura ya
+         esta en la cabecera. */ ?>
+<nav class="db-accesos<?= $vacio ? ' db-accesos--sin-kpis' : ''; ?>" aria-labelledby="titulo-accesos">
+    <h2 class="visualmente-oculto" id="titulo-accesos">Accesos rapidos</h2>
+    <ul>
+        <li><a class="db-acceso" href="/ventas/cotizaciones/nueva"><span class="db-acceso__icono" aria-hidden="true"><?= iconoSvg('informe-detalle', 18, ''); ?></span><span><strong>Nueva cotizacion</strong><small>Sin folio ni SII</small></span></a></li>
+        <li><a class="db-acceso" href="/ventas/carga-masiva/adaptar"><span class="db-acceso__icono" aria-hidden="true"><?= iconoSvg('carga-masiva', 18, ''); ?></span><span><strong>Importar notas</strong><small>Desde un Excel</small></span></a></li>
+        <li><a class="db-acceso" href="/ventas/panel-emision"><span class="db-acceso__icono" aria-hidden="true"><?= iconoSvg('panel-emision', 18, ''); ?></span><span><strong>Panel de emision</strong><small>Tus documentos</small></span></a></li>
+        <li><a class="db-acceso" href="/ventas/correos"><span class="db-acceso__icono" aria-hidden="true"><?= iconoSvg('envio-correo', 18, ''); ?></span><span><strong>Envio de correos</strong><small>A tus clientes</small></span></a></li>
+        <li><a class="db-acceso" href="/maestros/clientes"><span class="db-acceso__icono" aria-hidden="true"><?= iconoSvg('clientes', 18, ''); ?></span><span><strong>Clientes</strong><small>Tu maestro</small></span></a></li>
+        <li><a class="db-acceso" href="/configuracion/vista-factura"><span class="db-acceso__icono" aria-hidden="true"><?= iconoSvg('factura', 18, ''); ?></span><span><strong>Vista previa</strong><small>Como salen tus facturas</small></span></a></li>
+    </ul>
+</nav>
+
+<?php if ($vacio): ?>
+
+    <section class="db-card db-vacio" aria-labelledby="titulo-vacio">
+        <span class="db-vacio__icono" aria-hidden="true"><?= iconoSvg('factura', 28, ''); ?></span>
+        <h2 id="titulo-vacio">Aun no has emitido documentos</h2>
+        <p>Tu ambiente de produccion esta configurado y listo. Cuando emitas tu
+        primer documento tributario, aqui vas a ver la facturacion del periodo,
+        el consumo de folios y tus principales clientes.</p>
+        <p class="db-vacio__acciones">
+            <a class="boton-principal" href="/ventas/factura">Emitir una factura</a>
+            <a href="/ventas/carga-masiva/adaptar">o importar notas de venta desde un Excel</a>
+        </p>
+    </section>
+
+    <?php if ($folios !== []): ?>
+        <section class="db-card" aria-labelledby="titulo-folios-vacio">
+            <div class="db-card__cabecera">
+                <h2 class="db-card__titulo" id="titulo-folios-vacio"><span class="db-card__icono" aria-hidden="true"><?= iconoSvg('informe-folios', 18, ''); ?></span>Folios disponibles</h2>
+            </div>
+            <?php require __DIR__ . '/partials/_folios.php'; ?>
+        </section>
+    <?php endif; ?>
+
+    <details class="progreso-colapsado">
+        <summary>Ver el progreso de configuracion</summary>
+        <?php require __DIR__ . '/partials/_estaciones.php'; ?>
+    </details>
+
+<?php else: ?>
+
+    <div class="db-fila db-fila--2-1">
+        <section class="db-card" aria-labelledby="titulo-grafico">
+            <div class="db-card__cabecera">
+                <h2 class="db-card__titulo" id="titulo-grafico"><span class="db-card__icono" aria-hidden="true"><?= iconoSvg('informe-dia', 18, ''); ?></span>Ventas por dia</h2>
+                <a class="db-card__enlace" href="/informes/ventas-dia">Ver informe <?= iconoSvg('flecha', 14, ''); ?></a>
+            </div>
+            <?php require __DIR__ . '/partials/_grafico-ventas.php'; ?>
+        </section>
+
+        <section class="db-card" aria-labelledby="titulo-estados">
+            <div class="db-card__cabecera">
+                <h2 class="db-card__titulo" id="titulo-estados"><span class="db-card__icono" aria-hidden="true"><?= iconoSvg('informe-estados', 18, ''); ?></span>Estado de los documentos</h2>
+            </div>
+            <?php if ($estados === []): ?>
+                <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
+            <?php else: ?>
+                <?php
+                // Cada codigo con su nombre, tono y grupo del catalogo compartido.
+                // Un codigo que el catalogo no conoce sale crudo y en neutro.
+                $dgCatalogo = require __DIR__ . '/../datos/estados-sii.php';
+                $dgPorCodigo = [];
+                foreach ($dgCatalogo['estados'] as $x) {
+                    $dgPorCodigo[(string) ($x['codigo'] ?? '')] = $x + ['tono' => $dgCatalogo['grupos'][$x['grupo']]['tono']];
+                }
+                $dgTotal = array_sum(array_column($estados, 'documentos'));
+                $dgPorTono = [];
+                foreach ($estados as $fila) {
+                    $t = $dgPorCodigo[$fila['estado']]['tono'] ?? 'neutro';
+                    $dgPorTono[$t] = ($dgPorTono[$t] ?? 0) + $fila['documentos'];
+                }
+                ?>
+                <div class="dg-estados__barra" role="img" aria-label="Reparto de los <?= $dgTotal; ?> documentos del periodo por estado">
+                    <?php foreach (['exito', 'proceso', 'alerta', 'error', 'neutro'] as $t): ?>
+                        <?php if (! empty($dgPorTono[$t])): ?>
+                            <span class="dg-tono--<?= $t; ?>" style="--ancho: <?= round($dgPorTono[$t] * 100 / max(1, $dgTotal), 1); ?>%"></span>
+                        <?php endif; ?>
                     <?php endforeach; ?>
-                </tbody>
-            </table>
-        </div>
-    </section>
+                </div>
+                <ul class="dg-estados">
+                    <?php foreach ($estados as $fila): ?>
+                        <?php
+                        $info = $dgPorCodigo[$fila['estado']] ?? null;
+                        $tono = $info['tono'] ?? 'neutro';
+                        $pct  = round($fila['documentos'] * 100 / max(1, $dgTotal));
+                        $url  = '/ventas/panel-emision?' . http_build_query(['desde' => $periodo['desde'], 'hasta' => $periodo['hasta'], 'estado' => $fila['estado']]);
+                        ?>
+                        <li>
+                            <a class="dg-estado" href="<?= htmlspecialchars($url); ?>"
+                               aria-label="<?= htmlspecialchars(($info['nombre'] ?? $fila['estado']) . ': ' . $fila['documentos'] . ' documentos. Ver en el panel de emision'); ?>">
+                                <span class="dg-estado__codigo dg-tono--<?= $tono; ?>"><?= htmlspecialchars($fila['estado'] !== '' ? $fila['estado'] : '-'); ?></span>
+                                <span class="dg-estado__nombre"><?= htmlspecialchars($info['nombre'] ?? 'Codigo sin descripcion'); ?></span>
+                                <span class="dg-estado__cifra"><?= $fmtNum($fila['documentos']); ?> <small><?= $pct; ?>%</small></span>
+                                <span class="dg-estado__pista" aria-hidden="true"><span class="dg-tono--<?= $tono; ?>" style="--ancho: <?= max(2, $pct); ?>%"></span></span>
+                            </a>
+                        </li>
+                    <?php endforeach; ?>
+                </ul>
+            <?php endif; ?>
+            <p class="db-nota">El estado solo avanza cuando se consulta al SII desde el
+            panel de emision: no hay un proceso automatico que lo actualice.</p>
+        </section>
+    </div>
 
-    <section aria-labelledby="titulo-clientes">
-        <h2 class="dash-titulo" id="titulo-clientes"><?= iconoSvg('informe-clientes', 18, 'dash-titulo__icono'); ?>Clientes con mayor facturacion</h2>
-        <?php if ($topClientes === []): ?>
-            <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
-        <?php else: ?>
+    <div class="db-fila db-fila--1-1">
+        <section class="db-card" aria-labelledby="titulo-por-tipo">
+            <div class="db-card__cabecera">
+                <h2 class="db-card__titulo" id="titulo-por-tipo"><span class="db-card__icono" aria-hidden="true"><?= iconoSvg('informe-tipos', 18, ''); ?></span>Facturacion por tipo</h2>
+                <a class="db-card__enlace" href="/informes/facturacion">Ver informe <?= iconoSvg('flecha', 14, ''); ?></a>
+            </div>
             <div class="tabla-scroll">
-                <table>
-                    <caption>Top 5 receptores del periodo, agrupados por RUT normalizado
-                    (un mismo RUT con y sin puntos cuenta como uno solo). El monto es el
-                    total con IVA, restando las notas de credito &mdash; no es el mismo
-                    calculo que el "Neto del periodo" de arriba, que va sobre el neto sin
-                    IVA.</caption>
+                <table class="db-tabla">
+                    <caption>Documentos y montos del periodo, separados por tipo. Las notas
+                    de credito se muestran aparte porque rebajan lo facturado.</caption>
                     <thead>
                         <tr>
-                            <th scope="col">Cliente</th>
-                            <th scope="col" class="num">Documentos</th>
-                            <th scope="col" class="num">Monto con IVA</th>
+                            <th scope="col">Tipo</th>
+                            <th scope="col" class="num">Docs.</th>
+                            <th scope="col" class="num">Neto</th>
+                            <th scope="col" class="num">IVA</th>
+                            <th scope="col" class="num">Total</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($topClientes as $c): ?>
-                            <tr>
+                        <?php foreach ($resumen['porTipo'] as $tipo => $d): ?>
+                            <tr<?= $tipo === 61 ? ' class="fila-resta"' : ''; ?>>
                                 <th scope="row">
-                                    <?php if ($c['razonSocial'] !== null): ?>
-                                        <?= htmlspecialchars($c['razonSocial']); ?>
-                                        <span class="subpaso__aclaracion"><?= htmlspecialchars($c['rut']); ?></span>
-                                    <?php else: ?>
-                                        <?= htmlspecialchars($c['rut']); ?>
-                                        <span class="subpaso__aclaracion">&mdash; no esta en tu maestro de clientes</span>
+                                    <?= htmlspecialchars(nombreTipoDte((int) $tipo)); ?>
+                                    <?php if ($tipo === 61): ?>
+                                        <span class="db-tabla__resta">resta</span>
                                     <?php endif; ?>
                                 </th>
-                                <td class="num"><?= $fmtNum($c['documentos']); ?></td>
-                                <td class="num"><?= $fmtMonto($c['neto']); ?></td>
+                                <td class="num"><?= $fmtNum($d['documentos']); ?></td>
+                                <td class="num"><?= $fmtMonto($d['neto']); ?></td>
+                                <td class="num"><?= $fmtMonto($d['iva']); ?></td>
+                                <td class="num db-tabla__fuerte"><?= $fmtMonto($d['total']); ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
-        <?php endif; ?>
-    </section>
+        </section>
+
+        <section class="db-card" aria-labelledby="titulo-clientes">
+            <div class="db-card__cabecera">
+                <h2 class="db-card__titulo" id="titulo-clientes"><span class="db-card__icono" aria-hidden="true"><?= iconoSvg('informe-clientes', 18, ''); ?></span>Clientes con mayor facturacion</h2>
+                <a class="db-card__enlace" href="/informes/clientes">Ver informe <?= iconoSvg('flecha', 14, ''); ?></a>
+            </div>
+            <?php if ($topClientes === []): ?>
+                <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
+            <?php else: ?>
+                <?php $dbMaxCliente = max(1, ...array_map(static fn ($c) => (float) $c['neto'], $topClientes)); ?>
+                <ol class="db-ranking" aria-describedby="nota-clientes">
+                    <?php foreach ($topClientes as $i => $c): ?>
+                        <li class="db-ranking__fila">
+                            <span class="db-ranking__puesto" aria-hidden="true"><?= $i + 1; ?></span>
+                            <span class="db-ranking__cliente">
+                                <?php if ($c['razonSocial'] !== null): ?>
+                                    <strong><?= htmlspecialchars($c['razonSocial']); ?></strong>
+                                    <small><?= htmlspecialchars($c['rut']); ?> &middot; <?= $fmtNum($c['documentos']); ?> doc<?= (int) $c['documentos'] === 1 ? '' : 's'; ?>.</small>
+                                <?php else: ?>
+                                    <strong><?= htmlspecialchars($c['rut']); ?></strong>
+                                    <small>No esta en tu maestro de clientes &middot; <?= $fmtNum($c['documentos']); ?> doc<?= (int) $c['documentos'] === 1 ? '' : 's'; ?>.</small>
+                                <?php endif; ?>
+                                <span class="db-ranking__barra" aria-hidden="true"><span style="width: <?= max(3, round((float) $c['neto'] * 100 / $dbMaxCliente)); ?>%"></span></span>
+                            </span>
+                            <span class="db-ranking__monto"><?= $fmtMonto($c['neto']); ?></span>
+                        </li>
+                    <?php endforeach; ?>
+                </ol>
+                <p class="db-nota" id="nota-clientes">Top 5 del periodo por RUT (con y sin puntos cuenta como uno). Monto con IVA, restando notas de credito: no es el mismo calculo que el neto de arriba.</p>
+            <?php endif; ?>
+        </section>
     </div>
 
-    <section aria-labelledby="titulo-folios">
-        <h2 class="dash-titulo" id="titulo-folios"><?= iconoSvg('informe-folios', 18, 'dash-titulo__icono'); ?>Folios por tipo de documento</h2>
+    <section class="db-card" aria-labelledby="titulo-folios">
+        <div class="db-card__cabecera">
+            <h2 class="db-card__titulo" id="titulo-folios"><span class="db-card__icono" aria-hidden="true"><?= iconoSvg('informe-folios', 18, ''); ?></span>Folios por tipo de documento</h2>
+            <a class="db-card__enlace" href="/informes/folios">Ver informe <?= iconoSvg('flecha', 14, ''); ?></a>
+        </div>
         <?php require __DIR__ . '/partials/_folios.php'; ?>
     </section>
 
     <?php
-        /* FILA 2. Reparto desigual a favor del grafico. Las dos secciones
-           ya eran adyacentes en el DOM y no se movieron; lo que se quito
-           fue la seccion de grilla de dos columnas que envolvia las dos
-           tarjetas con un aria-label que solo nombraba a una de ellas.
-           Cada tarjeta quedo como su propia region, con su propio nombre. */
-    ?>
-    <div class="dash-fila dash-fila--grafico">
-    <section aria-labelledby="titulo-grafico">
-        <h2 class="dash-titulo" id="titulo-grafico"><?= iconoSvg('informe-dia', 18, 'dash-titulo__icono'); ?>Ventas por dia</h2>
-        <?php require __DIR__ . '/partials/_grafico-ventas.php'; ?>
-    </section>
-
-    <section class="tarjeta" aria-labelledby="titulo-estados">
-        <h2 class="dash-titulo" id="titulo-estados"><?= iconoSvg('informe-estados', 18, 'dash-titulo__icono'); ?>Estado de los documentos</h2>
-        <?php if ($estados === []): ?>
-            <p class="dash-vacio-inline">Sin documentos en el periodo.</p>
-        <?php else: ?>
-            <?php
-            // Cada codigo con su nombre, tono y grupo del catalogo compartido.
-            // Un codigo que el catalogo no conoce sale crudo y en neutro.
-            $dgCatalogo = require __DIR__ . '/../datos/estados-sii.php';
-            $dgPorCodigo = [];
-            foreach ($dgCatalogo['estados'] as $x) {
-                $dgPorCodigo[(string) ($x['codigo'] ?? '')] = $x + ['tono' => $dgCatalogo['grupos'][$x['grupo']]['tono']];
-            }
-            $dgTotal = array_sum(array_column($estados, 'documentos'));
-            $dgPorTono = [];
-            foreach ($estados as $fila) {
-                $t = $dgPorCodigo[$fila['estado']]['tono'] ?? 'neutro';
-                $dgPorTono[$t] = ($dgPorTono[$t] ?? 0) + $fila['documentos'];
-            }
-            ?>
-            <div class="dg-estados__barra" role="img" aria-label="Reparto de los <?= $dgTotal; ?> documentos del periodo por estado">
-                <?php foreach (['exito', 'proceso', 'alerta', 'error', 'neutro'] as $t): ?>
-                    <?php if (! empty($dgPorTono[$t])): ?>
-                        <span class="dg-tono--<?= $t; ?>" style="--ancho: <?= round($dgPorTono[$t] * 100 / max(1, $dgTotal), 1); ?>%"></span>
-                    <?php endif; ?>
-                <?php endforeach; ?>
-            </div>
-            <ul class="dg-estados">
-                <?php foreach ($estados as $fila): ?>
-                    <?php
-                    $info = $dgPorCodigo[$fila['estado']] ?? null;
-                    $tono = $info['tono'] ?? 'neutro';
-                    $pct  = round($fila['documentos'] * 100 / max(1, $dgTotal));
-                    $url  = '/ventas/panel-emision?' . http_build_query(['desde' => $periodo['desde'], 'hasta' => $periodo['hasta'], 'estado' => $fila['estado']]);
-                    ?>
-                    <li>
-                        <a class="dg-estado" href="<?= htmlspecialchars($url); ?>"
-                           aria-label="<?= htmlspecialchars(($info['nombre'] ?? $fila['estado']) . ': ' . $fila['documentos'] . ' documentos. Ver en el panel de emision'); ?>">
-                            <span class="dg-estado__codigo dg-tono--<?= $tono; ?>"><?= htmlspecialchars($fila['estado'] !== '' ? $fila['estado'] : '-'); ?></span>
-                            <span class="dg-estado__nombre"><?= htmlspecialchars($info['nombre'] ?? 'Codigo sin descripcion'); ?></span>
-                            <span class="dg-estado__cifra"><?= $fmtNum($fila['documentos']); ?> <small><?= $pct; ?>%</small></span>
-                            <span class="dg-estado__pista" aria-hidden="true"><span class="dg-tono--<?= $tono; ?>" style="--ancho: <?= max(2, $pct); ?>%"></span></span>
-                        </a>
-                    </li>
-                <?php endforeach; ?>
-            </ul>
-        <?php endif; ?>
-        <p class="nota">El estado solo avanza cuando se consulta al SII desde el
-        panel de emision: no hay un proceso automatico que lo actualice.</p>
-    </section>
-    </div>
-
-    <?php
-    // DOCUMENTOS CON PROBLEMAS. Esta tarjeta decia "Proximamente" y explicaba
-    // que no clasificabamos los codigos del SII porque era una regla tributaria
-    // sin definir. Ya esta definida y verificada (EstadoContable), asi que
-    // ahora muestra el numero.
-    //
-    // Y ES LA CONTRAPARTIDA OBLIGATORIA DE HABER EXCLUIDO ESOS DOCUMENTOS DE LOS
-    // KPI. Sacarlos del total sin enseñarlos en ninguna parte seria recrear el
-    // punto ciego en otra forma: el cliente veria bajar su facturacion sin
-    // ninguna explicacion a la vista. Lo que aparece aqui es EXACTAMENTE lo que
-    // se resto -- misma consulta, misma funcion de resumen, filtro invertido.
+    // DOCUMENTOS CON PROBLEMAS: la contrapartida obligatoria de haber excluido
+    // los rechazados de los KPI. Sacarlos del total sin ensenarlos seria un
+    // punto ciego: lo que aparece aqui es EXACTAMENTE lo que se resto.
     $hayRechazados = $rechazados !== null && (int) $rechazados['documentos'] > 0;
     ?>
-    <section class="tarjeta<?= $hayRechazados ? '' : ' tarjeta--proximamente'; ?>" aria-labelledby="titulo-problemas">
-        <h2 class="dash-titulo" id="titulo-problemas">
-            <?= iconoSvg('alerta', 18, 'dash-titulo__icono'); ?>Documentos con problemas
-        </h2>
-        <?php if (! $hayRechazados): ?>
-            <p>Ningun documento de este periodo fue rechazado por el SII.</p>
-            <p class="nota">Si el SII rechaza un envio, aqui vas a ver cuantos
-            documentos son y por cuanto monto, y no se suman a tu facturacion.</p>
-        <?php else: ?>
-            <p>El SII rechazo <strong><?= $fmtNum($rechazados['documentos']); ?></strong>
-            documento<?= (int) $rechazados['documentos'] === 1 ? '' : 's'; ?> de este periodo,
-            por <strong><?= $fmtMonto($rechazados['netoPeriodo']); ?></strong> netos
-            (<?= $fmtMonto($rechazados['ivaDebito']); ?> de IVA).</p>
-            <p class="nota">Esos documentos <strong>no</strong> estan sumados en las
-            cifras de arriba: un envio rechazado se corrige y se reemite, asi que
-            contarlos duplicaria las mismas ventas. Sus folios ya se consumieron y
-            los documentos siguen visibles en el
-            <a href="/ventas/panel-emision">Panel de emision</a>.</p>
-        <?php endif; ?>
-    </section>
-
-    <?php if ($correos !== null): ?>
-        <?php
-        // CORREOS A CLIENTES del periodo (dashCorreosPeriodo()). Lo que pide
-        // accion -- error y sin destinatario -- va con su enlace.
-        $dgPct = $correos['total'] > 0 ? (int) round($correos['enviado'] * 100 / $correos['total']) : 0;
-        ?>
-        <section class="tarjeta dg-correos" aria-labelledby="titulo-correos">
-            <h2 class="dash-titulo" id="titulo-correos"><?= iconoSvg('envio-correo', 18, 'dash-titulo__icono'); ?>Correos a clientes</h2>
-            <?php if ($correos['total'] === 0): ?>
-                <p class="dash-vacio-inline">Ningun documento del periodo paso por el envio de correos.</p>
+    <div class="db-fila db-fila--1-1">
+        <section class="db-card<?= $hayRechazados ? ' db-card--alerta' : ''; ?>" aria-labelledby="titulo-problemas">
+            <div class="db-card__cabecera">
+                <h2 class="db-card__titulo" id="titulo-problemas"><span class="db-card__icono db-card__icono--<?= $hayRechazados ? 'rojo' : 'verde'; ?>" aria-hidden="true"><?= iconoSvg($hayRechazados ? 'alerta' : 'check', 18, ''); ?></span>Documentos con problemas</h2>
+            </div>
+            <?php if (! $hayRechazados): ?>
+                <p class="db-destacado">Ningun documento de este periodo fue rechazado por el SII.</p>
+                <p class="db-nota">Si el SII rechaza un envio, aqui vas a ver cuantos
+                documentos son y por cuanto monto, y no se suman a tu facturacion.</p>
             <?php else: ?>
-                <div class="dg-correos__cuerpo">
-                    <div class="dg-correos__anillo" role="img" aria-label="<?= $dgPct; ?> por ciento de los correos enviados" style="--pct: <?= $dgPct; ?>">
-                        <span><?= $dgPct; ?><small>%</small></span>
-                    </div>
-                    <div>
-                        <p class="dg-correos__titulo"><strong><?= $fmtNum($correos['enviado']); ?></strong> de <?= $fmtNum($correos['total']); ?> documentos llegaron por correo a su cliente.</p>
-                        <ul class="dg-correos__lista">
-                            <?php if ($correos['pendiente'] > 0): ?><li class="dg-tono--proceso"><?= $fmtNum($correos['pendiente']); ?> en cola</li><?php endif; ?>
-                            <?php if ($correos['sin_destinatario'] > 0): ?><li class="dg-tono--alerta"><a href="/ventas/correos?estado=sin_destinatario"><?= $fmtNum($correos['sin_destinatario']); ?> sin correo del cliente</a></li><?php endif; ?>
-                            <?php if ($correos['error'] > 0): ?><li class="dg-tono--error"><a href="/ventas/correos?estado=error"><?= $fmtNum($correos['error']); ?> con error</a></li><?php endif; ?>
-                        </ul>
-                        <a class="dg-enlace" href="/ventas/correos">Ver envio de correos <?= iconoSvg('flecha', 14, ''); ?></a>
-                    </div>
-                </div>
+                <p class="db-destacado">El SII rechazo <strong><?= $fmtNum($rechazados['documentos']); ?></strong>
+                documento<?= (int) $rechazados['documentos'] === 1 ? '' : 's'; ?> de este periodo,
+                por <strong><?= $fmtMonto($rechazados['netoPeriodo']); ?></strong> netos
+                (<?= $fmtMonto($rechazados['ivaDebito']); ?> de IVA).</p>
+                <p class="db-nota">Esos documentos <strong>no</strong> estan sumados en las
+                cifras de arriba: un envio rechazado se corrige y se reemite, asi que
+                contarlos duplicaria las mismas ventas. Sus folios ya se consumieron y
+                los documentos siguen visibles en el
+                <a href="/ventas/panel-emision">Panel de emision</a>.</p>
             <?php endif; ?>
         </section>
-    <?php endif; ?>
+
+        <?php if ($correos !== null): ?>
+            <?php $dgPct = $correos['total'] > 0 ? (int) round($correos['enviado'] * 100 / $correos['total']) : 0; ?>
+            <section class="db-card dg-correos" aria-labelledby="titulo-correos">
+                <div class="db-card__cabecera">
+                    <h2 class="db-card__titulo" id="titulo-correos"><span class="db-card__icono" aria-hidden="true"><?= iconoSvg('envio-correo', 18, ''); ?></span>Correos a clientes</h2>
+                    <a class="db-card__enlace" href="/ventas/correos">Ver envios <?= iconoSvg('flecha', 14, ''); ?></a>
+                </div>
+                <?php if ($correos['total'] === 0): ?>
+                    <p class="dash-vacio-inline">Ningun documento del periodo paso por el envio de correos.</p>
+                <?php else: ?>
+                    <div class="dg-correos__cuerpo">
+                        <div class="dg-correos__anillo" role="img" aria-label="<?= $dgPct; ?> por ciento de los correos enviados" style="--pct: <?= $dgPct; ?>">
+                            <span><?= $dgPct; ?><small>%</small></span>
+                        </div>
+                        <div>
+                            <p class="dg-correos__titulo"><strong><?= $fmtNum($correos['enviado']); ?></strong> de <?= $fmtNum($correos['total']); ?> documentos llegaron por correo a su cliente.</p>
+                            <ul class="dg-correos__lista">
+                                <?php if ($correos['pendiente'] > 0): ?><li class="dg-tono--proceso"><?= $fmtNum($correos['pendiente']); ?> en cola</li><?php endif; ?>
+                                <?php if ($correos['sin_destinatario'] > 0): ?><li class="dg-tono--alerta"><a href="/ventas/correos?estado=sin_destinatario"><?= $fmtNum($correos['sin_destinatario']); ?> sin correo del cliente</a></li><?php endif; ?>
+                                <?php if ($correos['error'] > 0): ?><li class="dg-tono--error"><a href="/ventas/correos?estado=error"><?= $fmtNum($correos['error']); ?> con error</a></li><?php endif; ?>
+                            </ul>
+                        </div>
+                    </div>
+                <?php endif; ?>
+            </section>
+        <?php endif; ?>
+    </div>
 
 <?php endif; ?>
 
-<?php /* Los accesos rapidos subieron arriba; aqui queda el enlace a los planes.
-         Misma pestana nueva que en el login: planes.html no tiene vuelta. */ ?>
-<p class="dg-planes">
+<?php /* Misma pestana nueva que en el login: planes.html no tiene vuelta. */ ?>
+<p class="db-planes">
     <a class="boton-secundario pe-boton" href="/planes.html" target="_blank" rel="noopener">Ver planes<span class="visualmente-oculto"> (se abre en otra pestana)</span></a>
 </p>
+
+</div>
 
 <?php require __DIR__ . '/partials/footer.php'; ?>
