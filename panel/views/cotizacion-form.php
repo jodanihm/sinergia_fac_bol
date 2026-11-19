@@ -176,7 +176,12 @@ if (isset($errores['lineas'])) {
 
     <div class="config-columnas config-columnas--2">
         <section class="tarjeta" aria-labelledby="titulo-cliente" data-autoguardar="/ventas/guardar-cliente">
-            <h2 id="titulo-cliente">Cliente</h2>
+            <div class="tarjeta__cabecera">
+                <h2 id="titulo-cliente">Cliente</h2>
+                <?php /* Oculto hasta que js/pegar-receptor.js lo active: sin JavaScript no haria nada. */ ?>
+                <button type="button" class="boton-secundario" data-abrir-pegar-receptor aria-haspopup="dialog" hidden><?= iconoSvg('codigo', 16, ''); ?> Pegar datos</button>
+            </div>
+            <small class="form-ayuda" id="pegar-receptor-aviso" aria-live="polite"></small>
             <div class="form-grid">
                 <div class="<?= $claseCampo('receptor_rut'); ?>">
                     <label for="receptor_rut">RUT</label>
@@ -324,6 +329,11 @@ if (isset($errores['lineas'])) {
         <button type="submit" class="boton-principal" id="guardar-cotizacion">Guardar cotizacion</button>
     </div>
 </form>
+
+<?php
+$pegarCampos = 'rut:receptor_rut,razonSocial:receptor_razon_social,giro:receptor_giro,direccion:receptor_direccion,comuna:receptor_comuna,email:receptor_email';
+require __DIR__ . '/partials/_pegar-receptor.php';
+?>
 
 <script>
 (function () {

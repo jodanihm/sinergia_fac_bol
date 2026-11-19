@@ -25,16 +25,22 @@
  * datos del cliente anterior mezclados. Si el RUT ya esta en mis clientes, lo
  * que el texto no traia se completa desde ahi; lo pegado manda.
  *
+ * DONDE SE USA: formulario de emision (factura, boleta, notas) y cotizacion.
+ *
  * MARCADO, en la vista:
  *   - [data-abrir-pegar-receptor]: el boton. Viene oculto; este archivo lo
  *     muestra (sin JavaScript no haria nada).
  *   - #pegar-receptor: <dialog> con [data-pegar-texto] (textarea),
  *     [data-pegar-aplicar], [data-pegar-cerrar] y [data-pegar-estado].
- *   - #pegar-receptor-aviso: region viva donde se dice que se completo.
+ *     Opcionales en el <dialog>: data-campos="rut:id,razonSocial:id,giro:id,
+ *     direccion:id,comuna:id,email:id" si los ids no son los de emision, y
+ *     data-aviso="id" para la region viva (por defecto #pegar-receptor-aviso).
  */
 (function () {
     'use strict';
 
+    // Ids por defecto: los del formulario de emision. Otra vista (cotizacion)
+    // declara los suyos en el <dialog> con data-campos="rut:id,giro:id,...".
     var CAMPOS = {
         rut: 'receptor-rut',
         razonSocial: 'receptor-razonSocial',
@@ -43,6 +49,30 @@
         comuna: 'receptor-comuna',
         email: 'receptor-email'
     };
+
+    function rutLimpio(v) { return String(v || '').replace(/[^0-9kK]/g, '').toUpperCase(); }
+    // 12.345.678-9 y si el digito verificador calza (modulo 11).
+    function ordenarRut(v) {
+        var l = rutLimpio(v);
+        if (l.length < 2) { return { texto: v, valido: false }; }
+        var cuerpo = l.slice(0, -1), dv = l.slice(-1), suma = 0, mul = 2;
+        for (var i = cuerpo.length - 1; i >= 0; i--) { suma += parseInt(cuerpo[i], 10) * mul; mul = mul === 7 ? 2 : mul + 1; }
+        var r = 11 - (suma % 11);
+        var esperado = r === 11 ? '0' : (r === 10 ? 'K' : String(r));
+        return { texto: cuerpo.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + '-' + dv, valido: /^\d+$/.test(cuerpo) && dv === esperado };
+    }
+
+    // Revalida los campos del receptor con lo que la vista tenga: el
+    // formulario de emision expone window.emisionUx; el resto del panel usa
+    // js/validar-campos.js.
+    function revalidar() {
+        if (window.emisionUx) { window.emisionUx.revisarReceptor(true); return; }
+        if (!window.validarCampos || !window.validarCampos.revisar) { return; }
+        Object.keys(CAMPOS).forEach(function (c) {
+            var el = campo(c);
+            if (el && el.value.trim() !== '') { window.validarCampos.revisar(el); }
+        });
+    }
     var NOMBRES = {
         rut: 'RUT', razonSocial: 'razon social', giro: 'giro',
         direccion: 'direccion', comuna: 'comuna', email: 'correo'
@@ -229,7 +259,11 @@
         var texto = dlg.querySelector('[data-pegar-texto]');
         var estado = dlg.querySelector('[data-pegar-estado]');
         var aplicar = dlg.querySelector('[data-pegar-aplicar]');
-        var aviso = document.getElementById('pegar-receptor-aviso');
+        var aviso = document.getElementById(dlg.getAttribute('data-aviso') || 'pegar-receptor-aviso');
+        (dlg.getAttribute('data-campos') || '').split(',').forEach(function (par) {
+            var kv = par.split(':');
+            if (kv.length === 2 && CAMPOS.hasOwnProperty(kv[0].trim())) { CAMPOS[kv[0].trim()] = kv[1].trim(); }
+        });
         boton.hidden = false;
 
         boton.addEventListener('click', function () {
@@ -265,13 +299,9 @@
     function campo(c) { return document.getElementById(CAMPOS[c]); }
 
     function rellenar(datos, presentes, supuestos, aviso) {
-        var ux = window.emisionUx;
         var rut = campo('rut');
 
-        if (datos.rut && ux) {
-            var ord = ux.ordenarRut(datos.rut);
-            if (ord && ord.texto) { datos.rut = ord.texto; }
-        }
+        if (datos.rut) { datos.rut = ordenarRut(datos.rut).texto; }
         // Otro cliente: se vacia el receptor entero antes de llenar.
         if (rut && datos.rut && rut.value.trim() !== '' && rut.value.trim() !== datos.rut) {
             Object.keys(CAMPOS).forEach(function (c) {
@@ -287,18 +317,22 @@
             // input en todos menos el RUT: en el RUT abriria la lista de busqueda.
             if (c !== 'rut') { el.dispatchEvent(new Event('input', { bubbles: true })); }
         });
-        if (ux) { ux.revisarReceptor(true); }
+        revalidar();
 
         // Si el RUT ya esta en mis clientes, lo que el texto no traia se
         // completa desde ahi. Lo pegado no se pisa. El aviso sale al final,
         // para no decir "falta el giro" y llenarlo un instante despues.
-        var rutValido = rut && datos.rut && (!ux || ux.ordenarRut(datos.rut).valido);
+        var rutValido = rut && datos.rut && ordenarRut(datos.rut).valido;
         if (!rutValido) { avisar(presentes, supuestos, null, aviso); return; }
         fetch('/ventas/cliente-por-rut?rut=' + encodeURIComponent(rut.value.trim()))
             .then(function (resp) { return resp.json(); })
             .then(function (data) {
                 if (!data || !data.cliente || rut.value.trim() !== datos.rut) { avisar(presentes, supuestos, null, aviso); return; }
                 var c = data.cliente;
+                // Ya esta en el maestro: el guardado automatico de
+                // js/validar-campos.js (cotizacion) no lo repite.
+                var grupo = rut.closest('[data-autoguardar]');
+                if (grupo) { grupo.setAttribute('data-ya-guardado', rutLimpio(datos.rut)); }
                 var desdeMaestro = { razonSocial: c.razon_social, giro: c.giro, direccion: c.direccion, comuna: c.comuna, email: c.email };
                 var completados = [];
                 Object.keys(desdeMaestro).forEach(function (k) {
@@ -309,7 +343,7 @@
                         completados.push(NOMBRES[k]);
                     }
                 });
-                if (ux) { ux.revisarReceptor(true); }
+                revalidar();
                 avisar(presentes, supuestos, completados, aviso);
             })
             .catch(function () { avisar(presentes, supuestos, null, aviso); });
@@ -331,7 +365,7 @@
             var el = campo(c);
             return el && c !== 'email' && el.value.trim() === '';
         }).map(function (c) { return NOMBRES[c]; });
-        if (faltan.length) { msg += ' Falta: ' + faltan.join(', ') + '.'; }
+        if (faltan.length) { msg += ' Quedaron vacios: ' + faltan.join(', ') + '.'; }
         aviso.textContent = msg;
     }
 
