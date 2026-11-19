@@ -33,6 +33,18 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-19',
+        'version' => '2.26',
+        'titulo'  => 'El panel de emision avisa cuantos documentos esconde "Solo aceptados"',
+        'tag'     => 'frontend',
+        'items'   => [
+            'Con el switch "Solo aceptados" encendido, el panel ahora dice cuantos documentos quedaron fuera, por ejemplo "3 ocultos".',
+            'Se ve junto al switch y sobre la tabla, con un enlace "Ver todos" que apaga el switch y mantiene los demas filtros.',
+            'Por que: un documento rechazado o todavia en proceso en el SII quedaba invisible sin ningun aviso.',
+            'Si no hay ningun aceptado pero si hay ocultos, la pantalla vacia lo dice y ofrece verlos.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-19',
         'version' => '2.25',
         'titulo'  => 'Pegar los datos del cliente tambien en cotizaciones',
         'tag'     => 'frontend',
