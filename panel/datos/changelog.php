@@ -33,6 +33,20 @@ declare(strict_types=1);
 return [
     [
         'fecha'   => '2026-11-19',
+        'version' => '2.30',
+        'titulo'  => 'Dashboard renovado y vista previa de tus facturas',
+        'tag'     => 'frontend',
+        'items'   => [
+            'El panel de gestion tiene un diseno nuevo: una cabecera azul marino con el saludo, tu empresa, el periodo y el boton "Emitir factura", y los cuatro indicadores destacados justo debajo.',
+            'Los indicadores muestran la variacion contra el mes anterior en una etiqueta verde o roja, facil de leer de un vistazo.',
+            'Las secciones van en tarjetas del mismo estilo, con enlace a su informe: ventas por dia junto al estado de los documentos, facturacion por tipo junto a tus mejores clientes, folios, documentos con problemas y correos.',
+            'Los clientes con mayor facturacion ahora se ven como ranking, con una barra que compara sus montos.',
+            'Nueva pantalla en Configuracion: "Vista previa de facturas". Muestra un PDF de ejemplo de como salen tus facturas, con tu logo y los datos de tu empresa, y te dice de donde sale cada dato y donde cambiarlo.',
+            'El ejemplo lleva la marca "EJEMPLO", folio 0 y un timbre sin validez: no se envia al SII, no se guarda y no gasta folios.',
+        ],
+    ],
+    [
+        'fecha'   => '2026-11-19',
         'version' => '2.29',
         'titulo'  => 'Titulos del menu destacados y con divisores',
         'tag'     => 'frontend',

@@ -29,6 +29,7 @@ use Plantiflex\FacturacionCl\Enums\TipoOperacionLibro;
 use Plantiflex\FacturacionCl\Exceptions\EnvioRechazadoException;
 use Plantiflex\FacturacionCl\Exceptions\SiiAutenticacionException;
 use Plantiflex\FacturacionCl\Pdf\CotizacionPdfGenerator;
+use Plantiflex\FacturacionCl\Pdf\DtePdfEjemplo;
 use Plantiflex\FacturacionCl\Pdf\LogoEmpresa;
 use Plantiflex\FacturacionCl\Pdf\MuestrasImpresasZipBuilder;
 use Plantiflex\FacturacionCl\Providers\BoletaFacturador;
@@ -679,6 +680,10 @@ const PERMISOS_RUTA = [
     'POST /ventas/correos/buscar-destinatarios'  => ['ventas', 'gestionar'],
     'GET /configuracion/pagos'                   => ['config', 'ver'],
     'POST /configuracion/pagos'                  => ['config', 'gestionar'],
+    // Vista previa de facturas: solo lee los datos del emisor y dibuja un
+    // ejemplo. No emite ni consume folio.
+    'GET /configuracion/vista-factura'           => ['config', 'ver'],
+    'GET /configuracion/vista-factura/pdf'       => ['config', 'ver'],
 
     // --- maestros ---
     'GET /maestros/clientes'                     => ['maestros', 'ver'],
@@ -1158,6 +1163,7 @@ function definicionMenu(): array
             'plegable' => true,
             'items'    => [
                 ['clave' => 'config.pagos', 'label' => 'Cobro en linea', 'destino' => '/configuracion/pagos', 'construido' => true, 'requiereProduccion' => false],
+                ['clave' => 'config.vista-factura', 'label' => 'Vista previa de facturas', 'destino' => '/configuracion/vista-factura', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'config.usuarios', 'label' => 'Usuarios y permisos', 'destino' => '/configuracion/usuarios', 'construido' => true, 'requiereProduccion' => false],
                 ['clave' => 'auditoria', 'label' => 'Auditoria', 'destino' => '/auditoria', 'construido' => true, 'requiereProduccion' => false],
             ],
@@ -6720,6 +6726,85 @@ function handlePagosConfigGet(): void
         'flash'       => flashTomar(),
         'navActivo'   => 'config.pagos',
     ]);
+}
+
+/**
+ * GET /configuracion/vista-factura -- como salen las facturas de la empresa.
+ *
+ * Muestra, incrustado, un PDF de EJEMPLO (DtePdfEjemplo) dibujado con el mismo
+ * generador de las facturas reales y con los datos reales del emisor: logo,
+ * razon social, giro, direccion, comuna y resolucion. El receptor, el detalle
+ * y los montos son ficticios, y el PDF lleva marca de agua: no es un documento.
+ * Al lado, de donde sale cada dato y donde se cambia.
+ */
+function handleVistaFacturaGet(): void
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = rutEmisorDeLaCuenta($pdo, Auth::cuentaId());
+    $emisor    = datosEmisorParaImpreso($pdo, $rutEmisor);
+    $logo      = $rutEmisor === null ? null : LogoEmpresa::metadatos($pdo, $rutEmisor);
+
+    vista('configuracion-vista-factura', [
+        'emisor'     => $emisor,
+        'resolucion' => resolucionDelEmisor($pdo, $rutEmisor),
+        'tieneLogo'  => $logo !== null,
+        'navActivo'  => 'config.vista-factura',
+    ]);
+}
+
+/** GET /configuracion/vista-factura/pdf -- el PDF de ejemplo, inline. */
+function handleVistaFacturaPdfGet(): never
+{
+    $pdo       = Db::conexion();
+    $rutEmisor = rutEmisorDeLaCuenta($pdo, Auth::cuentaId());
+    $emisor    = datosEmisorParaImpreso($pdo, $rutEmisor);
+    $logo      = $rutEmisor !== null ? LogoEmpresa::leer($pdo, $rutEmisor) : null;
+
+    try {
+        $pdf = DtePdfEjemplo::generar(
+            $emisor,
+            resolucionDelEmisor($pdo, $rutEmisor),
+            $logo !== null ? LogoEmpresa::paraTcpdf($logo) : null
+        );
+    } catch (Throwable $e) {
+        error_log('vista previa factura: ' . $e->getMessage());
+        http_response_code(500);
+        exit('No se pudo generar la factura de ejemplo.');
+    }
+
+    header('Content-Type: application/pdf');
+    header('Content-Disposition: inline; filename="factura_ejemplo.pdf"');
+    header('Content-Length: ' . strlen($pdf));
+    // Cambia en cuanto cambia el logo o un dato de la empresa: sin cache.
+    header('Cache-Control: no-store');
+    echo $pdf;
+    exit;
+}
+
+/**
+ * Resolucion SII del emisor (la de produccion si existe), en el formato que
+ * espera el PDF. Sin datos: numero 0 y el ano en curso, que es lo que el
+ * impreso muestra mientras la empresa no complete su ficha.
+ *
+ * @return array{FchResol:string, NroResol:string}
+ */
+function resolucionDelEmisor(PDO $pdo, ?string $rutEmisor): array
+{
+    $vacia = ['FchResol' => date('Y') . '-01-01', 'NroResol' => '0'];
+    if ($rutEmisor === null) {
+        return $vacia;
+    }
+    $stmt = $pdo->prepare(
+        'SELECT resolucion_fecha, resolucion_numero FROM dte_emisor '
+        . "WHERE rut_emisor = :rut ORDER BY FIELD(ambiente, 'produccion', 'certificacion') LIMIT 1"
+    );
+    $stmt->execute([':rut' => $rutEmisor]);
+    $fila = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($fila === false || (string) ($fila['resolucion_fecha'] ?? '') === '') {
+        return $vacia;
+    }
+
+    return ['FchResol' => (string) $fila['resolucion_fecha'], 'NroResol' => (string) ($fila['resolucion_numero'] ?? '0')];
 }
 
 /**
@@ -13367,6 +13452,16 @@ if ($metodo === 'GET' && $ruta === '/configuracion/pagos') {
 if ($metodo === 'POST' && $ruta === '/configuracion/pagos') {
     Auth::requerirSesion();
     handlePagosConfigPost();
+}
+
+if ($metodo === 'GET' && $ruta === '/configuracion/vista-factura') {
+    Auth::requerirSesion();
+    handleVistaFacturaGet();
+}
+
+if ($metodo === 'GET' && $ruta === '/configuracion/vista-factura/pdf') {
+    Auth::requerirSesion();
+    handleVistaFacturaPdfGet();
 }
 
 if ($metodo === 'POST' && preg_match('#^/ventas/correos/(\d+)/enviar-sin-link$#', $ruta, $mSinLink)) {

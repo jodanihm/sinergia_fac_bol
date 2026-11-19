@@ -134,6 +134,56 @@ final class DtePdfGenerator
     }
 
     /**
+     * Genera el PDF desde los DATOS del documento (el mismo arreglo que
+     * Sii\Dte::getDatos() devuelve al leer un XML), sin EnvioDTE ni firma.
+     *
+     * Lo usa SOLO la vista previa de Configuracion > Vista previa de facturas
+     * (DtePdfEjemplo): un documento armado con datos de ejemplo para que la
+     * empresa vea como salen sus facturas -- logo, razon social, giro,
+     * direccion -- sin emitir nada. Recorre el MISMO DtePdfDocumento que las
+     * facturas reales, asi que lo que se ve es lo que sale.
+     *
+     * $marcaAgua: texto que se cruza en diagonal sobre la pagina y se repite
+     * arriba como franja. Un ejemplo NO puede poder pasar por una factura.
+     *
+     * @param array<string,mixed>                   $datos
+     * @param array{FchResol:string,NroResol:string} $resolucion
+     * @param ?string                               $logo Bytes del PNG con '@' delante, o null.
+     */
+    public function generarDesdeDatos(array $datos, string $timbre, array $resolucion, ?string $logo = null, ?string $marcaAgua = null): string
+    {
+        date_default_timezone_set('America/Santiago');
+        error_reporting(E_ALL & ~E_DEPRECATED & ~E_NOTICE & ~E_WARNING);
+
+        $pdf = new DtePdfDocumento();
+        $pdf->setResolucion($resolucion);
+        if ($logo !== null && $logo !== '') {
+            $pdf->setLogo($logo);
+        }
+        $pdf->agregar($datos, $timbre);
+
+        if ($marcaAgua !== null && $marcaAgua !== '') {
+            // Diagonal, roja y translucida, sobre todo el cuerpo.
+            $pdf->SetAlpha(0.13);
+            $pdf->StartTransform();
+            $pdf->Rotate(38, 105, 150);
+            $pdf->SetFont('helvetica', 'B', 64);
+            $pdf->SetTextColor(200, 0, 0);
+            $pdf->Text(22, 138, mb_strtoupper(explode(' - ', $marcaAgua)[0]));
+            $pdf->StopTransform();
+            $pdf->SetAlpha(1);
+            // Franja arriba, legible: dice exactamente que es esto.
+            $pdf->SetFont('helvetica', 'B', 8);
+            $pdf->SetTextColor(200, 0, 0);
+            $pdf->SetXY(10, 3);
+            $pdf->Cell(190, 5, $marcaAgua, 0, 0, 'C');
+            $pdf->SetTextColor(0, 0, 0);
+        }
+
+        return (string) $pdf->Output('', 'S');
+    }
+
+    /**
      * Resuelve FchResol/NroResol leyendo <Caratula> directo del XML por XPath.
      * Necesario para boleta porque EnvioDte::getCaratula() de LibreDTE no reconoce
      * la raiz <EnvioBOLETA> (solo <EnvioDTE>).
