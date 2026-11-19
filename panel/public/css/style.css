@@ -722,15 +722,33 @@ body.con-sidebar > main {
 }
 .sb__vacio { margin: 8px 12px; font-size: 0.85rem; color: var(--sb-tenue); }
 .sb__bloque + .sb__bloque { margin-top: 6px; }
+/* TITULOS CON COLOR PROPIO Y DIVISOR (pedido del 19-11-2026). Secciones
+   (General, Operacion, Administracion) y subgrupos (Emision, Facturacion
+   masiva, Certificacion) van en TURQUESA, un color que en el menu no
+   significa otra cosa: el azul es la pagina activa y el ambar, produccion.
+   #5eead4 sobre el fondo del menu da 12:1. Tras el texto, una linea que se
+   desvanece hacia la derecha hace de divisor entre bloques. */
+.sb { --sb-titulo: #5eead4; --sb-titulo-linea: rgba(94, 234, 212, 0.5); }
 .sb__seccion {
-    margin: 14px 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 8px;
     padding: 0 12px;
     font-size: 0.68rem;
     font-weight: 700;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--sb-tenue);
+    color: var(--sb-titulo);
     white-space: nowrap;
+}
+.sb__seccion::after,
+.sb-subgrupo__titulo::after {
+    content: "";
+    flex: 1 1 auto;
+    height: 1px;
+    min-width: 12px;
+    background: linear-gradient(90deg, var(--sb-titulo-linea), rgba(94, 234, 212, 0));
 }
 .sb__bloque:first-child .sb__seccion { margin-top: 4px; }
 
@@ -823,22 +841,29 @@ a.sb-sub:hover { background: var(--sb-hover); color: var(--sb-fuerte); }
 .sb-sub__texto { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .sb-subgrupo { margin: 4px 0 6px; }
+.sb-subgrupo + .sb-subgrupo,
+.sb-sub + .sb-subgrupo { margin-top: 12px; }
 .sb-subgrupo__titulo {
-    margin: 8px 0 3px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 4px;
     padding: 0 10px;
     font-size: 0.64rem;
     font-weight: 700;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: var(--sb-tenue);
+    color: var(--sb-titulo);
+    white-space: nowrap;
 }
 /* AMBIENTE DE PRODUCCION: los folios son reales. Titulo ambar con un punto;
    las opciones no se tinen (pisarian el azul del activo). */
 .sb-subgrupo--produccion .sb-subgrupo__titulo { color: var(--sb-ambar); }
+.sb-subgrupo--produccion .sb-subgrupo__titulo::after { background: linear-gradient(90deg, rgba(246, 178, 78, 0.45), rgba(246, 178, 78, 0)); }
 .sb-subgrupo--produccion .sb-subgrupo__titulo::before {
     content: "";
     display: inline-block;
-    width: 6px; height: 6px; margin-right: 6px;
+    width: 6px; height: 6px; margin-right: -2px;
     border-radius: 50%;
     background: var(--sb-ambar);
     box-shadow: 0 0 8px rgba(246, 178, 78, 0.8);
@@ -951,7 +976,8 @@ a.sb-sub:hover { background: var(--sb-hover); color: var(--sb-fuerte); }
         transform: translateY(-50%);
     }
     .menu-contraido .sb__seccion { height: 1px; margin: 12px 8px; padding: 0; background: var(--sb-linea); }
-    .menu-contraido .sb__seccion span { display: none; }
+    .menu-contraido .sb__seccion span,
+    .menu-contraido .sb__seccion::after { display: none; }
     .menu-contraido .sb__bloque:first-child .sb__seccion { display: none; }
     /* La lupa sola, como un boton: pincharla expande el menu. */
     .menu-contraido .sb__buscar input { padding: 0; color: transparent; cursor: pointer; }
